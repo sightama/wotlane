@@ -1,8 +1,11 @@
 // Minimal JSON (object, array, string, integer, boolean, null) for the files the port keeps human-readable: the save
 // (wotm_save.inc) and, later, whatever mods need. Keeps the key order and the keys the code doesn't know about, so that
-// rewriting a file doesn't erase what a mod put in it. Numbers with a fraction are read and truncated (the save only has integers).
+// rewriting a file doesn't erase what a mod put in it. A number with a fraction or an exponent keeps its value in `num` (`frac` set;
+// `i` holds it truncated, so integer readers see what they always saw); the conversion uses only exact IEEE steps, so every machine
+// reads the same bits (stage.json positions reach the game).
 #pragma once
 
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <string>
@@ -16,6 +19,8 @@ namespace wotm::json
         enum Type { Null, Bool, Int, Str, Arr, Obj } type = Null;
         bool b = false;
         int64_t i = 0;
+        double num = 0;      // the exact value when frac is set
+        bool frac = false;   // a number written with a fraction or an exponent
         std::string s;
         std::vector<Value> arr;
         std::vector<std::pair<std::string, Value>> obj;
@@ -23,6 +28,15 @@ namespace wotm::json
         Value() = default;
         static Value boolean(bool v) { Value r; r.type = Bool; r.b = v; return r; }
         static Value integer(int64_t v) { Value r; r.type = Int; r.i = v; return r; }
+        static Value number(double v)
+        {
+            Value r;
+            r.type = Int;
+            r.num = v;
+            r.frac = true;
+            r.i = v >= 9.2e18 ? INT64_MAX : v <= -9.2e18 ? INT64_MIN : v == v ? static_cast<int64_t>(v) : 0;
+            return r;
+        }
         static Value string(std::string v) { Value r; r.type = Str; r.s = std::move(v); return r; }
         static Value array() { Value r; r.type = Arr; return r; }
         static Value object() { Value r; r.type = Obj; return r; }
@@ -50,10 +64,30 @@ namespace wotm::json
         bool isInt() const { return type == Int || type == Bool; }
         int64_t asInt(int64_t def = 0) const { return type == Int ? i : type == Bool ? (b ? 1 : 0) : def; }
         bool asBool(bool def = false) const { return type == Bool ? b : type == Int ? i != 0 : def; }
+        bool isNum() const { return type == Int; }
+        double asNum(double def = 0) const { return type == Int ? (frac ? num : static_cast<double>(i)) : def; }
     };
 
     namespace detail
     {
+        // Decimal digits * 10^exp10 as a double. Up to 2^53 with |exp10| <= 22 it is one exact division or product (correctly
+        // rounded); past that, repeated * or / 10: not always the nearest double, but the same bits everywhere.
+        inline double decimal(uint64_t digits, int exp10)
+        {
+            static const double kPow10[] = {1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11,
+                                            1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22};
+            double v = static_cast<double>(digits);
+            if (digits == 0)
+                return 0;
+            if (digits < (1ull << 53) && exp10 >= -22 && exp10 <= 22)
+                return exp10 >= 0 ? v * kPow10[exp10] : v / kPow10[-exp10];
+            for (; exp10 > 0 && !std::isinf(v); --exp10)
+                v *= 10;
+            for (; exp10 < 0 && v != 0; ++exp10)
+                v /= 10;
+            return v;
+        }
+
         struct Parser
         {
             const char *p, *end;
@@ -214,21 +248,89 @@ namespace wotm::json
                     if (neg)
                         ++p;
                     int64_t n = 0;
-                    bool any = false;
+                    uint64_t digits = 0;   // the first 19 significant digits
+                    int kept = 0, exp10 = 0;
+                    bool any = false, frac = false;
+                    auto digit = [&](int d, bool fraction) {
+                        if (kept < 19)
+                        {
+                            digits = digits * 10 + static_cast<uint64_t>(d);
+                            kept += digits != 0;
+                            exp10 -= fraction;
+                        }
+                        else
+                            exp10 += !fraction;
+                    };
                     while (p < end && *p >= '0' && *p <= '9')
-                        n = n * 10 + (*p++ - '0'), any = true;
+                    {
+                        const int d = *p++ - '0';
+                        n = n * 10 + d, any = true;
+                        digit(d, false);
+                    }
                     if (!any)
                         return fail("invalid number");
-                    if (p < end && *p == '.')   // fraction: read and discarded
-                        for (++p; p < end && *p >= '0' && *p <= '9'; ++p) {}
+                    if (p < end && *p == '.')
+                    {
+                        frac = true;
+                        ++p;
+                        if (p >= end || *p < '0' || *p > '9')
+                            return fail("invalid number");
+                        for (; p < end && *p >= '0' && *p <= '9'; ++p)
+                            digit(*p - '0', true);
+                    }
                     if (p < end && (*p == 'e' || *p == 'E'))
-                        return fail("exponent not supported");
-                    v = Value::integer(neg ? -n : n);
+                    {
+                        frac = true;
+                        ++p;
+                        const bool eneg = p < end && *p == '-';
+                        if (p < end && (*p == '-' || *p == '+'))
+                            ++p;
+                        if (p >= end || *p < '0' || *p > '9')
+                            return fail("invalid number");
+                        int e = 0;
+                        for (; p < end && *p >= '0' && *p <= '9'; ++p)
+                            e = e < 100000 ? e * 10 + (*p - '0') : e;
+                        exp10 += eneg ? -e : e;
+                    }
+                    if (!frac)
+                    {
+                        v = Value::integer(neg ? -n : n);
+                        return true;
+                    }
+                    const double d = decimal(digits, exp10);
+                    v = Value::number(neg ? -d : d);
                     return true;
                 }
                 return fail("unexpected character");
             }
         };
+
+        // The shortest %g text that reads back (through decimal()) to the same double, with '.' whatever the C locale says.
+        inline void number(std::string &out, double d)
+        {
+            if (!std::isfinite(d))
+            {
+                out += "null";   // JSON has no inf or nan
+                return;
+            }
+            char buf[40] = {};
+            for (int prec = 1; prec <= 17; ++prec)
+            {
+                std::snprintf(buf, sizeof buf, "%.*g", prec, d);
+                for (char *c = buf; *c; ++c)
+                    if (*c == ',')
+                        *c = '.';
+                const std::string t = buf;
+                Parser ps{t.data(), t.data() + t.size(), {}};
+                Value back;
+                if (ps.value(back, 0) && back.asNum() == d)
+                    break;
+            }
+            const std::string t = buf;
+            out += t;
+            if (t.find_first_of(".e") == std::string::npos)
+                out += ".0";   // read back as a number with a fraction
+        }
 
         inline void quote(std::string &out, const std::string &s)
         {
@@ -269,7 +371,12 @@ namespace wotm::json
             {
             case Value::Null: out += "null"; break;
             case Value::Bool: out += v.b ? "true" : "false"; break;
-            case Value::Int: out += std::to_string(v.i); break;
+            case Value::Int:
+                if (v.frac)
+                    number(out, v.num);
+                else
+                    out += std::to_string(v.i);
+                break;
             case Value::Str: quote(out, v.s); break;
             case Value::Arr:
                 if (v.arr.empty())

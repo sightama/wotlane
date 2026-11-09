@@ -1,5 +1,5 @@
 // ABOUTME: Unit tests for the pure parts of the native layer (no game, no window): frame interpolation from wotm_interp.hpp (matrices,
-// ABOUTME: camera, cuts, projection), the settings profile for network matches and the mod digest. Build and run: tools\test_native.bat
+// ABOUTME: camera, cuts, projection), the settings profile for network matches, the mod digest and the map creator's stagemap. Build and run: tools\test_native.bat
 #include "wotm_interp.hpp"
 #include "wotm_settings.hpp"
 #include "wotm_mods.hpp"
@@ -9,6 +9,7 @@
 #include "net/wotm_modifiers.hpp"
 #include "wotm_tint.hpp"
 #include "wotm_creator.hpp"
+#include "wotm_stagemap.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -586,6 +587,624 @@ TEST(mods_add_skin_after_scan)
     fs::create_directories(root / "Creator" / "skins" / "bad");
     CHECK(!reg.addSkin(root / "Creator" / "skins" / "bad", why) && why.find("skin.json") != std::string::npos);
     fs::remove_all(root);
+}
+
+TEST(json_numbers_keep_fractions)
+{
+    wotm::json::Value v;
+    CHECK(wotm::json::parse("[1.5, -0.25, 3, 1e3, 2.5E-2, 0.1, 120.0]", v) && v.arr.size() == 7);
+    if (v.arr.size() == 7)
+    {
+        CHECK(v.arr[0].asNum() == 1.5 && v.arr[0].i == 1);   // integer readers still see the truncated value
+        CHECK(v.arr[1].asNum() == -0.25 && v.arr[2].asNum() == 3.0 && !v.arr[2].frac);
+        CHECK(v.arr[3].asNum() == 1000.0 && v.arr[4].asNum() == 0.025 && v.arr[5].asNum() == 0.1);
+        CHECK(v.arr[6].frac && v.arr[6].asNum() == 120.0);
+    }
+    CHECK(wotm::json::dump(wotm::json::Value::number(0.1)) == "0.1\n");
+    CHECK(wotm::json::dump(wotm::json::Value::number(2.0)) == "2.0\n");
+    CHECK(wotm::json::dump(wotm::json::Value::number(-1234.5)) == "-1234.5\n");
+    CHECK(!wotm::json::parse("1.", v) && !wotm::json::parse("1e", v));
+}
+
+namespace
+{
+    namespace sm = wotm::stagemap;
+
+    // Synthetic stage image for the stagemap tests: the header (root count + roots) at kBase, nodes 16-aligned after it, and a
+    // separate buffer mapped at the reserve. Layouts as include/hieri_types.h.
+    struct Img
+    {
+        std::vector<uint8_t> img, res;
+        uint32_t top = sm::kBase + 0x100;
+        explicit Img(uint32_t imgSize = 0x8000, uint32_t resSize = 0x400) : img(imgSize), res(resSize) {}
+
+        uint8_t *at(uint32_t a) { return a >= sm::kReserve ? &res[a - sm::kReserve] : &img[a - sm::kBase]; }
+        void w32(uint32_t a, uint32_t v) { std::memcpy(at(a), &v, 4); }
+        void w16(uint32_t a, uint16_t v) { std::memcpy(at(a), &v, 2); }
+        void wf(uint32_t a, float v) { std::memcpy(at(a), &v, 4); }
+        uint32_t r32(uint32_t a) { uint32_t v; std::memcpy(&v, at(a), 4); return v; }
+        float rf(uint32_t a) { float v; std::memcpy(&v, at(a), 4); return v; }
+
+        uint32_t alloc(uint32_t size)
+        {
+            const uint32_t a = top;
+            top += (size + 15) & ~15u;
+            return a;
+        }
+        uint32_t node(uint32_t op, uint32_t size, uint32_t id1 = 0)
+        {
+            const uint32_t a = alloc(size);
+            w32(a, id1 << 18 | op);
+            return a;
+        }
+        void kids(uint32_t a, const std::vector<uint32_t> &ks)
+        {
+            for (size_t i = 0; i < ks.size(); ++i)
+                w32(a + 4 * uint32_t(i), ks[i]);
+        }
+        void sphere(uint32_t a, float x, float y, float z, float r)
+        {
+            wf(a + 0xC, r * r), wf(a + 0x10, x), wf(a + 0x14, y), wf(a + 0x18, z), wf(a + 0x1C, r);
+        }
+        uint32_t object(uint32_t id1 = 0, float x = 0, float y = 0, float z = 0, float r = 10)
+        {
+            const uint32_t a = node(0, 0x20, id1);
+            sphere(a, x, y, z, r);
+            wf(a + 8, r * r);   // an OBJECT keeps radiusSqrd at +8
+            wf(a + 0xC, 0);
+            return a;
+        }
+        uint32_t polycoll() { return node(42, 0x10); }
+        uint32_t group(const std::vector<uint32_t> &ks, float x = 0, float y = 0, float z = 0, float r = 20, uint32_t id1 = 0)
+        {
+            const uint32_t a = node(1, 0x20 + 4 * uint32_t(ks.size()), id1);
+            w16(a + 8, uint16_t(ks.size()));
+            w16(a + 0xA, 1);
+            sphere(a, x, y, z, r);
+            kids(a + 0x20, ks);
+            return a;
+        }
+        uint32_t translate(const std::vector<uint32_t> &ks, float x, float y, float z, uint32_t id1 = 0)
+        {
+            const uint32_t a = node(3, 0x1C + 4 * uint32_t(ks.size()), id1);
+            w32(a + 8, uint32_t(ks.size()));
+            wf(a + 0x10, x), wf(a + 0x14, y), wf(a + 0x18, z);
+            kids(a + 0x1C, ks);
+            return a;
+        }
+        uint32_t rotate(const std::vector<uint32_t> &ks, float deg, float x, float y, float z)
+        {
+            const uint32_t a = node(4, 0x50 + 4 * uint32_t(ks.size()));
+            w32(a + 8, uint32_t(ks.size()));
+            const M4 m = rotZ(deg, 1.f, 1.f, 1.f, x, y, z);
+            for (int r = 0; r < 4; ++r)
+                for (int c = 0; c < 4; ++c)
+                    wf(a + 0x10 + 16 * r + 4 * c, m.m[r][c]);
+            kids(a + 0x50, ks);
+            return a;
+        }
+        uint32_t holder(uint32_t op, uint32_t countOff, uint32_t kidsOff, const std::vector<uint32_t> &ks)
+        {
+            const uint32_t a = node(op, kidsOff + 4 * uint32_t(ks.size()));
+            w32(a + countOff, uint32_t(ks.size()));
+            kids(a + kidsOff, ks);
+            return a;
+        }
+        uint32_t control(uint32_t child1, uint32_t child2)
+        {
+            const uint32_t a = node(8, 0x20);
+            w32(a + 4, child1), w32(a + 8, child2);
+            return a;
+        }
+        uint32_t lod(uint32_t child, float x, float y, float z, float r)
+        {
+            const uint32_t a = node(2, 0x30);
+            w32(a + 4, 1);
+            wf(a + 0x10, x), wf(a + 0x14, y), wf(a + 0x18, z), wf(a + 0x1C, r);
+            w32(a + 0x28, child);
+            return a;
+        }
+        uint32_t path(float x0, float y0, float z0, float x1, float y1, float z1, const std::vector<uint32_t> &nodes)
+        {
+            const uint32_t a = alloc(0x24 + 4 * uint32_t(nodes.size()));
+            wf(a, x0), wf(a + 4, y0), wf(a + 8, z0), wf(a + 0xC, x1), wf(a + 0x10, y1), wf(a + 0x14, z1);
+            w32(a + 0x1C, uint32_t(nodes.size()));
+            kids(a + 0x24, nodes);
+            return a;
+        }
+        uint32_t grid(int nc, int nr, float cell, float minx, float miny, float maxx, float maxy)
+        {
+            const uint32_t a = node(15, 0x20 + 4 * uint32_t(nc * nr));
+            w16(a + 4, uint16_t(nc)), w16(a + 6, uint16_t(nr));
+            wf(a + 8, cell), wf(a + 0xC, minx), wf(a + 0x10, miny), wf(a + 0x14, maxx), wf(a + 0x18, maxy);
+            return a;
+        }
+        int cols(uint32_t g) { return int(int16_t(r32(g + 4) & 0xFFFF)); }
+        int rows(uint32_t g) { return int(int16_t(r32(g + 4) >> 16)); }
+
+        // Cells a path's box covers, written here on its own (floor-inclusive, clamped, row * nCols + col: tools/stage_map.py covered())
+        std::vector<int> cover(uint32_t g, uint32_t p)
+        {
+            const int nc = cols(g), nr = rows(g);
+            const double cs = rf(g + 8), mx = rf(g + 0xC), my = rf(g + 0x10);
+            auto span = [&](double lo, double hi, double o, int k, int &a, int &b) {
+                a = std::max(int(std::floor((lo - o) / cs)), 0);
+                b = std::min(int(std::floor((hi - o) / cs)), k - 1);
+            };
+            int c0, c1, r0, r1;
+            span(rf(p), rf(p + 0xC), mx, nc, c0, c1);
+            span(rf(p + 4), rf(p + 0x10), my, nr, r0, r1);
+            std::vector<int> out;
+            for (int r = r0; r <= r1; ++r)
+                for (int c = c0; c <= c1; ++c)
+                    out.push_back(r * nc + c);
+            return out;
+        }
+        // lists each path in the cells its box covers (list nodes appended after the image's nodes)
+        void link(uint32_t g, const std::vector<uint32_t> &paths)
+        {
+            for (uint32_t p : paths)
+                for (int cell : cover(g, p))
+                {
+                    const uint32_t ln = alloc(8);
+                    w32(ln, 0), w32(ln + 4, p);
+                    uint32_t slot = g + 0x20 + 4 * uint32_t(cell);
+                    while (r32(slot))
+                        slot = r32(slot);
+                    w32(slot, ln);
+                }
+        }
+        void roots(const std::vector<uint32_t> &rs)
+        {
+            w32(sm::kBase, uint32_t(rs.size()));
+            kids(sm::kBase + 4, rs);
+        }
+        // (cell, list node) pairs that list path p, in cell order
+        std::vector<std::pair<int, uint32_t>> listing(uint32_t g, uint32_t p)
+        {
+            std::vector<std::pair<int, uint32_t>> out;
+            for (int i = 0; i < cols(g) * rows(g); ++i)
+                for (uint32_t ln = r32(g + 0x20 + 4 * uint32_t(i)); ln; ln = r32(ln))
+                    if (r32(ln + 4) == p)
+                        out.push_back({i, ln});
+            return out;
+        }
+        std::vector<int> cellsOf(uint32_t g, uint32_t p)
+        {
+            std::vector<int> out;
+            for (const auto &c : listing(g, p))
+                out.push_back(c.first);
+            return out;
+        }
+        // the grid rule: every listed path in exactly the cells its box covers, once per cell, no list node in two cells
+        int gridProblems(uint32_t g)
+        {
+            int bad = 0;
+            std::vector<uint32_t> seen, paths;
+            for (int i = 0; i < cols(g) * rows(g); ++i)
+            {
+                std::vector<uint32_t> here;
+                for (uint32_t ln = r32(g + 0x20 + 4 * uint32_t(i)); ln; ln = r32(ln))
+                {
+                    bad += std::find(seen.begin(), seen.end(), ln) != seen.end();
+                    seen.push_back(ln);
+                    const uint32_t p = r32(ln + 4);
+                    bad += std::find(here.begin(), here.end(), p) != here.end();
+                    here.push_back(p);
+                    if (std::find(paths.begin(), paths.end(), p) == paths.end())
+                        paths.push_back(p);
+                }
+            }
+            for (uint32_t p : paths)
+                bad += cellsOf(g, p) != cover(g, p);
+            return bad;
+        }
+        sm::Mem mem() { return sm::Mem{{{sm::kBase, img.data(), uint32_t(img.size())}, {sm::kReserve, res.data(), uint32_t(res.size())}}}; }
+        sm::Reserve reserve() { return sm::Reserve{sm::kReserve, sm::kReserve + uint32_t(res.size())}; }
+    };
+
+    // A 4 x 4 grid of 200-unit cells from (0, 0); piece A (TRANSLATE at 100,100 under a GROUP `mid`), piece B (ROTATE at
+    // 500,100, 30 degrees), and a ground hull under the world root listed in all 16 cells.
+    struct Stage
+    {
+        Img im;
+        uint32_t g, world, mid, tA, gA, objA, pcA, pA, rB, objB, pcB, pB, pcG, pG;
+        Stage()
+        {
+            objA = im.object(), pcA = im.polycoll();
+            gA = im.group({objA, pcA});
+            tA = im.translate({gA}, 100, 100, 0, 7);
+            im.w32(tA, im.r32(tA) | 3u << 7);   // id2 3 as well: both ids survive edits
+            mid = im.group({tA}, 100, 100, 0, 50);
+            objB = im.object(), pcB = im.polycoll();
+            rB = im.rotate({objB, pcB}, 30, 500, 100, 0);
+            pcG = im.polycoll();
+            world = im.group({mid, rB, pcG}, 400, 400, 0, 600, 1);
+            g = im.grid(4, 4, 200, 0, 0, 800, 800);
+            pA = im.path(90, 95, 0, 130, 105, 30, {world, mid, tA, gA, pcA});
+            pB = im.path(480, 90, 0, 540, 110, 10, {world, rB, pcB});
+            pG = im.path(0, 0, 0, 800, 800, 0, {world, pcG});
+            im.link(g, {pA, pB, pG});
+            im.roots({world, g});
+        }
+        uint32_t off(uint32_t a) const { return a - sm::kBase; }
+        sm::Result run(std::vector<sm::Edit> edits, sm::Reserve &res)
+        {
+            sm::Map m;
+            m.edits = std::move(edits);
+            return sm::apply(im.mem(), uint32_t(im.img.size()), m, res);
+        }
+        sm::Result run(std::vector<sm::Edit> edits)
+        {
+            sm::Reserve res = im.reserve();
+            return run(std::move(edits), res);
+        }
+    };
+
+    sm::Edit moveTo(uint32_t node, float x, float y, float z, float turn = 0)
+    {
+        sm::Edit e;
+        e.node = node, e.move = true, e.pos[0] = x, e.pos[1] = y, e.pos[2] = z, e.turn = turn;
+        return e;
+    }
+    sm::Edit turnBy(uint32_t node, float turn)
+    {
+        sm::Edit e;
+        e.node = node, e.turn = turn;
+        return e;
+    }
+    sm::Edit removal(uint32_t node)
+    {
+        sm::Edit e;
+        e.node = node, e.remove = true;
+        return e;
+    }
+    bool logHas(const sm::Result &r, const std::string &what)
+    {
+        for (const std::string &l : r.log)
+            if (l.find(what) != std::string::npos)
+                return true;
+        return false;
+    }
+    std::string hexOff(uint32_t off)
+    {
+        char b[16];
+        std::snprintf(b, sizeof b, "0x%x", off);
+        return b;
+    }
+}
+
+TEST(stagemap_fnv)
+{
+    CHECK(sm::fnv1a(nullptr, 0) == 0xCBF29CE484222325ull);
+    CHECK(sm::fnv1a(reinterpret_cast<const uint8_t *>("a"), 1) == 0xAF63DC4C8601EC8Cull);
+}
+
+TEST(stagemap_parse)
+{
+    const std::string good = R"({
+  "name": "DOWNTOWN MESS",
+  "base": "CENTRAL",
+  "baseHash": "0123456789abcdef",
+  "edits": [
+    { "node": "0x61e340", "move": [120.5, -40.0, 0], "turn": 90 },
+    { "node": "0x62a1c0", "remove": true },
+    { "node": "0x100", "turn": -15.25 }
+  ]
+})";
+    sm::Map m;
+    std::string why;
+    CHECK(sm::parse(good, m, why));
+    CHECK(m.name == "DOWNTOWN MESS" && m.base == "CENTRAL" && m.baseHash == 0x0123456789abcdefull && m.edits.size() == 3);
+    if (m.edits.size() == 3)
+    {
+        const sm::Edit &a = m.edits[0], &b = m.edits[1], &c = m.edits[2];
+        CHECK(a.node == 0x61e340 && !a.remove && a.move && a.pos[0] == 120.5f && a.pos[1] == -40.f && a.pos[2] == 0.f && a.turn == 90.f);
+        CHECK(b.node == 0x62a1c0 && b.remove && !b.move && b.turn == 0.f);
+        CHECK(c.node == 0x100 && !c.remove && !c.move && c.turn == -15.25f);
+    }
+    auto bad = [](const std::string &edit, const std::string &needle, const char *top = nullptr) {
+        const std::string text = top ? std::string(top)
+                                     : R"({"name": "X", "base": "CENTRAL", "baseHash": "0123456789abcdef", "edits": [)" + edit + "]}";
+        sm::Map out;
+        std::string w;
+        const bool ok = sm::parse(text, out, w);
+        if (ok || w.find(needle) == std::string::npos)
+            std::printf("  parse(%s) -> %d \"%s\"\n", text.c_str(), int(ok), w.c_str());
+        return !ok && w.find(needle) != std::string::npos;
+    };
+    CHECK(bad("", "base", R"({"name": "X", "baseHash": "0123456789abcdef", "edits": []})"));
+    CHECK(bad("", "baseHash", R"({"name": "X", "base": "CENTRAL", "baseHash": "0123", "edits": []})"));
+    CHECK(bad("", "name", R"({"name": "lower case", "base": "CENTRAL", "baseHash": "0123456789abcdef", "edits": []})"));
+    CHECK(bad("", "JSON", "{ nope"));
+    CHECK(bad(R"({"node": "0xZZ", "remove": true})", "node"));
+    CHECK(bad(R"({"node": "0x102", "remove": true})", "node"));   // not a multiple of 4
+    CHECK(bad(R"({"node": "0x100", "remove": true, "move": [1, 2, 3]})", "remove"));
+    CHECK(bad(R"({"node": "0x100", "remove": false})", "remove"));
+    CHECK(bad(R"({"node": "0x100", "spin": 1})", "spin"));
+    CHECK(bad(R"({"node": "0x100", "move": ["a", 0, 0]})", "move"));
+    CHECK(bad(R"({"node": "0x100", "move": [1, 2]})", "move"));
+    CHECK(bad(R"({"node": "0x100", "turn": "90"})", "turn"));
+    CHECK(bad(R"({"node": "0x100"})", "nothing"));
+    sm::Map empty;
+    CHECK(sm::parse(R"({"name": "A-1 B", "base": "3-MILE", "baseHash": "FFFFFFFFFFFFFFFF", "edits": []})", empty, why) &&
+          empty.edits.empty() && empty.baseHash == ~0ull);
+}
+
+TEST(stagemap_write_roundtrip)
+{
+    sm::Map m;
+    m.name = "TEST ONE";
+    m.base = "CENTRAL";
+    m.baseHash = 0x00ab00cd00ef0012ull;
+    m.edits.push_back(moveTo(0x61e340, 0.1f, -1234.567f, 1e-5f, 22.5f));
+    m.edits.push_back(removal(0x62a1c0));
+    m.edits.push_back(turnBy(0x400, -90.f));
+    m.edits.push_back(moveTo(0x404, 3.f, 4.f, 5.f));
+    sm::Map back;
+    std::string why;
+    CHECK(sm::parse(sm::write(m), back, why));
+    CHECK(back.name == m.name && back.base == m.base && back.baseHash == m.baseHash && back.edits.size() == m.edits.size());
+    bool same = back.edits.size() == m.edits.size();
+    for (size_t i = 0; same && i < m.edits.size(); ++i)
+    {
+        const sm::Edit &a = m.edits[i], &b = back.edits[i];
+        same = a.node == b.node && a.remove == b.remove && a.move == b.move && a.turn == b.turn;
+        for (int k = 0; k < 3; ++k)
+            same = same && (!a.move || bitsOf(a.pos[k]) == bitsOf(b.pos[k]));
+    }
+    CHECK(same);
+}
+
+// The coverage rule on the same cases as tools/stage_map.py selftest: a box past both X edges, a negative start, one fully
+// outside, and one ending exactly on a cell line (floor-inclusive takes the next cell).
+TEST(stagemap_covered)
+{
+    const sm::GridDims g{4, 2, 100.f, -100.f, 0.f, 300.f, 200.f};
+    auto cells = [&](float x0, float y0, float x1, float y1) {
+        const float lo[3] = {x0, y0, 0.f}, hi[3] = {x1, y1, 9.f};
+        return sm::covered(g, lo, hi);
+    };
+    CHECK(cells(-160.f, 110.f, 450.f, 150.f) == std::vector<int>({4, 5, 6, 7}));
+    CHECK(cells(-50.f, 10.f, 20.f, 50.f) == std::vector<int>({0, 1}));
+    CHECK(cells(-500.f, 10.f, -300.f, 20.f).empty());
+    CHECK(cells(0.f, 0.f, 100.f, 100.f) == std::vector<int>({1, 2, 5, 6}));
+}
+
+TEST(stagemap_reserve_alloc)
+{
+    sm::Reserve r{0x1008, 0x1040};
+    CHECK(r.alloc(8) == 0x1010 && r.next == 0x1020);
+    CHECK(r.alloc(0x11) == 0x1020 && r.next == 0x1040);
+    CHECK(r.alloc(1) == 0 && r.next == 0x1040);
+}
+
+TEST(stagemap_walk)
+{
+    Img im;
+    const uint32_t o1 = im.object(), pc1 = im.polycoll(), shared = im.object();
+    const uint32_t g1 = im.group({o1, pc1, shared}), t1 = im.translate({g1}, 50, 50, 0);
+    const uint32_t g2 = im.group({im.object(), shared}), t2 = im.translate({g2}, 150, 50, 0);
+    const uint32_t ts = im.translate({im.object()}, 1, 1, 1), sc = im.holder(30, 8, 0x2C, {ts});    // under a SCALE
+    const uint32_t ta = im.translate({im.object()}, 2, 2, 2), ax = im.holder(17, 4, 0xCC, {ta});    // under an ANIM_XFORM
+    const uint32_t tb = im.translate({im.object()}, 3, 3, 3), sb = im.holder(35, 4, 0xC, {tb});     // under a SKEL_BONE
+    const uint32_t tc = im.translate({im.object()}, 4, 4, 4), as = im.holder(38, 4, 0x60, {tc});    // under an ANIM_SCALE
+    const uint32_t te = im.translate({}, 5, 5, 5);                                                   // no geometry
+    const uint32_t world = im.group({t1, t2, sc, ax, sb, as, te}, 0, 0, 0, 1000, 1);
+    const uint32_t pedIn = im.translate({im.object()}, 0, 0, 0), ped = im.translate({pedIn}, 9, 9, 9, 3000);
+    const uint32_t tt = im.translate({im.object(18)}, 0, 35, 0), templ = im.group({tt});
+    const uint32_t pick = im.translate({im.group({im.object(5001)})}, 50, 60, 70), pickups = im.group({pick});
+    im.roots({world, ped, templ, pickups});
+    const sm::Mem m = im.mem();
+    const std::map<uint32_t, uint32_t> par = sm::parents(m);
+    for (uint32_t n : {world, t1, g1, o1, pc1, shared, t2, g2, ts, sc, ta, ax, tb, sb, tc, as, te, ped, pedIn, tt, templ, pick, pickups})
+        CHECK(par.count(n) == 1);
+    auto parent = [&](uint32_t n) { const auto it = par.find(n); return it == par.end() ? 0xFFFFFFFFu : it->second; };
+    CHECK(parent(world) == 0 && parent(ped) == 0 && parent(t1) == world && parent(g1) == t1);
+    CHECK(parent(shared) == g1);   // reached twice: keeps its first parent
+    CHECK(parent(ta) == ax && parent(tb) == sb && parent(tc) == as && parent(ts) == sc && parent(pedIn) == ped);
+    CHECK(sm::children(m, ax) == std::vector<uint32_t>({ta}) && sm::children(m, as) == std::vector<uint32_t>({tc}));
+    CHECK(sm::isPiece(m, par, t1) && sm::isPiece(m, par, t2) && sm::isPiece(m, par, tb) && sm::isPiece(m, par, pick));
+    for (uint32_t n : {ts, ta, tc, te, ped, pedIn, tt, world, g1, o1, templ, pickups})
+        CHECK(!sm::isPiece(m, par, n));
+    CHECK(!sm::isPiece(m, par, sm::kBase + 0x7F00));   // not reached
+}
+
+TEST(stagemap_remove)
+{
+    {
+        Stage s;
+        const std::vector<uint8_t> before = s.im.img;
+        const sm::Result r = s.run({removal(s.off(s.tA))});
+        CHECK(r.applied == 1 && r.refused == 0);
+        uint32_t w0;
+        std::memcpy(&w0, &before[s.off(s.tA)], 4);
+        CHECK(s.im.r32(s.tA) == ((w0 & ~63u) | 9));
+        size_t diff = 0;
+        for (size_t i = 0; i < before.size(); ++i)
+            diff += before[i] != s.im.img[i] && (i < s.off(s.tA) || i >= s.off(s.tA) + 4);
+        CHECK(diff == 0);   // only the header word; the grid is untouched
+    }
+    {
+        Stage s;
+        const std::vector<uint8_t> before = s.im.img, rbefore = s.im.res;
+        const sm::Result r = s.run({removal(s.off(s.gA)), removal(0x100000), removal(s.off(s.tA) + 4)});
+        CHECK(r.applied == 0 && r.refused == 3 && r.log.size() == 3);
+        CHECK(logHas(r, hexOff(s.off(s.gA))) && logHas(r, "0x100000") && logHas(r, "not a piece") && logHas(r, "outside"));
+        CHECK(s.im.img == before && s.im.res == rbefore);
+    }
+    {
+        Stage s;
+        const sm::Result r = s.run({removal(s.off(s.tA)), moveTo(s.off(s.tA), 1, 2, 3)});
+        CHECK(r.applied == 1 && r.refused == 1 && logHas(r, "twice") && logHas(r, hexOff(s.off(s.tA))));
+        CHECK(s.im.rf(s.tA + 0x10) == 100.f);
+    }
+}
+
+TEST(stagemap_move)
+{
+    {
+        Stage s;   // +250 in X: from cell 0 to cell 1, the path's own list node moves
+        const sm::Result r = s.run({moveTo(s.off(s.tA), 350, 100, 0)});
+        CHECK(r.applied == 1 && r.refused == 0 && r.relinked == 1 && r.fromReserve == 0);
+        CHECK(s.im.rf(s.tA + 0x10) == 350.f && s.im.rf(s.tA + 0x14) == 100.f && s.im.rf(s.tA + 0x18) == 0.f);
+        CHECK(near(s.im.rf(s.pA), 340.f) && near(s.im.rf(s.pA + 4), 95.f) && near(s.im.rf(s.pA + 0xC), 380.f) &&
+              near(s.im.rf(s.pA + 0x10), 105.f) && s.im.rf(s.pA + 0x8) == 0.f && s.im.rf(s.pA + 0x14) == 30.f);
+        CHECK(s.im.cellsOf(s.g, s.pA) == std::vector<int>({1}));
+        CHECK(s.im.cellsOf(s.g, s.pG).size() == 16 && s.im.cellsOf(s.g, s.pB) == std::vector<int>({2}));
+        CHECK(s.im.gridProblems(s.g) == 0);
+    }
+    {
+        Stage s;   // across a cell line: one more list node, from the reserve
+        sm::Reserve res = s.im.reserve();
+        const uint32_t start = res.next;
+        const sm::Result r = s.run({moveTo(s.off(s.tA), 180, 100, 0)}, res);
+        CHECK(r.applied == 1 && r.relinked == 2 && r.fromReserve == 1);
+        CHECK(s.im.cellsOf(s.g, s.pA) == std::vector<int>({0, 1}) && s.im.gridProblems(s.g) == 0);
+        int inReserve = 0;
+        for (const auto &c : s.im.listing(s.g, s.pA))
+            inReserve += c.second >= start && c.second < res.end;
+        CHECK(inReserve == 1 && res.next > start);
+    }
+    {
+        Stage s;   // the same with no room in the reserve: refused, nothing written
+        const std::vector<uint8_t> before = s.im.img;
+        sm::Reserve none{sm::kReserve, sm::kReserve};
+        const sm::Result r = s.run({moveTo(s.off(s.tA), 180, 100, 0)}, none);
+        CHECK(r.applied == 0 && r.refused == 1 && logHas(r, "reserve") && logHas(r, hexOff(s.off(s.tA))));
+        CHECK(s.im.img == before);
+    }
+    {
+        Stage s;   // past the grid's edges: clamped to the stored min and max
+        const sm::Result r = s.run({moveTo(s.off(s.tA), -50, 100, 0), moveTo(s.off(s.rB), 900, 900, 0)});
+        CHECK(r.applied == 2 && logHas(r, "edge"));
+        CHECK(near(s.im.rf(s.tA + 0x10), 100.f - 90.f) && near(s.im.rf(s.pA), 0.f));                 // box min x was -90 - 50 + 100
+        CHECK(near(s.im.rf(s.rB + 0x40), 900.f - 140.f) && near(s.im.rf(s.rB + 0x44), 790.f));       // box max x 940 -> 800, y 910 -> 800
+        CHECK(near(s.im.rf(s.pB + 0xC), 800.f) && near(s.im.rf(s.pB + 0x10), 800.f));
+        CHECK(s.im.gridProblems(s.g) == 0 && s.im.cellsOf(s.g, s.pB) == std::vector<int>({15}));
+    }
+    {
+        Stage s;   // a ROTATE piece moves through its fourth row; its 3x3 stays
+        const float m00 = s.im.rf(s.rB + 0x10), m01 = s.im.rf(s.rB + 0x14);
+        const sm::Result r = s.run({moveTo(s.off(s.rB), 500, 300, 5)});
+        CHECK(r.applied == 1 && s.im.rf(s.rB + 0x40) == 500.f && s.im.rf(s.rB + 0x44) == 300.f && s.im.rf(s.rB + 0x48) == 5.f);
+        CHECK(s.im.rf(s.rB + 0x4C) == 1.f && s.im.rf(s.rB + 0x10) == m00 && s.im.rf(s.rB + 0x14) == m01);
+        CHECK(near(s.im.rf(s.pB), 480.f) && near(s.im.rf(s.pB + 4), 290.f) && near(s.im.rf(s.pB + 8), 5.f) && near(s.im.rf(s.pB + 0x14), 15.f));
+        CHECK(s.im.cellsOf(s.g, s.pB) == std::vector<int>({6}) && s.im.gridProblems(s.g) == 0);
+    }
+}
+
+TEST(stagemap_spheres)
+{
+    {
+        Stage s;   // out of `mid`'s sphere: mid grows, center kept; the world root's sphere already covers it
+        const sm::Result r = s.run({moveTo(s.off(s.tA), 700, 700, 0)});
+        CHECK(r.applied == 1);
+        const double want = std::sqrt(600.0 * 600.0 * 2.0) + 20.0;   // |(700,700) - (100,100)| + gA's radius
+        const float rad = s.im.rf(s.mid + 0x1C);
+        CHECK(double(rad) >= want && near(rad, float(want)) && s.im.rf(s.mid + 0xC) == rad * rad);
+        CHECK(s.im.rf(s.mid + 0x10) == 100.f && s.im.rf(s.mid + 0x14) == 100.f && s.im.rf(s.mid + 0x18) == 0.f);
+        CHECK(s.im.rf(s.world + 0x1C) == 600.f && s.im.rf(s.world + 0xC) == 360000.f);
+    }
+    {
+        Stage s;   // a move inside the sphere changes nothing
+        s.run({moveTo(s.off(s.tA), 110, 100, 0)});
+        CHECK(s.im.rf(s.mid + 0x1C) == 50.f && s.im.rf(s.mid + 0xC) == 2500.f);
+    }
+    {
+        Img im;   // a LOD above the piece: its sphere drives LOD switching, so it is logged and left alone
+        const uint32_t t = im.translate({im.object()}, 10, 10, 0), l = im.lod(t, 10, 10, 0, 30);
+        const uint32_t world = im.group({l}, 0, 0, 0, 5000, 1), g = im.grid(2, 2, 200, 0, 0, 400, 400);
+        im.roots({world, g});
+        sm::Map m;
+        m.edits.push_back(moveTo(t - sm::kBase, 300, 300, 0));
+        sm::Reserve res = im.reserve();
+        const sm::Result r = sm::apply(im.mem(), uint32_t(im.img.size()), m, res);
+        CHECK(r.applied == 1 && im.rf(t + 0x10) == 300.f && im.rf(l + 0x1C) == 30.f && im.rf(l + 0x10) == 10.f);
+        CHECK(logHas(r, "LOD") && logHas(r, hexOff(l - sm::kBase)));
+    }
+}
+
+TEST(stagemap_turn_rotate_piece)
+{
+    {
+        Stage s;   // 30 + 90 degrees, moved: the 3x3 is multiplied by rotZ(90), the fourth row is the new place
+        const sm::Result r = s.run({moveTo(s.off(s.rB), 500, 300, 0, 90)});
+        CHECK(r.applied == 1);
+        const M4 want = rotZ(120.f);
+        bool ok = true;
+        for (int i = 0; i < 3; ++i)
+            for (int j = 0; j < 4; ++j)
+                ok = ok && near(s.im.rf(s.rB + 0x10 + 16 * i + 4 * j), want.m[i][j], 1e-5f);
+        CHECK(ok);
+        CHECK(s.im.rf(s.rB + 0x40) == 500.f && s.im.rf(s.rB + 0x44) == 300.f && s.im.rf(s.rB + 0x48) == 0.f && s.im.rf(s.rB + 0x4C) == 1.f);
+        // box relative to the old place (-20..40, -10..10) turned 90: (-10..10, -20..40)
+        CHECK(near(s.im.rf(s.pB), 490.f) && near(s.im.rf(s.pB + 4), 280.f) && near(s.im.rf(s.pB + 0xC), 510.f) && near(s.im.rf(s.pB + 0x10), 340.f));
+        CHECK(s.im.cellsOf(s.g, s.pB) == std::vector<int>({6}) && s.im.gridProblems(s.g) == 0);
+    }
+    {
+        Stage s;   // a turn alone keeps the place; 45 degrees is not a right angle
+        const sm::Result r = s.run({turnBy(s.off(s.rB), 45)});
+        CHECK(r.applied == 1 && s.im.rf(s.rB + 0x40) == 500.f && s.im.rf(s.rB + 0x44) == 100.f);
+        CHECK(near(s.im.rf(s.rB + 0x10), std::cos(75.f * 3.14159265f / 180.f), 1e-5f) &&
+              near(s.im.rf(s.rB + 0x14), std::sin(75.f * 3.14159265f / 180.f), 1e-5f));
+        CHECK(s.im.gridProblems(s.g) == 0);
+    }
+}
+
+TEST(stagemap_turn_translate_piece)
+{
+    {
+        Stage s;
+        s.im.w32(s.tA + 4, 0x1234);   // a GS ctx: the ROTATE keeps it (the renderer swaps ctx at TRANSLATE and ROTATE alike)
+        const uint32_t word = s.im.r32(s.tA);
+        sm::Reserve res = s.im.reserve();
+        const uint32_t start = res.next;
+        const sm::Result r = s.run({turnBy(s.off(s.tA), 90)}, res);
+        CHECK(r.applied == 1 && r.refused == 0);
+        const uint32_t rot = s.im.r32(s.mid + 0x20);   // mid's child slot now holds the ROTATE
+        CHECK(rot != s.tA && rot >= start && rot < res.end && rot % 16 == 0);
+        CHECK(s.im.r32(rot) == ((word & ~127u) | 4) && s.im.r32(rot + 4) == 0x1234 && s.im.r32(rot + 8) == 1 && s.im.r32(rot + 0xC) == 0);
+        CHECK(s.im.r32(rot + 0x50) == s.gA);
+        const float want[16] = {0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1, 0, 100, 100, 0, 1};
+        bool ok = true;
+        for (int k = 0; k < 16; ++k)
+            ok = ok && s.im.rf(rot + 0x10 + 4 * uint32_t(k)) == want[k];
+        CHECK(ok);
+        CHECK(s.im.r32(s.pA + 0x24 + 8) == rot && s.im.r32(s.pA + 0x24 + 4) == s.mid && s.im.r32(s.pA + 0x24 + 12) == s.gA);
+        CHECK((s.im.r32(s.tA) & 63) == 3 && s.im.rf(s.tA + 0x10) == 100.f);   // the TRANSLATE itself is left as it was
+        // box (-10..30, -5..5) around (100,100) turned 90: (-5..5, -10..30)
+        CHECK(near(s.im.rf(s.pA), 95.f) && near(s.im.rf(s.pA + 4), 90.f) && near(s.im.rf(s.pA + 0xC), 105.f) && near(s.im.rf(s.pA + 0x10), 130.f));
+        CHECK(s.im.gridProblems(s.g) == 0);
+    }
+    {
+        Stage s;   // turned and moved
+        const sm::Result r = s.run({moveTo(s.off(s.tA), 300, 300, 0, 90)});
+        const uint32_t rot = s.im.r32(s.mid + 0x20);
+        CHECK(r.applied == 1 && s.im.rf(rot + 0x40) == 300.f && s.im.rf(rot + 0x44) == 300.f);
+        CHECK(near(s.im.rf(s.pA), 295.f) && near(s.im.rf(s.pA + 4), 290.f) && near(s.im.rf(s.pA + 0xC), 305.f) && near(s.im.rf(s.pA + 0x10), 330.f));
+        CHECK(s.im.cellsOf(s.g, s.pA) == std::vector<int>({5}) && s.im.gridProblems(s.g) == 0);
+    }
+    {
+        Stage s;   // no room for the ROTATE: refused, nothing written
+        const std::vector<uint8_t> before = s.im.img;
+        sm::Reserve none{sm::kReserve, sm::kReserve};
+        const sm::Result r = s.run({turnBy(s.off(s.tA), 90)}, none);
+        CHECK(r.applied == 0 && r.refused == 1 && logHas(r, "reserve") && s.im.img == before);
+    }
+    {
+        Img im;   // the parent is a CONTROL and the piece sits in its second slot
+        const uint32_t ghost = im.object(), t = im.translate({im.object()}, 50, 50, 0), c = im.control(ghost, t);
+        const uint32_t world = im.group({c}, 0, 0, 0, 5000, 1), g = im.grid(2, 2, 200, 0, 0, 400, 400);
+        im.roots({world, g});
+        sm::Map m;
+        m.edits.push_back(turnBy(t - sm::kBase, 180));
+        sm::Reserve res = im.reserve();
+        const sm::Result r = sm::apply(im.mem(), uint32_t(im.img.size()), m, res);
+        const uint32_t rot = im.r32(c + 8);
+        CHECK(r.applied == 1 && im.r32(c + 4) == ghost && rot >= sm::kReserve && (im.r32(rot) & 63) == 4);
+        CHECK(im.rf(rot + 0x10) == -1.f && im.rf(rot + 0x14) == 0.f && im.rf(rot + 0x24) == -1.f && im.rf(rot + 0x40) == 50.f);
+    }
 }
 
 int main()
