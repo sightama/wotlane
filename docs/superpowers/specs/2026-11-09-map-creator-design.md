@@ -68,7 +68,7 @@ Decisions taken with Jake:
 ## Pieces
 
 A piece is the nearest `TRANSLATE` (or `ROTATE`) above a building, prop or destructible (typically
-`GROUP -> TRANSLATE -> INTERACTIVE -> DESTRUCTIBLE -> ...`). `CENTRAL` has about 366 with geometry. Ground hulls with no
+`GROUP -> TRANSLATE -> INTERACTIVE -> DESTRUCTIBLE -> ...`). `CENTRAL` has 373 (rule in PR 1 checks, 1i). Ground hulls with no
 transform above them (7 in `CENTRAL`) and pedestrian groups (root `TRANSLATE`s with id1 3000) are not pieces. A piece with
 a `ROTATE` gets moved through the translation row of its matrix. Most buildings have only a `TRANSLATE`, so a turn on one
 allocates a `ROTATE` in the reserve (see "Grid nodes") whose matrix is the turn with the piece's translation in its fourth row
@@ -227,3 +227,18 @@ Task 1 of the PR 1 plan. Addresses in the generated recompiled code (`recomp/ret
   (`src/game/reset.cpp:28-55`); nothing tied to pieces. Trigger zones are `COLL_TRIG` collision paths in the grid (`CENTRAL`:
   18, all under a `TRANSLATE` or `ROTATE`); they follow a moved piece through the same relink, so the relink includes
   trigger paths.
+- **1i. Piece rule** (`tools/stage_map.py`, mirrored by the loader). Walk: depth-first preorder from the header's roots in
+  order, children in slot order, a node reached twice keeps its first parent. The children table needs `ANIM_XFORM` (17,
+  count +4, children +0xCC), `SKEL_BONE` (35, count +4, children +0xC) and `ANIM_SCALE` (38, count +4, children +0x60) as
+  well as the plan's list: without them 527 node entries of stock collision paths are unreachable. With them every node of every
+  stock path is reached and each step of a path is a parent-child link, except 39 steps (AIRPORT, CAPITOL, ISLAND, VEGAS,
+  VOLCANO) that leave a `NULL` on disc, where `hdTraversePath` stops anyway. **Rule:** a piece is a `TRANSLATE`
+  or `ROTATE` with a parent, whose subtree holds an `OBJECT` or `POLY_COLL`, with no transforming node (`TRANSLATE`,
+  `ROTATE`, `SCALE`, `ANIM_XFORM`, `ANIM_SCALE`) on its first-parent chain. The plan's "no piece above" let in 48 nodes of
+  `CENTRAL` under an `ANIM_XFORM` (animated vehicles and parts, whose place comes from the animation) and, on METRO and
+  VEGAS, nodes under a `SCALE`; with no transform above, a piece's own translation (a `ROTATE`'s fourth row) is its world
+  position, which is what `move` writes. `CHAR_INSTANCE` and `SKEL_BONE` do not transform and do not block. Root-level
+  transforms (pedestrians, id1 3000) and what is under them are excluded by the same rule. No piece has two parents on any
+  stage. `CENTRAL`: **373 pieces** (99 `ROTATE`), 55 of them on collision paths (all destructible) under the world root
+  (id1 1, 202 pieces in all); the other 171 are under the id1 0 roots (0x250, 0x280, 0x600), some at the origin (templates);
+  the editor's picking (bounding sphere hit) decides whether those are useful.
