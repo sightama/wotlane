@@ -229,7 +229,7 @@ void exportPointsTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     if (ctx->pc == kExportPoints && !g_pups.empty() && !g_pupMap.empty() && g_pupMap == g_active &&
         static_cast<int32_t>(rd32(rdram, kGameModeAddr)) != 8)
     {
-        const uint32_t self = GPR_U32(ctx, 4) & PS2_RAM_MASK, n = rd32(rdram, self + kNumPointsOff);
+        const uint32_t self = GPR_U32(ctx, 4) & PS2_RAM_MASK;
         if (self != kPowerUpTool)
         {
             if (!g_pupLogged)
@@ -238,6 +238,7 @@ void exportPointsTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         }
         else
         {
+            const uint32_t n = rd32(rdram, kPowerUpTool + kNumPointsOff);
             sm::Mem mem;
             mem.r.push_back({kPowerUpTool, rdram + kPowerUpTool, sm::kMaxPoints * sm::kPointSize});
             const sm::PowerUpResult r = sm::applyPowerUps(mem, kPowerUpTool, n, g_pups);
