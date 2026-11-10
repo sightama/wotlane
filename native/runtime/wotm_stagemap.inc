@@ -35,6 +35,15 @@
 //   game's own "no interactive" id (dispatchHit and HitHistory::newHit ignore id 0, Debris skips a node with id2 0, a hit on a
 //   node with id 0 reaches nobody); the first refusal of a load is logged. The maps' estimate keeps them under 1000 (decision 7):
 //   the guard is for what the estimate cannot see (HomingBugs, the Airplane, the UFO, bosses).
+// - LevelPickups::createPickup (0x181750) is guarded the same way for MemoryStack::global, whose alloc16 has no bounds check
+//   (include/memory_stack.h:58-63): an allocation past hi1 runs over the high end and the end of the 0x80000 pool. When the free
+//   room (hi1 - low) is under the pickup's size (sm::levelPickupBytes() of its id1, plus 16 for alignment) the call allocates
+//   nothing and returns 0, the value createPickup itself returns for a type that creates nothing (Pickup.cpp:1166-1167): the
+//   stage traversal (dbProcInteractive, db.cpp:223; retail 0x12E818 branches to the return) and Debris::update's settled and
+//   dying chunks (Debris.cpp:412, 442; retail 0x12FD74, 0x12FE54 go on to csDeactivate) ignore the result. Debris::Activate's
+//   rigid chunk (Debris.cpp:294) does not: retail 0x12F768-0x12F774 loads the node's data and calls huck on it with no null
+//   test, so that call (return address 0x12F768) is let through and logged, as is any caller not in kPickupTolerantRa; the
+//   maps' estimate charges every debris pickup against the room (spec 2g). The first refusal of a load is logged.
 // - WOTM_STAGE_BREAK=<seconds> (test only): that long after the fight's first frame, the first applied copy with a destructible
 //   goes to its last state through Destructible::ChangeState (integer arguments), and 120 frames later the copy's and the
 //   source's INTERACTIVE_STATE whichChild are logged (tick(), called from the Monster::update hook's slot-0 path).
@@ -63,9 +72,14 @@ constexpr uint32_t kAddInteractive = wotm::fn::addInteractive__12InteractivesP13
                    kDbInteractive = wotm::sym::x_12Interactives_s_dbInteractive, kInteractiveSlots = 1024;
 constexpr uint32_t kChangeState = wotm::fn::ChangeState__12DestructibleibT2;   // Destructible::ChangeState(int, bool, bool)
 constexpr uint32_t kNoStock = 0xFFFFFFFFu;   // g_pupStock before the load's first exportPoints
+// LevelPickups::createPickup(_hierhead *ep, _fvector &pos, float (*m)[4], bool regen, ePickupType type): a0 ep, t0 type
+constexpr uint32_t kCreatePickup = wotm::fn::createPickup__12LevelPickupsP9_hierheadR8_fvectorPA3_fb11ePickupType;
+// return addresses of the createPickup calls that ignore the result (see the header): dbProcInteractive, Debris::update twice.
+// The fourth retail caller, Debris::Activate (0x12F768), uses it and is never refused.
+constexpr uint32_t kPickupTolerantRa[3] = {0x12E818, 0x12FD74, 0x12FE54};
 
 PS2Runtime::RecompiledFunction g_origLoadLevelDB = nullptr, g_origZip = nullptr, g_origDbInitDb = nullptr, g_origLoadUserintDB = nullptr,
-                               g_origExportPoints = nullptr, g_origAddInteractive = nullptr;
+                               g_origExportPoints = nullptr, g_origAddInteractive = nullptr, g_origCreatePickup = nullptr;
 
 std::string g_active;          // map id (Registry::stages()), or empty: no map
 bool g_hashed = false;         // g_hash is the hash of the last LoadLevelDB's image (taken only with a map active)
@@ -83,6 +97,8 @@ bool g_pupLogged = false;      // the "exportPoints on another object" line was 
 uint32_t g_pupStock = kNoStock;   // numPoints at the load's first exportPoints (the stock points), kNoStock before it
 uint32_t g_pupTotal = 0;          // numPoints written back by that call (stock plus the places added), for the log
 bool g_addFullLogged = false;     // the Interactives guard logged its refusal for this load
+bool g_pickupFullLogged = false;  // the createPickup guard logged a refusal, for this load
+bool g_pickupRigidLogged = false; // ... and a call it let through for lack of room (a caller that uses the result)
 // WOTM_STAGE_BREAK (tick()): the first applied copy with a destructible, its source, and the break's progress for this load
 sm::CopyInfo g_copy;
 uint32_t g_breakStart = 0, g_breakAt = 0;   // g_frame of the fight's first tick seen (0: none yet), of the break (0: not yet)
@@ -164,6 +180,7 @@ void loadLevelDBTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         g_pupStock = kNoStock;
         g_pupTotal = 0;
         g_addFullLogged = false;
+        g_pickupFullLogged = g_pickupRigidLogged = false;
         g_copy = sm::CopyInfo{};
         g_breakStart = g_breakAt = 0;
         g_breakDone = false;
@@ -333,6 +350,42 @@ void exportPointsTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     g_origExportPoints(rdram, ctx, runtime);
 }
 
+// LevelPickups::createPickup: acted on at its entry only (wrapAll: a resumed call comes back with pc inside it). See the header.
+void createPickupTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+{
+    if (ctx->pc == kCreatePickup)
+    {
+        const uint32_t ep = GPR_U32(ctx, 4), type = GPR_U32(ctx, 8);
+        const uint32_t id1 = type ? type + 0x1388 : rd32(rdram, ep) >> 18;
+        const uint32_t size = sm::levelPickupBytes(id1);
+        const uint32_t low = rd32(rdram, kGlobalStack + 4), hi1 = rd32(rdram, kGlobalStack + 0x10);
+        const uint32_t room = hi1 > low ? hi1 - low : 0;
+        if (size && room < size + 16)
+        {
+            const uint32_t ra = GPR_U32(ctx, 31);
+            const bool tolerant = ra == kPickupTolerantRa[0] || ra == kPickupTolerantRa[1] || ra == kPickupTolerantRa[2];
+            if (!tolerant)
+            {
+                if (!g_pickupRigidLogged)
+                    std::fprintf(stderr, "[stages] MemoryStack::global has %u bytes free, pickup id1 0x%X needs %u: the call from 0x%X "
+                                 "cannot be refused (it uses the result), let through\n", room, id1, size, ra);
+                g_pickupRigidLogged = true;
+            }
+            else
+            {
+                if (!g_pickupFullLogged)
+                    std::fprintf(stderr, "[stages] MemoryStack::global has %u bytes free, pickup id1 0x%X needs %u (called from 0x%X): not "
+                                 "created; the rest of this load's are refused silently\n", room, id1, size, ra);
+                g_pickupFullLogged = true;
+                SET_GPR_U32(ctx, 2, 0);
+                ctx->pc = ra;
+                return;
+            }
+        }
+    }
+    g_origCreatePickup(rdram, ctx, runtime);
+}
+
 // int Interactives::addInteractive(DbInteractive *p): the table's next slot. A leaf (no call, no thread switch): hooked at its entry.
 // Past slot 1023 it writes nothing and returns 0 (see the header).
 void addInteractiveTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
@@ -474,6 +527,10 @@ void install(PS2Runtime &runtime)
         runtime.registerFunction(kAddInteractive, &addInteractiveTapped);
     else
         std::fprintf(stderr, "[stages] Interactives guard unavailable: addInteractive has no function in the runtime\n");
+    // size from native/wotm_syms.h (createPickup__12LevelPickups... 0x4D0); it calls the pickup constructors and init
+    const bool pickupGuard = wrapAll(runtime, kCreatePickup, 0x4D0, &createPickupTapped, g_origCreatePickup) > 0;
+    if (!pickupGuard)
+        std::fprintf(stderr, "[stages] pickup memory guard unavailable: createPickup has no function in the runtime\n");
     // sizes from native/wotm_syms.h (LoadLevelDB__5Shell 0x140, zipInflateAll__FPcPv 0x108)
     const int nLoad = wrapAll(runtime, kLoadLevelDB, 0x140, &loadLevelDBTapped, g_origLoadLevelDB);
     const int nZip = nLoad ? wrapAll(runtime, kZipInflateAll, 0x108, &zipTapped, g_origZip) : 0;
@@ -485,8 +542,9 @@ void install(PS2Runtime &runtime)
         // size from native/wotm_syms.h (exportPoints__11PowerUpTool 0x80)
         const int nPup = wrapAll(runtime, kExportPoints, 0x80, &exportPointsTapped, g_origExportPoints);
         std::fprintf(stderr, "[stages] map hooks: LoadLevelDB (%d entry and resume points), zipInflateAll (%d), dbInitDb, exportPoints (%d)%s, "
-                     "Interactives guard %s\n",
-                     nLoad, nZip, nPup, nPup ? "" : ": power-up places stay where the disc puts them", guard ? "on" : "unavailable");
+                     "Interactives guard %s, pickup memory guard %s\n",
+                     nLoad, nZip, nPup, nPup ? "" : ": power-up places stay where the disc puts them", guard ? "on" : "unavailable",
+                     pickupGuard ? "on" : "unavailable");
     }
     else
         std::fprintf(stderr, "[stages] maps unavailable: LoadLevelDB, zipInflateAll, dbInitDb or LoadUserintDB has no function in the runtime\n");
