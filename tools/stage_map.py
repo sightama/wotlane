@@ -3,12 +3,16 @@
 # ABOUTME: grid rule (every path listed in exactly the cells its box covers) on a stock .NGP or a RAM dump of an edited stage.
 """Map creator tool (docs/superpowers/specs/2026-11-09-map-creator-design.md, issue #10).
 
-  stage_map.py check <NGP or dump>...      grid rule; a dump is the raw image (bytes from 0xA00000), and a sibling
-                                           <dump>.reserve, if present, is mapped at --reserve (default 0x3BFF000)
+  stage_map.py check <NGP or dump>...      grid rule, path entries mapped and the copy checks (copy_checks()); a dump is
+                                           the raw image (bytes from 0xA00000), and a sibling <dump>.reserve, if present,
+                                           is mapped at --reserve (default 0x3BFF000); prints "N paths, M list nodes,
+                                           K copies, OK" per file
   stage_map.py pieces <NGP or dump>        one line per piece: node, kind, world position, collision paths, riders,
                                            power-ups (indices into <disc>/PTS/<STAGE>.PUP, for an .NGP in <disc>/LVL),
-                                           destructible; node is the offset from 0xA00000, or @<absolute address> outside
-                                           the image
+                                           destructible, and the copy column: "copy <bytes> B i<interactives>
+                                           d<destructibles> p<pickups>" plus " debris <n> (<bytes> B)" when its
+                                           destructibles drop pickup debris, or "no copy (<reason>)" (copy_set()); node is
+                                           the offset from 0xA00000, or @<absolute address> outside the image
   stage_map.py make --base CENTRAL --id <id> --name "<NAME>" --out <stages folder> [--remove 0x..]...
                     [--move 0x..=x,y,z[,turn]]... [--turn 0x..=degrees]... [--no-riders]
                                            writes <stages folder>/<id>/stage.json (--turn and --move on the same node make
@@ -43,6 +47,22 @@ The native loader mirrors these rules exactly (keep them in step):
 - Grid coverage: cols floor((boxMin.x - minX) / cellSize) .. floor((boxMax.x - minX) / cellSize) inclusive, rows the
   same with Y, clamped to [0, nCols - 1] and [0, nRows - 1]; cell index row * nCols + col.
 - baseHash: FNV-1a 64 over the whole inflated image.
+Copies (copy_set(), stage_counts(); native copySet(), stageCounts(); spec 2026-11-09-map-copy-design.md):
+- A piece is refused, first reason in this order: on its first-parent chain a DESTRUCTIBLE or INTERACTIVE_STATE ("in a
+  destructible's state"), a GROUP with flags & 0xB0 ("mode-masked"), an ANIM_XFORM, ANIM_SCALE or SKEL_BONE ("animated");
+  in its subtree an ANIM_XFORM, CHAR_INSTANCE, SKEL_BONE or ANIM_SCALE; a CHAR_INSTANCE above it while an OBJECT of it reads
+  an animation channel (an s16 >= 0 at +0x30..+0x3C); in its DESTRUCTIBLEs' state actions an ACT_ANIM, a script action
+  (ACT_CINEMA, ACT_PLAYERPOS, ACT_RUNSCRIPT, ACT_AINAVIGATION, ACT_GENERICEVENT) or a tree past 20 levels or 256 actions in a
+  group; then per node in preorder: an INTERACTIVE_STATE or DESTRUCTIBLE with a fixed-table id1, a dispatched kind (ops 0,
+  1, 2, 3, 4, 6, 11, 17, 30, 40, 41) with a special id1, an emitter with a locator id (0x1D4C..0x1D6B); a shared node
+  inside it holding a copied one; a copied node whose size node_size() cannot give.
+- Copy set: the root, the per-instance nodes (INTERACTIVE_STATE, DESTRUCTIBLE, SWITCH, PARTICLE_EMITTER, SCRIPT_ACTION, a
+  dispatched kind with a level pickup id1) and their first-parent ancestors inside the piece, in preorder; bytes = their
+  16-aligned sizes. Counts per copy, each node once per path from the root to it (path_counts()): Interactives
+  (INTERACTIVE_STATE, level pickup nodes), Destructibles (DESTRUCTIBLE, dispatched nodes with id1 0x1450..0x1B57), level
+  pickups, and debris pickups (ACT_DEBRIS chunks with a pickup type, per state reaching them, 32 chunks at most) with their
+  memory (debris_pickup_bytes()).
+- Stage counts: the same over every node reachable from the header roots, plus HomingBugs (0x11F8, 0x1203) as Interactives.
 Riders (rider_map(), make only; the loader applies them as ordinary edits): a piece whose origin (a pickup: its position; a
 world piece: the bottom of its lowest OBJECT) lies in X and Y inside one of another piece's solid collision boxes at most 700
 wide, at z from the box top - 20 to the box top + 25; on two pieces, the one whose box top is nearest, then the lower node.
@@ -263,8 +283,56 @@ def all_paths(m, g):
     return seen
 
 
+def wrappers(m):
+    """[(header root, wrapper)]: the loader's copy wrappers, a GROUP outside the image in a header GROUP root's last child slot
+    (a step 1 turn may leave a reserve ROTATE there: not a wrapper)."""
+    out, seen = [], set()
+    for r in m.roots():
+        if not r or r in seen or not m.ok(r, 0x20) or op(m, r) != OP_GROUP:
+            continue
+        seen.add(r)
+        k = m.u16(r + 8)
+        if not k or not m.ok(r + 0x20 + 4 * (k - 1), 4):
+            continue
+        w = m.u32(r + 0x20 + 4 * (k - 1))
+        if w and not m.in_image(w) and m.ok(w, 0x20) and op(m, w) == OP_GROUP:
+            out.append((r, w))
+    return out
+
+
+def copy_checks(m, parent):
+    """(copies, problems): every per-instance node (per_instance()) reachable from the header roots has one holder slot, and
+    nothing in a copy (a wrapper's children after its first, the slot's old child) reaches an image per-instance node or is a
+    shared image node holding a node outside the image (review focus 1). copies = the wrappers' numKids - 1, summed."""
+    problems, holders = [], {}
+    for n in parent:
+        for k in children(m, n):
+            if per_instance(m, k):
+                holders[k] = holders.get(k, 0) + 1
+    for k, c in sorted(holders.items()):
+        if c > 1:
+            problems.append("per-instance node %s held by %d child slots" % (addr(m, k), c))
+    ncopies = 0
+    for _r, w in wrappers(m):
+        k = m.u16(w + 8)
+        ncopies += max(k - 1, 0)
+        for i in range(1, min(k, 4096)):
+            if not m.ok(w + 0x20 + 4 * i, 4):
+                problems.append("wrapper %s: slot %d not mapped" % (addr(m, w), i))
+                break
+            root = m.u32(w + 0x20 + 4 * i)
+            for x in subtree(m, root) if root and m.ok(root, 4) else ():
+                for kid in children(m, x):
+                    if m.in_image(kid) and per_instance(m, kid):
+                        problems.append("copy at %s points at per-instance node %s" % (addr(m, x), addr(m, kid)))
+                    elif m.in_image(x) and not m.in_image(kid):
+                        problems.append("shared node %s in copy %s holds copied node %s" % (addr(m, x), addr(m, root),
+                                                                                          addr(m, kid)))
+    return ncopies, problems
+
+
 def check(m, parent=None):
-    """(paths, list nodes, problems) for the grid rule."""
+    """(paths, list nodes, problems, copies): the grid rule, every listed path's entries mapped, and copy_checks()."""
     if parent is None:
         parent = walk_all(m)
     g = find_grid(m, parent)
@@ -289,7 +357,14 @@ def check(m, parent=None):
         want = covered(m, g, p)
         if cells != want:
             problems.append("path %s: listed in %s, box covers %s" % (addr(m, p), sorted(cells), sorted(want)))
-    return len(listed), nnodes, problems
+        k = min(m.u32(p + 0x1C), 256)
+        for i in range(k):
+            e = p + 0x24 + 4 * i
+            if not m.ok(e, 4) or not m.ok(m.u32(e), 4):
+                problems.append("path %s: entry %d (%s) not mapped" % (addr(m, p), i,
+                                                                       addr(m, m.u32(e)) if m.ok(e, 4) else "slot"))
+    ncopies, more = copy_checks(m, parent)
+    return len(listed), nnodes, problems + more, ncopies
 
 
 # ---------------------------------------------------------------- pieces
@@ -324,25 +399,429 @@ def pieces(m, parent=None):
         for n in set(path_nodes(m, p)):
             through[n] = through.get(n, 0) + 1
     out = []
-    for n, p in parent.items():
-        if op(m, n) not in (OP_TRANSLATE, OP_ROTATE) or p is None:
-            continue
-        if not m.ok(n, 0x50 if op(m, n) == OP_ROTATE else 0x1C):
-            continue
-        root = p
-        while parent[root] is not None and op(m, root) not in TRANSFORMING:
-            root = parent[root]
-        if op(m, root) in TRANSFORMING:
-            continue
-        nodes = subtree(m, n)
-        ops = {op(m, k) for k in nodes}
-        if OP_OBJECT not in ops and OP_POLY_COLL not in ops:
-            continue
-        first_id = next((m.u32(k) >> 18 for k in nodes if m.u32(k) >> 18), 0)
-        if (m.u32(root) >> 18) != WORLD_ID and not PICKUP_IDS[0] <= first_id <= PICKUP_IDS[1]:
-            continue
-        out.append((n, op(m, n), position(m, n), through.get(n, 0), OP_DESTRUCTIBLE in ops))
+    for n in parent:
+        if is_piece(m, parent, n):
+            ops = {op(m, k) for k in subtree(m, n)}
+            out.append((n, op(m, n), position(m, n), through.get(n, 0), OP_DESTRUCTIBLE in ops))
     return out
+
+
+def is_piece(m, parent, n):
+    """The piece rule for one node (the module docstring's "Piece"; native isPiece())."""
+    if parent.get(n) is None or not m.ok(n, 4):
+        return False
+    o = op(m, n)
+    if o not in (OP_TRANSLATE, OP_ROTATE) or not m.ok(n, 0x50 if o == OP_ROTATE else 0x1C):
+        return False
+    root = parent[n]
+    while parent[root] is not None and op(m, root) not in TRANSFORMING:
+        root = parent[root]
+    if op(m, root) in TRANSFORMING:
+        return False
+    nodes = subtree(m, n)
+    if not any(op(m, k) in (OP_OBJECT, OP_POLY_COLL) for k in nodes):
+        return False
+    first_id = next((m.u32(k) >> 18 for k in nodes if m.u32(k) >> 18), 0)
+    return (m.u32(root) >> 18) == WORLD_ID or PICKUP_IDS[0] <= first_id <= PICKUP_IDS[1]
+
+
+# ---------------------------------------------------------------- copies (native copySet(), stageCounts())
+
+OP_GROUP, OP_LOD, OP_SWITCH, OP_CONTROL, OP_NULL = 1, 2, 6, 8, 9
+OP_ANIM_XFORM, OP_EMITTER, OP_ACTION_DATA, OP_CHAR_INSTANCE, OP_SCALE = 17, 22, 23, 25, 30
+OP_SKEL_BONE, OP_ANIM_SCALE, OP_INTERACTIVE, OP_SCRIPT_ACTION = 35, 38, 39, 41
+ACT_GROUP, ACT_TRANSFORM, ACT_ANIM, ACT_DEBRIS = 0, 1, 2, 3
+SCRIPT_ACTIONS = {9: "ACT_CINEMA", 11: "ACT_PLAYERPOS", 12: "ACT_RUNSCRIPT", 13: "ACT_AINAVIGATION", 14: "ACT_GENERICEVENT"}
+DISPATCHED = (0, 1, 2, 3, 4, 6, 11, 17, 30, 40, 41)   # kinds dbsTraverse hands to dbProcInteractive with a nonzero id1
+DEBRIS_CHUNKS = 32
+COUNT_MAX = 0x7FFFFFFF                                # addCount() saturates here
+OP_NAMES = {0: "OBJECT", 1: "GROUP", 2: "LOD", 3: "TRANSLATE", 4: "ROTATE", 6: "SWITCH", 8: "CONTROL", 9: "NULL", 15: "GRID",
+            17: "ANIM_XFORM", 22: "PARTICLE_EMITTER", 23: "ACTION_DATA", 25: "CHAR_INSTANCE", 30: "SCALE", 31: "DESTRUCTIBLE",
+            35: "SKEL_BONE", 38: "ANIM_SCALE", 39: "INTERACTIVE_STATE", 41: "SCRIPT_ACTION", 42: "POLY_COLL"}
+
+
+def _z32(m, a):
+    """u32 at a, 0 when not mapped (the native Mem's reads)."""
+    return m.u32(a) if m.ok(a, 4) else 0
+
+
+def _z16(m, a):
+    return m.u16(a) if m.ok(a, 2) else 0
+
+
+def _z8(m, a):
+    return m.u8(a) if m.ok(a, 1) else 0
+
+
+def _off(a):
+    """The native loader's hex(a - kBase) in reasons."""
+    return "0x%x" % ((a - BASE) & 0xFFFFFFFF)
+
+
+def node_size(m, n):
+    """Bytes of a copy-set node (include/hieri_types.h); 0 for a kind a copy cannot hold, a node not wholly mapped, or a child
+    count past what children() reads (4096; a LOD's 16): such a piece is refused, not copied in part."""
+    if not m.ok(n, 4):
+        return 0
+
+    def kids(base, count, each):
+        return base + each * count if count <= 4096 else 0
+    o = op(m, n)
+    if o == OP_GROUP:
+        size = kids(0x20, m.u16(n + 8), 4) if m.ok(n + 8, 2) else 0
+    elif o == OP_TRANSLATE:
+        size = kids(0x1C, m.u32(n + 8), 4) if m.ok(n + 8) else 0
+    elif o == OP_ROTATE:
+        size = kids(0x50, m.u32(n + 8), 4) if m.ok(n + 8) else 0
+    elif o == OP_SCALE:
+        size = kids(0x2C, m.u32(n + 8), 4) if m.ok(n + 8) else 0
+    elif o == OP_SWITCH:
+        size = 0xC + 4 * m.u8(n + 0xB) if m.ok(n + 0xB, 1) else 0
+    elif o == OP_LOD:
+        size = 0x20 + 16 * m.u32(n + 4) if m.ok(n + 4) and m.u32(n + 4) < 16 else 0
+    elif o == OP_CONTROL:
+        size = 0x20 + 4 * m.u8(n + 0xC) if m.ok(n + 0xC, 1) else 0
+    elif o == OP_INTERACTIVE:
+        size = 0x10
+    elif o == OP_DESTRUCTIBLE:
+        size = kids(0xC, m.u16(n + 0xA), 12) if m.ok(n + 0xA, 2) else 0
+    elif o == OP_EMITTER:
+        size = 0xB0
+    elif o == OP_SCRIPT_ACTION:
+        size = 0x60
+    else:
+        return 0
+    return size if size and m.ok(n, size) else 0
+
+
+def debris_pickup_bytes(t):
+    """MemoryStack::global bytes LevelPickups::createPickup takes for a pickup of type t (id1 t + 0x1388): its object and its
+    list node, 16-aligned; 0 for a type that creates nothing (native debrisPickupBytes())."""
+    i = t + 0x1388
+    if i in (0x1388, 0x138D):
+        return 0
+    size = {0x1391: 0x2A0, 0x1392: 0x2B0, 0x1393: 0x300, 0x1394: 0x300, 0x139F: 0x300, 0x13A0: 0x1D0, 0x13A1: 0x230,
+            0x1395: 0x4C0, 0x1399: 0x4C0, 0x139A: 0x4C0, 0x139B: 0x4C0, 0x139C: 0x4C0, 0x139D: 0x4C0, 0x139E: 0x4C0,
+            0x138A: 0x270, 0x138B: 0x270, 0x1397: 0x270, 0x13A2: 0x270, 0x13A3: 0x250}.get(i, 0x170)
+    return size + 0x10
+
+
+def actions_under(m, a, depth, seen, out, cut):
+    """Every action under a (ACT_GROUP, ACT_TRANSFORM; 20 levels, 256 per group), each once, depth first in slot order; cut[0]
+    set when a limit leaves part of the tree unread (native actionsUnder())."""
+    if not a or a in seen:
+        return
+    if depth > 20:
+        cut[0] = True
+        return
+    if not m.ok(a, 8):
+        return
+    seen.add(a)
+    out.append(a)
+    t = m.u16(a)
+    if t == ACT_GROUP:
+        cut[0] = cut[0] or _z32(m, a + 8) > 256
+        for i in range(min(_z32(m, a + 8), 256)):
+            if not m.ok(a + 0xC + 4 * i, 4):
+                break
+            actions_under(m, m.u32(a + 0xC + 4 * i), depth + 1, seen, out, cut)
+    elif t == ACT_TRANSFORM:
+        actions_under(m, _z32(m, a + 8), depth + 1, seen, out, cut)
+
+
+def _state_slots(m, n):
+    """Addresses of DESTRUCTIBLE n's states' action pointers (+0xC + 12 i + 4), while mapped."""
+    out = []
+    for i in range(_z16(m, n + 0xA)):
+        if not m.ok(n + 0xC + 12 * i + 4, 4):
+            break
+        out.append(n + 0xC + 12 * i + 4)
+    return out
+
+
+def state_actions(m, n, cut):
+    """The actions of DESTRUCTIBLE n's states, each once, in state and slot order (native stateActions())."""
+    out = []
+    if not m.ok(n, 0xC) or op(m, n) != OP_DESTRUCTIBLE:
+        return out
+    seen = set()
+    for s in _state_slots(m, n):
+        actions_under(m, m.u32(s), 0, seen, out, cut)
+    return out
+
+
+def debris_of(m, n):
+    """(chunks, bytes): DESTRUCTIBLE n's debris pickups, per state that reaches each ACT_DEBRIS (amendment A4; native
+    debrisOf())."""
+    count = nbytes = 0
+    if not m.ok(n, 0xC) or op(m, n) != OP_DESTRUCTIBLE:
+        return 0, 0
+    for s in _state_slots(m, n):
+        acts = []
+        actions_under(m, m.u32(s), 0, set(), acts, [False])
+        for a in acts:
+            if m.u16(a) != ACT_DEBRIS or not m.ok(a, 0x10):
+                continue
+            for c in range(min(m.u32(a + 8), DEBRIS_CHUNKS)):
+                ch = a + 0x10 + 0x30 * c
+                if not m.ok(ch, 0x30):
+                    break
+                t = (m.u16(ch + 0xE) >> 5) & 31
+                if t:
+                    count += 1
+                    nbytes += debris_pickup_bytes(t)
+    return count, nbytes
+
+
+def path_counts(m, starts):
+    """{node: how many traversal paths from `starts` reach it} (dbsTraverse has no visited set), saturating at 2^40; nodes on a
+    cycle keep only the paths from outside it (native pathCounts())."""
+    kmax = 1 << 40
+    count, holders, kids, stack = {}, {}, {}, []
+    for s in starts:
+        if s and m.ok(s, 4):
+            count[s] = count.get(s, 0) + 1
+            stack.append(s)
+    while stack:
+        n = stack.pop()
+        if n in kids:
+            continue
+        kids[n] = children(m, n)
+        for k in kids[n]:
+            holders[k] = holders.get(k, 0) + 1
+            if k not in kids:
+                stack.append(k)
+    ready = [n for n in kids if n not in holders]
+    while ready:
+        n = ready.pop()
+        c = count.get(n, 0)
+        for k in kids[n]:
+            count[k] = min(count.get(k, 0) + c, kmax)
+            holders[k] -= 1
+            if holders[k] == 0:
+                ready.append(k)
+    return count
+
+
+def _debris_add(m, n, times, acc):
+    """acc [count, bytes] += DESTRUCTIBLE n's debris pickups `times` over, saturating (native addDebris())."""
+    c, b = debris_of(m, n)
+    acc[0] = min(acc[0] + min(c, 1 << 20) * times, COUNT_MAX)
+    acc[1] = min(acc[1] + min(b, 1 << 30) * min(times, 1 << 20), 1 << 40)
+
+
+def special_range(i):
+    """dbProcInteractive's ranges a copy must not register twice (src/game/db.cpp:187-255), None for a free id."""
+    if i == 0:
+        return None
+    for lo, hi, name in ((1, 0x1F, "world, sky or font"), (0x20, 0x400, "monsters"), (0xBB8, 0xBB8, "pedestrians"),
+                         (0xFA0, 0x11F7, "weapons"), (0x11F8, 0x12BF, "effects"), (0x13EC, 0x144F, "power-ups"),
+                         (0x1B58, 0x1C1F, "particle textures"), (0x1C20, 0x2133, "HUD"), (0x2134, 0x2327, "scripts"),
+                         (0x2328, 0x3E7F, "end points")):
+        if lo <= i <= hi:
+            return name
+    return None
+
+
+def fixed_table(i):
+    """id1 tables the game fills from INTERACTIVE_STATE and DESTRUCTIBLE ids (Destructible.cpp:161-169, :287-315)."""
+    if 0x275D <= i <= 0x2762:
+        return "SanFran saves"
+    if 0x2775 <= i <= 0x2777:
+        return "CANYON2 pillars"
+    if 0x27AE <= i <= 0x27B3:
+        return "CAPITOL pillars"
+    if i == 0x2712 or 0x2715 <= i <= 0x2718:
+        return "the 3-MILE vent and stacks"
+    return None
+
+
+def reads_channel(m, n):
+    """An OBJECT that reads an animation channel (an index >= 0 at +0x30..+0x3C); too short to tell counts as reading one."""
+    if not m.ok(n, 0x3E):
+        return True
+    return any(m.s16(n + 0x30 + 2 * k) >= 0 for k in range(7))
+
+
+def per_instance(m, n):
+    """A node each copy gets its own of (decision 4): INTERACTIVE_STATE, DESTRUCTIBLE, SWITCH, PARTICLE_EMITTER,
+    SCRIPT_ACTION, and a dispatched kind with a level pickup id1."""
+    if not m.ok(n, 4):
+        return False
+    w = m.u32(n)
+    o, i = w & 63, w >> 18
+    return o in (OP_INTERACTIVE, OP_DESTRUCTIBLE, OP_SWITCH, OP_EMITTER, OP_SCRIPT_ACTION) or (
+        o in DISPATCHED and PICKUP_IDS[0] <= i <= PICKUP_IDS[1])
+
+
+class CopySet:
+    """What copying a piece takes (native CopySet): `why` "" when it can be copied, else the reason; `nodes` the copy set in
+    preorder; `bytes` their 16-aligned sizes; per copy: Interactives, Destructibles, level pickups, debris pickups and their
+    memory; `option_group` a GROUP above with collision-option flags (0: none)."""
+    __slots__ = ("why", "nodes", "bytes", "interactives", "destructibles", "pickups", "debris_pickups", "debris_bytes",
+                 "option_group")
+
+    def __init__(self, why=""):
+        self.why, self.nodes, self.bytes = why, [], 0
+        self.interactives = self.destructibles = self.pickups = self.debris_pickups = self.debris_bytes = 0
+        self.option_group = 0
+
+    def column(self):
+        """pieces' copy column: "copy B B iI dD pP" (plus " debris N (M B)" with debris pickups), or "no copy (why)"."""
+        if self.why:
+            return "no copy (%s)" % self.why
+        return "copy %d B i%d d%d p%d%s" % (self.bytes, self.interactives, self.destructibles, self.pickups,
+                                             " debris %d (%d B)" % (self.debris_pickups, self.debris_bytes)
+                                             if self.debris_pickups else "")
+
+
+def copy_set(m, parent, n):
+    """The native copySet(), rule for rule and in the same order (so the same first reason): see "Copies" in the module
+    docstring."""
+    c = CopySet()
+    if not is_piece(m, parent, n):
+        return CopySet("not a piece")
+    char_above = 0
+    a = parent[n]
+    while a is not None:
+        o = op(m, a)
+        if o in (OP_DESTRUCTIBLE, OP_INTERACTIVE):
+            return CopySet("in a destructible's state (%s %s above it)" % (OP_NAMES[o], _off(a)))
+        if o == OP_GROUP:
+            flags = _z16(m, a + 0xA)
+            if flags & 0xB0:
+                return CopySet("mode-masked (GROUP %s above it, flags 0x%x)" % (_off(a), flags))
+            if flags & 0xFF00 and not c.option_group:
+                c.option_group = a
+        if o == OP_CHAR_INSTANCE and not char_above:
+            char_above = a
+        if o in (OP_ANIM_XFORM, OP_ANIM_SCALE, OP_SKEL_BONE):
+            return CopySet("animated (an %s above it)" % OP_NAMES[o])
+        a = parent[a]
+    # the subtree in preorder with each node's first parent inside it
+    order, up, stack = [], {}, [(n, 0)]
+    while stack:
+        k, p = stack.pop()
+        if k in up:
+            continue
+        up[k] = p
+        order.append(k)
+        for kid in reversed(children(m, k)):
+            stack.append((kid, k))
+    channel = False
+    for k in order:
+        o = op(m, k)
+        if o in (OP_ANIM_XFORM, OP_CHAR_INSTANCE, OP_SKEL_BONE, OP_ANIM_SCALE):
+            return CopySet("animated (an %s in it)" % OP_NAMES[o])
+        channel = channel or (o == OP_OBJECT and reads_channel(m, k))
+    if char_above and channel:
+        return CopySet("animated (the CHAR_INSTANCE %s above it drives its OBJECTs' channels)" % _off(char_above))
+    for k in order:
+        if op(m, k) != OP_DESTRUCTIBLE:
+            continue
+        cut = [False]
+        for act in state_actions(m, k, cut):
+            t = m.u16(act)
+            if t == ACT_ANIM:
+                return CopySet("animated (an ACT_ANIM action)")
+            if t in SCRIPT_ACTIONS:
+                return CopySet("a script action (%s)" % SCRIPT_ACTIONS[t])
+        if cut[0]:
+            return CopySet("an action tree past 20 levels or 256 actions in a group (%s)" % _off(k))
+    # ids, per-instance nodes and what each copy registers (once per path from the root to a node)
+    keep = {n}
+    paths = path_counts(m, [n])
+    debris = [0, 0]
+
+    def add(field, v):
+        setattr(c, field, min(getattr(c, field) + v, COUNT_MAX))
+    for k in order:
+        w = m.u32(k)
+        o, i = w & 63, w >> 18
+        times = max(paths.get(k, 0), 1)
+        own = o in (OP_SWITCH, OP_EMITTER, OP_SCRIPT_ACTION)
+        if o in (OP_INTERACTIVE, OP_DESTRUCTIBLE):
+            t = fixed_table(i)
+            if t:
+                return CopySet("holds id1 0x%x (a fixed id1 table: %s)" % (i, t))
+            own = True
+            add("interactives" if o == OP_INTERACTIVE else "destructibles", times)
+            if o == OP_DESTRUCTIBLE:
+                _debris_add(m, k, times, debris)
+        elif o in DISPATCHED and i:
+            r = special_range(i)
+            if r:
+                return CopySet("holds special id 0x%x (%s)" % (i, r))
+            if PICKUP_IDS[0] <= i <= PICKUP_IDS[1]:
+                own = True
+                add("interactives", times)
+                add("pickups", times)
+            elif 0x1450 <= i < 0x1B58:
+                add("destructibles", times)
+        if o == OP_EMITTER and 0x1D4C <= i <= 0x1D6B:
+            return CopySet("an emitter with locator id 0x%x" % i)
+        x = k
+        while own and x and x not in keep:
+            keep.add(x)
+            x = up[x]
+    # a shared node of the piece holding a copied one would let the copy reach the original's per-instance nodes
+    for k in order:
+        if k not in keep:
+            for kid in children(m, k):
+                if kid in keep:
+                    return CopySet("a shared node inside it (%s) holds a copied node (%s)" % (_off(k), _off(kid)))
+    for k in order:
+        if k in keep:
+            size = node_size(m, k)
+            if not size:
+                o = op(m, k)
+                return CopySet("its copy would hold a node of kind %d (%s)" % (o, OP_NAMES.get(o, "unknown")))
+            c.nodes.append(k)
+            c.bytes += (size + 15) & ~15
+    c.debris_pickups, c.debris_bytes = debris
+    return c
+
+
+class StageCounts:
+    """The stage's own entries (native StageCounts): Interactives (INTERACTIVE_STATE + level pickup + HomingBug nodes),
+    Destructibles (DESTRUCTIBLE + dispatched nodes with a destructible id1), level pickups, debris pickups and their memory; each
+    node once per traversal path from the header roots."""
+    __slots__ = ("interactives", "destructibles", "pickups", "debris_pickups", "debris_bytes")
+
+    def __init__(self):
+        self.interactives = self.destructibles = self.pickups = self.debris_pickups = self.debris_bytes = 0
+
+    def as_tuple(self):
+        return (self.interactives, self.destructibles, self.pickups, self.debris_pickups, self.debris_bytes)
+
+
+def stage_counts(m, parent):
+    """The native stageCounts() of the image in m (call it before copies are linked in: it would count them too)."""
+    s = StageCounts()
+    paths = path_counts(m, m.roots())
+    debris = [0, 0]
+
+    def add(field, v):
+        setattr(s, field, min(getattr(s, field) + v, COUNT_MAX))
+    for n in parent:
+        w = _z32(m, n)
+        o, i = w & 63, w >> 18
+        times = max(paths.get(n, 0), 1)
+        if o == OP_INTERACTIVE:
+            add("interactives", times)
+        elif o == OP_DESTRUCTIBLE:
+            add("destructibles", times)
+            _debris_add(m, n, times, debris)
+        elif o in DISPATCHED and i:
+            if PICKUP_IDS[0] <= i <= PICKUP_IDS[1]:
+                add("interactives", times)
+                add("pickups", times)
+            elif i in (0x11F8, 0x1203):
+                add("interactives", times)
+            elif 0x1450 <= i < 0x1B58:
+                add("destructibles", times)
+    s.debris_pickups, s.debris_bytes = debris
+    return s
 
 
 # ---------------------------------------------------------------- riders
@@ -799,16 +1278,16 @@ def cmd_check(a):
     for path in expand(a.files):
         name = os.path.basename(path)
         try:
-            npaths, nnodes, problems = check(load_mem(path, a.reserve))
+            npaths, nnodes, problems, ncopies = check(load_mem(path, a.reserve))
         except (ValueError, IndexError, OSError) as e:
-            npaths, nnodes, problems = 0, 0, [str(e)]
+            npaths, nnodes, problems, ncopies = 0, 0, [str(e)], 0
         if problems:
             bad += 1
             print("%s: %d problems" % (name, len(problems)))
             for p in problems[:50]:
                 print("  " + p)
         else:
-            print("%s: %d paths, %d list nodes, OK" % (name, npaths, nnodes))
+            print("%s: %d paths, %d list nodes, %d copies, OK" % (name, npaths, nnodes, ncopies))
     return 1 if bad else 0
 
 
@@ -827,12 +1306,16 @@ def cmd_pieces(a):
     except (ValueError, IndexError, OSError) as e:
         print("%s: %s" % (a.file, e))
         return 1
+    copyable = 0
     for n, o, pos, npaths, destr in ps:
-        print("%s  %-9s  pos %.1f %.1f %.1f  paths %d  riders %d%s%s" % (
+        cs = copy_set(m, parent, n)
+        copyable += not cs.why
+        print("%s  %-9s  pos %.1f %.1f %.1f  paths %d  riders %d%s%s  %s" % (
             addr(m, n), "TRANSLATE" if o == OP_TRANSLATE else "ROTATE", pos[0], pos[1], pos[2], npaths, len(rm.get(n, ())),
-            "  power-ups %s" % ",".join(str(i) for i, *_ in pm[n]) if n in pm else "", "  destructible" if destr else ""))
-    print("%d pieces%s" % (len(ps), ", %d power-up places on %d of them" % (sum(len(v) for v in pm.values()), len(pm)) if pm else ""),
-          file=sys.stderr)
+            "  power-ups %s" % ",".join(str(i) for i, *_ in pm[n]) if n in pm else "", "  destructible" if destr else "",
+            cs.column()))
+    places = ", %d power-up places on %d of them" % (sum(len(v) for v in pm.values()), len(pm)) if pm else ""
+    print("%d pieces%s, %d copyable" % (len(ps), places, copyable), file=sys.stderr)
     return 0
 
 
@@ -1050,7 +1533,7 @@ def cmd_selftest(_a):
         return Mem(bytes(img), [(RESERVE, bytes(res))] if reserve else [])
     m = mem()
     assert covered(m, g, p1) == {4, 5, 6, 7} and covered(m, g, p2) == {0, 1}
-    assert check(m) == (2, 6, []), check(m)
+    assert check(m) == (2, 6, [], 0), check(m)
     got = [(n, o, pos, k) for n, o, pos, k, _d in pieces(m)]
     assert got == [(t1, 3, (5.0, 6.0, 0.0), 1), (r1, 4, (7.0, 8.0, 9.0), 1), (tres, 3, (3.0, 4.0, 5.0), 0),
                    (pick, 3, (50.0, 60.0, 70.0), 0)], got
@@ -1256,8 +1739,284 @@ def cmd_selftest(_a):
     got, notes = edits_of(E(b2, turn=90))
     assert got == [E(b2, turn=90)] and any("action data" in n for n in notes), (got, notes)
     assert rider_edits(m, [E(b2, turn=90)], valid, [], parent, pv) == [E(b2, turn=90)]
+    selftest_copies()
     print("selftest OK")
     return 0
+
+
+class _Img:
+    """A built image and reserve for the copy selftest (the native tests' Img)."""
+
+    def __init__(self, size=0x8000, res=0x4000):
+        self.img, self.res, self.top = bytearray(size), bytearray(res), BASE + 0x100
+
+    def at(self, a):
+        return (self.res, a - RESERVE) if a >= RESERVE else (self.img, a - BASE)
+
+    def w(self, fmt, a, v):
+        b, o = self.at(a)
+        struct.pack_into(fmt, b, o, v)
+
+    def r32(self, a):
+        b, o = self.at(a)
+        return struct.unpack_from("<I", b, o)[0]
+
+    def alloc(self, size):
+        a = self.top
+        self.top += (size + 15) & ~15
+        return a
+
+    def node(self, o, size, id1=0):
+        a = self.alloc(size)
+        self.w("<I", a, id1 << 18 | o)
+        return a
+
+    def set_id(self, n, id1):
+        self.w("<I", n, (self.r32(n) & 0x3FFFF) | id1 << 18)
+
+    def kids(self, a, ks):
+        for i, k in enumerate(ks):
+            self.w("<I", a + 4 * i, k)
+        return a
+
+    def still(self):   # a full-size OBJECT whose animation channels are all -1
+        a = self.node(OP_OBJECT, 0xA0)
+        for k in range(7):
+            self.w("<h", a + 0x30 + 2 * k, -1)
+        return a
+
+    def polycoll(self):
+        return self.node(OP_POLY_COLL, 0x10)
+
+    def istate(self, child, id1=0):
+        return self.kids(self.node(OP_INTERACTIVE, 0x10, id1) + 0xC, [child]) - 0xC
+
+    def emitter(self, id1=0):
+        return self.node(OP_EMITTER, 0xB0, id1)
+
+    def switch(self, ks):
+        a = self.node(OP_SWITCH, 0xC + 4 * len(ks))
+        self.w("<B", a + 0xB, len(ks))
+        return self.kids(a + 0xC, ks) - 0xC
+
+    def act(self, t, size):
+        a = self.alloc(size)
+        self.w("<I", a, t)
+        return a
+
+    def hat(self):
+        return self.act(10, 0x18)
+
+    def domino(self, target, state):
+        a = self.act(8, 0x10)
+        self.w("<I", a + 8, state), self.w("<I", a + 0xC, target)
+        return a
+
+    def act_group(self, acts):
+        a = self.act(ACT_GROUP, 0xC + 4 * len(acts))
+        self.w("<I", a + 8, len(acts))
+        return self.kids(a + 0xC, acts) - 0xC
+
+    def debris(self, types):
+        a = self.act(ACT_DEBRIS, 0x10 + 0x30 * len(types))
+        self.w("<I", a + 8, len(types))
+        for i, t in enumerate(types):
+            self.w("<H", a + 0x10 + 0x30 * i + 0xE, 1 | t << 5 | 3 << 10)
+        return a
+
+    def destr(self, states):   # [(child, actions)]
+        d = self.node(OP_DESTRUCTIBLE, 0xC + 12 * len(states))
+        self.w("<H", d + 0xA, len(states))
+        for i, (ch, acts) in enumerate(states):
+            self.w("<I", d + 0xC + 12 * i, ch), self.w("<I", d + 0x10 + 12 * i, acts)
+        return d
+
+    def group(self, ks, id1=0, flags=1):
+        a = self.node(OP_GROUP, 0x20 + 4 * len(ks), id1)
+        self.w("<H", a + 8, len(ks)), self.w("<H", a + 0xA, flags)
+        return self.kids(a + 0x20, ks) - 0x20
+
+    def translate(self, ks, x, y, z):
+        a = self.node(OP_TRANSLATE, 0x1C + 4 * len(ks))
+        self.w("<I", a + 8, len(ks))
+        for i, v in enumerate((x, y, z)):
+            self.w("<f", a + 0x10 + 4 * i, v)
+        return self.kids(a + 0x1C, ks) - 0x1C
+
+    def holder(self, o, count_off, kids_off, ks):
+        a = self.node(o, kids_off + 4 * len(ks))
+        self.w("<I", a + count_off, len(ks))
+        return self.kids(a + kids_off, ks) - kids_off
+
+    def mem(self):
+        return Mem(bytes(self.img), [(RESERVE, bytes(self.res))])
+
+
+def _copy_stage():
+    """The native tests' CopyStage: world {mid {tD}, tE, oldLast}, a pickup root, a 4 x 4 grid of 200 with paths pD and pE."""
+    im, s = _Img(), {}
+    s["pcE"] = im.polycoll()
+    s["gE"] = im.group([im.still(), s["pcE"]])
+    s["dE"] = im.destr([(s["gE"], 0)])
+    s["iE"] = im.istate(s["dE"])
+    s["tE"] = im.translate([s["iE"]], 700, 100, 0)
+    s["d2"] = im.destr([(im.still(), 0)])
+    s["i2"] = im.istate(s["d2"])
+    s["hat1"] = im.hat()
+    s["dom"] = im.domino(s["i2"], 1)
+    s["domOut"] = im.domino(s["iE"], 0)
+    s["a1"] = im.act_group([s["hat1"], s["dom"], s["domOut"]])
+    s["obj0"], s["obj1"] = im.still(), im.still()
+    s["sw"] = im.switch([s["obj0"], s["obj1"]])
+    s["pc"] = im.polycoll()
+    s["em"] = im.emitter()
+    s["g0"] = im.group([s["sw"], s["pc"], s["em"]])
+    s["obj2"] = im.still()
+    s["d1"] = im.destr([(s["g0"], s["a1"]), (s["obj2"], s["hat1"])])
+    s["i1"] = im.istate(s["d1"])
+    s["tD"] = im.translate([s["i1"], s["i2"]], 300, 300, 0)
+    s["mid"] = im.group([s["tD"]])
+    s["oldLast"] = im.group([im.still()])
+    s["world"] = im.group([s["mid"], s["tE"], s["oldLast"]], WORLD_ID, 3)
+    s["swP"] = im.switch([im.still()])
+    s["gP"] = im.group([s["swP"]], 0x12C1)
+    s["tP"] = im.translate([s["gP"]], 500, 500, 10)
+    s["holder"] = im.group([s["tP"]])
+    s["proot"] = im.group([s["holder"]])
+    g = s["g"] = im.node(OP_GRID, 0x20 + 4 * 16)
+    im.w("<h", g + 4, 4), im.w("<h", g + 6, 4)
+    for i, v in enumerate((200.0, 0.0, 0.0, 800.0, 800.0)):
+        im.w("<f", g + 8 + 4 * i, v)
+
+    def path(lo, hi, nodes, cells):
+        p = im.alloc(0x24 + 4 * len(nodes))
+        for i, v in enumerate(lo + hi):
+            im.w("<f", p + 4 * i, v)
+        im.w("<I", p + 0x1C, len(nodes))
+        im.kids(p + 0x24, nodes)
+        for cell in cells:
+            ln = im.alloc(8)
+            im.w("<I", ln, im.r32(g + 0x20 + 4 * cell)), im.w("<I", ln + 4, p)
+            im.w("<I", g + 0x20 + 4 * cell, ln)
+        return p
+    s["pD"] = path((290.0, 290.0, 0.0), (320.0, 310.0, 40.0), [s[k] for k in ("world", "mid", "tD", "i1", "d1", "g0", "pc")],
+                   [5])
+    s["pE"] = path((690.0, 90.0, 0.0), (710.0, 110.0, 20.0), [s[k] for k in ("world", "tE", "iE", "dE", "gE", "pcE")], [3])
+    im.w("<I", BASE, 3)
+    im.kids(BASE + 4, [s["world"], s["proot"], g])
+    return im, s
+
+
+def selftest_copies():
+    """copy_set(), stage_counts() and check()'s copy problems on the native tests' CopyStage (stagemap_copy_set,
+    stagemap_copy_refusals, stagemap_stage_counts, stagemap_copy_debris_pickups)."""
+    im, s = _copy_stage()
+    m = im.mem()
+    parent = walk_all(m)
+    c = copy_set(m, parent, s["tD"])
+    want = [s[k] for k in ("tD", "i1", "d1", "g0", "sw", "em", "i2", "d2")]
+    nbytes = sum((v + 15) & ~15 for v in (0x24, 0x10, 0x24, 0x2C, 0x14, 0xB0, 0x10, 0x18))
+    assert (c.why, c.nodes, c.bytes, c.interactives, c.destructibles, c.pickups) == ("", want, nbytes, 2, 2, 0), c.why
+    assert c.column() == "copy %d B i2 d2 p0" % nbytes, c.column()
+    p = copy_set(m, parent, s["tP"])
+    assert (p.why, p.nodes, p.interactives, p.destructibles, p.pickups) == ("", [s["tP"], s["gP"], s["swP"]], 1, 0, 1)
+    assert copy_set(m, parent, s["g0"]).why == "not a piece"
+    assert node_size(m, s["obj0"]) == 0 and node_size(m, s["pc"]) == 0 and node_size(m, s["sw"]) == 0x14
+    assert stage_counts(m, parent).as_tuple() == (4, 3, 1, 0, 0)
+
+    def why(change):
+        im2, s2 = _copy_stage()
+        change(im2, s2)
+        m2 = im2.mem()
+        return copy_set(m2, walk_all(m2), s2["tD"]).why
+
+    def under_char(i, t):
+        i.w("<I", t["mid"] + 0x20, i.holder(OP_CHAR_INSTANCE, 0x28, 0x2C, [t["tD"]]))
+
+    def ad_between(i, t):
+        ad = i.node(OP_ACTION_DATA, 0x10)
+        i.w("<I", ad + 4, t["i1"])
+        i.w("<I", t["tD"] + 0x1C, ad)
+
+    def shared_holds(i, t):   # g0 = {sw, gs, em}, d1's state 1 = plain {gs, OBJECT}: plain is shared but holds gs (copied)
+        gs = i.group([i.switch([i.still()])])
+        i.w("<I", t["g0"] + 0x24, gs)
+        i.w("<I", t["d1"] + 0x18, i.group([gs, i.still()]))
+    for change, text in (
+            (lambda i, t: i.set_id(t["g0"], 0x2134), "holds special id 0x2134 (scripts)"),
+            (lambda i, t: i.set_id(t["g0"], 0x20), "holds special id 0x20 (monsters)"),
+            (lambda i, t: i.set_id(t["i1"], 0x27AE), "holds id1 0x27ae (a fixed id1 table: CAPITOL pillars)"),
+            (lambda i, t: i.set_id(t["i2"], 0x2715), "holds id1 0x2715 (a fixed id1 table: the 3-MILE vent and stacks)"),
+            (lambda i, t: i.set_id(t["em"], 0x1D4C), "an emitter with locator id 0x1d4c"),
+            (lambda i, t: i.w("<I", t["g0"] + 0x24, i.holder(OP_ANIM_XFORM, 4, 0xCC, [t["pc"]])),
+             "animated (an ANIM_XFORM in it)"),
+            (lambda i, t: i.w("<I", t["a1"] + 0xC, i.act(ACT_ANIM, 0x10)), "animated (an ACT_ANIM action)"),
+            (lambda i, t: i.w("<I", t["a1"] + 0xC, i.act(12, 0x10)), "a script action (ACT_RUNSCRIPT)"),
+            (lambda i, t: i.w("<I", t["a1"] + 0xC, i.act(9, 0x10)), "a script action (ACT_CINEMA)"),
+            (lambda i, t: (under_char(i, t), i.w("<h", t["obj0"] + 0x30, 0)), "animated (the CHAR_INSTANCE 0x"),
+            (lambda i, t: i.w("<I", t["mid"] + 0x20, i.holder(OP_SKEL_BONE, 4, 0xC, [t["tD"]])),
+             "animated (an SKEL_BONE above it)"),
+            (lambda i, t: i.w("<I", t["mid"] + 0x20, i.holder(OP_ANIM_SCALE, 4, 0x60, [t["tD"]])), "not a piece"),
+            (ad_between, "its copy would hold a node of kind 23 (ACTION_DATA)"),
+            (shared_holds, "a shared node inside it (0x"),
+            (lambda i, t: i.w("<I", t["mid"] + 0x20, i.istate(i.destr([(t["tD"], 0)]))),
+             "in a destructible's state (DESTRUCTIBLE 0x"),
+            (lambda i, t: i.w("<H", t["mid"] + 0xA, 0x21), "mode-masked (GROUP 0x"),
+            (lambda i, t: i.set_id(t["obj2"], 0x12C3), "its copy would hold a node of kind 0 (OBJECT)")):
+        got = why(change)
+        assert got.startswith(text), (got, text)
+    for change in (lambda i, t: i.set_id(t["i1"], 0x2134),            # any other id on a 39 goes to AddDestruct only
+                   under_char,                                         # no channel read under the CHAR_INSTANCE
+                   lambda i, t: i.w("<h", t["obj0"] + 0x30, 0),        # a channel without a CHAR_INSTANCE above
+                   lambda i, t: i.w("<H", t["mid"] + 0xA, 0x4F),       # other low flag bits are not masks
+                   lambda i, t: i.w("<I", t["d1"] + 0x18, t["obj0"])):   # a shared OBJECT held twice
+        assert why(change) == "", why(change)
+    # a destructible-range id on an OBJECT, a pickup id on a GROUP, a pickup id on a SWITCH (copied)
+    for key, id1, counts in (("obj0", 0x1500, (2, 3, 0)), ("g0", 0x12C5, (3, 2, 1)), ("sw", 0x12C3, (3, 2, 1))):
+        im2, s2 = _copy_stage()
+        im2.set_id(s2[key], id1)
+        m2 = im2.mem()
+        c2 = copy_set(m2, walk_all(m2), s2["tD"])
+        assert c2.why == "" and (c2.interactives, c2.destructibles, c2.pickups) == counts, (key, c2.why)
+    # debris pickups (amendment A4): a rigid pickup, none and a plain one in d1's state 0 actions
+    im2, s2 = _copy_stage()
+    im2.w("<I", s2["a1"] + 0x14, im2.debris([0x1395 - 0x1388, 0, 1]))
+    m2 = im2.mem()
+    par2 = walk_all(m2)
+    c2 = copy_set(m2, par2, s2["tD"])
+    assert (c2.debris_pickups, c2.debris_bytes, c2.interactives) == (2, 0x4D0 + 0x180, 2), c2.column()
+    assert c2.column().endswith(" debris 2 (%d B)" % (0x4D0 + 0x180)), c2.column()
+    assert stage_counts(m2, par2).as_tuple() == (4, 3, 1, 2, 0x4D0 + 0x180)
+    # a NULL ends a branch
+    im.w("<I", s["tE"], OP_NULL)
+    m = im.mem()
+    assert stage_counts(m, walk_all(m)).as_tuple()[:3] == (3, 2, 1)
+
+    # check(): a wrapper G = {oldLast, tD'} in the world root's last slot, tD' = {i1'} -> d1' -> {g0' -> {sw', pc, em'}, obj2}
+    im, s = _copy_stage()
+    assert check(im.mem()) == (2, 2, [], 0), check(im.mem())
+    im.top = RESERVE
+    d1c = im.destr([(0, s["a1"]), (s["obj2"], s["hat1"])])
+    g0c = im.group([im.switch([s["obj0"], s["obj1"]]), s["pc"], im.emitter()])
+    im.w("<I", d1c + 0xC, g0c)
+    i1c = im.istate(d1c)
+    tdc = im.translate([i1c], 500, 500, 0)
+    wrap = im.group([s["oldLast"], tdc], 0, 3)
+    im.w("<I", s["world"] + 0x20 + 8, wrap)
+    m = im.mem()
+    assert check(m) == (2, 2, [], 1), check(m)
+    im.w("<I", tdc + 0x1C, s["i1"])                                   # the copy's slot at the source's INTERACTIVE_STATE
+    got = check(im.mem())[2]
+    assert "copy at @0x%08x points at per-instance node 0x%x" % (tdc, s["i1"] - BASE) in got, got
+    assert "per-instance node 0x%x held by 2 child slots" % (s["i1"] - BASE) in got, got
+    im.w("<I", tdc + 0x1C, i1c)
+    im.w("<I", s["g0"] + 0x24, i1c)                                   # a source node holding a node of the copy
+    got = check(im.mem())[2]
+    assert any(p.startswith("per-instance node @0x%08x held by 2" % i1c) for p in got), got
+    im.w("<I", s["g0"] + 0x24, s["pc"])
+    im.w("<I", s["pD"] + 0x24 + 4 * 6, RESERVE + 0x3FF0 + 0x100)      # a path entry outside every region
+    got = check(im.mem())[2]
+    assert any("entry 6" in p and "not mapped" in p for p in got), got
 
 
 def main(argv=None):
