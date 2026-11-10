@@ -3118,6 +3118,162 @@ TEST(stagemap_stock_grid_rule)
     }
 }
 
+// Review focus 1, 2 and 4 on every stock stage (same WOTM_TEST_STAGE images; WOTM_TEST_STAGE_DUMP writes <stem>.copies.bin and
+// .reserve for python tools/stage_map.py check): a piece removed (its list nodes go to the pool), then up to three copyable
+// pieces with collision paths (a destructible, a TRANSLATE, a ROTATE: address order) each copied twice, three cells over and
+// turned 90 two cells the other way. Every copy applies, the grid rule holds, the listed paths are the stock ones minus the
+// removed piece's plus one per copied path, every per-instance node keeps one holder, the Interactives estimate is the
+// stage's plus the copies', and the copies take the pool's list nodes before the reserve's.
+TEST(stagemap_stock_copies_grid_rule)
+{
+    const std::vector<std::string> stages = envList("WOTM_TEST_STAGE");
+    const char *dumpDir = std::getenv("WOTM_TEST_STAGE_DUMP");
+    if (stages.empty())
+    {
+        std::printf("  skip (WOTM_TEST_STAGE not set)\n");
+        return;
+    }
+    for (const std::string &file : stages)
+    {
+        const std::string stem = std::filesystem::path(file).stem().string();
+        std::vector<uint8_t> bytes;
+        CHECK(readFile(file, bytes) && bytes.size() > 8);
+        if (bytes.size() <= 8)
+            continue;
+        Img im(uint32_t(bytes.size()), sm::kReserveSize);
+        im.img = bytes;
+        const sm::Mem m = im.mem();
+        const std::map<uint32_t, uint32_t> par = sm::parents(m);
+        uint32_t g = 0;
+        for (const auto &kv : par)
+            if ((m.u32(kv.first) & 63) == sm::kOpGrid)
+                g = kv.first;
+        if (!g)
+            continue;
+        const GridScan stock = scanGrid(m, g);
+        std::map<uint32_t, std::set<uint32_t>> through;
+        for (const auto &kv : stock.listed)
+        {
+            const uint32_t k = std::min<uint32_t>(m.u32(kv.first + 0x1C), 256);
+            for (uint32_t i = 0; i < k; ++i)
+                through[m.u32(kv.first + 0x24 + 4 * i)].insert(kv.first);
+        }
+        std::map<uint32_t, int> holders;
+        for (const auto &kv : par)
+            for (uint32_t sl : sm::slots(m, kv.first))
+                if (const uint32_t k = m.u32(sl))
+                    ++holders[k];
+        auto destructible = [&](uint32_t n) {
+            for (uint32_t k : sm::subtree(m, n))
+                if ((m.u32(k) & 63) == sm::kOpDestructible)
+                    return true;
+            return false;
+        };
+        // sources: copyable pieces with paths, one held by its parent only; the removed piece: any other piece with paths
+        std::map<uint32_t, sm::CopySet> sets;
+        std::vector<uint32_t> sources;
+        uint32_t removed = 0;
+        const std::function<bool(uint32_t)> wants[3] = {
+            [&](uint32_t n) { return destructible(n); },
+            [&](uint32_t n) { return (m.u32(n) & 63) == sm::kOpTranslate; },
+            [&](uint32_t n) { return (m.u32(n) & 63) == sm::kOpRotate; }};
+        for (const auto &want : wants)
+            for (const auto &kv : par)
+            {
+                const uint32_t n = kv.first;
+                if (sets.count(n) || holders[n] != 1 || !through.count(n) || !sm::isPiece(m, par, n) || !want(n))
+                    continue;
+                sm::CopySet cs = sm::copySet(m, par, n);
+                if (!cs.why.empty())
+                    continue;
+                // a TRANSLATE with action data cannot be turned
+                if ((m.u32(n) & 63) == sm::kOpTranslate && m.u32(n + 0xC) != 0)
+                    continue;
+                sets[n] = std::move(cs);
+                sources.push_back(n);
+                break;
+            }
+        for (const auto &kv : par)
+            if (!sets.count(kv.first) && holders[kv.first] == 1 && through.count(kv.first) && sm::isPiece(m, par, kv.first))
+            {
+                bool feeds = false;   // a source's paths must not be the removed piece's
+                for (uint32_t s : sources)
+                    for (uint32_t p : through[s])
+                        feeds = feeds || through[kv.first].count(p);
+                if (!feeds)
+                {
+                    removed = kv.first;
+                    break;
+                }
+            }
+        if (sources.empty() || !removed)
+        {
+            std::printf("  %s: copies skipped (%zu copyable pieces with paths)\n", stem.c_str(), sources.size());
+            continue;
+        }
+        const float cell = m.f32(g + 8), minX = m.f32(g + 0xC), minY = m.f32(g + 0x10), maxX = m.f32(g + 0x14), maxY = m.f32(g + 0x18);
+        sm::Map map;
+        map.edits.push_back(removal(removed - sm::kBase));
+        std::map<uint32_t, std::vector<uint32_t>> setNodes;
+        int addInteractives = 0;
+        size_t addPaths = 0;
+        for (uint32_t n : sources)
+        {
+            const uint32_t at = (m.u32(n) & 63) == sm::kOpRotate ? 0x40 : 0x10;
+            const float px = m.f32(n + at), py = m.f32(n + at + 4), pz = m.f32(n + at + 8);
+            const float dx = (px < (minX + maxX) / 2 ? 3 : -3) * cell, dy = (py < (minY + maxY) / 2 ? 2 : -2) * cell;
+            map.copies.push_back(copyAt(n - sm::kBase, px + dx, py + dy, pz));
+            map.copies.push_back(copyAt(n - sm::kBase, px - dx / 3 * 2, py - dy, pz, 90));
+            setNodes[n] = sets[n].nodes;
+            addInteractives += 2 * sets[n].interactives;
+            addPaths += 2 * through[n].size();
+        }
+        sm::StageCounts after;   // the stage's counts after the remove alone
+        {
+            Img only(uint32_t(bytes.size()), 0x10);
+            only.img = bytes;
+            sm::Map rm;
+            rm.edits = map.edits;
+            sm::Reserve r0 = only.reserve();
+            sm::apply(only.mem(), uint32_t(bytes.size()), rm, r0);
+            const sm::Mem om = only.mem();
+            after = sm::stageCounts(om, sm::parents(om));
+        }
+        sm::Reserve res = im.reserve();
+        const sm::Result r = sm::apply(m, uint32_t(bytes.size()), map, res);
+        for (const std::string &l : r.log)
+            std::printf("  %s: %s\n", stem.c_str(), l.c_str());
+        std::printf("  %s: %s\n", stem.c_str(), r.copySummary.c_str());
+        CHECK(r.applied == 1 && r.copied == int(map.copies.size()) && r.copyRefused == 0);
+        const GridScan scan = scanGrid(m, g);
+        CHECK(scan.problems == 0);
+        CHECK(scan.listed.size() == stock.listed.size() - through[removed].size() + addPaths);
+        CHECK(copiesStandAlone(im, r, setNodes));
+        CHECK(r.interactives == 1 + sm::kMonsterSlots + after.interactives + addInteractives);
+        // the pool first: the copies' list nodes include every node the remove freed, or all of theirs are freed ones
+        const sm::Mem disc{{{sm::kBase, bytes.data(), uint32_t(bytes.size())}}};
+        const int cells = m.s16(g + 4) * m.s16(g + 6);
+        std::set<uint32_t> nowListed;
+        for (int i = 0; i < cells; ++i)
+            for (uint32_t ln = m.u32(g + 0x20 + 4 * uint32_t(i)); ln; ln = m.u32(ln))
+                nowListed.insert(ln);
+        int freed = 0, reused = 0;
+        for (int i = 0; i < cells; ++i)
+            for (uint32_t ln = disc.u32(g + 0x20 + 4 * uint32_t(i)); ln; ln = disc.u32(ln))
+                if (through[removed].count(disc.u32(ln + 4)))
+                    ++freed, reused += int(nowListed.count(ln));
+        const int copyNodes = scan.nodes - (stock.nodes - freed);
+        CHECK(reused == std::min(freed, copyNodes));
+        std::printf("  %s: removed %s, copied %zu sources x2; %d of %d freed list nodes reused; grid %zu paths, %d list nodes\n",
+                    stem.c_str(), hexOff(removed - sm::kBase).c_str(), sources.size(), reused, freed, scan.listed.size(), scan.nodes);
+        if (dumpDir && *dumpDir)
+        {
+            const std::string out = (std::filesystem::path(dumpDir) / (stem + ".copies.bin")).string();
+            CHECK(writeFile(out, im.img) && writeFile(out + ".reserve", im.res));
+        }
+    }
+}
+
 int main()
 {
     for (const Test &t : tests())
