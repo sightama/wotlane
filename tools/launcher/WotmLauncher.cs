@@ -368,7 +368,7 @@ class Launcher : Form
         foreach (int id in LevelIds) matchLevel.Items.Add(id + "  " + LevelNames[Array.IndexOf(LevelIds, id)]);
         matchLevel.SelectedIndex = IndexOrZero(LevelIds, saved, ":MatchLevel");
         tips.SetToolTip(matchLevel, "Number = stage index in GLOSSARIO.md. Every stage fits 8 monsters: the monsters load above 32 MB (64 MB runtime); " +
-            "Metro City with 8 still has ~21 MB to spare.");
+            "Metro City with 8 still has ~17 MB to spare up to the map reserve.");
         inner.Controls.Add(Row("Stage", matchLevel));
 
         var modsRow = new FlowLayoutPanel { FlowDirection = FlowDirection.LeftToRight, AutoSize = true, WrapContents = false, Margin = new Padding(0) };
