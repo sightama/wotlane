@@ -1999,6 +1999,27 @@ TEST(stagemap_stage_counts)
     CHECK(c.interactives == 3 && c.destructibles == 2 && c.pickups == 1);
 }
 
+TEST(stagemap_counts_follow_paths)
+{
+    // the game registers a node once per path dbsTraverse takes to it, so a node held twice counts twice
+    {
+        CopyStage s;
+        s.im.w32(s.oldLast + 0x20, s.iE);   // iE (and dE under it) held by tE and by oldLast
+        const sm::Mem m = s.im.mem();
+        const sm::StageCounts c = sm::stageCounts(m, sm::parents(m));
+        CHECK(c.interactives == 5 && c.destructibles == 4 && c.pickups == 1);
+    }
+    {
+        CopyStage s;   // inside a piece: an OBJECT with a destructible id1 under sw and under d1's state 1
+        s.im.w32(s.obj0, 0x1500u << 18);
+        s.im.w32(s.d1 + 0x18, s.obj0);
+        const sm::CopySet c = s.copySet(s.tD);
+        CHECK(c.why == "" && c.destructibles == 4 && c.interactives == 2);
+        const sm::Mem m = s.im.mem();
+        CHECK(sm::stageCounts(m, sm::parents(m)).destructibles == 5);
+    }
+}
+
 namespace
 {
     // ';'-separated list from the environment (empty when unset)

@@ -175,7 +175,8 @@ constexpr uint32_t kPickupBytes = 0x500;
 // preorder (the root first): the root, the per-instance nodes of its subtree (INTERACTIVE_STATE, DESTRUCTIBLE, SWITCH,
 // PARTICLE_EMITTER, SCRIPT_ACTION, a level pickup node) and their ancestors inside the piece; the rest is shared. `bytes` their
 // 16-aligned sizes (an unturned copy, without actions, paths and grid nodes); the counts are what each copy adds to the
-// Interactives and Destructibles tables and to the level pickups. `optionGroup`: a GROUP above the piece with collision-option
+// Interactives and Destructibles tables and to the level pickups, a node counted once per path from the root to it (the game
+// registers it on each visit). `optionGroup`: a GROUP above the piece with collision-option
 // flags (flags & 0xFF00: a query with that option stops at the original, not at its copies), 0 when none; logged by apply().
 //
 // Refused: not a piece; part of a destructible's state (a DESTRUCTIBLE or INTERACTIVE_STATE above it: a copy would outlive its
@@ -196,7 +197,9 @@ uint32_t nodeSize(const Mem &m, uint32_t n);
 std::vector<uint32_t> dominoActions(const Mem &m, uint32_t n);
 // The stage's own entries, from the image as it is in `m` (after step 1 edits; a NULL ends a branch): Interactives =
 // INTERACTIVE_STATE + level pickup + HomingBug nodes, Destructibles = DESTRUCTIBLE + dispatched nodes with a destructible id1,
-// level pickups
+// level pickups. Each node counts once per path from the header roots to it (dbsTraverse has no visited set), so a node held
+// twice counts twice. An upper bound of what the load registers (masked GROUPs and empty nodes counted too). Call it before
+// copies are linked in: it would count them as well.
 struct StageCounts { int interactives = 0, destructibles = 0, pickups = 0; };
 StageCounts stageCounts(const Mem &m, const std::map<uint32_t, uint32_t> &par);
 

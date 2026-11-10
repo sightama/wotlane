@@ -659,6 +659,58 @@ bool dispatched(uint32_t op)
 
 bool pickupId(uint32_t id) { return id >= kPickupFirst && id <= kPickupLast; }
 
+// How many times a traversal from `starts` (each counted as often as listed) reaches each node: the number of paths through
+// child slots (a node held by two slots is reached twice, as dbsTraverse has no visited set), saturating at 2^40. Nodes on a
+// cycle keep only the paths from outside it (a cycle would hang the game; 2b found none).
+std::map<uint32_t, uint64_t> pathCounts(const Mem &m, const std::vector<uint32_t> &starts)
+{
+    constexpr uint64_t kMax = uint64_t(1) << 40;
+    std::map<uint32_t, uint64_t> count;
+    std::map<uint32_t, uint32_t> holders;   // reachable node -> child slots of reachable nodes that hold it
+    std::map<uint32_t, std::vector<uint32_t>> kids;
+    std::vector<uint32_t> stack;
+    for (uint32_t s : starts)
+        if (s && m.ok(s, 4))
+            ++count[s], stack.push_back(s);
+    while (!stack.empty())
+    {
+        const uint32_t n = stack.back();
+        stack.pop_back();
+        if (kids.count(n))
+            continue;
+        std::vector<uint32_t> &ks = kids[n] = children(m, n);
+        for (uint32_t k : ks)
+        {
+            ++holders[k];
+            if (!kids.count(k))
+                stack.push_back(k);
+        }
+    }
+    std::vector<uint32_t> ready;
+    for (const auto &kv : kids)
+        if (!holders.count(kv.first))
+            ready.push_back(kv.first);
+    while (!ready.empty())
+    {
+        const uint32_t n = ready.back();
+        ready.pop_back();
+        const uint64_t c = count[n];
+        for (uint32_t k : kids.at(n))
+        {
+            count[k] = std::min(count[k] + c, kMax);
+            if (--holders.at(k) == 0)
+                ready.push_back(k);
+        }
+    }
+    return count;
+}
+
+// x += v, saturating at INT_MAX (an estimate past any cap)
+void addCount(int &x, uint64_t v)
+{
+    x = int(std::min<uint64_t>(uint64_t(x) + v, 0x7FFFFFFF));
+}
+
 // dbProcInteractive's ranges a copy must not register twice (src/game/db.cpp:187-255), nullptr for a free id
 const char *specialRange(uint32_t id)
 {
@@ -866,25 +918,27 @@ CopySet copySet(const Mem &m, const std::map<uint32_t, uint32_t> &par, uint32_t 
         }
     // ids, per-instance nodes and what each copy registers
     std::set<uint32_t> keep{node};
+    const std::map<uint32_t, uint64_t> paths = pathCounts(m, {node});   // each copy registers a node once per path to it
     for (uint32_t n : order)
     {
         const uint32_t w = m.u32(n), op = w & 63, id = w >> 18;
+        const uint64_t times = paths.count(n) ? std::max<uint64_t>(paths.at(n), 1) : 1;
         bool own = op == kOpSwitch || op == kOpEmitter || op == kOpScriptAction;
         if (op == kOpInteractive || op == kOpDestructible)
         {
             if (const char *t = fixedTable(id))
                 return refused("holds id1 " + hex(id) + " (a fixed id1 table: " + t + ")");
             own = true;
-            ++(op == kOpInteractive ? c.interactives : c.destructibles);
+            addCount(op == kOpInteractive ? c.interactives : c.destructibles, times);
         }
         else if (dispatched(op) && id)
         {
             if (const char *r = specialRange(id))
                 return refused("holds special id " + hex(id) + " (" + r + ")");
             if (pickupId(id))
-                own = true, ++c.interactives, ++c.pickups;
+                own = true, addCount(c.interactives, times), addCount(c.pickups, times);
             else if (id >= 0x1450 && id < 0x1B58)
-                ++c.destructibles;
+                addCount(c.destructibles, times);
         }
         if (op == kOpEmitter && id >= 0x1D4C && id <= 0x1D6B)
             return refused("an emitter with locator id " + hex(id));
@@ -916,21 +970,23 @@ CopySet copySet(const Mem &m, const std::map<uint32_t, uint32_t> &par, uint32_t 
 StageCounts stageCounts(const Mem &m, const std::map<uint32_t, uint32_t> &par)
 {
     StageCounts s;
+    const std::map<uint32_t, uint64_t> paths = pathCounts(m, roots(m));
     for (const auto &kv : par)
     {
         const uint32_t w = m.u32(kv.first), op = w & 63, id = w >> 18;
+        const uint64_t times = paths.count(kv.first) ? std::max<uint64_t>(paths.at(kv.first), 1) : 1;
         if (op == kOpInteractive)
-            ++s.interactives;
+            addCount(s.interactives, times);
         else if (op == kOpDestructible)
-            ++s.destructibles;
+            addCount(s.destructibles, times);
         else if (dispatched(op) && id)
         {
             if (pickupId(id))
-                ++s.interactives, ++s.pickups;
+                addCount(s.interactives, times), addCount(s.pickups, times);
             else if (id == 0x11F8 || id == 0x1203)
-                ++s.interactives;
+                addCount(s.interactives, times);
             else if (id >= 0x1450 && id < 0x1B58)
-                ++s.destructibles;
+                addCount(s.destructibles, times);
         }
     }
     return s;
