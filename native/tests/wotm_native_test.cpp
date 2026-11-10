@@ -2158,13 +2158,24 @@ TEST(stagemap_copy_build)
             const sm::CopyInfo &c = r.copies[0];
             CHECK(c.source == s.tD && c.root == root && c.istate == i1c && c.destructible == d1c && c.sourceIstate == s.i1);
         }
-        // spheres: G's centre is the world root's, its radius covers oldLast (0,0,0 r20) and the copy (g0's sphere is local to
-        // tD: g0' at (800, 800) r20, as far out as oldLast); the world root's 600 already covers the copy
-        const double want = std::sqrt(400.0 * 400.0 * 2.0) + 20.0;
-        const float rad = s.im.rf(G + 0x1C);
+        // G's centre is the world root's (its radius: the next block); the world root's 600 already covers the copy
         CHECK(s.im.rf(G + 0x10) == 400.f && s.im.rf(G + 0x14) == 400.f && s.im.rf(G + 0x18) == 0.f);
-        CHECK(double(rad) >= want && near(rad, float(want)) && s.im.rf(G + 0xC) == rad * rad);
         CHECK(s.im.rf(s.world + 0x1C) == 600.f && s.im.rf(s.world + 0xC) == 360000.f);
+    }
+    // G's radius covers each child, whichever is farther: oldLast (a GROUP at (0, 0, 0), 565.7 from the centre) with radius
+    // 200 or 5, and the copy (g0's sphere is local to tD: g0' at (800, 800) r20, 565.7 + 20 from the centre)
+    for (const float oldR : {200.f, 5.f})
+    {
+        CopyStage s;
+        s.im.sphere(s.oldLast, 0, 0, 0, oldR);
+        sm::Map map;
+        map.copies.push_back(copyAt(s.off(s.tD), 500, 500, 0));
+        const sm::Result r = s.run(map);
+        const uint32_t G = s.im.r32(s.world + 0x28);
+        const double d = std::sqrt(400.0 * 400.0 * 2.0), oldNeed = d + oldR, copyNeed = d + 20.0;
+        const float rad = s.im.rf(G + 0x1C);
+        CHECK(r.copied == 1 && double(rad) >= oldNeed && double(rad) >= copyNeed);
+        CHECK(near(rad, float(std::max(oldNeed, copyNeed))) && s.im.rf(G + 0xC) == rad * rad);
     }
     {
         CopyStage s;   // two copies: one wrapper per apply, numKids 3, each copy its own nodes
@@ -2298,6 +2309,26 @@ TEST(stagemap_copy_build)
         const uint32_t root = s.im.r32(s.im.r32(s.world + 0x28) + 0x24), d1c = s.im.r32(s.im.r32(root + 0x1C) + 0xC);
         const uint32_t g0c = s.im.r32(d1c + 0xC), plainc = s.im.r32(g0c + 0x24), gsc = s.im.r32(d1c + 0x18);
         CHECK(r.copied == 1 && s.inReserve(plainc) && s.inReserve(gsc) && gsc != gs && s.im.r32(plainc + 0x20) == gsc);
+        CHECK(copiesStandAlone(s.im, r, sets));
+    }
+    // amendment A2: the wrapper takes the root's last slot as it is after step 1. Here the pickup root's last (only) child is
+    // the pickup piece tP itself; step 1 turns it (its slot gets a reserve ROTATE) or removes it (NULL)
+    for (int turnIt = 0; turnIt < 2; ++turnIt)
+    {
+        CopyStage s;
+        s.im.w32(s.proot + 0x20, s.tP);   // proot = {tP}
+        const std::map<uint32_t, std::vector<uint32_t>> sets{{s.tP, s.copySet(s.tP).nodes}};
+        sm::Map map;
+        map.edits.push_back(turnIt ? turnBy(s.off(s.tP), 90) : removal(s.off(s.tP)));
+        map.copies.push_back(copyAt(s.off(s.tP), 600, 600, 10));
+        const sm::Result r = s.run(map);
+        const uint32_t W = s.im.r32(s.proot + 0x20), live = s.im.r32(W + 0x20), copy = s.im.r32(W + 0x24);
+        CHECK(r.applied == 1 && r.copied == 1 && s.inReserve(W) && s.im.r16(W + 8) == 2);
+        if (turnIt)
+            CHECK(live != s.tP && s.inReserve(live) && (s.im.r32(live) & 63) == sm::kOpRotate && s.im.r32(live + 0x50) == s.gP);
+        else
+            CHECK(live == s.tP && (s.im.r32(s.tP) & 63) == sm::kOpNull);
+        CHECK(copy != live && (s.im.r32(copy) & 63) == sm::kOpTranslate && s.im.rf(copy + 0x10) == 600.f && s.inReserve(s.im.r32(copy + 0x1C)));
         CHECK(copiesStandAlone(s.im, r, sets));
     }
 }
