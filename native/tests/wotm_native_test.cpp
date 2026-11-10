@@ -1603,6 +1603,60 @@ TEST(stagemap_powerups_append)
     }
 }
 
+// The exportPoints hook's order in one call: the additions first (their "from" is the disc place), then step 1's moves, which
+// only reach the stock points; a second call on points that already hold the additions appends nothing
+TEST(stagemap_point_edits_order)
+{
+    constexpr uint32_t kPoints = 0x2AF0C0;
+    std::vector<uint8_t> buf(sm::kMaxPoints * sm::kPointSize);
+    sm::Mem mem;
+    mem.r.push_back({kPoints, buf.data(), uint32_t(buf.size())});
+    auto pos = [&](uint32_t i) {
+        const uint32_t a = kPoints + sm::kPointSize * i;
+        return std::array<float, 3>{mem.f32(a), mem.f32(a + 4), mem.f32(a + 8)};
+    };
+    auto load = [&]() {   // loadPoints: 3 stock points at their disc places
+        std::fill(buf.begin(), buf.end(), uint8_t(0));
+        for (uint32_t i = 0; i < 3; ++i)
+        {
+            const uint32_t a = kPoints + sm::kPointSize * i;
+            mem.wf32(a, 100.f * float(i)), mem.wf32(a + 4, -50.f), mem.wf32(a + 8, 40.f + float(i));
+            buf[a - kPoints + 0x2C] = uint8_t(i + 1);
+        }
+    };
+    const std::array<float, 3> disc1{100.f, -50.f, 41.f};
+    {
+        // (a) a move of index 3 (== the stock count, though an addition makes 4 points): refused, the added point stays
+        load();
+        uint32_t count = 0;
+        const sm::PointEditsResult r = sm::applyPointEdits(mem, kPoints, 3, 3, {powerUp(1, disc1, {5.f, 6.f, 7.f})},
+                                                           {powerUp(3, {5.f, 6.f, 7.f}, {9.f, 9.f, 9.f})}, count);
+        CHECK(count == 4 && r.added.moved == 1 && r.moved.moved == 0 && r.moved.refused == 1);
+        CHECK((pos(3) == std::array<float, 3>{5.f, 6.f, 7.f}));
+        CHECK(r.moved.log.size() == 1 && r.moved.log[0].find("power-up 3: the stage has 3 power-up places") == 0);
+    }
+    {
+        // (b) index 1 both added (at its disc place) and moved: the copy keeps the disc place, the original moves
+        load();
+        uint32_t count = 0;
+        const std::vector<sm::PowerUpEdit> adds{powerUp(1, disc1, disc1)}, moves{powerUp(1, disc1, {500.f, 600.f, 70.f})};
+        sm::PointEditsResult r = sm::applyPointEdits(mem, kPoints, 3, 3, adds, moves, count);
+        CHECK(count == 4 && r.added.moved == 1 && r.added.refused == 0 && r.moved.moved == 1 && r.moved.refused == 0);
+        CHECK(pos(3) == disc1 && (pos(1) == std::array<float, 3>{500.f, 600.f, 70.f}) && buf[sm::kPointSize * 3 + 0x2C] == 2);
+        // (c) a second exportPoints with no new loadPoints: the points already hold the addition (4 of them, stock 3): nothing
+        // appended, the moves still reach the stock points only, the bytes stay
+        const std::vector<uint8_t> once = buf;
+        count = 0;
+        r = sm::applyPointEdits(mem, kPoints, 4, 3, adds, {moves[0], powerUp(3, disc1, {1.f, 1.f, 1.f})}, count);
+        CHECK(count == 4 && r.added.moved == 0 && r.added.refused == 0 && r.added.log.empty());
+        CHECK(r.moved.moved == 1 && r.moved.refused == 1 && buf == once);
+        // a fresh loadPoints (3 points at the disc places again): the same edits give the same bytes
+        load();
+        r = sm::applyPointEdits(mem, kPoints, 3, 3, adds, moves, count);
+        CHECK(count == 4 && buf == once);
+    }
+}
+
 // The coverage rule on the same cases as tools/stage_map.py selftest: a box past both X edges, a negative start, one fully
 // outside, and one ending exactly on a cell line (floor-inclusive takes the next cell).
 TEST(stagemap_covered)

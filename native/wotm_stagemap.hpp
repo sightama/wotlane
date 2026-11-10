@@ -285,4 +285,17 @@ constexpr uint32_t kMaxPowerUps = 100;
 // it adds the note "added N power-ups (M places: the game creates 100 at most)" after the refusals.
 PowerUpResult appendPowerUps(const Mem &m, uint32_t points, uint32_t numPoints, const std::vector<PowerUpEdit> &adds, uint32_t &count);
 
+// A map's power-up edits at one PowerUpTool::exportPoints entry, in the only safe order (the hook calls this, nothing else):
+//   1. the additions (appendPowerUps()), only when the points are the stock ones (numPoints == stock: the first exportPoints
+//      after loadPoints); their "from" is then the disc place, before any move. With numPoints != stock (a second exportPoints
+//      on points that already hold the additions) nothing is appended and nothing is logged for them;
+//   2. step 1's moves (applyPowerUps()) against the stock count only (min(stock, numPoints)), never the count after the
+//      additions: a move cannot reach an added point, and one of an index the map also adds moves the original while the copy
+//      keeps the place its addition gave it.
+// `stock` is the stock point count the hook saw at the first exportPoints of this load. `count` gets the point count to write
+// back (numPoints when nothing was appended).
+struct PointEditsResult { PowerUpResult added, moved; };
+PointEditsResult applyPointEdits(const Mem &m, uint32_t points, uint32_t numPoints, uint32_t stock, const std::vector<PowerUpEdit> &adds,
+                                 const std::vector<PowerUpEdit> &moves, uint32_t &count);
+
 } // namespace wotm::stagemap

@@ -2411,4 +2411,15 @@ PowerUpResult appendPowerUps(const Mem &m, uint32_t points, uint32_t numPoints, 
     return out;
 }
 
+PointEditsResult applyPointEdits(const Mem &m, uint32_t points, uint32_t numPoints, uint32_t stock, const std::vector<PowerUpEdit> &adds,
+                                 const std::vector<PowerUpEdit> &moves, uint32_t &count)
+{
+    PointEditsResult out;
+    count = numPoints;
+    if (numPoints == stock)
+        out.added = appendPowerUps(m, points, stock, adds, count);
+    out.moved = applyPowerUps(m, points, std::min(stock, numPoints), moves);
+    return out;
+}
+
 } // namespace wotm::stagemap
