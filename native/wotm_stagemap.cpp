@@ -1523,11 +1523,138 @@ std::string planMove(const Mem &m, const std::map<uint32_t, uint32_t> &par, cons
     return "";
 }
 
+// The wrapper GROUP of the copies under header root `root`: reserved at `at` before the first copy (0: no room), with room for
+// `cap` children; `kids` is 0 until the first copy that applies links it into the root's last slot. `need`: the radius its
+// children need so far.
+struct Wrapper { uint32_t root = 0, at = 0, cap = 0, kids = 0; double need = 0; };
+
+// Plans copy `e` of piece `node`, whose copy set `cs` and collision `paths` are read from `snap` (the image on entry), under
+// wrapper `w`; returns the reason for refusing it, or "" with `plan`, `w`, `res` and `info` updated (the caller commits them
+// only on success). Live state (the root's last slot and sphere) is read from `m`.
+std::string planCopy(const Mem &m, const Mem &snap, const CopySet &cs, const std::vector<uint32_t> &paths, const Copy &e,
+                     uint32_t node, const GridDims &gd, Wrapper &w, Reserve &res, Plan &plan, CopyInfo &info)
+{
+    double old[3];
+    discPlace(snap, node, old);
+    const Placement pl = place(snap, paths, old, e.at, e.turn, gd);
+    const float *to = pl.to;
+    const uint32_t op = snap.u32(node) & 63;
+    const bool toRotate = op == kOpTranslate && pl.turning;   // a turned TRANSLATE's copy is a ROTATE (as a turn)
+    if (toRotate && snap.u32(node + 0xC) != 0)
+        return "its TRANSLATE carries action data, which a ROTATE has no room for";
+    if (!w.at)
+        return "the reserve is full (no room for the wrapper)";
+    if (w.kids > w.cap)   // the old child + cap copies: never with apply()'s count
+        return "its wrapper is full";
+
+    // every node of the copy set gets its copy, mapped by the original's address: two copied holders of one node both get its
+    // one copy
+    std::map<uint32_t, uint32_t> copyOf;
+    const uint32_t rootKids = snap.u32(node + 8);
+    for (uint32_t n : cs.nodes)
+    {
+        const uint32_t size = n == node && toRotate ? 0x50 + 4 * rootKids : nodeSize(snap, n);
+        const uint32_t a = size ? res.alloc(size) : 0;
+        if (!a || !m.ok(a, size))
+            return "the reserve is full (no room for its nodes)";
+        copyOf[n] = a;
+    }
+    auto mapped = [&](uint32_t v) {
+        const auto it = copyOf.find(v);
+        return it == copyOf.end() ? v : it->second;
+    };
+    for (uint32_t n : cs.nodes)
+    {
+        const uint32_t a = copyOf.at(n);
+        if (n == node && toRotate)
+        {
+            planTurnedTranslate(snap, node, a, rootKids, pl.c, pl.s, to, plan);
+            for (uint32_t i = 0; i < rootKids; ++i)
+                plan.u32(a + 0x50 + 4 * i, mapped(snap.u32(node + 0x1C + 4 * i)));
+            continue;
+        }
+        const uint32_t size = nodeSize(snap, n);
+        for (uint32_t i = 0; i < size; i += 4)
+            plan.u32(a + i, snap.u32(n + i));
+        for (uint32_t sl : slots(snap, n))
+            plan.u32(a + (sl - n), mapped(snap.u32(sl)));
+    }
+
+    // the root at the copy's place
+    const uint32_t root = copyOf.at(node);
+    if (op == kOpRotate)
+    {
+        float rows[3][3];
+        rootMatrix(snap, node, pl.turning, pl.c, pl.s, rows);
+        if (pl.turning)
+            for (uint32_t i = 0; i < 3; ++i)
+                plan.f32(root + 0x10 + 16 * i, rows[i][0]), plan.f32(root + 0x14 + 16 * i, rows[i][1]);
+        for (uint32_t k = 0; k < 3; ++k)
+            plan.f32(root + 0x40 + 4 * k, to[k]);
+    }
+    else if (!toRotate)
+        for (uint32_t k = 0; k < 3; ++k)
+            plan.f32(root + 0x10 + 4 * k, to[k]);
+
+    // the wrapper: on the first copy its header (the root's opcode and isRelocated bits, ids 0: an id1 of 1 would make it a
+    // second world root; the root's ctx, flags and sphere centre) and the root's last slot, its old child kept first
+    if (!w.kids)
+    {
+        const std::vector<uint32_t> sl = slots(m, w.root);
+        if (sl.empty())
+            return "the root above it has no child slot";
+        const uint32_t last = sl.back(), oldChild = m.u32(last);
+        plan.u32(w.at, m.u32(w.root) & 0x7F);
+        plan.u32(w.at + 4, m.u32(w.root + 4));
+        for (uint32_t k = 0x10; k < 0x1C; k += 4)
+            plan.u32(w.at + k, m.u32(w.root + k));
+        plan.u32(w.at + 0x20, oldChild);
+        plan.u32(last, w.at);
+        w.kids = 1;
+        std::vector<Sphere> sph;
+        std::set<uint32_t> seen;
+        spheres(m, oldChild, Xf{}, 1, seen, sph);
+        w.need = reach(m, w.root, sph);
+    }
+    plan.u32(w.at + 0x20 + 4 * w.kids, root);
+    ++w.kids;
+    plan.u32(w.at + 8, w.kids | uint32_t(m.u16(w.root + 0xA)) << 16);   // numKids u16 +8, flags u16 +0xA
+
+    // spheres: the wrapper's radius holds its children, the root's grows to hold the copy (centres kept)
+    std::vector<Sphere> sph;
+    std::set<uint32_t> seen;
+    const Xf world = placedXf(snap, node, pl.turning, pl.c, pl.s, to);
+    for (uint32_t k : children(snap, node))
+        spheres(snap, k, world, 1, seen, sph);
+    w.need = std::max(w.need, reach(m, w.root, sph));
+    planRadius(w.at, w.need, plan);
+    const double rootNeed = reach(m, w.root, sph);
+    if (!sph.empty() && rootNeed > double(m.f32(w.root + 0x1C)))
+        planRadius(w.root, rootNeed, plan);
+
+    info.source = node, info.root = root;
+    for (uint32_t n : cs.nodes)
+    {
+        const uint32_t nop = snap.u32(n) & 63;
+        if (nop == kOpInteractive && !info.istate)
+            info.istate = copyOf.at(n), info.sourceIstate = n;
+        if (nop == kOpDestructible && !info.destructible)
+            info.destructible = copyOf.at(n);
+    }
+    return "";
+}
+
 } // namespace
 
-Result apply(const Mem &m, uint32_t imageSize, const Map &map, Reserve &res)
+Result apply(const Mem &m, uint32_t imageSize, const Map &map, Reserve &res, const Limits &lim)
 {
     Result out;
+    // copies read their sources from the image as it is on entry (the disc state), before any edit writes
+    std::vector<uint8_t> disc;
+    if (!map.copies.empty())
+        if (const uint8_t *p = m.at(kBase, imageSize))
+            disc.assign(p, p + imageSize);
+    const Mem snap{{{kBase, disc.data(), uint32_t(disc.size())}}};
     const std::map<uint32_t, uint32_t> par = parents(m);
     Grid grid;
     std::string noGrid;
@@ -1649,6 +1776,109 @@ Result apply(const Mem &m, uint32_t imageSize, const Map &map, Reserve &res)
         ++out.applied;
         out.relinked += plan.relinked;
         out.fromReserve += plan.fromReserve;
+        out.log.insert(out.log.end(), plan.notes.begin(), plan.notes.end());
+    }
+
+    // 4. copies, in file order, from the snapshot (par, through and holders describe it: they were taken before any edit).
+    // One wrapper per header root above a copy's source, reserved first with room for every copy under it.
+    if (map.copies.empty())
+        return out;
+    (void)lim;   // the caps are checked with the copies' paths and grid nodes
+    std::vector<uint32_t> tops(map.copies.size(), 0), wrapOrder;
+    std::map<uint32_t, Wrapper> wraps;
+    for (size_t i = 0; i < map.copies.size(); ++i)
+    {
+        const uint32_t off = map.copies[i].node, node = kBase + off;
+        if (off >= imageSize || imageSize - off < 4 || !par.count(node) || !par.at(node))
+            continue;
+        uint32_t top = node;
+        while (par.at(top))
+            top = par.at(top);
+        tops[i] = top;
+        if (!wraps.count(top))
+            wrapOrder.push_back(top), wraps[top].root = top;
+        ++wraps[top].cap;
+    }
+    for (uint32_t top : wrapOrder)
+    {
+        Wrapper &w = wraps[top];
+        if ((m.u32(top) & 63) != kOpGroup)
+            continue;
+        const uint32_t size = 0x20 + 4 * (1 + w.cap);
+        Reserve r2 = res;
+        const uint32_t a = r2.alloc(size);
+        if (a && m.ok(a, size))
+            w.at = a, res = r2;
+    }
+    std::map<uint32_t, CopySet> sets;   // per source
+    for (size_t i = 0; i < map.copies.size(); ++i)
+    {
+        const Copy &e = map.copies[i];
+        auto refuse = [&](const std::string &why) {
+            ++out.copyRefused;
+            out.log.push_back("copy " + hex(e.node) + ": " + why + ", refused");
+        };
+        if (disc.empty())
+        {
+            refuse("the stage image is not readable");
+            continue;
+        }
+        if (e.node >= imageSize || imageSize - e.node < 4)
+        {
+            refuse("outside the stage image");
+            continue;
+        }
+        const uint32_t node = kBase + e.node;
+        if (!isPiece(snap, par, node))
+        {
+            refuse("not a piece");
+            continue;
+        }
+        const auto h = holders.find(node);
+        if (h != holders.end() && h->second.size() > 1)
+        {
+            for (uint32_t other : h->second)
+                if (other != par.at(node))
+                {
+                    refuse("also hangs from node " + hex(other - kBase) + ", not only from its parent");
+                    break;
+                }
+            continue;
+        }
+        if (!haveGrid)
+        {
+            refuse(noGrid);
+            continue;
+        }
+        if (!sets.count(node))
+            sets[node] = copySet(snap, par, node);
+        const CopySet &cs = sets.at(node);
+        if (!cs.why.empty())
+        {
+            refuse(cs.why);
+            continue;
+        }
+        if ((m.u32(tops[i]) & 63) != kOpGroup)
+        {
+            refuse("the root above it is not a GROUP");
+            continue;
+        }
+        Wrapper w2 = wraps.at(tops[i]);
+        Reserve r2 = res;
+        Plan plan;
+        CopyInfo info;
+        const std::string why = planCopy(m, snap, cs, pathsOf(node), e, node, grid.d, w2, r2, plan, info);
+        if (!why.empty())
+        {
+            refuse(why);
+            continue;
+        }
+        for (const auto &w : plan.writes)
+            m.w32(w.first, w.second);
+        wraps[tops[i]] = w2;
+        res = r2;
+        ++out.copied;
+        out.copies.push_back(info);
         out.log.insert(out.log.end(), plan.notes.begin(), plan.notes.end());
     }
     return out;

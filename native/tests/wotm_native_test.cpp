@@ -712,6 +712,7 @@ namespace
         void w16(uint32_t a, uint16_t v) { std::memcpy(at(a), &v, 2); }
         void wf(uint32_t a, float v) { std::memcpy(at(a), &v, 4); }
         uint32_t r32(uint32_t a) { uint32_t v; std::memcpy(&v, at(a), 4); return v; }
+        uint16_t r16(uint32_t a) { uint16_t v; std::memcpy(&v, at(a), 2); return v; }
         float rf(uint32_t a) { float v; std::memcpy(&v, at(a), 4); return v; }
 
         uint32_t alloc(uint32_t size)
@@ -1053,7 +1054,67 @@ namespace
             const sm::Mem m = im.mem();
             return sm::copySet(m, sm::parents(m), node);
         }
+        sm::Result run(const sm::Map &map, sm::Reserve &res) { return sm::apply(im.mem(), uint32_t(im.img.size()), map, res); }
+        sm::Result run(const sm::Map &map)
+        {
+            sm::Reserve res = im.reserve();
+            return run(map, res);
+        }
+        bool inReserve(uint32_t a) const { return a >= sm::kReserve && a < sm::kReserve + uint32_t(im.res.size()); }
     };
+
+    sm::Copy copyAt(uint32_t node, float x, float y, float z, float turn = 0)
+    {
+        sm::Copy c;
+        c.node = node, c.at[0] = x, c.at[1] = y, c.at[2] = z, c.turn = turn;
+        return c;
+    }
+
+    // Copy `copy` of node `orig` (`size` bytes) holds the original's bytes, except child slots that held a copied node (`to`
+    // maps original -> copy): those hold its copy
+    bool copiedBytes(Img &im, uint32_t orig, uint32_t copy, uint32_t size, const std::map<uint32_t, uint32_t> &to)
+    {
+        const sm::Mem m = im.mem();
+        const std::vector<uint32_t> sl = sm::slots(m, orig);
+        for (uint32_t i = 0; i < size; i += 4)
+        {
+            uint32_t want = im.r32(orig + i);
+            if (std::find(sl.begin(), sl.end(), orig + i) != sl.end() && to.count(want))
+                want = to.at(want);
+            if (im.r32(copy + i) != want)
+                return false;
+        }
+        return true;
+    }
+
+    // Review focus 1: nothing reachable from a copy's root is one of its source's copied (per-instance) nodes, and every
+    // per-instance node reachable from the header roots has exactly one holder slot
+    bool copiesStandAlone(Img &im, const sm::Result &r, const std::map<uint32_t, std::vector<uint32_t>> &sets)
+    {
+        const sm::Mem m = im.mem();
+        for (const sm::CopyInfo &c : r.copies)
+        {
+            const std::vector<uint32_t> &orig = sets.at(c.source);
+            for (uint32_t k : sm::subtree(m, c.root))
+                if (std::find(orig.begin(), orig.end(), k) != orig.end())
+                    return false;
+        }
+        std::map<uint32_t, int> held;
+        const std::map<uint32_t, uint32_t> par = sm::parents(m);
+        for (const auto &kv : par)
+            for (uint32_t s : sm::slots(m, kv.first))
+                if (const uint32_t k = m.u32(s))
+                    ++held[k];
+        for (const auto &kv : par)
+        {
+            const uint32_t w = m.u32(kv.first), op = w & 63, id = w >> 18;
+            const bool own = op == sm::kOpInteractive || op == sm::kOpDestructible || op == sm::kOpSwitch || op == sm::kOpEmitter ||
+                             op == sm::kOpScriptAction || (op == sm::kOpGroup && id >= sm::kPickupFirst && id <= sm::kPickupLast);
+            if (own && held[kv.first] != 1)
+                return false;
+        }
+        return true;
+    }
 
     uint32_t aligned(uint32_t n) { return (n + 15) & ~15u; }
     bool has(const std::string &s, const std::string &what) { return s.find(what) != std::string::npos; }
@@ -2045,6 +2106,199 @@ TEST(stagemap_counts_follow_paths)
         CHECK(c.why == "" && c.destructibles == 4 && c.interactives == 2);
         const sm::Mem m = s.im.mem();
         CHECK(sm::stageCounts(m, sm::parents(m)).destructibles == 5);
+    }
+}
+
+TEST(stagemap_copy_build)
+{
+    {
+        CopyStage s;   // one copy of tD at (500, 500, 0): a wrapper G in the world root's last slot = {oldLast, tD'}
+        s.im.w32(s.world + 4, 0x1234);   // a GS ctx: the wrapper hands the root's on
+        const std::vector<uint8_t> before = s.im.img;
+        const std::map<uint32_t, std::vector<uint32_t>> sets{{s.tD, s.copySet(s.tD).nodes}};
+        sm::Map map;
+        map.copies.push_back(copyAt(s.off(s.tD), 500, 500, 0));
+        sm::Reserve res = s.im.reserve();
+        const sm::Result r = s.run(map, res);
+        CHECK(r.copied == 1 && r.copyRefused == 0 && r.applied == 0 && r.refused == 0);
+        const uint32_t G = s.im.r32(s.world + 0x28);
+        CHECK(s.inReserve(G) && G < res.next);
+        CHECK(s.im.r32(G) == sm::kOpGroup && s.im.r32(G + 4) == 0x1234 && s.im.r16(G + 8) == 2 && s.im.r16(G + 0xA) == 3);
+        CHECK(s.im.r32(G + 0x20) == s.oldLast);
+        const uint32_t root = s.im.r32(G + 0x24);
+        CHECK(s.inReserve(root) && s.im.r32(root) == s.im.r32(s.tD));
+        CHECK(s.im.rf(root + 0x10) == 500.f && s.im.rf(root + 0x14) == 500.f && s.im.rf(root + 0x18) == 0.f);
+        // follow the copy: its per-instance nodes are in the reserve, its geometry is the image's
+        const uint32_t i1c = s.im.r32(root + 0x1C), i2c = s.im.r32(root + 0x20), d1c = s.im.r32(i1c + 0xC),
+                       g0c = s.im.r32(d1c + 0xC), swc = s.im.r32(g0c + 0x20), emc = s.im.r32(g0c + 0x28),
+                       d2c = s.im.r32(i2c + 0xC);
+        const std::vector<uint32_t> copies{root, i1c, d1c, g0c, swc, emc, i2c, d2c};
+        bool inRes = true;
+        for (uint32_t c : copies)
+            inRes = inRes && s.inReserve(c);
+        CHECK(inRes && std::set<uint32_t>(copies.begin(), copies.end()).size() == 8);
+        CHECK(s.im.r32(g0c + 0x24) == s.pc && s.im.r32(swc + 0xC) == s.obj0 && s.im.r32(swc + 0x10) == s.obj1 &&
+              s.im.r32(d1c + 0x18) == s.obj2 && s.im.r32(d2c + 0xC) == s.im.r32(s.d2 + 0xC));
+        const std::map<uint32_t, uint32_t> to{{s.tD, root}, {s.i1, i1c}, {s.d1, d1c}, {s.g0, g0c}, {s.sw, swc}, {s.em, emc},
+                                              {s.i2, i2c}, {s.d2, d2c}};
+        CHECK(copiedBytes(s.im, s.tD, root, 0x10, to) && s.im.r32(root + 0x1C) == i1c && s.im.r32(root + 0x20) == i2c);
+        CHECK(copiedBytes(s.im, s.i1, i1c, 0x10, to) && copiedBytes(s.im, s.d1, d1c, 0x24, to) &&
+              copiedBytes(s.im, s.g0, g0c, 0x2C, to) && copiedBytes(s.im, s.sw, swc, 0x14, to) &&
+              copiedBytes(s.im, s.em, emc, 0xB0, to) && copiedBytes(s.im, s.i2, i2c, 0x10, to) && copiedBytes(s.im, s.d2, d2c, 0x18, to));
+        CHECK(copiesStandAlone(s.im, r, sets));
+        // the image: only the world root's last slot and its sphere fields changed (no paths yet: the grid is untouched)
+        std::vector<uint8_t> after = s.im.img;
+        const uint32_t w = s.world - sm::kBase;
+        std::copy(before.begin() + w + 0xC, before.begin() + w + 0x20, after.begin() + w + 0xC);
+        std::copy(before.begin() + w + 0x28, before.begin() + w + 0x2C, after.begin() + w + 0x28);
+        CHECK(after == before);
+        CHECK(r.copies.size() == 1);
+        if (r.copies.size() == 1)
+        {
+            const sm::CopyInfo &c = r.copies[0];
+            CHECK(c.source == s.tD && c.root == root && c.istate == i1c && c.destructible == d1c && c.sourceIstate == s.i1);
+        }
+        // spheres: G's centre is the world root's, its radius covers oldLast (0,0,0 r20) and the copy (g0's sphere is local to
+        // tD: g0' at (800, 800) r20, as far out as oldLast); the world root's 600 already covers the copy
+        const double want = std::sqrt(400.0 * 400.0 * 2.0) + 20.0;
+        const float rad = s.im.rf(G + 0x1C);
+        CHECK(s.im.rf(G + 0x10) == 400.f && s.im.rf(G + 0x14) == 400.f && s.im.rf(G + 0x18) == 0.f);
+        CHECK(double(rad) >= want && near(rad, float(want)) && s.im.rf(G + 0xC) == rad * rad);
+        CHECK(s.im.rf(s.world + 0x1C) == 600.f && s.im.rf(s.world + 0xC) == 360000.f);
+    }
+    {
+        CopyStage s;   // two copies: one wrapper per apply, numKids 3, each copy its own nodes
+        const std::map<uint32_t, std::vector<uint32_t>> sets{{s.tD, s.copySet(s.tD).nodes}};
+        sm::Map map;
+        map.copies = {copyAt(s.off(s.tD), 500, 500, 0), copyAt(s.off(s.tD), 100, 500, 0)};
+        const sm::Result r = s.run(map);
+        const uint32_t G = s.im.r32(s.world + 0x28);
+        CHECK(r.copied == 2 && s.im.r16(G + 8) == 3 && s.im.r32(G + 0x20) == s.oldLast);
+        const uint32_t c1 = s.im.r32(G + 0x24), c2 = s.im.r32(G + 0x28);
+        CHECK(s.inReserve(c1) && s.inReserve(c2) && c1 != c2 && s.im.r32(c1 + 0x1C) != s.im.r32(c2 + 0x1C));
+        CHECK(s.im.rf(c2 + 0x10) == 100.f && s.im.rf(c2 + 0x14) == 500.f);
+        CHECK(r.copies.size() == 2 && copiesStandAlone(s.im, r, sets));
+    }
+    {
+        CopyStage s;   // turned 90: the TRANSLATE's copy is a ROTATE
+        sm::Map map;
+        map.copies.push_back(copyAt(s.off(s.tD), 500, 500, 0, 90));
+        const sm::Result r = s.run(map);
+        const uint32_t root = s.im.r32(s.im.r32(s.world + 0x28) + 0x24);
+        CHECK(r.copied == 1 && s.inReserve(root));
+        CHECK(s.im.r32(root) == ((s.im.r32(s.tD) & ~63u) | sm::kOpRotate) && s.im.r32(root + 8) == 2 && s.im.r32(root + 0xC) == 0);
+        const float want[16] = {0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1, 0, 500, 500, 0, 1};
+        bool ok = true;
+        for (uint32_t k = 0; k < 16; ++k)
+            ok = ok && s.im.rf(root + 0x10 + 4 * k) == want[k];
+        CHECK(ok);
+        const uint32_t i1c = s.im.r32(root + 0x50), i2c = s.im.r32(root + 0x54);
+        CHECK(s.inReserve(i1c) && s.inReserve(i2c) && s.im.r32(i1c) == s.im.r32(s.i1) && s.inReserve(s.im.r32(i1c + 0xC)));
+    }
+    {
+        CopyStage s;   // a TRANSLATE with action data cannot be turned into a ROTATE (step 1's rule)
+        s.im.w32(s.tD + 0xC, s.a1);
+        const std::vector<uint8_t> before = s.im.img;
+        sm::Map map;
+        map.copies.push_back(copyAt(s.off(s.tD), 500, 500, 0, 90));
+        const sm::Result r = s.run(map);
+        CHECK(r.copied == 0 && r.copyRefused == 1 && logHas(r, "action data") && s.im.img == before);
+    }
+    {
+        CopyStage s;   // a ROTATE source at 30 degrees: unturned it keeps its rows, turned 90 they are 120 degrees
+        const uint32_t rB = s.im.rotate({s.im.stillObject()}, 30, 200, 600, 0);
+        s.im.w32(s.oldLast + 0x20, rB);
+        sm::Map map;
+        map.copies = {copyAt(s.off(rB), 100, 700, 0), copyAt(s.off(rB), 100, 700, 0, 90)};
+        const sm::Result r = s.run(map);
+        const uint32_t G = s.im.r32(s.world + 0x28), c0 = s.im.r32(G + 0x24), c1 = s.im.r32(G + 0x28);
+        CHECK(r.copied == 2 && s.im.r32(G + 0x20) == s.oldLast && (s.im.r32(c0) & 63) == sm::kOpRotate);
+        bool same = true;
+        for (uint32_t k = 0; k < 12; ++k)
+            same = same && s.im.r32(c0 + 0x10 + 4 * k) == s.im.r32(rB + 0x10 + 4 * k);
+        CHECK(same && s.im.rf(c0 + 0x40) == 100.f && s.im.rf(c0 + 0x44) == 700.f && s.im.rf(c0 + 0x4C) == 1.f);
+        CHECK(s.im.r32(c0 + 0x50) == s.im.r32(rB + 0x50));   // its only child is a shared OBJECT
+        const M4 want = rotZ(120.f);
+        bool ok = true;
+        for (int i = 0; i < 3; ++i)
+            for (int j = 0; j < 4; ++j)
+                ok = ok && near(s.im.rf(c1 + 0x10 + 16 * uint32_t(i) + 4 * uint32_t(j)), want.m[i][j], 1e-5f);
+        CHECK(ok && s.im.rf(c1 + 0x40) == 100.f && s.im.rf(c1 + 0x44) == 700.f);
+    }
+    {
+        CopyStage s;   // a level pickup: its wrapper goes in the pickup root's last slot, the world root is untouched
+        s.im.w32(s.proot + 4, 0x55);
+        const std::map<uint32_t, std::vector<uint32_t>> sets{{s.tP, s.copySet(s.tP).nodes}, {s.tD, s.copySet(s.tD).nodes}};
+        sm::Map map;
+        map.copies = {copyAt(s.off(s.tP), 600, 600, 10), copyAt(s.off(s.tD), 500, 500, 0)};
+        const sm::Result r = s.run(map);
+        CHECK(r.copied == 2);
+        const uint32_t W = s.im.r32(s.proot + 0x20);
+        CHECK(s.inReserve(W) && s.im.r32(W) == sm::kOpGroup && s.im.r32(W + 4) == 0x55 && s.im.r16(W + 8) == 2 &&
+              s.im.r16(W + 0xA) == s.im.r16(s.proot + 0xA));
+        CHECK(s.im.r32(W + 0x20) == s.holder);
+        const uint32_t tPc = s.im.r32(W + 0x24), gPc = s.im.r32(tPc + 0x1C), swPc = s.im.r32(gPc + 0x20);
+        CHECK(s.inReserve(tPc) && s.inReserve(gPc) && s.inReserve(swPc) && s.im.r32(gPc) == s.im.r32(s.gP));
+        CHECK(s.im.rf(tPc + 0x10) == 600.f && s.im.rf(tPc + 0x14) == 600.f && s.im.rf(tPc + 0x18) == 10.f);
+        CHECK(s.im.r32(swPc + 0xC) == s.im.r32(s.swP + 0xC));
+        const uint32_t G = s.im.r32(s.world + 0x28);   // the world copy has its own wrapper
+        CHECK(G != W && s.inReserve(G) && s.im.r16(G + 8) == 2 && s.im.r32(G + 0x20) == s.oldLast);
+        CHECK(copiesStandAlone(s.im, r, sets));
+        CHECK(r.copies.size() == 2 && r.copies[0].istate == 0 && r.copies[0].destructible == 0 && r.copies[0].root == tPc);
+    }
+    {
+        CopyStage s;   // a copy outside the world root's sphere widens it, centre kept
+        s.im.sphere(s.world, 400, 400, 0, 100);
+        sm::Map map;
+        map.copies.push_back(copyAt(s.off(s.tD), 500, 500, 0));
+        const sm::Result r = s.run(map);
+        // g0's sphere (300, 300, 0) is local to tD, so g0' is at (800, 800) r20 in the world
+        const double want = std::sqrt(400.0 * 400.0 * 2.0) + 20.0;
+        const float rad = s.im.rf(s.world + 0x1C);
+        CHECK(r.copied == 1 && double(rad) >= want && near(rad, float(want)) && s.im.rf(s.world + 0xC) == rad * rad);
+        CHECK(s.im.rf(s.world + 0x10) == 400.f && s.im.rf(s.world + 0x14) == 400.f && s.im.rf(s.world + 0x18) == 0.f);
+    }
+    {
+        CopyStage s;   // a source that step 1 removes: its copy is built from the disc state
+        const std::map<uint32_t, std::vector<uint32_t>> sets{{s.tD, s.copySet(s.tD).nodes}};
+        sm::Map map;
+        map.edits.push_back(removal(s.off(s.tD)));
+        map.copies.push_back(copyAt(s.off(s.tD), 500, 500, 0));
+        const sm::Result r = s.run(map);
+        const uint32_t root = s.im.r32(s.im.r32(s.world + 0x28) + 0x24);
+        CHECK(r.applied == 1 && r.copied == 1 && (s.im.r32(s.tD) & 63) == sm::kOpNull);
+        CHECK((s.im.r32(root) & 63) == sm::kOpTranslate && s.im.rf(root + 0x10) == 500.f && s.im.r32(root + 8) == 2);
+        CHECK(s.inReserve(s.im.r32(root + 0x1C)) && s.inReserve(s.im.r32(root + 0x20)) && copiesStandAlone(s.im, r, sets));
+    }
+    {
+        CopyStage s;   // a source that step 1 moves and turns: the copy is the disc TRANSLATE, at the copy's place
+        const std::map<uint32_t, std::vector<uint32_t>> sets{{s.tD, s.copySet(s.tD).nodes}};
+        sm::Map map;
+        map.edits.push_back(moveTo(s.off(s.tD), 100, 500, 0, 90));
+        map.copies.push_back(copyAt(s.off(s.tD), 500, 500, 0));
+        const sm::Result r = s.run(map);
+        const uint32_t root = s.im.r32(s.im.r32(s.world + 0x28) + 0x24), moved = s.im.r32(s.mid + 0x20);
+        CHECK(r.applied == 1 && r.copied == 1 && (s.im.r32(moved) & 63) == sm::kOpRotate);
+        CHECK((s.im.r32(root) & 63) == sm::kOpTranslate && s.im.rf(root + 0x10) == 500.f && s.im.rf(root + 0x14) == 500.f);
+        CHECK(s.im.r32(root + 8) == 2 && s.inReserve(s.im.r32(root + 0x1C)) && s.im.r32(root + 0x1C) != s.i1);
+        CHECK(copiesStandAlone(s.im, r, sets));
+    }
+    {
+        CopyStage s;   // a node with two copied holders (copySet allows it): both copies of the holders hold one copy of it
+        const uint32_t gs = s.im.group({s.im.switchNode({s.im.stillObject()})});
+        const uint32_t plain = s.im.group({gs, s.im.stillObject()});
+        s.im.w32(s.g0 + 0x24, plain);   // g0 = {sw, plain, em}
+        s.im.w32(s.d1 + 0x18, gs);      // state 1 = gs
+        const sm::CopySet cs = s.copySet(s.tD);
+        CHECK(cs.why == "");
+        const std::map<uint32_t, std::vector<uint32_t>> sets{{s.tD, cs.nodes}};
+        sm::Map map;
+        map.copies.push_back(copyAt(s.off(s.tD), 500, 500, 0));
+        const sm::Result r = s.run(map);
+        const uint32_t root = s.im.r32(s.im.r32(s.world + 0x28) + 0x24), d1c = s.im.r32(s.im.r32(root + 0x1C) + 0xC);
+        const uint32_t g0c = s.im.r32(d1c + 0xC), plainc = s.im.r32(g0c + 0x24), gsc = s.im.r32(d1c + 0x18);
+        CHECK(r.copied == 1 && s.inReserve(plainc) && s.inReserve(gsc) && gsc != gs && s.im.r32(plainc + 0x20) == gsc);
+        CHECK(copiesStandAlone(s.im, r, sets));
     }
 }
 

@@ -207,8 +207,17 @@ std::vector<uint32_t> dominoActions(const Mem &m, uint32_t n);
 struct StageCounts { int interactives = 0, destructibles = 0, pickups = 0; };
 StageCounts stageCounts(const Mem &m, const std::map<uint32_t, uint32_t> &par);
 
-// relinked: grid list nodes linked for moved paths; fromReserve: how many of them came from the reserve
-struct Result { int applied = 0, refused = 0, relinked = 0, fromReserve = 0; std::vector<std::string> log; };
+// What copies may add to the game's tables: the Interactives and Destructibles caps, and the room left in MemoryStack::global
+// for level pickups (bytes; the runtime measures it at dbInitDb entry)
+struct Limits { int interactives = kInteractivesCap, destructibles = kDestructiblesCap; uint32_t pickupRoom = 0xFFFFFFFFu; };
+// One applied copy, as guest addresses: its source and root, its first INTERACTIVE_STATE and DESTRUCTIBLE (preorder) and the
+// source's INTERACTIVE_STATE they copy (0: none)
+struct CopyInfo { uint32_t source = 0, root = 0, istate = 0, destructible = 0, sourceIstate = 0; };
+// applied, refused: piece edits; relinked: grid list nodes linked for moved paths; fromReserve: how many of them came from the
+// reserve. copied, copyRefused: copies; interactives, destructibles, pickupBytes: the estimates after the copies (Limits)
+struct Result { int applied = 0, refused = 0, relinked = 0, fromReserve = 0; std::vector<std::string> log;
+                int copied = 0, copyRefused = 0, interactives = 0, destructibles = 0; uint32_t pickupBytes = 0;
+                std::vector<CopyInfo> copies; std::string copySummary; };
 
 // Applies a map's edits to the stage image in `m` (imageSize bytes at kBase), taking grid nodes and ROTATEs from `res`. A turn
 // also turns the offsets of the hat pickup actions of the destructibles under the piece (hatActions(); one that a destructible
@@ -216,7 +225,16 @@ struct Result { int applied = 0, refused = 0, relinked = 0, fromReserve = 0; std
 // edit is checked first, in file order (the first edit of a node stands); then the removes run, in file order, and their
 // paths' list nodes go to a pool; then the moves and turns, in file order, take list nodes from the pool before the reserve.
 // A move or turn is planned whole before anything is written: one that can't be done writes nothing and is logged.
-Result apply(const Mem &m, uint32_t imageSize, const Map &map, Reserve &res);
+//
+// Then the copies, in file order, each built in the reserve from the image as it was on entry (a snapshot taken before any
+// edit: a copy of a removed, moved or turned source is a copy of its disc state). A copy is its source's copy set (copySet())
+// with every child slot that held a copied node pointing at that node's copy (one copy per node, whatever holds it), its root
+// at the copy's place (a turned TRANSLATE becomes a ROTATE, as in a turn), hung under a wrapper GROUP in the last child slot
+// of the header root above its source: one wrapper per root (the world root, each pickup root), reserved before the first
+// copy, holding the slot's old child first and linked by the first copy that applies. The wrapper keeps the root's ctx, flags
+// and sphere centre, with ids 0; its radius covers its children, and the root's radius grows to cover the copies (centre
+// kept). A copy is planned whole before anything is written: one that can't be done writes nothing and is logged.
+Result apply(const Mem &m, uint32_t imageSize, const Map &map, Reserve &res, const Limits &lim = Limits{});
 
 // moved: power-up edits written; refused: edits left out (logged)
 struct PowerUpResult { int moved = 0, refused = 0; std::vector<std::string> log; };
