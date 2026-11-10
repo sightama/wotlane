@@ -1,7 +1,30 @@
 # Map creator, step 2 (copy pieces): design
 
-Date: 2026-11-09. Branch: `map-copy` (off `map-creator`, PR #48). Status: approved by Jake; written for Lane's review.
-Issue: #10. Builds on `docs/superpowers/specs/2026-11-09-map-creator-design.md` (step 1: move, turn, remove).
+Date: 2026-11-09. Branch: `map-copy` (off `map-creator`, PR #48). Status: approved by Jake; **PR 2 implemented, branch
+`map-copy`, in review** (plan `docs/superpowers/plans/2026-11-10-map-copy.md`, its decisions 1-19 and amendments A1-A4 refine
+this design; see "Implemented" below). Issue: #10. Builds on `docs/superpowers/specs/2026-11-09-map-creator-design.md` (step 1:
+move, turn, remove).
+
+## Implemented
+
+- **Edits.** `{"copy": "0x..", "at": [x, y, z], "turn": d}` and `{"addpowerup": i, "from": [..], "at": [..]}` in `stage.json`
+  (`native/wotm_stagemap.{hpp,cpp}`; one `edits` list of at most 4096 for all four kinds).
+- **Loader.** At `dbInitDb` entry, after step 1's edits, each copy is built in the map reserve (now 4 MB at `0x3BFF000`) from
+  a snapshot of the disc image: its copy set (per-instance nodes and their ancestors in the piece), its transform, private
+  action trees (HAT offsets turned, in-piece dominoes retargeted), collision paths `[header root, wrapper, mapped tail]`
+  linked into the grid, under a wrapper `GROUP` in the world root's (or each pickup root's) last slot. Atomic per copy;
+  refusals, caps (Interactives 1000 with debris pickups, Destructibles 1400, pickup memory from `MemoryStack::global` minus
+  `kGlobalKeep` 0x34000) and logs as in the plan's decision 12. The `exportPoints` hook appends the added power-up places on
+  the load's first call. Runtime guards on `Interactives::addInteractive` and `LevelPickups::createPickup` for every load;
+  `WOTM_STAGE_BREAK` (test only) breaks the first copy mid-fight.
+- **Tools.** `tools/stage_map.py` mirrors the rules: the `pieces` copy column, `check` on copies, `make --copy` with riders
+  and power-up places, `ram --interactives/--destructibles`. `tools/map_demo.ps1` writes the demo map (CENTRAL's park).
+- **Checks.** Native: `stagemap_copy_*`, `stagemap_powerup_parse`, `stagemap_powerups_append`, `stagemap_powerups_apply`,
+  `stagemap_stock_copies`, `stagemap_stock_copies_grid_rule`; copy digest `e6ad18f1f1b154fe`, step 1's digest unchanged.
+  Live (`tools/live_checks.ps1`): `map_copy_solid`, `map_copy_break`, `map_copy_200`, `map_copy_cap`, with step 1's
+  `map_load`, `map_solid`, `map_remove`, `map_control`, `map_bad_hash`, `creator_script`, `creator_reload`. Net
+  (`tools/net_checks.ps1`): `map_copy_online` (dumps compared byte for byte on both PCs), with `map_online` and
+  `map_online_missing`.
 
 ## Goal
 
@@ -58,7 +81,8 @@ Decisions taken with Jake:
 - **Memory:** 200 copies of a typical CENTRAL or METRO building is 1.6 to 2 MB. The reserve grows from 1 MB to 4 MB:
   base `0x3BFF000`, still about 17 MB above the 8-monster load end (~0x2B10000).
 - **Determinism:** Interactives indices follow the preorder walk and pickup ids the `initAfterDbLoad` list order; copies in the
-  last slots register after every original, in edit-file order, so originals keep their stock indices.
+  last slots register after every original, in edit-file order, so originals keep their stock indices. (Not all of them:
+  plan decision 17 and Known limits.)
 
 ## Saved map
 
@@ -126,15 +150,56 @@ see-through), a LOD above it (always at that detail), a SWITCH above it (stage-w
 ## Known limits (step 2)
 
 - Copies only within the same stage (mixing stages is the next-but-one PR).
-- No copies of animated or special-id pieces; dominoes that point outside the piece knock down the original's neighbour.
-- See-through, LOD and stage-wide switching context is lost on copies (see above).
-- About 300 to 500 copies per map depending on the stage (Interactives cap).
-- CPU routes, spawn and power-up places unchanged (as in step 1).
-- Past 1024 Interactives during a load (only what the estimate cannot see: HomingBugs, the Airplane, the UFO, bosses), the
-  runtime guard gives the extra registrations id 0 instead of writing past the table. Most users ignore id 0, but `doDomino`
-  (`ActionDispatch.cpp:385-388`), `sanFranSaveInteractive` (`Destructible.cpp:163`) and the boss registrations
-  (`FinalBoss.cpp:217`, `PlantBoss.cpp:519`, `:1037`, `:1205`) do not: through `getInteractive(0)`, slot 0 (NULL), they make
-  `ChangeState` write into guest page 0. Reachable only past 1024 entries during a load; maps are capped at 1000.
+- No copies of animated or special-id pieces, of pieces in a destructible's state or under a mode-masked GROUP (amendment A3),
+  of emitter locators (none on the stock stages) or of 3-MILE's vent and stacks (plan decision 5), nor of pieces whose
+  destructibles run a script action (`ACT_CINEMA`, `ACT_PLAYERPOS`, `ACT_RUNSCRIPT`, `ACT_AINAVIGATION`,
+  `ACT_GENERICEVENT`; decision 6).
+- **Lost context.** Copies hang under the world (or pickup) root's wrapper, so a `CONTROL`, `LOD` or `SWITCH` above the source
+  applies to neither their drawing nor their collision (decision 2): always solid and opaque, always at their own detail,
+  never switched stage-wide (3-MILE: 263 pieces under its `SWITCH`). Logged once per source (`... above it does not hang
+  over its copies`).
+- **Collision-option GROUPs.** A copyable source under a GROUP with collision-option flags (0x0102: 3-MILE 10, ISLAND 1;
+  `hdTraverse.cpp:135`) loses that GROUP on its copies: a query with that option goes through the original and hits the
+  copies. Logged once per source (amendment A3).
+- **Ancestor ids (2c).** A copy's hits report the ids of its own path, not of the nodes above the source: on 3-MILE (238
+  paths under the stage-wide `SWITCH` 0x2714) and SANFRAN (84 under the saves 0x275F and 0x2760) a hit on a copy reports id1
+  1, and the copies of 3 pieces on 3-MILE and 1 on SANFRAN, with no id2 of their own below, report no interactive. Not
+  logged.
+- **Fixed id2 paths (2d).** 17 hulls (AIRPORT 2, ISLAND 6, VEGAS 3, VOLCANO 6) carry a fixed id2 (5 to 7) on an id1 0 GROUP
+  below the `INTERACTIVE_STATE`; the original and its copies report that same index, as the stock stage does. Not logged.
+- **Out-of-piece dominoes.** A domino whose target is outside the source (3-MILE 2, AIRPORT 6, TOKYO 2, TOKYODM 7, VEGAS 6)
+  is kept: breaking a copy knocks down the original's neighbour. Logged once per source.
+- **Interactives indices shift** (decision 17): world copies register during the world root's traversal, so the
+  `INTERACTIVE_STATE`s under header roots after the world root (CENTRAL 0x2510, VEGAS 0x35b0...) and every level pickup
+  take later indices than on the stock stage, and pickup copies, pushed at the head of `activeList`, take the first pickup
+  ids. Deterministic, and nothing keys on stock indices (SanFran saves store the id at registration).
+- **Budgets** (2g, CENTRAL, METRO, VEGAS, ISLAND measured; room = `MemoryStack::global` at `dbInitDb` entry - 0x34000).
+  Interactives left for copies (1000 - 1 - 8 - the stage's interactives and debris pickups): CENTRAL 676, METRO 353, VEGAS
+  447, ISLAND 670. Pickup memory left after the stock charge: CENTRAL 171 KB, METRO 76 KB, VEGAS 98 KB, ISLAND 209 KB. A
+  typical CENTRAL destructible copy (0x2d85a0: 1 state and 4 debris pickups, 5 interactives, 1536 B of pickups) fits 114
+  times by pickup memory and 135 by Interactives; a piece with one interactive and no pickup memory fits 200 or more (447 to
+  676 on those stages, 353 on METRO). The earlier "about 300 to 500 copies per map" did not count debris pickups (amendment
+  A4). The Interactives estimate overcounts nodes under mode-masked GROUPs (2g): the safe direction.
+- **Power-ups.** 256 places at most (the rest refused and logged); the game creates 100 power-ups at most
+  (`PowerUps::CreatePowerUp`, decision 13), so places past the 100th create nothing.
+- **Interactives guard.** Past 1024 Interactives during a load (only what the estimate cannot see: HomingBugs, the Airplane,
+  the UFO, bosses), the runtime guard on `addInteractive` gives the extra registrations id 0 instead of writing past the
+  table. Most users ignore id 0, but `doDomino` (`ActionDispatch.cpp:385-388`), `sanFranSaveInteractive`
+  (`Destructible.cpp:163`) and the boss registrations (`FinalBoss.cpp:217`, `PlantBoss.cpp:519`, `:1037`, `:1205`) do not:
+  through `getInteractive(0)`, slot 0 (NULL), they make `ChangeState` write into guest page 0. Reachable only past 1024
+  entries during a load; maps are capped at 1000.
+- **Pickup memory guard.** When `MemoryStack::global`'s room is under a pickup's size + 16, the runtime guard on
+  `createPickup` refuses the call (allocates nothing, returns 0) from the three callers that ignore the result
+  (`dbProcInteractive`, `Debris::update` twice). **`Debris::Activate`'s rigid chunk is not guarded**: it uses the result with
+  no null test (retail 0x12F768-0x12F774), so that call is let through and logged, and only the maps' room charge (every
+  debris pickup counted) keeps it in bounds. `kGlobalKeep` was measured in the default game mode with one lineup on 4 stages
+  and spot-checked on 3 more (2g); what SANFRAN's quake or 3-MILE's meltdown allocate after frame 2400 is not covered.
+- **Online** (decision 16). The network's per-frame RAM hash covers the low 32 MB, not the reserve where the copies' nodes
+  live; `map_copy_online` compares the two PCs' as-built image and reserve dumps (`WOTM_STAGE_DUMP`) byte for byte, so a
+  difference that grows during the fight is not caught as it happens.
+- **`WOTM_STAGE_BREAK`** is test only: it changes the state of the PC that sets it, so it desyncs a net match.
+- CPU routes, spawn points and trigger zones unchanged (as in step 1). Power-up drop limits of step 1 (CANYON1 16, the ground
+  ignoring the map's other moves and its copies): step 1's spec, Known limits.
 
 ## PR 2 checks
 
