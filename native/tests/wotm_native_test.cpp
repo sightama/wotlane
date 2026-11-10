@@ -2142,7 +2142,10 @@ TEST(stagemap_copy_build)
         const std::map<uint32_t, uint32_t> to{{s.tD, root}, {s.i1, i1c}, {s.d1, d1c}, {s.g0, g0c}, {s.sw, swc}, {s.em, emc},
                                               {s.i2, i2c}, {s.d2, d2c}};
         CHECK(copiedBytes(s.im, s.tD, root, 0x10, to) && s.im.r32(root + 0x1C) == i1c && s.im.r32(root + 0x20) == i2c);
-        CHECK(copiedBytes(s.im, s.i1, i1c, 0x10, to) && copiedBytes(s.im, s.d1, d1c, 0x24, to) &&
+        // d1's state 0 actions (+0x10) hold an in-piece domino: the copy has its own tree there (stagemap_copy_actions)
+        CHECK(copiedBytes(s.im, s.d1, d1c, 0x10, to) && s.inReserve(s.im.r32(d1c + 0x10)) &&
+              std::memcmp(s.im.at(d1c + 0x14), s.im.at(s.d1 + 0x14), 0x10) == 0);
+        CHECK(copiedBytes(s.im, s.i1, i1c, 0x10, to) &&
               copiedBytes(s.im, s.g0, g0c, 0x2C, to) && copiedBytes(s.im, s.sw, swc, 0x14, to) &&
               copiedBytes(s.im, s.em, emc, 0xB0, to) && copiedBytes(s.im, s.i2, i2c, 0x10, to) && copiedBytes(s.im, s.d2, d2c, 0x18, to));
         CHECK(copiesStandAlone(s.im, r, sets));
@@ -2345,6 +2348,118 @@ TEST(stagemap_copy_build)
             const sm::CopyInfo &c = r.copies[0];
             CHECK(c.sourceIstate == s.i1 && s.inReserve(c.istate) && s.im.r32(c.istate + 0xC) == c.destructible && s.inReserve(c.destructible));
         }
+    }
+}
+
+TEST(stagemap_copy_actions)
+{
+    // d1's states: 0 -> a1 = {hat1, dom (-> i2, state 1), domOut (-> iE)}, 1 -> hat1. The copy's destructible d1' (d1 + 0xC is
+    // its state 0 child g0, + 0x10 its actions, + 0x1C state 1's actions)
+    auto rootOf = [](CopyStage &s, size_t k) { return s.im.r32(s.im.r32(s.world + 0x28) + 0x24 + 4 * uint32_t(k)); };
+    auto destOf = [](CopyStage &s, uint32_t root) {
+        const uint32_t first = (s.im.r32(root) & 63) == sm::kOpRotate ? 0x50 : 0x1C;
+        return s.im.r32(s.im.r32(root + first) + 0xC);   // root -> i1' -> d1'
+    };
+    {
+        CopyStage s;   // unturned: the group holding the in-piece domino is private, the hat and the outside domino shared
+        const std::vector<uint8_t> a1Before(s.im.img.begin() + (s.a1 - sm::kBase), s.im.img.begin() + (s.a1 - sm::kBase) + 0x18);
+        sm::Map map;
+        map.copies.push_back(copyAt(s.off(s.tD), 500, 500, 0));
+        const sm::Result r = s.run(map);
+        CHECK(r.copied == 1);
+        const uint32_t root = rootOf(s, 0), d1c = destOf(s, root), i2c = s.im.r32(root + 0x20);
+        CHECK(s.inReserve(d1c) && d1c != s.d1 && s.inReserve(i2c));
+        const uint32_t a1c = s.im.r32(d1c + 0x10);
+        CHECK(s.inReserve(a1c) && a1c != s.a1 && s.im.r16(a1c) == sm::kActGroup && s.im.r32(a1c + 8) == 3);
+        const uint32_t domc = s.im.r32(a1c + 0x10);
+        CHECK(s.im.r32(a1c + 0xC) == s.hat1 && s.im.r32(a1c + 0x14) == s.domOut);
+        CHECK(s.inReserve(domc) && s.im.r16(domc) == sm::kActDomino && s.im.r32(domc + 8) == 1 && s.im.r32(domc + 0xC) == i2c);
+        CHECK(s.im.r32(d1c + 0x1C) == s.hat1);   // no domino under state 1: shared
+        CHECK(logHas(r, "copy " + hexOff(s.off(s.tD)) + ": 1 domino actions point outside it"));
+        CHECK(std::equal(a1Before.begin(), a1Before.end(), s.im.img.begin() + (s.a1 - sm::kBase)));
+        CHECK(s.im.r32(s.dom + 0xC) == s.i2 && s.im.r32(s.d1 + 0x10) == s.a1);
+    }
+    {
+        CopyStage s;   // turned 90, twice: each copy has its own turned hat, reached from both states (one memo per copy)
+        sm::Map map;
+        map.copies = {copyAt(s.off(s.tD), 500, 500, 0, 90), copyAt(s.off(s.tD), 100, 500, 0, 90)};
+        const sm::Result r = s.run(map);
+        CHECK(r.copied == 2);
+        std::vector<uint32_t> hats;
+        for (size_t k = 0; k < 2; ++k)
+        {
+            const uint32_t root = rootOf(s, k), d1c = destOf(s, root), i2c = s.im.r32(root + 0x54);
+            const uint32_t a1c = s.im.r32(d1c + 0x10), hatc = s.im.r32(a1c + 0xC), domc = s.im.r32(a1c + 0x10);
+            CHECK(s.inReserve(a1c) && s.inReserve(hatc) && hatc != s.hat1 && s.im.r32(d1c + 0x1C) == hatc);
+            CHECK(s.im.r16(hatc) == sm::kActHatPickup && s.im.rf(hatc + 8) == 300.f);
+            CHECK(s.im.rf(hatc + 0xC) == 0.f && s.im.rf(hatc + 0x10) == 10.f && s.im.rf(hatc + 0x14) == 5.f);
+            CHECK(s.inReserve(domc) && s.im.r32(domc + 0xC) == i2c && s.im.r32(a1c + 0x14) == s.domOut);
+            hats.push_back(hatc);
+        }
+        CHECK(hats.size() == 2 && hats[0] != hats[1]);
+        CHECK(s.im.rf(s.hat1 + 0xC) == 10.f && s.im.rf(s.hat1 + 0x10) == 0.f && s.im.rf(s.hat1 + 0x14) == 5.f);
+        int noted = 0;
+        for (const std::string &l : r.log)
+            noted += has(l, "domino actions point outside it");
+        CHECK(noted == 1);   // once per source
+    }
+    {
+        CopyStage s;   // the hat offset turns with the same bits as a step 1 turn (45 degrees)
+        sm::Map map;
+        map.copies.push_back(copyAt(s.off(s.tD), 500, 500, 0, 45));
+        const sm::Result r = s.run(map);
+        CopyStage t;
+        t.run([&] { sm::Map m2; m2.edits.push_back(turnBy(t.off(t.tD), 45)); return m2; }());
+        const uint32_t hatc = s.im.r32(s.im.r32(destOf(s, rootOf(s, 0)) + 0x10) + 0xC);
+        CHECK(r.copied == 1 && s.im.r32(hatc + 0xC) == t.im.r32(t.hat1 + 0xC) && s.im.r32(hatc + 0x10) == t.im.r32(t.hat1 + 0x10));
+    }
+    {
+        CopyStage s;   // a cycle (an ACT_GROUP holding an ACT_TRANSFORM that points back at it) ends, each action copied once
+        const uint32_t grp = s.im.act(sm::kActGroup, 0x18), xf = s.im.act(sm::kActTransform, 0x50), hat = s.im.hat(100, 1, 2, 3);
+        s.im.w32(grp + 8, 3), s.im.w32(grp + 0xC, xf), s.im.w32(grp + 0x10, hat), s.im.w32(grp + 0x14, grp);
+        s.im.w32(xf + 8, grp);
+        s.im.w32(s.d1 + 0x1C, xf);
+        CHECK(s.copySet(s.tD).why == "");
+        sm::Map map;
+        map.copies.push_back(copyAt(s.off(s.tD), 500, 500, 0, 90));
+        const sm::Result r = s.run(map);
+        CHECK(r.copied == 1);
+        const uint32_t d1c = destOf(s, rootOf(s, 0)), xfc = s.im.r32(d1c + 0x1C), grpc = s.im.r32(xfc + 8);
+        CHECK(s.inReserve(xfc) && s.inReserve(grpc) && s.im.r16(xfc) == sm::kActTransform && s.im.r16(grpc) == sm::kActGroup);
+        CHECK(s.im.r32(grpc + 0xC) == xfc && s.im.r32(grpc + 0x14) == grpc);
+        const uint32_t hatc = s.im.r32(grpc + 0x10);
+        CHECK(s.inReserve(hatc) && s.im.rf(hatc + 0xC) == -2.f && s.im.rf(hatc + 0x10) == 1.f && s.im.rf(hatc + 0x14) == 3.f);
+        CHECK(std::memcmp(s.im.at(xfc + 0xC), s.im.at(xf + 0xC), 0x50 - 0xC) == 0);   // the TRANSFORM's matrix copied whole
+        CHECK(s.im.r32(grp + 0xC) == xf && s.im.r32(xf + 8) == grp && s.im.rf(hat + 0xC) == 1.f);
+    }
+    {
+        CopyStage s;   // a domino aimed at a node inside the piece that is not copied (an OBJECT with id2 set): kept, logged
+        s.im.w32(s.obj0, s.im.r32(s.obj0) | 5u << 7);
+        const uint32_t domIn = s.im.domino(s.obj0, 0), grp = s.im.actGroup({s.hat1, domIn});
+        s.im.w32(s.d1 + 0x1C, grp);
+        sm::Map map;
+        map.copies.push_back(copyAt(s.off(s.tD), 500, 500, 0, 90));
+        const sm::Result r = s.run(map);
+        CHECK(r.copied == 1);
+        const uint32_t grpc = s.im.r32(destOf(s, rootOf(s, 0)) + 0x1C);
+        CHECK(s.inReserve(grpc) && s.inReserve(s.im.r32(grpc + 0xC)) && s.im.r32(grpc + 0x10) == domIn);
+        CHECK(logHas(r, "copy " + hexOff(s.off(s.tD)) + ": domino action " + hexOff(s.off(domIn)) + " targets " +
+                            hexOff(s.off(s.obj0)) + " inside it, not copied"));
+    }
+    {
+        CopyStage s;   // atomic: no room for the last action of the copy: refused, nothing written, its reserve given back
+        sm::Map map;
+        map.copies.push_back(copyAt(s.off(s.tD), 500, 500, 0, 90));
+        sm::Reserve full = s.im.reserve();
+        {
+            CopyStage t;
+            CHECK(t.run(map, full).copied == 1);
+        }
+        const std::vector<uint8_t> img = s.im.img, resBytes = s.im.res;
+        sm::Reserve res{sm::kReserve, full.next - 16};
+        const sm::Result r = s.run(map, res);
+        CHECK(r.copied == 0 && r.copyRefused == 1 && logHas(r, "the reserve is full (no room for its actions)"));
+        CHECK(s.im.img == img && s.im.res == resBytes && res.next == sm::kReserve + aligned(0x20 + 4 * 2));
     }
 }
 

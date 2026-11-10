@@ -1153,6 +1153,7 @@ void spheres(const Mem &m, uint32_t n, const Xf &x, int depth, std::set<uint32_t
 struct Plan {
     std::vector<std::pair<uint32_t, uint32_t>> writes;
     std::vector<std::string> notes;
+    std::vector<std::string> sourceNotes;   // a copy's notes about its source: logged for its first applied copy only
     int relinked = 0, fromReserve = 0;
     void u32(uint32_t a, uint32_t v) { writes.push_back({a, v}); }
     void f32(uint32_t a, float f)
@@ -1530,6 +1531,126 @@ std::string planMove(const Mem &m, const std::map<uint32_t, uint32_t> &par, cons
     return "";
 }
 
+// A copy's private action trees (decision 8). The leaves a copy owns: an ACT_HATPICKUP when the copy is turned (its offset turned
+// as a turned piece's), an ACT_DOMINO whose target is a copied node (retargeted to the copy). Every ACT_GROUP and ACT_TRANSFORM
+// on the way from a state's actions to an owned leaf is copied too; everything else is shared. One per copy: `memo` maps an
+// action to what the copy stores in its place, so an action reached twice (two states, two groups, a cycle) is copied once.
+struct ActionCopier
+{
+    const Mem &m, &snap;
+    const std::map<uint32_t, uint32_t> &copyOf;
+    bool turning;
+    float c, s;
+    Reserve &res;
+    Plan &plan;
+    std::set<uint32_t> needs;   // actions with an owned leaf under them (themselves included)
+    std::map<uint32_t, uint32_t> memo;
+    std::string why;
+
+    // The kinds a copy may hold, and their sizes (an ACT_GROUP's count is at most 256: copySet() refuses more)
+    static uint32_t sizeOf(const Mem &mm, uint32_t a)
+    {
+        switch (mm.u16(a))
+        {
+        case kActGroup: return 0xC + 4 * std::min<uint32_t>(mm.u32(a + 8), 256);
+        case kActTransform: return 0x50;
+        case kActHatPickup: return 0x18;
+        case kActDomino: return 0x10;
+        default: return 0;
+        }
+    }
+    static std::vector<uint32_t> next(const Mem &mm, uint32_t a)
+    {
+        std::vector<uint32_t> out;
+        if (mm.u16(a) == kActGroup)
+        {
+            const uint32_t k = std::min<uint32_t>(mm.u32(a + 8), 256);
+            for (uint32_t i = 0; i < k && mm.ok(a + 0xC + 4 * i, 4); ++i)
+                out.push_back(mm.u32(a + 0xC + 4 * i));
+        }
+        else if (mm.u16(a) == kActTransform)
+            out.push_back(mm.u32(a + 8));
+        return out;
+    }
+    bool owned(uint32_t a) const
+    {
+        const uint16_t type = snap.u16(a);
+        if (type == kActHatPickup)
+            return turning && snap.ok(a, 0x18);
+        return type == kActDomino && snap.ok(a, 0x10) && copyOf.count(snap.u32(a + 0xC));
+    }
+
+    // Marks the actions reachable from `starts` that lead to an owned leaf; returns every reachable action, in visit order
+    std::vector<uint32_t> mark(const std::vector<uint32_t> &starts)
+    {
+        std::vector<uint32_t> order, stack(starts.rbegin(), starts.rend());
+        std::set<uint32_t> seen;
+        std::map<uint32_t, std::vector<uint32_t>> from;   // action -> the actions that lead to it
+        while (!stack.empty())
+        {
+            const uint32_t a = stack.back();
+            stack.pop_back();
+            if (!a || !snap.ok(a, 8) || !seen.insert(a).second)
+                continue;
+            order.push_back(a);
+            const std::vector<uint32_t> ks = next(snap, a);
+            for (auto it = ks.rbegin(); it != ks.rend(); ++it)
+                from[*it].push_back(a), stack.push_back(*it);
+        }
+        std::vector<uint32_t> up;
+        for (uint32_t a : order)
+            if (owned(a))
+                up.push_back(a);
+        while (!up.empty())
+        {
+            const uint32_t a = up.back();
+            up.pop_back();
+            if (!needs.insert(a).second)
+                continue;
+            const auto it = from.find(a);
+            if (it != from.end())
+                up.insert(up.end(), it->second.begin(), it->second.end());
+        }
+        return order;
+    }
+
+    // What the copy stores in place of action `a`: `a` itself when nothing under it is owned, else its private copy (0 and `why`
+    // set when the reserve has no room)
+    uint32_t copy(uint32_t a)
+    {
+        if (!why.empty() || !needs.count(a))
+            return a;
+        const auto it = memo.find(a);
+        if (it != memo.end())
+            return it->second;
+        const uint32_t size = sizeOf(snap, a);
+        const uint32_t na = size && snap.ok(a, size) ? res.alloc(size) : 0;
+        if (!na || !m.ok(na, size))
+        {
+            why = "the reserve is full (no room for its actions)";
+            return 0;
+        }
+        memo[a] = na;
+        for (uint32_t i = 0; i < size; i += 4)
+            plan.u32(na + i, snap.u32(a + i));
+        switch (snap.u16(a))
+        {
+        case kActGroup:
+        {
+            const std::vector<uint32_t> ks = next(snap, a);
+            for (uint32_t i = 0; i < ks.size(); ++i)
+                plan.u32(na + 0xC + 4 * i, copy(ks[i]));
+            break;
+        }
+        case kActTransform: plan.u32(na + 8, copy(snap.u32(a + 8))); break;
+        case kActHatPickup: planHatTurn(snap, a, na, c, s, plan); break;
+        case kActDomino: plan.u32(na + 0xC, copyOf.at(snap.u32(a + 0xC))); break;
+        default: break;
+        }
+        return na;
+    }
+};
+
 // The wrapper GROUP of the copies under header root `root`: reserved at `at` before the first copy (0: no room), with room for
 // `cap` children; `kids` is 0 until the first copy that applies links it into the root's last slot. `need`: the radius its
 // children need so far.
@@ -1585,6 +1706,52 @@ std::string planCopy(const Mem &m, const Mem &snap, const CopySet &cs, const std
             plan.u32(a + i, snap.u32(n + i));
         for (uint32_t sl : slots(snap, n))
             plan.u32(a + (sl - n), mapped(snap.u32(sl)));
+    }
+
+    // the copied DESTRUCTIBLEs' action trees (decision 8), after the nodes; dominoes it keeps are noted
+    {
+        ActionCopier ac{m, snap, copyOf, pl.turning, pl.c, pl.s, res, plan, {}, {}, {}};
+        std::vector<uint32_t> dests, starts;
+        for (uint32_t n : cs.nodes)
+            if ((snap.u32(n) & 63) == kOpDestructible)
+            {
+                dests.push_back(n);
+                const uint32_t k = snap.u16(n + 0xA);
+                for (uint32_t i = 0; i < k && snap.ok(n + 0xC + 12 * i + 4, 4); ++i)
+                    starts.push_back(snap.u32(n + 0xC + 12 * i + 4));
+            }
+        const std::vector<uint32_t> reached = ac.mark(starts);
+        for (uint32_t d : dests)
+        {
+            const uint32_t k = snap.u16(d + 0xA);
+            for (uint32_t i = 0; i < k && snap.ok(d + 0xC + 12 * i + 4, 4); ++i)
+            {
+                const uint32_t at = d + 0xC + 12 * i + 4, was = snap.u32(at), now = ac.copy(was);
+                if (!ac.why.empty())
+                    return ac.why;
+                if (now != was)
+                    plan.u32(copyOf.at(d) + (at - d), now);
+            }
+        }
+        const std::vector<uint32_t> sub = subtree(snap, node);
+        const std::set<uint32_t> inside(sub.begin(), sub.end());
+        int outside = 0;
+        for (uint32_t a : reached)
+        {
+            if (snap.u16(a) != kActDomino || !snap.ok(a, 0x10))
+                continue;
+            const uint32_t t = snap.u32(a + 0xC);
+            if (!t || copyOf.count(t))
+                continue;
+            if (inside.count(t))
+                plan.sourceNotes.push_back("copy " + hex(node - kBase) + ": domino action " + hex(a - kBase) + " targets " +
+                                           hex(t - kBase) + " inside it, not copied (kept: its copies act on the original's)");
+            else
+                ++outside;
+        }
+        if (outside)
+            plan.sourceNotes.push_back("copy " + hex(node - kBase) + ": " + std::to_string(outside) +
+                                       " domino actions point outside it (kept: its copies knock down the original's neighbours)");
     }
 
     // the root at the copy's place
@@ -1826,6 +1993,7 @@ Result apply(const Mem &m, uint32_t imageSize, const Map &map, Reserve &res, con
             w.at = a, res = r2;
     }
     std::map<uint32_t, CopySet> sets;   // per source
+    std::set<uint32_t> noted;           // sources whose notes are logged
     for (size_t i = 0; i < map.copies.size(); ++i)
     {
         const Copy &e = map.copies[i];
@@ -1895,6 +2063,8 @@ Result apply(const Mem &m, uint32_t imageSize, const Map &map, Reserve &res, con
         ++out.copied;
         out.copies.push_back(info);
         out.log.insert(out.log.end(), plan.notes.begin(), plan.notes.end());
+        if (noted.insert(node).second)
+            out.log.insert(out.log.end(), plan.sourceNotes.begin(), plan.sourceNotes.end());
     }
     return out;
 }
