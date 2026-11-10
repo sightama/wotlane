@@ -458,6 +458,12 @@ def _off(a):
     return "0x%x" % ((a - BASE) & 0xFFFFFFFF)
 
 
+def with_article(o):
+    """"a SKEL_BONE", "an ANIM_XFORM": the kind's name with its article (native withArticle())."""
+    name = OP_NAMES.get(o, "unknown")
+    return ("an " if name[0] in "AEIOU" else "a ") + name
+
+
 def node_size(m, n):
     """Bytes of a copy-set node (include/hieri_types.h); 0 for a kind a copy cannot hold, a node not wholly mapped, or a child
     count past what children() reads (4096; a LOD's 16): such a piece is refused, not copied in part."""
@@ -696,7 +702,7 @@ def copy_set(m, parent, n):
         if o == OP_CHAR_INSTANCE and not char_above:
             char_above = a
         if o in (OP_ANIM_XFORM, OP_ANIM_SCALE, OP_SKEL_BONE):
-            return CopySet("animated (an %s above it)" % OP_NAMES[o])
+            return CopySet("animated (%s above it)" % with_article(o))
         a = parent[a]
     # the subtree in preorder with each node's first parent inside it
     order, up, stack = [], {}, [(n, 0)]
@@ -712,7 +718,7 @@ def copy_set(m, parent, n):
     for k in order:
         o = op(m, k)
         if o in (OP_ANIM_XFORM, OP_CHAR_INSTANCE, OP_SKEL_BONE, OP_ANIM_SCALE):
-            return CopySet("animated (an %s in it)" % OP_NAMES[o])
+            return CopySet("animated (%s in it)" % with_article(o))
         channel = channel or (o == OP_OBJECT and reads_channel(m, k))
     if char_above and channel:
         return CopySet("animated (the CHAR_INSTANCE %s above it drives its OBJECTs' channels)" % _off(char_above))
@@ -1955,7 +1961,7 @@ def selftest_copies():
             (lambda i, t: i.w("<I", t["a1"] + 0xC, i.act(9, 0x10)), "a script action (ACT_CINEMA)"),
             (lambda i, t: (under_char(i, t), i.w("<h", t["obj0"] + 0x30, 0)), "animated (the CHAR_INSTANCE 0x"),
             (lambda i, t: i.w("<I", t["mid"] + 0x20, i.holder(OP_SKEL_BONE, 4, 0xC, [t["tD"]])),
-             "animated (an SKEL_BONE above it)"),
+             "animated (a SKEL_BONE above it)"),
             (lambda i, t: i.w("<I", t["mid"] + 0x20, i.holder(OP_ANIM_SCALE, 4, 0x60, [t["tD"]])), "not a piece"),
             (ad_between, "its copy would hold a node of kind 23 (ACTION_DATA)"),
             (shared_holds, "a shared node inside it (0x"),

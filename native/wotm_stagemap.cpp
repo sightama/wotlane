@@ -842,6 +842,13 @@ const char *opName(uint32_t op)
     }
 }
 
+// "a SKEL_BONE", "an ANIM_XFORM": the kind's name with its article (stage_map.py with_article())
+std::string withArticle(uint32_t op)
+{
+    const std::string name = opName(op);
+    return (std::string("AEIOU").find(name[0]) != std::string::npos ? "an " : "a ") + name;
+}
+
 const char *scriptAction(uint16_t type)
 {
     switch (type)
@@ -932,7 +939,7 @@ CopySet copySet(const Mem &m, const std::map<uint32_t, uint32_t> &par, uint32_t 
         if (op == kOpCharInstance && !charAbove)
             charAbove = a;
         if (op == kOpAnimXform || op == kOpAnimScale || op == kOpSkelBone)
-            return refused("animated (an " + std::string(opName(op)) + " above it)");
+            return refused("animated (" + withArticle(op) + " above it)");
     }
     // the subtree in preorder with each node's first parent inside it (subtree()'s order)
     std::vector<uint32_t> order, stack{node};
@@ -957,7 +964,7 @@ CopySet copySet(const Mem &m, const std::map<uint32_t, uint32_t> &par, uint32_t 
     {
         const uint32_t op = m.u32(n) & 63;
         if (op == kOpAnimXform || op == kOpCharInstance || op == kOpSkelBone || op == kOpAnimScale)
-            return refused("animated (an " + std::string(opName(op)) + " in it)");
+            return refused("animated (" + withArticle(op) + " in it)");
         channel = channel || (op == kOpObject && readsChannel(m, n));
     }
     if (charAbove && channel)
