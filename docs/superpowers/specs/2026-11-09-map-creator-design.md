@@ -120,16 +120,23 @@ is made (`stage_map.py make`, later the editor), as explicit edits the loader ap
   box top + 100 (the + 25 window would miss almost all, `CENTRAL`'s tower and 0x18a410 included), and writes
   `{"powerup": i, "from": [disc place], "at": [new place]}` edits: a moved or turned P carries them as its riders (same
   clamped place and turn; none when the turn is refused), a removed P drops them to its ground at the same X and Y, keeping
-  their hover height: new z = the ground under that X and Y + z - the carrying box's top. The ground (`pup_ground()`) is the
-  highest top among the stage's solid boxes there, other than the removed pieces' (every remove of the map), at most 10
-  above the carrying box's bottom (a building's boxes reach up to 6.4 into the ground it stands on, `CENTRAL` 0x18a410). With
-  none, the lowest bottom of P's own solid boxes at most 700 wide under it (or of all of them), but no lower than the
-  stage's flat (at most 1 tall) solid slabs wider than 700 there that are not above the carrying box (a ceiling is not
-  ground). Not the carrying box's own bottom: many roof boxes are thin or flat (`CAPITOL` 35 would not move, `METRO` 31 and
-  34 would drop 2); and not P's lowest box: foundation and animated boxes reach far below the ground (`CENTRAL` power-up 4
-  of the tower 0x165a70 went to -191.4 under an earlier rule, a 1000 x 1000 animated box reaching -242; it now rests 50.6
-  over the ground slab at 0). Boxes are bounds, not surfaces: on hilly stages (`CAPITOL` 32 and 39, `CANYON1` 16, `SANFRAN`
-  1, 2, 22 and 26) the top found may be a wide terrain box's highest point or a hollow under a plinth. The runtime hooks `exportPoints` (every resume
+  their hover height: new z = the ground under that X and Y + the hover (z - the carrying box's top, at least 0: a few
+  places rest a little under their box's top). The ground (`pup_ground()`) starts from a reference, the carrying box's
+  bottom walked down P's own boxes under that X and Y while one's top is within 1 of it (a tier standing on a lower tier
+  of P). It is the highest top among the stage's solid boxes there, other than the removed pieces' (every remove of the
+  map), at most 10 above the reference (a building's boxes reach up to 6.4 into the ground it stands on, `CENTRAL`
+  0x18a410); with none, the same against the carrying box's bottom, then the lowest bottom of P's own solid boxes at most
+  700 wide under it (or of all of them), but no lower than the stage's flat (at most 1 tall) solid slabs wider than 700
+  there that are not above the carrying box (a ceiling is not ground). A kept box under it reaching from at or below the
+  reference to more than 10 above it means P stood on it (a hill): the ground is then at least the reference. The ground
+  never passes the carrying box's top. Not the carrying box's own bottom: many roof boxes are thin or flat (`CAPITOL` 35
+  would not move, `METRO` 31 and 34 would drop 2); and not P's lowest box: foundation and animated boxes reach far below
+  the ground (`CENTRAL` power-up 4 of the tower 0x165a70 went to -191.4 under an earlier rule, a 1000 x 1000 animated box
+  reaching -242; it now rests 50.6 over the ground slab at 0). The tiers and the hill rule are there because a box's top is
+  the highest point of what it bounds: `CAPITOL` 0x6631f0's upper tier (189) stands on its own base, over a plaza box
+  whose top is 182.3 (its tiers bring 32 and 39 to 2.1 and 2.2, not 184), and `SANFRAN`'s hillside pieces stand partway up
+  terrain boxes (1, 2, 26 and 22 rest at 1050.4, 857.3, 256.4 and 0.3, not in the valley under them). The runtime hooks
+  `exportPoints` (every resume
   slot, acting on entry) and, for the map applied to this load, writes each `at` over the point's position when the point is
   at `from` (or already at `at`) within 0.01 on each axis; an index past the count or a point elsewhere is refused and
   logged, the rest apply (`[stages] <id>: moved N power-ups`); a second edit of an index refuses the whole file at parse. A
@@ -223,6 +230,9 @@ Nothing is merged by us; Lane reviews.
 - CPU routes (`.AIP`) are not updated: CPUs that hit a moved building climb or steer around it.
 - Spawn points (`.SPT`) stay where the disc puts them. Power-up places follow their piece ("Riders"); one not on an edited
   piece's box stays.
+- A removed piece's power-ups drop to the ground the collision boxes describe (`pup_ground()`), not to the drawn surface.
+  `CANYON1` 16 cannot be placed right: no box bounds the cliff its piece stands on, so it drops to the valley floor (66.4,
+  from 459). The ground counts the map's removes only: a box the map moves away or a copy it adds is not seen.
 - Trigger zones stay where the disc puts them (except 3-MILE's 13 under pieces, which follow).
 - Only riders follow an edited piece ("Riders"): things standing on its collision box tops within the tolerances, one level
   deep. Anything else on it floats or stays, and a map written by hand gets no riders.
