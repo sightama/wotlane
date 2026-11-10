@@ -170,6 +170,16 @@ constexpr uint16_t kActAnim = 2, kActDomino = 8, kActCinema = 9, kActPlayerPos =
                    kActGenericEvent = 14;   // ACT_DOMINO {state +8, target +0xC}
 constexpr int kInteractivesCap = 1000, kDestructiblesCap = 1400, kMonsterSlots = 8;
 constexpr uint32_t kPickupBytes = 0x500;
+// ACT_DEBRIS {numChunks +8, chunks[] +0x10 of 0x30 bytes}; a chunk's pickup type (ePickupType, 0 none) is bits 5..9 of its u16
+// at +0xE (src/game/Debris.cpp ActDebrisChunk; retail 0x12f744: ld +8, dsrl32 21, andi 0x1F). Debris::Activate uses 32 chunks
+// at most.
+constexpr uint16_t kActDebris = 3;
+constexpr uint32_t kDebrisChunks = 32;
+
+// MemoryStack::global bytes LevelPickups::createPickup takes for a pickup of type `type` (id1 = type + 0x1388): its object
+// (src/game/Pickup.cpp:1098-1160, the largest of the game modes and flags) and its 0xC list node, each 16-aligned; 0 for a
+// type that creates nothing (0, 0x138D's 5)
+uint32_t debrisPickupBytes(uint32_t type);
 
 // What copying piece `node` takes: `why` is "" when it can be copied, else the reason (logged as is). `nodes` is the copy set in
 // preorder (the root first): the root, the per-instance nodes of its subtree (INTERACTIVE_STATE, DESTRUCTIBLE, SWITCH,
@@ -190,8 +200,15 @@ constexpr uint32_t kPickupBytes = 0x500;
 // locator id (0x1D4C..0x1D6B, one fx per id); a shared node inside the piece holding a copied one (the copy set follows first
 // parents: the copy would reach the original's state through it); a node in the copy set that nodeSize() gives 0 for. A level
 // pickup id1 on any dispatched kind makes the node per-instance (a pickup id on an OBJECT therefore refuses the piece).
+//
+// `debrisPickups`, `debrisBytes` (amendment A4): the debris chunks with a pickup type in the ACT_DEBRIS actions of the copied
+// DESTRUCTIBLEs, and the pickup memory they take (debrisPickupBytes()). A chunk turns into a level pickup when it settles or
+// its slot dies in the fight (Debris.cpp:294, 412, 442), which registers an interactive and allocates from
+// MemoryStack::global. Counted per state that reaches the action (each state's actions fire when the destructible enters it)
+// and per path to the DESTRUCTIBLE, as `destructibles`: an upper bound. Not part of `interactives` and `pickups`.
 struct CopySet { std::string why; std::vector<uint32_t> nodes; uint32_t bytes = 0;
-                 int interactives = 0, destructibles = 0, pickups = 0;
+                 int interactives = 0, destructibles = 0, pickups = 0, debrisPickups = 0;
+                 uint64_t debrisBytes = 0;
                  uint32_t optionGroup = 0; };
 CopySet copySet(const Mem &m, const std::map<uint32_t, uint32_t> &par, uint32_t node);
 // Size in bytes of a node of the copy set (include/hieri_types.h), 0 for a kind a copy cannot hold, for a node not wholly mapped
@@ -203,8 +220,8 @@ std::vector<uint32_t> dominoActions(const Mem &m, uint32_t n);
 // INTERACTIVE_STATE + level pickup + HomingBug nodes, Destructibles = DESTRUCTIBLE + dispatched nodes with a destructible id1,
 // level pickups. Each node counts once per path from the header roots to it (dbsTraverse has no visited set), so a node held
 // twice counts twice. An upper bound of what the load registers (masked GROUPs and empty nodes counted too). Call it before
-// copies are linked in: it would count them as well.
-struct StageCounts { int interactives = 0, destructibles = 0, pickups = 0; };
+// copies are linked in: it would count them as well. `debrisPickups`, `debrisBytes`: the stage's debris pickups, as CopySet's.
+struct StageCounts { int interactives = 0, destructibles = 0, pickups = 0, debrisPickups = 0; uint64_t debrisBytes = 0; };
 StageCounts stageCounts(const Mem &m, const std::map<uint32_t, uint32_t> &par);
 
 // What copies may add to the game's tables: the Interactives and Destructibles caps, and the room left in MemoryStack::global
@@ -239,8 +256,9 @@ struct Result { int applied = 0, refused = 0, relinked = 0, fromReserve = 0; std
 // kept). Each collision path through the source becomes a path [header root, wrapper, the source's path from the piece root
 // down with copied nodes replaced] with its box moved (and turned) as the piece, listed with the grid rule, taking list nodes
 // left by the removes and moves first, then the reserve. Caps (Limits) are checked before a copy takes anything: the
-// Interactives estimate (slot 0, the monster slots, stageCounts() of the image after the piece edits, the applied copies),
-// the Destructibles one and the pickup memory (kPickupBytes per level pickup); a copy that would pass one is refused.
+// Interactives estimate (slot 0, the monster slots, stageCounts() of the image after the piece edits, the applied copies;
+// debris pickups included), the Destructibles one and the pickup memory (kPickupBytes per level pickup, debrisPickupBytes()
+// per debris pickup); a copy that would pass one is refused.
 // A copy is planned whole before anything is written: one that can't be done writes no byte of the image or the reserve and
 // takes no list node. Logs: a copy kept inside the grid's edge (one line each), what each source loses under the wrapper and
 // its domino notes (once per source), then "copied <source> xN (K KB, G grid nodes)" per source and "copy <source> xN

@@ -780,6 +780,16 @@ namespace
             w32(a, type);
             return a;
         }
+        // ACT_DEBRIS {numChunks +8, chunks[] +0x10 of 0x30}; a chunk's pickup type is bits 5..9 of its u16 at +0xE (kind 1 in
+        // bits 0..2, damage 3 in bits 10..15 around it, so the field is read alone)
+        uint32_t debris(const std::vector<uint32_t> &pickupTypes)
+        {
+            const uint32_t a = act(sm::kActDebris, 0x10 + 0x30 * uint32_t(pickupTypes.size()));
+            w32(a + 8, uint32_t(pickupTypes.size()));
+            for (size_t i = 0; i < pickupTypes.size(); ++i)
+                w16(a + 0x10 + 0x30 * uint32_t(i) + 0xE, uint16_t(1 | pickupTypes[i] << 5 | 3u << 10));
+            return a;
+        }
         uint32_t hat(float r, float x, float y, float z)
         {
             const uint32_t a = act(sm::kActHatPickup, 0x18);
@@ -2560,6 +2570,83 @@ namespace
     {
         const sm::Mem m = s.im.mem();
         return sm::stageCounts(m, sm::parents(m));
+    }
+}
+
+TEST(stagemap_debris_pickup_bytes)
+{
+    // Pickup.cpp:1098-1160 (object, then the 0xC list node), each 16-aligned
+    CHECK(sm::debrisPickupBytes(0) == 0 && sm::debrisPickupBytes(0x138D - 0x1388) == 0);
+    CHECK(sm::debrisPickupBytes(1) == 0x180);                  // a plain Pickup
+    CHECK(sm::debrisPickupBytes(0x1395 - 0x1388) == 0x4D0);   // rigid
+    CHECK(sm::debrisPickupBytes(0x139E - 0x1388) == 0x4D0);
+    CHECK(sm::debrisPickupBytes(0x13A2 - 0x1388) == 0x280);   // car
+    CHECK(sm::debrisPickupBytes(0x1393 - 0x1388) == 0x310);   // helicopter
+    CHECK(sm::debrisPickupBytes(0x13A3 - 0x1388) == 0x260);   // subway
+    CHECK(sm::debrisPickupBytes(0x13A0 - 0x1388) == 0x1E0);   // turret
+    CHECK(sm::debrisPickupBytes(31) == 0x180);
+    for (uint32_t t = 1; t < 32; ++t)
+        CHECK(sm::debrisPickupBytes(t) <= sm::kPickupBytes && sm::debrisPickupBytes(t) % 16 == 0);
+}
+
+// Amendment A4: debris chunks with a pickup type count against the Interactives cap and the pickup memory, in the copy set and in
+// the stage's own counts
+TEST(stagemap_copy_debris_pickups)
+{
+    // d1's state 0 actions a1 get a debris action with three chunks: a rigid pickup, none, a plain pickup
+    auto withDebris = [](CopyStage &s) {
+        const uint32_t deb = s.im.debris({0x1395 - 0x1388, 0, 1});
+        s.im.w32(s.a1 + 0x14, deb);   // a1 = {hat1, dom, deb}; the outside domino is dropped
+        return deb;
+    };
+    const uint64_t perCopy = 0x4D0 + 0x180;
+    {
+        CopyStage s;
+        const uint32_t deb = withDebris(s);
+        sm::CopySet c = s.copySet(s.tD);
+        CHECK(c.why == "" && c.debrisPickups == 2 && c.debrisBytes == perCopy && c.interactives == 2 && c.pickups == 0);
+        sm::StageCounts st = stockCounts(s);
+        CHECK(st.debrisPickups == 2 && st.debrisBytes == perCopy && st.interactives == 4 && st.pickups == 1);
+        // reached from state 1 too (it fires again when d1 enters state 1): counted per state
+        s.im.w32(s.d1 + 0x1C, s.im.actGroup({s.hat1, deb}));
+        c = s.copySet(s.tD);
+        CHECK(c.debrisPickups == 4 && c.debrisBytes == 2 * perCopy);
+        // dE (outside tD) gets the same action: the stage counts it, tD's copy set does not
+        s.im.w32(s.dE + 0x10, deb);
+        CHECK(s.copySet(s.tD).debrisPickups == 4 && stockCounts(s).debrisPickups == 6);
+        // more than 32 chunks: Debris::Activate uses the first 32
+        CopyStage t;
+        std::vector<uint32_t> many(40, 1);
+        t.im.w32(t.d2 + 0x10, t.im.debris(many));
+        CHECK(t.copySet(t.tD).debrisPickups == 32 && stockCounts(t).debrisPickups == 32);
+    }
+    {
+        // Interactives: 1 + 8 + 4 + the stage's 2 debris pickups = 15; each copy of tD adds 2 + 2
+        CopyStage s;
+        withDebris(s);
+        sm::Limits lim;
+        lim.interactives = 15 + 4 + 3;
+        sm::Map map;
+        map.copies = {copyAt(s.off(s.tD), 500, 500, 0), copyAt(s.off(s.tD), 100, 500, 0)};
+        sm::Reserve res = s.im.reserve();
+        const sm::Result r = sm::apply(s.im.mem(), 0x8000, map, res, lim);
+        CHECK(r.copied == 1 && r.copyRefused == 1 && r.interactives == 15 + 4);
+        CHECK(logLine(r, "copy " + hexOff(s.off(s.tD)) + " x1 refused: the Interactives table would pass its cap (22; each copy "
+                         "adds 4, 2 of them debris pickups)") >= 0);
+        CHECK(r.pickupBytes == sm::kPickupBytes + 2 * perCopy);
+    }
+    {
+        // pickup memory: the stage's level pickup and debris, plus one copy's debris
+        CopyStage s;
+        withDebris(s);
+        sm::Limits lim;
+        lim.pickupRoom = uint32_t(sm::kPickupBytes + 2 * perCopy);
+        sm::Map map;
+        map.copies = {copyAt(s.off(s.tD), 500, 500, 0), copyAt(s.off(s.tD), 100, 500, 0)};
+        sm::Reserve res = s.im.reserve();
+        const sm::Result r = sm::apply(s.im.mem(), 0x8000, map, res, lim);
+        CHECK(r.copied == 1 && r.copyRefused == 1 && r.pickupBytes == lim.pickupRoom);
+        CHECK(logLine(r, "copy " + hexOff(s.off(s.tD)) + " x1 refused: not enough pickup memory (") >= 0);
     }
 }
 

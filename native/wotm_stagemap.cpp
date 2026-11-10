@@ -603,6 +603,25 @@ std::vector<uint32_t> hatActions(const Mem &m, uint32_t n)
 
 // ---------------------------------------------------------------- copy set
 
+uint32_t debrisPickupBytes(uint32_t type)
+{
+    uint32_t size = 0x170;   // Pickup
+    switch (type + 0x1388)
+    {
+    case 0x1388: case 0x138D: return 0;   // no type; 0x138D creates nothing
+    case 0x1391: size = 0x2A0; break;     // missile truck (game mode 1)
+    case 0x1392: size = 0x2B0; break;     // tank (mode 1)
+    case 0x1393: case 0x1394: case 0x139F: size = 0x300; break;   // helicopters
+    case 0x13A0: size = 0x1D0; break;     // turret (mode 1)
+    case 0x13A1: size = 0x230; break;     // UFO
+    case 0x1395: case 0x1399: case 0x139A: case 0x139B: case 0x139C: case 0x139D: case 0x139E: size = 0x4C0; break;   // rigid
+    case 0x138A: case 0x138B: case 0x1397: case 0x13A2: size = 0x270; break;   // car (head bit 7), else a Pickup
+    case 0x13A3: size = 0x250; break;     // subway
+    default: break;
+    }
+    return size + 0x10;   // + the list node (alloc16(0xC))
+}
+
 namespace {
 
 // Every action under `a` (through ACT_GROUP and ACT_TRANSFORM, 20 levels at most), each once, depth first in slot order.
@@ -643,6 +662,36 @@ std::vector<uint32_t> stateActions(const Mem &m, uint32_t n, bool &cut)
     for (uint32_t i = 0; i < k && m.ok(n + 0xC + 12 * i + 4, 4); ++i)
         actionsUnder(m, m.u32(n + 0xC + 12 * i + 4), 0, seen, out, cut);
     return out;
+}
+
+// The debris pickups of DESTRUCTIBLE n (amendment A4): per state, the chunks with a pickup type in the ACT_DEBRIS actions that
+// state reaches (each once per state; a state's actions fire when the destructible enters it), and their pickup memory
+void debrisOf(const Mem &m, uint32_t n, uint64_t &count, uint64_t &bytes)
+{
+    if (!m.ok(n, 0xC) || (m.u32(n) & 63) != kOpDestructible)
+        return;
+    const uint32_t k = m.u16(n + 0xA);
+    for (uint32_t i = 0; i < k && m.ok(n + 0xC + 12 * i + 4, 4); ++i)
+    {
+        std::set<uint32_t> seen;
+        std::vector<uint32_t> acts;
+        bool cut = false;
+        actionsUnder(m, m.u32(n + 0xC + 12 * i + 4), 0, seen, acts, cut);
+        for (uint32_t a : acts)
+        {
+            if (m.u16(a) != kActDebris || !m.ok(a, 0x10))
+                continue;
+            const uint32_t chunks = std::min(m.u32(a + 8), kDebrisChunks);
+            for (uint32_t c = 0; c < chunks; ++c)
+            {
+                const uint32_t ch = a + 0x10 + 0x30 * c;
+                if (!m.ok(ch, 0x30))
+                    break;
+                if (const uint32_t type = uint32_t(m.u16(ch + 0xE) >> 5) & 31)
+                    ++count, bytes += debrisPickupBytes(type);
+            }
+        }
+    }
 }
 
 // Kinds dbsTraverse hands to dbProcInteractive when their id1 is nonzero (src/common/dbs.cpp:141-420); 31 and 39 always go there
@@ -709,6 +758,16 @@ std::map<uint32_t, uint64_t> pathCounts(const Mem &m, const std::vector<uint32_t
 void addCount(int &x, uint64_t v)
 {
     x = int(std::min<uint64_t>(uint64_t(x) + v, 0x7FFFFFFF));
+}
+
+// DESTRUCTIBLE n's debris pickups (debrisOf()), `times` over: added to `count` and `bytes`, saturating (2^40 bytes is past any
+// room)
+void addDebris(const Mem &m, uint32_t n, uint64_t times, int &count, uint64_t &bytes)
+{
+    uint64_t c = 0, b = 0;
+    debrisOf(m, n, c, b);
+    addCount(count, std::min<uint64_t>(c, 1u << 20) * times);
+    bytes = std::min<uint64_t>(bytes + std::min<uint64_t>(b, 1u << 30) * std::min<uint64_t>(times, 1u << 20), uint64_t(1) << 40);
 }
 
 // dbProcInteractive's ranges a copy must not register twice (src/game/db.cpp:187-255), nullptr for a free id
@@ -930,6 +989,8 @@ CopySet copySet(const Mem &m, const std::map<uint32_t, uint32_t> &par, uint32_t 
                 return refused("holds id1 " + hex(id) + " (a fixed id1 table: " + t + ")");
             own = true;
             addCount(op == kOpInteractive ? c.interactives : c.destructibles, times);
+            if (op == kOpDestructible)
+                addDebris(m, n, times, c.debrisPickups, c.debrisBytes);
         }
         else if (dispatched(op) && id)
         {
@@ -978,7 +1039,7 @@ StageCounts stageCounts(const Mem &m, const std::map<uint32_t, uint32_t> &par)
         if (op == kOpInteractive)
             addCount(s.interactives, times);
         else if (op == kOpDestructible)
-            addCount(s.destructibles, times);
+            addCount(s.destructibles, times), addDebris(m, kv.first, times, s.debrisPickups, s.debrisBytes);
         else if (dispatched(op) && id)
         {
             if (pickupId(id))
@@ -2050,11 +2111,13 @@ Result apply(const Mem &m, uint32_t imageSize, const Map &map, Reserve &res, con
     // One wrapper per header root above a copy's source, reserved first with room for every copy under it.
     if (map.copies.empty())
         return out;
-    // caps (decision 7), counted on the image after the step 1 edits and before any copy is linked in: slot 0, the monster
-    // slots and the stage's own entries, then each applied copy's
+    // caps (decision 7, amendment A4), counted on the image after the step 1 edits and before any copy is linked in: slot 0,
+    // the monster slots and the stage's own entries (its debris pickups included), then each applied copy's. Pickup memory:
+    // kPickupBytes per level pickup and debrisPickupBytes() per debris pickup.
     const StageCounts stock = stageCounts(m, parents(m));
-    int64_t interactives = 1 + kMonsterSlots + int64_t(stock.interactives), destructibles = stock.destructibles;
-    uint64_t pickups = uint64_t(std::max(stock.pickups, 0));
+    int64_t interactives = 1 + kMonsterSlots + int64_t(stock.interactives) + stock.debrisPickups,
+            destructibles = stock.destructibles;
+    uint64_t pickupBytes = uint64_t(std::max(stock.pickups, 0)) * kPickupBytes + stock.debrisBytes;
     std::vector<uint32_t> tops(map.copies.size(), 0), wrapOrder;
     std::map<uint32_t, Wrapper> wraps;
     for (size_t i = 0; i < map.copies.size(); ++i)
@@ -2145,10 +2208,13 @@ Result apply(const Mem &m, uint32_t imageSize, const Map &map, Reserve &res, con
             continue;
         }
         // caps, before anything is allocated; a copy that adds nothing to a table passes whatever its count
-        if (cs.interactives && interactives + cs.interactives > lim.interactives)
+        const int64_t addInteractives = int64_t(cs.interactives) + cs.debrisPickups;
+        const uint64_t addPickupBytes = uint64_t(cs.pickups) * kPickupBytes + cs.debrisBytes;
+        if (addInteractives && interactives + addInteractives > lim.interactives)
         {
             refuse("the Interactives table would pass its cap (" + std::to_string(lim.interactives) + "; each copy adds " +
-                   std::to_string(cs.interactives) + ")");
+                   std::to_string(addInteractives) +
+                   (cs.debrisPickups ? ", " + std::to_string(cs.debrisPickups) + " of them debris pickups" : std::string()) + ")");
             continue;
         }
         if (cs.destructibles && destructibles + cs.destructibles > lim.destructibles)
@@ -2157,9 +2223,10 @@ Result apply(const Mem &m, uint32_t imageSize, const Map &map, Reserve &res, con
                    std::to_string(cs.destructibles) + ")");
             continue;
         }
-        if (cs.pickups && (pickups + uint64_t(cs.pickups)) * kPickupBytes > lim.pickupRoom)
+        if (addPickupBytes && pickupBytes + addPickupBytes > lim.pickupRoom)
         {
-            refuse("not enough pickup memory (room for " + std::to_string(lim.pickupRoom / kPickupBytes) + " level pickups)");
+            refuse("not enough pickup memory (" + kbOf(lim.pickupRoom) + " KB for pickups; each copy adds " + kbOf(addPickupBytes) +
+                   " KB)");
             continue;
         }
         // planned whole on copies of the grid, the pool, the wrapper and the reserve: a refused copy writes nothing and takes
@@ -2184,7 +2251,7 @@ Result apply(const Mem &m, uint32_t imageSize, const Map &map, Reserve &res, con
         grid = std::move(g2);
         pool = std::move(pool2);
         res = r2;
-        interactives += cs.interactives, destructibles += cs.destructibles, pickups += uint64_t(cs.pickups);
+        interactives += addInteractives, destructibles += cs.destructibles, pickupBytes += addPickupBytes;
         ++out.copied;
         out.copies.push_back(info);
         const auto t = std::find_if(applied.begin(), applied.end(), [&](const Tally &x) { return x.source == e.node; });
@@ -2209,7 +2276,7 @@ Result apply(const Mem &m, uint32_t imageSize, const Map &map, Reserve &res, con
         out.log.push_back("copy " + hex(rf.first.first) + " x" + std::to_string(rf.second) + " refused: " + rf.first.second);
     out.interactives = int(std::min<int64_t>(interactives, INT32_MAX));
     out.destructibles = int(std::min<int64_t>(destructibles, INT32_MAX));
-    out.pickupBytes = uint32_t(std::min<uint64_t>(pickups * kPickupBytes, 0xFFFFFFFFu));
+    out.pickupBytes = uint32_t(std::min<uint64_t>(pickupBytes, 0xFFFFFFFFu));
     out.copySummary = "copies: " + std::to_string(out.copied) + " applied, " + std::to_string(out.copyRefused) + " refused; reserve " +
                       kbOf(uint64_t(res.next) - entry.next) + " of " + kbOf(uint64_t(entry.end) - entry.next) + " KB; interactives " +
                       std::to_string(out.interactives) + " of " + std::to_string(lim.interactives) + ", destructibles " +
