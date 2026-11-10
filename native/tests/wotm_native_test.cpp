@@ -743,7 +743,72 @@ namespace
             wf(a + 0xC, 0);
             return a;
         }
+        // an OBJECT at its full size (0xA0) whose animation channels (+0x30..+0x3C) are all -1: it reads none
+        uint32_t stillObject(float x = 0, float y = 0, float z = 0, float r = 10)
+        {
+            const uint32_t a = node(0, 0xA0);
+            sphere(a, x, y, z, r);
+            wf(a + 8, r * r);
+            wf(a + 0xC, 0);
+            for (uint32_t k = 0; k < 7; ++k)
+                w16(a + 0x30 + 2 * k, 0xFFFF);
+            return a;
+        }
         uint32_t polycoll() { return node(42, 0x10); }
+        // INTERACTIVE_STATE: child +0xC
+        uint32_t istate(uint32_t child, uint32_t id1 = 0)
+        {
+            const uint32_t a = node(39, 0x10, id1);
+            w32(a + 0xC, child);
+            return a;
+        }
+        // PARTICLE_EMITTER (0xB0 bytes, no children)
+        uint32_t emitter(uint32_t id1 = 0) { return node(22, 0xB0, id1); }
+        // SWITCH: numKids u8 +0xB, child[] +0xC
+        uint32_t switchNode(const std::vector<uint32_t> &ks)
+        {
+            const uint32_t a = node(6, 0xC + 4 * uint32_t(ks.size()));
+            *at(a + 0xB) = uint8_t(ks.size());
+            kids(a + 0xC, ks);
+            return a;
+        }
+        // actions (ActHead: type u16 at +0)
+        uint32_t act(uint16_t type, uint32_t size)
+        {
+            const uint32_t a = alloc(size);
+            w32(a, type);
+            return a;
+        }
+        uint32_t hat(float r, float x, float y, float z)
+        {
+            const uint32_t a = act(sm::kActHatPickup, 0x18);
+            wf(a + 8, r), wf(a + 0xC, x), wf(a + 0x10, y), wf(a + 0x14, z);
+            return a;
+        }
+        // ACT_DOMINO {state +8, target +0xC}
+        uint32_t domino(uint32_t target, uint32_t state)
+        {
+            const uint32_t a = act(sm::kActDomino, 0x10);
+            w32(a + 8, state), w32(a + 0xC, target);
+            return a;
+        }
+        // ACT_GROUP {count +8, acts[] +0xC}
+        uint32_t actGroup(const std::vector<uint32_t> &acts)
+        {
+            const uint32_t a = act(sm::kActGroup, 0xC + 4 * uint32_t(acts.size()));
+            w32(a + 8, uint32_t(acts.size()));
+            kids(a + 0xC, acts);
+            return a;
+        }
+        // DESTRUCTIBLE: numKids u16 +0xA, states[] +0xC of 12 bytes (child +0, actions +4)
+        uint32_t destructible(const std::vector<std::pair<uint32_t, uint32_t>> &states)   // (child, actions)
+        {
+            const uint32_t d = node(31, 0xC + 12 * uint32_t(states.size()));
+            w16(d + 0xA, uint16_t(states.size()));
+            for (size_t i = 0; i < states.size(); ++i)
+                w32(d + 0xC + 12 * uint32_t(i), states[i].first), w32(d + 0x10 + 12 * uint32_t(i), states[i].second);
+            return d;
+        }
         uint32_t group(const std::vector<uint32_t> &ks, float x = 0, float y = 0, float z = 0, float r = 20, uint32_t id1 = 0)
         {
             const uint32_t a = node(1, 0x20 + 4 * uint32_t(ks.size()), id1);
@@ -932,6 +997,66 @@ namespace
             return run(std::move(edits), res);
         }
     };
+
+    // The copy tests' stage: a 4 x 4 grid of 200-unit cells from (0, 0).
+    //   world (GROUP, id1 1, flags 3) = {mid, tE, oldLast}
+    //   piece tD (TRANSLATE 300,300,0) under mid = {i1, i2}: i1 -> d1, state 0 g0 = {sw {obj0, obj1}, pc, em} with actions
+    //     a1 = {hat1, dom (-> i2, state 1), domOut (-> iE)}, state 1 obj2 with actions hat1; i2 -> d2 (state 0 an OBJECT)
+    //   piece tE (TRANSLATE 700,100,0): iE -> dE, state 0 gE = {OBJECT, pcE}
+    //   pickup root proot (GROUP, id1 0) = {holder}, holder = {tP (TRANSLATE 500,500,10) -> gP (GROUP id1 0x12C1) = {swP {OBJECT}}}
+    //   paths pD {world, mid, tD, i1, d1, g0, pc} and pE {world, tE, iE, dE, gE, pcE}; roots {world, proot, grid}
+    struct CopyStage
+    {
+        Img im{0x8000, 0x4000};
+        uint32_t g, world, mid, oldLast, tD, i1, d1, g0, sw, obj0, obj1, pc, em, a1, hat1, dom, domOut, obj2, i2, d2;
+        uint32_t tE, iE, dE, gE, pcE, proot, holder, tP, gP, swP, pD, pE;
+        CopyStage()
+        {
+            pcE = im.polycoll();
+            gE = im.group({im.stillObject(), pcE}, 700, 100, 0, 20);
+            dE = im.destructible({{gE, 0}});
+            iE = im.istate(dE);
+            tE = im.translate({iE}, 700, 100, 0);
+            d2 = im.destructible({{im.stillObject(), 0}});
+            i2 = im.istate(d2);
+            hat1 = im.hat(300, 10, 0, 5);
+            dom = im.domino(i2, 1);
+            domOut = im.domino(iE, 0);
+            a1 = im.actGroup({hat1, dom, domOut});
+            obj0 = im.stillObject(), obj1 = im.stillObject();
+            sw = im.switchNode({obj0, obj1});
+            pc = im.polycoll();
+            em = im.emitter();
+            g0 = im.group({sw, pc, em}, 300, 300, 0, 20);
+            obj2 = im.stillObject();
+            d1 = im.destructible({{g0, a1}, {obj2, hat1}});
+            i1 = im.istate(d1);
+            tD = im.translate({i1, i2}, 300, 300, 0);
+            mid = im.group({tD}, 300, 300, 0, 100);
+            oldLast = im.group({im.stillObject()});
+            world = im.group({mid, tE, oldLast}, 400, 400, 0, 600, 1);
+            im.w16(world + 0xA, 3);
+            swP = im.switchNode({im.stillObject()});
+            gP = im.group({swP}, 500, 500, 10, 20, 0x12C1);
+            tP = im.translate({gP}, 500, 500, 10);
+            holder = im.group({tP});
+            proot = im.group({holder});
+            g = im.grid(4, 4, 200, 0, 0, 800, 800);
+            pD = im.path(290, 290, 0, 320, 310, 40, {world, mid, tD, i1, d1, g0, pc});
+            pE = im.path(690, 90, 0, 710, 110, 20, {world, tE, iE, dE, gE, pcE});
+            im.link(g, {pD, pE});
+            im.roots({world, proot, g});
+        }
+        uint32_t off(uint32_t a) const { return a - sm::kBase; }
+        sm::CopySet copySet(uint32_t node)
+        {
+            const sm::Mem m = im.mem();
+            return sm::copySet(m, sm::parents(m), node);
+        }
+    };
+
+    uint32_t aligned(uint32_t n) { return (n + 15) & ~15u; }
+    bool has(const std::string &s, const std::string &what) { return s.find(what) != std::string::npos; }
 
     sm::Edit moveTo(uint32_t node, float x, float y, float z, float turn = 0)
     {
@@ -1628,26 +1753,9 @@ TEST(stagemap_turn_turns_hat_offsets)
     {
         Img im;
         uint32_t t, t2, g, h1, h2, h3;
-        uint32_t act(uint16_t type, uint32_t size)
-        {
-            const uint32_t a = im.alloc(size);
-            im.w32(a, type);
-            return a;
-        }
-        uint32_t hat(float r, float x, float y, float z)
-        {
-            const uint32_t a = act(sm::kActHatPickup, 0x18);
-            im.wf(a + 8, r), im.wf(a + 0xC, x), im.wf(a + 0x10, y), im.wf(a + 0x14, z);
-            return a;
-        }
-        uint32_t destructible(const std::vector<std::pair<uint32_t, uint32_t>> &states)   // (child, actions)
-        {
-            const uint32_t d = im.node(31, 0xC + 12 * uint32_t(states.size()));
-            im.w16(d + 0xA, uint16_t(states.size()));
-            for (size_t i = 0; i < states.size(); ++i)
-                im.w32(d + 0xC + 12 * uint32_t(i), states[i].first), im.w32(d + 0x10 + 12 * uint32_t(i), states[i].second);
-            return d;
-        }
+        uint32_t act(uint16_t type, uint32_t size) { return im.act(type, size); }
+        uint32_t hat(float r, float x, float y, float z) { return im.hat(r, x, y, z); }
+        uint32_t destructible(const std::vector<std::pair<uint32_t, uint32_t>> &states) { return im.destructible(states); }
         Hats()
         {
             h1 = hat(400, 10, 0, 5), h2 = hat(300, 3, 4, 0), h3 = hat(200, 7, 0, 0);
@@ -1720,6 +1828,111 @@ TEST(stagemap_same_bits_on_every_machine)
     // 0x035d31e0eff6d986 with the 1 MB reserve at 0x3EFF000; the 4 MB reserve (0x3BFF000) changes only the 5 reserve pointers the
     // edits write (each 0x300000 lower), no float bit
     CHECK(h == 0x7ebbfd393eca9736ull);
+}
+
+TEST(stagemap_copy_set)
+{
+    CopyStage s;
+    const sm::CopySet c = s.copySet(s.tD);
+    CHECK(c.why == "");
+        // preorder; the OBJECTs and the POLY_COLL are shared
+    CHECK(c.nodes == std::vector<uint32_t>({s.tD, s.i1, s.d1, s.g0, s.sw, s.em, s.i2, s.d2}));
+    CHECK(c.bytes == aligned(0x24) + aligned(0x10) + aligned(0x24) + aligned(0x2C) + aligned(0x14) + aligned(0xB0) + aligned(0x10)
+                         + aligned(0x18));
+    CHECK(c.interactives == 2 && c.destructibles == 2 && c.pickups == 0 && c.optionGroup == 0);
+    const sm::CopySet p = s.copySet(s.tP);
+    CHECK(p.why == "" && p.nodes == std::vector<uint32_t>({s.tP, s.gP, s.swP}));
+    CHECK(p.interactives == 1 && p.destructibles == 0 && p.pickups == 1);
+    CHECK(has(s.copySet(s.g0).why, "not a piece"));
+
+    const sm::Mem m = s.im.mem();
+    CHECK(sm::nodeSize(m, s.tD) == 0x24 && sm::nodeSize(m, s.d1) == 0x24 && sm::nodeSize(m, s.sw) == 0x14);
+    CHECK(sm::nodeSize(m, s.em) == 0xB0 && sm::nodeSize(m, s.i1) == 0x10 && sm::nodeSize(m, s.g0) == 0x2C);
+    CHECK(sm::nodeSize(m, s.obj0) == 0 && sm::nodeSize(m, s.pc) == 0);   // shared kinds are never copied
+    const uint32_t ad = s.im.node(sm::kOpActionData, 0x10);
+    CHECK(sm::nodeSize(m, ad) == 0);
+    CHECK(sm::dominoActions(m, s.d1) == std::vector<uint32_t>({s.dom, s.domOut}));
+    CHECK(sm::dominoActions(m, s.tD).empty());
+}
+
+TEST(stagemap_copy_refusals)
+{
+    auto why = [](const std::function<void(CopyStage &)> &change) {
+        CopyStage s;
+        change(s);
+        return s.copySet(s.tD).why;
+    };
+    auto setId = [](CopyStage &s, uint32_t n, uint32_t id1) { s.im.w32(n, (s.im.r32(n) & 0x3FFFFu) | id1 << 18); };
+    // special ids on a node traversal hands to dbProcInteractive
+    CHECK(has(why([&](CopyStage &s) { setId(s, s.g0, 0x2134); }), "special id 0x2134"));
+    CHECK(has(why([&](CopyStage &s) { setId(s, s.g0, 0x20); }), "special id 0x20"));
+    // INTERACTIVE_STATE and DESTRUCTIBLE: only the fixed id1 tables
+    CHECK(has(why([&](CopyStage &s) { setId(s, s.i1, 0x27AE); }), "fixed id1 table"));
+    CHECK(has(why([&](CopyStage &s) { setId(s, s.i2, 0x2715); }), "fixed id1 table"));
+    CHECK(why([&](CopyStage &s) { setId(s, s.i1, 0x2134); }) == "");   // any other id on a 39 goes to AddDestruct only
+    {
+        CopyStage s;   // a refusal carries no partial copy set or counts
+        setId(s, s.i2, 0x2715);
+        const sm::CopySet c = s.copySet(s.tD);
+        CHECK(c.why != "" && c.nodes.empty() && c.bytes == 0 && c.interactives == 0 && c.destructibles == 0);
+    }
+    CHECK(has(why([&](CopyStage &s) { setId(s, s.em, 0x1D4C); }), "locator"));
+    // animated
+    CHECK(has(why([&](CopyStage &s) { s.im.w32(s.g0 + 0x24, s.im.holder(sm::kOpAnimXform, 4, 0xCC, {s.pc})); }), "animated"));
+    CHECK(has(why([&](CopyStage &s) { s.im.w32(s.a1 + 0xC, s.im.act(sm::kActAnim, 0x10)); }), "animated"));
+    CHECK(has(why([&](CopyStage &s) { s.im.w32(s.a1 + 0xC, s.im.act(sm::kActRunScript, 0x10)); }), "script action"));
+    CHECK(has(why([&](CopyStage &s) { s.im.w32(s.a1 + 0xC, s.im.act(sm::kActCinema, 0x10)); }), "script action"));
+    // a CHAR_INSTANCE above (amendment A1): refused only when an OBJECT of the piece reads an animation channel
+    auto underChar = [&](CopyStage &s) { s.im.w32(s.mid + 0x20, s.im.holder(sm::kOpCharInstance, 0x28, 0x2C, {s.tD})); };
+    CHECK(why(underChar) == "");
+    CHECK(has(why([&](CopyStage &s) { underChar(s), s.im.w16(s.obj0 + 0x30, 0); }), "animated"));
+    CHECK(has(why([&](CopyStage &s) { underChar(s), s.im.w16(s.obj2 + 0x3C, 3); }), "animated"));
+        // a channel without a CHAR_INSTANCE above: the copy is no worse than the original
+    CHECK(why([&](CopyStage &s) { s.im.w16(s.obj0 + 0x30, 0); }) == "");
+    // an ACTION_DATA between the root and a per-instance node would be in the copy set
+    CHECK(has(why([&](CopyStage &s) {
+              const uint32_t ad = s.im.node(sm::kOpActionData, 0x10);
+              s.im.w32(ad + 4, s.i1);
+              s.im.w32(s.tD + 0x1C, ad);
+          }), "ACTION_DATA"));
+    // lost context (amendment A3): part of a destructible's state, mode-masked GROUP above
+    CHECK(has(why([&](CopyStage &s) { s.im.w32(s.mid + 0x20, s.im.istate(s.im.destructible({{s.tD, 0}}))); }),
+              "in a destructible's state"));
+    CHECK(has(why([&](CopyStage &s) { s.im.w16(s.mid + 0xA, 0x21); }), "mode-masked"));
+    CHECK(has(why([&](CopyStage &s) { s.im.w16(s.mid + 0xA, 0x81); }), "mode-masked"));
+    {
+        CopyStage s;   // a GROUP above with collision-option flags: copyable, named for the log
+        s.im.w16(s.mid + 0xA, 0x0102);
+        const sm::CopySet c = s.copySet(s.tD);
+        CHECK(c.why == "" && c.optionGroup == s.mid);
+    }
+    // fine: a destructible-range id1 on an OBJECT, a pickup id on a GROUP
+    {
+        CopyStage s;
+        setId(s, s.obj0, 0x1500);
+        const sm::CopySet c = s.copySet(s.tD);
+        CHECK(c.why == "" && c.destructibles == 3 && c.interactives == 2);
+    }
+    {
+        CopyStage s;
+        setId(s, s.g0, 0x12C5);
+        const sm::CopySet c = s.copySet(s.tD);
+        CHECK(c.why == "" && c.interactives == 3 && c.pickups == 1);
+    }
+}
+
+TEST(stagemap_stage_counts)
+{
+    CopyStage s;
+    {
+        const sm::Mem m = s.im.mem();
+        const sm::StageCounts c = sm::stageCounts(m, sm::parents(m));
+        CHECK(c.interactives == 4 && c.destructibles == 3 && c.pickups == 1);   // i1, i2, iE + gP; d1, d2, dE; gP
+    }
+    s.im.w32(s.tE, (s.im.r32(s.tE) & ~63u) | sm::kOpNull);   // a NULL ends its branch
+    const sm::Mem m = s.im.mem();
+    const sm::StageCounts c = sm::stageCounts(m, sm::parents(m));
+    CHECK(c.interactives == 3 && c.destructibles == 2 && c.pickups == 1);
 }
 
 namespace

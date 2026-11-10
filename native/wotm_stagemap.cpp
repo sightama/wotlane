@@ -601,6 +601,316 @@ std::vector<uint32_t> hatActions(const Mem &m, uint32_t n)
     return out;
 }
 
+// ---------------------------------------------------------------- copy set
+
+namespace {
+
+// Every action under `a` (through ACT_GROUP and ACT_TRANSFORM, 20 levels at most), each once, depth first in slot order
+void actionsUnder(const Mem &m, uint32_t a, int depth, std::set<uint32_t> &seen, std::vector<uint32_t> &out)
+{
+    if (!a || depth > 20 || !m.ok(a, 8) || !seen.insert(a).second)
+        return;
+    out.push_back(a);
+    const uint16_t type = m.u16(a);
+    if (type == kActGroup)
+    {
+        const uint32_t k = std::min<uint32_t>(m.u32(a + 8), 256);
+        for (uint32_t i = 0; i < k && m.ok(a + 0xC + 4 * i, 4); ++i)
+            actionsUnder(m, m.u32(a + 0xC + 4 * i), depth + 1, seen, out);
+    }
+    else if (type == kActTransform)
+        actionsUnder(m, m.u32(a + 8), depth + 1, seen, out);
+}
+
+// The actions of DESTRUCTIBLE n's states, each once, in state and slot order
+std::vector<uint32_t> stateActions(const Mem &m, uint32_t n)
+{
+    std::vector<uint32_t> out;
+    if (!m.ok(n, 0xC) || (m.u32(n) & 63) != kOpDestructible)
+        return out;
+    std::set<uint32_t> seen;
+    const uint32_t k = std::min<uint32_t>(m.u16(n + 0xA), 4096);
+    for (uint32_t i = 0; i < k && m.ok(n + 0xC + 12 * i + 4, 4); ++i)
+        actionsUnder(m, m.u32(n + 0xC + 12 * i + 4), 0, seen, out);
+    return out;
+}
+
+// Kinds dbsTraverse hands to dbProcInteractive when their id1 is nonzero (src/common/dbs.cpp:141-420); 31 and 39 always go there
+bool dispatched(uint32_t op)
+{
+    switch (op)
+    {
+    case 0: case 1: case 2: case 3: case 4: case 6: case 11: case 17: case 30: case 40: case 41:
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool pickupId(uint32_t id) { return id >= kPickupFirst && id <= kPickupLast; }
+
+// dbProcInteractive's ranges a copy must not register twice (src/game/db.cpp:187-255), nullptr for a free id
+const char *specialRange(uint32_t id)
+{
+    if (id == 0)
+        return nullptr;
+    if (id < 0x20)
+        return "world, sky or font";
+    if (id <= 0x400)
+        return "monsters";
+    if (id == 0xBB8)
+        return "pedestrians";
+    if (id >= 0xFA0 && id < 0x11F8)
+        return "weapons";
+    if (id >= 0x11F8 && id < 0x12C0)
+        return "effects";
+    if (id >= 0x13EC && id < 0x1450)
+        return "power-ups";
+    if (id >= 0x1B58 && id < 0x1C20)
+        return "particle textures";
+    if (id >= 0x1C20 && id < 0x2134)
+        return "HUD";
+    if (id >= 0x2134 && id < 0x2328)
+        return "scripts";
+    if (id >= 0x2328 && id < 0x3E80)
+        return "end points";
+    return nullptr;
+}
+
+// id1 tables that the game fills from INTERACTIVE_STATE and DESTRUCTIBLE ids (Destructible.cpp:161-169, :287-315)
+const char *fixedTable(uint32_t id)
+{
+    if (id >= 0x275D && id <= 0x2762)
+        return "SanFran saves";
+    if (id >= 0x2775 && id <= 0x2777)
+        return "CANYON2 pillars";
+    if (id >= 0x27AE && id <= 0x27B3)
+        return "CAPITOL pillars";
+    if (id == 0x2712 || (id >= 0x2715 && id <= 0x2718))
+        return "the 3-MILE vent and stacks";
+    return nullptr;
+}
+
+const char *opName(uint32_t op)
+{
+    switch (op)
+    {
+    case kOpObject: return "OBJECT";
+    case kOpGroup: return "GROUP";
+    case kOpLod: return "LOD";
+    case kOpTranslate: return "TRANSLATE";
+    case kOpRotate: return "ROTATE";
+    case kOpSwitch: return "SWITCH";
+    case kOpControl: return "CONTROL";
+    case kOpNull: return "NULL";
+    case kOpGrid: return "GRID";
+    case kOpAnimXform: return "ANIM_XFORM";
+    case kOpEmitter: return "PARTICLE_EMITTER";
+    case kOpActionData: return "ACTION_DATA";
+    case kOpCharInstance: return "CHAR_INSTANCE";
+    case kOpScale: return "SCALE";
+    case kOpDestructible: return "DESTRUCTIBLE";
+    case kOpSkelBone: return "SKEL_BONE";
+    case kOpAnimScale: return "ANIM_SCALE";
+    case kOpInteractive: return "INTERACTIVE_STATE";
+    case kOpScriptAction: return "SCRIPT_ACTION";
+    case kOpPolyColl: return "POLY_COLL";
+    default: return "unknown";
+    }
+}
+
+const char *scriptAction(uint16_t type)
+{
+    switch (type)
+    {
+    case kActCinema: return "ACT_CINEMA";
+    case kActPlayerPos: return "ACT_PLAYERPOS";
+    case kActRunScript: return "ACT_RUNSCRIPT";
+    case kActAiNavigation: return "ACT_AINAVIGATION";
+    case kActGenericEvent: return "ACT_GENERICEVENT";
+    default: return nullptr;
+    }
+}
+
+// An OBJECT that reads an animation channel (an index >= 0 at +0x30..+0x3C, src/common/dbs.cpp:154-163): only a CHAR_INSTANCE
+// above it gives it one. An OBJECT too short to tell counts as reading one.
+bool readsChannel(const Mem &m, uint32_t n)
+{
+    if (!m.ok(n, 0x3E))
+        return true;
+    for (uint32_t k = 0; k < 7; ++k)
+        if (m.s16(n + 0x30 + 2 * k) >= 0)
+            return true;
+    return false;
+}
+
+} // namespace
+
+uint32_t nodeSize(const Mem &m, uint32_t n)
+{
+    if (!m.ok(n, 4))
+        return 0;
+    uint32_t size = 0;
+    switch (m.u32(n) & 63)
+    {
+    case kOpGroup: size = m.ok(n + 8, 2) ? 0x20 + 4 * uint32_t(m.u16(n + 8)) : 0; break;
+    case kOpTranslate: size = m.ok(n + 8) ? 0x1C + 4 * std::min<uint32_t>(m.u32(n + 8), 4096) : 0; break;
+    case kOpRotate: size = m.ok(n + 8) ? 0x50 + 4 * std::min<uint32_t>(m.u32(n + 8), 4096) : 0; break;
+    case kOpScale: size = m.ok(n + 8) ? 0x2C + 4 * std::min<uint32_t>(m.u32(n + 8), 4096) : 0; break;
+    case kOpSwitch: size = m.ok(n + 0xB, 1) ? 0xC + 4 * uint32_t(m.u8(n + 0xB)) : 0; break;
+    case kOpLod: size = m.ok(n + 4) && m.u32(n + 4) < 16 ? 0x20 + 16 * m.u32(n + 4) : 0; break;
+    case kOpControl: size = m.ok(n + 0xC, 1) ? 0x20 + 4 * uint32_t(m.u8(n + 0xC)) : 0; break;
+    case kOpInteractive: size = 0x10; break;
+    case kOpDestructible: size = m.ok(n + 0xA, 2) ? 0xC + 12 * uint32_t(m.u16(n + 0xA)) : 0; break;
+    case kOpEmitter: size = 0xB0; break;
+    case kOpScriptAction: size = 0x60; break;
+    default: return 0;
+    }
+    return size && m.ok(n, size) ? size : 0;
+}
+
+std::vector<uint32_t> dominoActions(const Mem &m, uint32_t n)
+{
+    std::vector<uint32_t> out;
+    for (uint32_t a : stateActions(m, n))
+        if (m.u16(a) == kActDomino && m.ok(a, 0x10))
+            out.push_back(a);
+    return out;
+}
+
+CopySet copySet(const Mem &m, const std::map<uint32_t, uint32_t> &par, uint32_t node)
+{
+    CopySet c;
+    auto refused = [](std::string why) {
+        CopySet r;
+        r.why = std::move(why);
+        return r;
+    };
+    if (!isPiece(m, par, node))
+        return refused("not a piece");
+    // what it hangs under (dropped by the copy, which hangs under the wrapper)
+    uint32_t charAbove = 0;
+    for (uint32_t a = par.at(node); a; a = par.at(a))
+    {
+        const uint32_t op = m.u32(a) & 63;
+        if (op == kOpDestructible || op == kOpInteractive)
+            return refused("in a destructible's state (" + std::string(opName(op)) + " " + hex(a - kBase) + " above it)");
+        if (op == kOpGroup)
+        {
+            const uint16_t flags = m.u16(a + 0xA);
+            if (flags & 0xB0)
+                return refused("mode-masked (GROUP " + hex(a - kBase) + " above it, flags " + hex(flags) + ")");
+            if ((flags & 0xFF00) && !c.optionGroup)
+                c.optionGroup = a;
+        }
+        if (op == kOpCharInstance && !charAbove)
+            charAbove = a;
+        if (op == kOpAnimXform || op == kOpAnimScale || op == kOpSkelBone)
+            return refused("animated (an " + std::string(opName(op)) + " above it)");
+    }
+    // the subtree in preorder with each node's first parent inside it (subtree()'s order)
+    std::vector<uint32_t> order, stack{node};
+    std::map<uint32_t, uint32_t> up;
+    {
+        std::vector<uint32_t> from{0};
+        while (!stack.empty())
+        {
+            const uint32_t k = stack.back(), p = from.back();
+            stack.pop_back(), from.pop_back();
+            if (up.count(k))
+                continue;
+            up[k] = p;
+            order.push_back(k);
+            const std::vector<uint32_t> ks = children(m, k);
+            for (auto it = ks.rbegin(); it != ks.rend(); ++it)
+                stack.push_back(*it), from.push_back(k);
+        }
+    }
+    bool channel = false;
+    for (uint32_t n : order)
+    {
+        const uint32_t op = m.u32(n) & 63;
+        if (op == kOpAnimXform || op == kOpCharInstance || op == kOpSkelBone || op == kOpAnimScale)
+            return refused("animated (an " + std::string(opName(op)) + " in it)");
+        channel = channel || (op == kOpObject && readsChannel(m, n));
+    }
+    if (charAbove && channel)
+        return refused("animated (the CHAR_INSTANCE " + hex(charAbove - kBase) + " above it drives its OBJECTs' channels)");
+    for (uint32_t n : order)
+        if ((m.u32(n) & 63) == kOpDestructible)
+            for (uint32_t a : stateActions(m, n))
+            {
+                const uint16_t type = m.u16(a);
+                if (type == kActAnim)
+                    return refused("animated (an ACT_ANIM action)");
+                if (const char *s = scriptAction(type))
+                    return refused(std::string("a script action (") + s + ")");
+            }
+    // ids, per-instance nodes and what each copy registers
+    std::set<uint32_t> keep{node};
+    for (uint32_t n : order)
+    {
+        const uint32_t w = m.u32(n), op = w & 63, id = w >> 18;
+        bool own = op == kOpSwitch || op == kOpEmitter || op == kOpScriptAction;
+        if (op == kOpInteractive || op == kOpDestructible)
+        {
+            if (const char *t = fixedTable(id))
+                return refused("holds id1 " + hex(id) + " (a fixed id1 table: " + t + ")");
+            own = true;
+            ++(op == kOpInteractive ? c.interactives : c.destructibles);
+        }
+        else if (dispatched(op) && id)
+        {
+            if (const char *r = specialRange(id))
+                return refused("holds special id " + hex(id) + " (" + r + ")");
+            if (pickupId(id))
+                own = true, ++c.interactives, ++c.pickups;
+            else if (id >= 0x1450 && id < 0x1B58)
+                ++c.destructibles;
+        }
+        if (op == kOpEmitter && id >= 0x1D4C && id <= 0x1D6B)
+            return refused("an emitter with locator id " + hex(id));
+        for (uint32_t k = n; own && k && keep.insert(k).second;)
+            k = up.at(k);
+    }
+    for (uint32_t n : order)
+        if (keep.count(n))
+        {
+            const uint32_t size = nodeSize(m, n);
+            if (!size)
+            {
+                const uint32_t op = m.u32(n) & 63;
+                return refused("its copy would hold a node of kind " + std::to_string(op) + " (" + opName(op) + ")");
+            }
+            c.nodes.push_back(n);
+            c.bytes += (size + 15) & ~15u;
+        }
+    return c;
+}
+
+StageCounts stageCounts(const Mem &m, const std::map<uint32_t, uint32_t> &par)
+{
+    StageCounts s;
+    for (const auto &kv : par)
+    {
+        const uint32_t w = m.u32(kv.first), op = w & 63, id = w >> 18;
+        if (op == kOpInteractive)
+            ++s.interactives;
+        else if (op == kOpDestructible)
+            ++s.destructibles;
+        else if (dispatched(op) && id)
+        {
+            if (pickupId(id))
+                ++s.interactives, ++s.pickups;
+            else if (id == 0x11F8 || id == 0x1203)
+                ++s.interactives;
+            else if (id >= 0x1450 && id < 0x1B58)
+                ++s.destructibles;
+        }
+    }
+    return s;
+}
+
 // ---------------------------------------------------------------- edits
 
 namespace {

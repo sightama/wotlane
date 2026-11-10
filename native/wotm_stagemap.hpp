@@ -163,6 +163,43 @@ bool isPiece(const Mem &m, const std::map<uint32_t, uint32_t> &par, uint32_t nod
 // place + offset (doPickupHat, LevelPickups::hatCheck); the offset is added unrotated, so a turn turns it (apply()).
 std::vector<uint32_t> hatActions(const Mem &m, uint32_t n);
 
+// ---------------------------------------------------------------- copies (spec 2026-11-09-map-copy-design.md)
+
+constexpr uint32_t kOpEmitter = 22, kOpScriptAction = 41;
+constexpr uint16_t kActAnim = 2, kActDomino = 8, kActCinema = 9, kActPlayerPos = 11, kActRunScript = 12, kActAiNavigation = 13,
+                   kActGenericEvent = 14;   // ACT_DOMINO {state +8, target +0xC}
+constexpr int kInteractivesCap = 1000, kDestructiblesCap = 1400, kMonsterSlots = 8;
+constexpr uint32_t kPickupBytes = 0x500;
+
+// What copying piece `node` takes: `why` is "" when it can be copied, else the reason (logged as is). `nodes` is the copy set in
+// preorder (the root first): the root, the per-instance nodes of its subtree (INTERACTIVE_STATE, DESTRUCTIBLE, SWITCH,
+// PARTICLE_EMITTER, SCRIPT_ACTION, a level pickup node) and their ancestors inside the piece; the rest is shared. `bytes` their
+// 16-aligned sizes (an unturned copy, without actions, paths and grid nodes); the counts are what each copy adds to the
+// Interactives and Destructibles tables and to the level pickups. `optionGroup`: a GROUP above the piece with collision-option
+// flags (flags & 0xFF00: a query with that option stops at the original, not at its copies), 0 when none; logged by apply().
+//
+// Refused: not a piece; part of a destructible's state (a DESTRUCTIBLE or INTERACTIVE_STATE above it: a copy would outlive its
+// building); under a mode-masked GROUP (flags & 0xB0: a copy would show in modes that blank the original); animated (ANIM_XFORM,
+// CHAR_INSTANCE, SKEL_BONE or ANIM_SCALE in the subtree, an ANIM_XFORM above, a CHAR_INSTANCE above when an OBJECT of the
+// piece reads an animation channel, an ACT_ANIM in its destructibles' actions); a script action (ACT_CINEMA, ACT_PLAYERPOS,
+// ACT_RUNSCRIPT, ACT_AINAVIGATION, ACT_GENERICEVENT); a special id on a node dbsTraverse hands to dbProcInteractive (world, sky,
+// font, monsters, pedestrians, weapons, effects, power-ups, particle textures, HUD, scripts, end points); an id1 of a fixed
+// table on an INTERACTIVE_STATE or DESTRUCTIBLE (SanFran saves, CANYON2 and CAPITOL pillars, the 3-MILE vent and stacks); an
+// emitter with a locator id (0x1D4C..0x1D6B, one fx per id); a node of another kind in the copy set.
+struct CopySet { std::string why; std::vector<uint32_t> nodes; uint32_t bytes = 0;
+                 int interactives = 0, destructibles = 0, pickups = 0;
+                 uint32_t optionGroup = 0; };
+CopySet copySet(const Mem &m, const std::map<uint32_t, uint32_t> &par, uint32_t node);
+// Size in bytes of a node of the copy set (include/hieri_types.h), 0 for a kind a copy cannot hold
+uint32_t nodeSize(const Mem &m, uint32_t n);
+// The domino actions of DESTRUCTIBLE n's states (as hatActions())
+std::vector<uint32_t> dominoActions(const Mem &m, uint32_t n);
+// The stage's own entries, from the image as it is in `m` (after step 1 edits; a NULL ends a branch): Interactives =
+// INTERACTIVE_STATE + level pickup + HomingBug nodes, Destructibles = DESTRUCTIBLE + dispatched nodes with a destructible id1,
+// level pickups
+struct StageCounts { int interactives = 0, destructibles = 0, pickups = 0; };
+StageCounts stageCounts(const Mem &m, const std::map<uint32_t, uint32_t> &par);
+
 // relinked: grid list nodes linked for moved paths; fromReserve: how many of them came from the reserve
 struct Result { int applied = 0, refused = 0, relinked = 0, fromReserve = 0; std::vector<std::string> log; };
 
