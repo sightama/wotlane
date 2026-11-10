@@ -2797,6 +2797,7 @@ TEST(stagemap_debris_pickup_bytes)
     // a level pickup node: createPickup takes the type from its id1 (Pickup.cpp:1094-1095)
     CHECK(sm::levelPickupBytes(0x12C1) == 0x180 && sm::levelPickupBytes(0x1387) == 0x180);   // ids below 0x1388: a Pickup
     CHECK(sm::levelPickupBytes(0x1395) == 0x4D0 && sm::levelPickupBytes(0x13A1) == 0x240 && sm::levelPickupBytes(0x138D) == 0);
+    CHECK(sm::levelPickupBytes(0x1388) == 0x180);   // createPickup's default case: a Pickup, not the table's "no pickup"
     for (uint32_t id = sm::kPickupFirst; id <= sm::kPickupLast; ++id)
         CHECK(sm::levelPickupBytes(id) <= 0x4D0 && sm::levelPickupBytes(id) % 16 == 0);
 }

@@ -517,8 +517,9 @@ def debris_pickup_bytes(t):
 
 
 def level_pickup_bytes(i):
-    """The same for a level pickup node of id1 i: createPickup takes its type from the id1 (native levelPickupBytes())."""
-    return debris_pickup_bytes(i - 0x1388)
+    """The same for a level pickup node of id1 i: createPickup takes its type from the id1 (native levelPickupBytes()); 0x1388,
+    type 0 for the table, is a plain Pickup there (the switch's default case)."""
+    return 0x180 if i == 0x1388 else debris_pickup_bytes(i - 0x1388)
 
 
 def _bytes_add(acc, field, nbytes, times):
@@ -2252,6 +2253,7 @@ def selftest_copies():
     assert (p.why, p.nodes, p.interactives, p.destructibles, p.pickups) == ("", [s["tP"], s["gP"], s["swP"]], 1, 0, 1)
     # a level pickup is charged its own size (id1 0x12C1: a plain Pickup, 0x170 + the list node)
     assert level_pickup_bytes(0x12C1) == 0x180 and level_pickup_bytes(0x1395) == 0x4D0 and level_pickup_bytes(0x138D) == 0
+    assert level_pickup_bytes(0x1388) == 0x180 and debris_pickup_bytes(0) == 0
     assert p.pickup_bytes == 0x180 and " p1 (384 B)" in p.column(), p.column()
     assert copy_set(m, parent, s["g0"]).why == "not a piece"
     assert node_size(m, s["obj0"]) == 0 and node_size(m, s["pc"]) == 0 and node_size(m, s["sw"]) == 0x14

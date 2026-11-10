@@ -622,7 +622,9 @@ uint32_t debrisPickupBytes(uint32_t type)
     return size + 0x10;   // + the list node (alloc16(0xC))
 }
 
-uint32_t levelPickupBytes(uint32_t id1) { return debrisPickupBytes(id1 - 0x1388u); }
+// id1 0x1388 is type 0 for the table ("no pickup" on a debris chunk), but a node with it goes to createPickup's default case: a
+// Pickup (0x170) and its list node
+uint32_t levelPickupBytes(uint32_t id1) { return id1 == 0x1388 ? 0x180 : debrisPickupBytes(id1 - 0x1388u); }
 
 namespace {
 

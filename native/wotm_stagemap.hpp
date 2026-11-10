@@ -187,7 +187,8 @@ constexpr uint32_t kDebrisChunks = 32;
 uint32_t debrisPickupBytes(uint32_t type);
 // The same for a level pickup node of id1 `id1` (0x12C0..0x13EB): dbProcInteractive calls createPickup with type 0, which takes
 // the type from the id1 (type = id1 - 0x1388, src/game/Pickup.cpp:1094-1095), so the size is debrisPickupBytes(id1 - 0x1388):
-// 0x170 + 0x10 for the ids below 0x1388 and the plain types, more for vehicles and rigid bodies, 0 for 0x138D
+// 0x170 + 0x10 for the ids up to 0x1388 (0x1388 too: type 0 there means "from the id1", and the switch's default case makes a
+// Pickup) and the plain types, more for vehicles and rigid bodies, 0 for 0x138D
 uint32_t levelPickupBytes(uint32_t id1);
 
 // What copying piece `node` takes: `why` is "" when it can be copied, else the reason (logged as is). `nodes` is the copy set in
