@@ -1,5 +1,5 @@
 // ABOUTME: Map creator, pure part: stage.json, the image hash, the stage hierarchy walk, pieces and the edits (move, turn,
-// ABOUTME: remove) with collision-grid relink and sphere widening, on a Mem view of guest memory (tested without the game).
+// ABOUTME: remove, copy, power-up places added) with collision-grid relink and sphere widening, on a Mem view of guest memory.
 #pragma once
 #include <cstdint>
 #include <cstring>
@@ -8,7 +8,8 @@
 #include <vector>
 
 // The rules mirror tools/stage_map.py (its docstring lists them; keep both in step): the children table, the walk (first
-// parent), the piece rule, the grid coverage rule and the FNV-1a 64 hash. Spec: docs/superpowers/specs/2026-11-09-map-creator-design.md.
+// parent), the piece rule, the grid coverage rule and the FNV-1a 64 hash. Specs: docs/superpowers/specs/2026-11-09-map-creator-design.md,
+// and docs/superpowers/specs/2026-11-09-map-copy-design.md for the copies and the power-up places added.
 //
 // The functions are defined in wotm_stagemap.cpp, compiled on its own with strict float rules like wotm_detmath.cpp: what they
 // compute is written to guest RAM, so every build and every machine must get the same bits (a caller built with /fp:fast must
