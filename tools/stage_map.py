@@ -18,9 +18,12 @@
                                            writes <stages folder>/<id>/stage.json (--turn and --move on the same node make
                                            one edit), plus an edit per rider of an edited piece (rider_map(),
                                            rider_edits()) and per power-up place on it (powerup_riders(), from the disc's
-                                           PTS/<BASE>.PUP when there is one), printed as it is added; then per --copy the
-                                           copy and its riders' copies, then the power-up places on the copied pieces added
-                                           (make_copies()), and the loader's cap estimates (copy_estimate())
+                                           PTS/<BASE>.PUP when there is one), printed as it is added; per --copy the copy
+                                           and its riders' copies, and the power-up places on the copied pieces added
+                                           (make_copies()), and the loader's cap estimates (copy_estimate()). The file
+                                           lists them in the loader's order (file_order()): node edits and their riders',
+                                           then the copies (per --copy: the copy, its riders'), then the power-up moves,
+                                           then the power-up additions
   stage_map.py inflate <NGP> <out>         writes the inflated stage image (what the game has at 0xA00000), e.g. for
                                            the native test's WOTM_TEST_STAGE
   stage_map.py ram <ram_<frame>.bin> [--monster I:ZMIN:ZMAX]... [--pickup X,Y,Z]... [--no-pickup X,Y,Z]...
@@ -1239,6 +1242,13 @@ def make_copies(m, args, valid, valid_riders, pups, notes, parent=None):
     return copies, adds
 
 
+def file_order(edits, copies, adds):
+    """stage.json's "edits" in the loader's write() order (decision 14): node edits, copies, power-up moves, power-up additions.
+    `edits` is rider_edits()' result (node edits, then power-up moves); the loader numbers a copy's "(edit N)" notes from
+    this order."""
+    return ([e for e in edits if "node" in e] + list(copies) + [e for e in edits if "powerup" in e] + list(adds))
+
+
 def copy_estimate(m, edits, copies, parent=None):
     """(interactives, destructibles, pickup bytes): what the loader's caps count once the map's copies are in (native apply(),
     decision 7, amendment A4): slot 0, the 8 monster slots and the stage's own entries (stage_counts() of the image after the
@@ -1576,7 +1586,7 @@ def cmd_make(a):
             print("warning: %d power-up places: the loader adds up to %d, the rest are refused" % (total, MAX_POINTS))
         elif total > MAX_POWER_UPS:
             print("note: %d power-up places: the game creates %d power-ups at most" % (total, MAX_POWER_UPS))
-    edits = edits + copies + adds
+    edits = file_order(edits, copies, adds)
     doc = {"name": name, "base": base, "baseHash": "%016x" % fnv1a(image), "edits": edits}
     folder = os.path.join(a.out, a.id)
     os.makedirs(folder, exist_ok=True)
@@ -1926,6 +1936,13 @@ def cmd_selftest(_a):
         except ValueError as e:
             assert text in str(e), (str(e), text)
     assert copies_of(["0x%x=150,100,0" % off(b2)])[0][0][0] == C(b2, [150, 100, 0])   # unturned it is fine
+    # the file's order (the loader's write(), decision 14): node edits, copies, power-up moves, power-up additions
+    (cps, adds), _ = copies_of(["0x%x=150,100,0" % off(b)])
+    mixed = rider_edits(m, [E(b2, remove=True)], valid, [], parent, pv)   # b2 and its rider pk1 removed, power-up 0 moved down
+    assert [list(e)[0] for e in mixed] == ["node", "node", "powerup"], mixed
+    got = file_order(mixed, cps, adds)
+    assert got == mixed[:2] + cps + mixed[2:] + adds, got
+    assert [list(e)[0] for e in got] == ["node", "node", "copy", "copy", "powerup", "addpowerup"], got
     # with the pickup id on its GROUP (as on the disc), pk6 is copied too
     pk6g = children(m, pk6)[0]
     w("<I", pk6g, 5001 << 18 | OP_GROUP), w("<I", children(m, pk6g)[0], OP_OBJECT)
