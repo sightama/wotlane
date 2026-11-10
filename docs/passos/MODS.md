@@ -308,8 +308,9 @@ mods/my_mod/
 - A power-up edit in the same list, `{ "powerup": 4, "from": [776.9985, 600.7072, 630.1727], "at": [-88.081, 634.123, 630.173] }`:
   `powerup` is the index into the stage's power-up places (`PTS/<STAGE>.PUP`, 0 to 255), `from` its place on the disc and `at`
   its new place (absolute; z is the height it hovers at). The runtime moves the place before the game creates the power-ups
-  (`PowerUpTool::exportPoints`) and logs `[stages] <id>: moved N power-ups`. An index past the stage's count, a place that is
-  not at `from` (within 0.01), or a second edit of the same index is refused with a log line, and the rest of the map applies.
+  (`PowerUpTool::exportPoints`) and logs `[stages] <id>: moved N power-ups`. An index past the stage's count or a place that
+  is not at `from` (within 0.01) is refused with a log line, and the rest of the map applies; two edits of the same index make
+  the file invalid. A power-up edit applies even when the loader refuses its piece's edit, as a rider's does.
 - Unknown keys in an edit are refused; the scan logs why a folder was skipped (`[stages] my_mod/stages/x ignored: ...`).
 
 **What a piece is.** A building, prop, destructible or level pickup with its own position in the stage: the nearest `TRANSLATE` or
@@ -350,7 +351,8 @@ the base's `.PUP` from the disc folder and adds a power-up edit (above) for each
 `  power-up 4 follows 0x165a70, to -88.1 634.1 630.2`. A power-up hovers for good at its place's height, up to about 95 above
 what is under it, so the rule is the riders' with a height from 20 under the box top to 100 above it. A moved or turned piece
 carries them like its riders (the same place, turn and grid-edge shift); a removed one drops them to the ground under it (the
-carrying box's bottom) at the same X and Y, keeping their hover height. `--no-riders` turns this off too; a stage with no `.PUP`
+lowest bottom of the piece's collision boxes under them, not the roof's own box, which is often a thin slab) at the same X and
+Y, keeping their hover height. `--no-riders` turns this off too; a stage with no `.PUP`
 gets none. `pieces` lists the power-up indices per piece (`power-ups 5,15`). On the stock stages 160 of 472 power-up places
 are on 110 pieces (CENTRAL: 29 of 35, on 24 pieces; the other 6 are on open ground).
 To find a piece, take the position from `pieces` and look at it with the free camera (`WOTM_FREECAM=<s>@<x>,<y>,<z>,<heading>,<pitch>`,
