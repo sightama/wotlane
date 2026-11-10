@@ -288,6 +288,25 @@ readers. Addresses in the generated recompiled code (`recomp/retail/`, not in gi
   METRO with 8 monsters: `hi1 - low` at `dbInitDb` entry and exit, the largest `.ptr` read, and `hi1 - low` after
   `InitAfterDbLoad`; `kGlobalKeep` = what is used after `dbInitDb` entry besides the pickups, plus 64 KB (the plan's start,
   0x40000, already covers the 164376-byte read).
+
+  **Measured (Task 14, 2026-11-10).** Map `c0` = one copy of a 32-byte prop (no pickup), `WOTM_MATCH=3,1,2,5,9,8,4,7,c0`
+  (8 monsters), `WOTM_AIVSAI=1`; room = `hi1 - low` at `dbInitDb` entry (the runtime's log line) and in `ram_2400.bin`
+  (0x54D954, 0x54D960); stock pickups from `stage_counts()`; used = entry - frame 2400 - pickups x 0x170 (the smallest
+  pickup: an upper bound of what is not a pickup):
+
+  | Stage | entry (low, hi1) | frame 2400 | pickups | used besides pickups | PedGroups |
+  |---|---|---|---|---|---|
+  | CENTRAL | 501648 (0x8066FC, 0x880E8C) | 326028 | 115 | 133300 | 16 (6400 B) |
+  | METRO | 485252 (0x8066FC, 0x87CE80) | 309156 | 201 | 102128 | 8 (3200 B) |
+  | VEGAS | 501648 (0x8066FC, 0x880E8C) | 360864 | 117 | 97728 | 7 (2800 B) |
+  | ISLAND | 501648 (0x8066FC, 0x880E8C) | 384368 | 95 | 82320 | 6 (2400 B) |
+
+  `kGlobalKeep` = 133300 rounded up to 16 KB (147456) + 64 KB = **0x34000** (212992 bytes). The transient `.ptr` read needs
+  164376 + 16 bytes on top of the pickups and the PedGroups allocated before it (at most 6400 here): 170792 bytes, under
+  0x34000. With it the pickup room is 281 KB on CENTRAL, VEGAS and ISLAND and 265 KB on METRO. **Open:** the estimate charges
+  every stock pickup `kPickupBytes` (0x500) plus the stock debris pickups, which already passes that room on METRO (338 KB)
+  and leaves VEGAS 18 KB and CENTRAL 87 KB: a copy with debris pickups (most destructibles: 0x2d85a0 takes 1536 B) is
+  refused after a few dozen on CENTRAL and at once on METRO.
 - **2h. `exportPoints` callers.** Besides `PointToolKit::loadPoints` (through vtable slot 3, `PointToolKit.cpp:51-58`), two
   game functions call `PowerUpTool::exportPoints` directly with `$a0` = `PowerUpTool::instance` (0x2AF0C0) and no
   `loadPoints` before: `sanFranUpdate` (retail 0x18D874 and 0x18D8FC, each after `sanFranQuake`, `AiPathTool::exportPoints`
