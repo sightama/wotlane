@@ -2003,6 +2003,7 @@ def selftest_copies():
     # check(): a wrapper G = {oldLast, tD'} in the world root's last slot, tD' = {i1'} -> d1' -> {g0' -> {sw', pc, em'}, obj2}
     im, s = _copy_stage()
     assert check(im.mem()) == (2, 2, [], 0), check(im.mem())
+    shared = im.group([0])                                            # an image GROUP, linked further down
     im.top = RESERVE
     d1c = im.destr([(0, s["a1"]), (s["obj2"], s["hat1"])])
     g0c = im.group([im.switch([s["obj0"], s["obj1"]]), s["pc"], im.emitter()])
@@ -2025,6 +2026,17 @@ def selftest_copies():
     im.w("<I", s["pD"] + 0x24 + 4 * 6, RESERVE + 0x3FF0 + 0x100)      # a path entry outside every region
     got = check(im.mem())[2]
     assert any("entry 6" in p and "not mapped" in p for p in got), got
+    im.w("<I", s["pD"] + 0x24 + 4 * 6, s["pc"])
+    im.w("<I", shared + 0x20, im.still())                             # d1' state 1: the image GROUP `shared` holding a
+    im.w("<I", d1c + 0x18, shared)                                    # reserve OBJECT
+    got = check(im.mem())[2]
+    want = "shared node 0x%x in copy @0x%08x holds copied node @0x%08x" % (shared - BASE, tdc, im.r32(shared + 0x20))
+    assert got == [want], got
+    im.w("<I", d1c + 0x18, s["obj2"])
+    im.w("<H", wrap + 8, 0x1000)                                      # numKids past the reserve's end
+    got = check(im.mem())
+    first_out = (RESERVE + 0x4000 - wrap - 0x20) // 4                 # the first slot past the reserve's end
+    assert got[3] == 0xFFF and "wrapper @0x%08x: slot %d not mapped" % (wrap, first_out) in got[2], got
 
 
 def main(argv=None):
