@@ -46,9 +46,14 @@ struct Edit { uint32_t node = 0; bool remove = false; bool move = false; float p
 struct PowerUpEdit { uint32_t index = 0; float from[3] = {0, 0, 0}; float at[3] = {0, 0, 0}; };
 constexpr uint32_t kMaxPoints = 256;     // PointToolKit::points[256]
 constexpr uint32_t kPointSize = 0x40;    // a point: position (_fvector) at +0, power-up type +0x2C, arg +0x2D
-// id and dir come from the folder (mods/<mod>/stages/<id>/), the rest from stage.json. stage.json has one "edits" list; the
-// power-up edits ({"powerup": i, ...}) are kept apart from the piece edits, in file order, and written after them.
-struct Map { std::string id, name, base, dir; uint64_t baseHash = 0; std::vector<Edit> edits; std::vector<PowerUpEdit> powerups; };
+// A copy of a piece: `node` the source's offset (as in the file), `at` the copy's world position (absolute), `turn` degrees about Z
+// added to the source's rotation, about `at`. Built from the source's disc state (apply()).
+struct Copy { uint32_t node = 0; float at[3] = {0, 0, 0}; float turn = 0; };
+// id and dir come from the folder (mods/<mod>/stages/<id>/), the rest from stage.json. stage.json has one "edits" list (at most
+// 4096 entries of all kinds); the copies ({"copy": "0x..", ...}), the power-up moves ({"powerup": i, ...}) and the power-up places
+// added ({"addpowerup": i, ...}) are kept apart from the piece edits, each in file order, and written after them in that order.
+struct Map { std::string id, name, base, dir; uint64_t baseHash = 0; std::vector<Edit> edits; std::vector<PowerUpEdit> powerups;
+             std::vector<Copy> copies; std::vector<PowerUpEdit> addPowerUps; };
 
 // 64-bit FNV-1a, the same as stage_map.py's baseHash
 inline uint64_t fnv1a(const uint8_t *p, size_t n)
@@ -60,7 +65,7 @@ inline uint64_t fnv1a(const uint8_t *p, size_t n)
 }
 
 // Reads stage.json; false with `why` (plain English) when a field is missing or wrong. Unknown top-level keys are ignored,
-// unknown keys in an edit are refused, and so is a second power-up edit of the same index.
+// unknown keys in an edit are refused, and so is a second power-up move of the same index (additions may repeat an index).
 bool parse(const std::string &json, Map &out, std::string &why);
 // stage.json text for a map; parse() reads it back to the same values (floats bit for bit, -0 included)
 std::string write(const Map &m);

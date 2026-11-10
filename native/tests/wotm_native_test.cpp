@@ -614,12 +614,15 @@ TEST(mods_scan_stages)
     put(root / "A" / "stages" / "abcdefghijklmnopq" / "stage.json", kStageJson);   // 17 chars: too long
     put(root / "B" / "Stages" / "M1" / "stage.json", R"({"name": "LOSER", "base": "CENTRAL", "baseHash": "0123456789abcdef", "edits": []})");
     put(root / "C" / "Stages" / "M2" / "stage.json", kStageJson);   // mixed case: lists as m2
+    put(root / "A" / "stages" / "m3" / "stage.json",
+        R"({"name": "COPY TOWN", "base": "CENTRAL", "baseHash": "0123456789abcdef", "edits": [{"copy": "0x100", "at": [1, 2, 3]},
+            {"node": "0x200", "turn": 90}, {"addpowerup": 1, "from": [0, 0, 0], "at": [1, 1, 1]}, {"copy": "0x100", "at": [4, 5, 6], "turn": 45}]})");
     put(root / "A" / "MON" / "LIZARD1.TEX", "tex");   // a real override, so the file list is not empty
     wotm::mods::Registry reg;
     reg.scan(root);
     const std::vector<wotm::mods::Stage> st = reg.stages();
-    CHECK(st.size() == 2);
-    if (st.size() == 2)
+    CHECK(st.size() == 3);
+    if (st.size() == 3)
     {
         CHECK(st[1].map.id == "m2" && st[1].mod == "C");
         CHECK(st[0].map.id == "m1" && st[0].map.name == "DOWNTOWN MESS" && st[0].map.base == "CENTRAL" && st[0].map.edits.size() == 2);
@@ -636,6 +639,8 @@ TEST(mods_scan_stages)
     CHECK(logged("A/stages/abcdefghijklmnopq ignored", "up to 16"));
     CHECK(logged("map m1: A beats B", ""));
     CHECK(logged("[stages] map m1 (\"DOWNTOWN MESS\", A): base CENTRAL, 2 edits", ""));
+    CHECK(logged("[stages] map m3 (\"COPY TOWN\", A): base CENTRAL, 1 edits, 2 copies, 1 new power-up places", ""));
+    CHECK(!logged("[stages] map m1 (", "copies"));
     CHECK(reg.files().count("MON/LIZARD1.TEX") == 1);
     bool stagesInFiles = false;
     for (const auto &[rel, f] : reg.files())
@@ -1103,6 +1108,122 @@ TEST(stagemap_powerup_parse)
     CHECK(bad(R"({"powerup": 1, "from": [0, 0, 0], "at": [1, 1, 1], "turn": 90})", "turn"));
     CHECK(bad(R"({"powerup": 7, "from": [0, 0, 0], "at": [1, 1, 1]}, {"node": "0x100", "remove": true},
                  {"powerup": 7, "from": [0, 0, 0], "at": [2, 2, 2]})", "edit 3: power-up 7 is edited twice"));
+}
+
+// Copies ({"copy": ...}) and power-up places added ({"addpowerup": ...}) share the one "edits" list with the step 1 edits
+TEST(stagemap_copy_parse)
+{
+    sm::Map m;
+    std::string why;
+    CHECK(sm::parse(R"({"name": "C", "base": "CENTRAL", "baseHash": "0123456789abcdef", "edits": [
+        { "copy": "0x2d85a0", "at": [768.1, 499.6, 74.1], "turn": 90 },
+        { "node": "0x100", "remove": true },
+        { "addpowerup": 4, "from": [1, 2, 3], "at": [4, 5, 6] },
+        { "copy": "0x2d85a0", "at": [1, 2, 3] },
+        { "powerup": 4, "from": [1, 2, 3], "at": [7, 8, 9] },
+        { "addpowerup": 4, "from": [1, 2, 3], "at": [10, 11, 12.5] }
+    ]})", m, why));
+    if (!why.empty())
+        std::printf("  parse -> \"%s\"\n", why.c_str());
+    CHECK(m.edits.size() == 1 && m.copies.size() == 2 && m.powerups.size() == 1 && m.addPowerUps.size() == 2);
+    if (m.copies.size() == 2)
+    {
+        const sm::Copy &a = m.copies[0], &b = m.copies[1];
+        CHECK(a.node == 0x2d85a0 && a.at[0] == 768.1f && a.at[1] == 499.6f && a.at[2] == 74.1f && a.turn == 90.f);
+        CHECK(b.node == 0x2d85a0 && b.at[0] == 1.f && b.at[1] == 2.f && b.at[2] == 3.f && b.turn == 0.f);
+    }
+    if (m.powerups.size() == 1)
+        CHECK(m.powerups[0].index == 4 && m.powerups[0].at[0] == 7.f);
+    if (m.addPowerUps.size() == 2)
+    {
+        const sm::PowerUpEdit &a = m.addPowerUps[0], &b = m.addPowerUps[1];
+        CHECK(a.index == 4 && a.from[0] == 1.f && a.from[1] == 2.f && a.from[2] == 3.f && a.at[0] == 4.f && a.at[1] == 5.f &&
+              a.at[2] == 6.f);
+        CHECK(b.index == 4 && b.at[0] == 10.f && b.at[1] == 11.f && b.at[2] == 12.5f);
+    }
+    auto bad = [](const std::string &edits, const std::string &needle) {
+        const std::string text = R"({"name": "X", "base": "CENTRAL", "baseHash": "0123456789abcdef", "edits": [)" + edits + "]}";
+        sm::Map out;
+        std::string w;
+        const bool ok = sm::parse(text, out, w);
+        if (ok || w.find(needle) == std::string::npos)
+            std::printf("  parse(%.200s) -> %d \"%s\"\n", text.c_str(), int(ok), w.c_str());
+        return !ok && w.find(needle) != std::string::npos;
+    };
+    const std::string first = R"({"node": "0x100", "remove": true}, )";   // so the bad edit is edit 2
+    CHECK(bad(first + R"({"copy": "0xZZ", "at": [1, 2, 3]})", "edit 2: \"copy\""));
+    CHECK(bad(first + R"({"copy": "0x102", "at": [1, 2, 3]})", "edit 2: \"copy\""));       // not a multiple of 4
+    CHECK(bad(first + R"({"copy": "0x1600000", "at": [1, 2, 3]})", "edit 2: \"copy\""));   // kMaxNode
+    CHECK(bad(first + R"({"copy": 256, "at": [1, 2, 3]})", "edit 2: \"copy\""));
+    CHECK(bad(first + R"({"copy": "0x100"})", "edit 2: \"at\""));
+    CHECK(bad(first + R"({"copy": "0x100", "at": [1, 2]})", "edit 2: \"at\""));
+    CHECK(bad(first + R"({"copy": "0x100", "at": [1, 2, 3], "turn": "90"})", "edit 2: \"turn\""));
+    CHECK(bad(first + R"({"copy": "0x100", "at": [1, 2, 3], "move": [1, 2, 3]})", "edit 2: unknown key \"move\""));
+    CHECK(bad(first + R"({"addpowerup": -1, "from": [0, 0, 0], "at": [1, 1, 1]})", "edit 2: \"addpowerup\""));
+    CHECK(bad(first + R"({"addpowerup": 256, "from": [0, 0, 0], "at": [1, 1, 1]})", "edit 2: \"addpowerup\""));
+    CHECK(bad(first + R"({"addpowerup": 1, "at": [1, 1, 1]})", "edit 2: \"from\""));
+    CHECK(bad(first + R"({"addpowerup": 1, "from": [0, 0, 0], "at": [1, 1, 1], "turn": 9})", "edit 2: unknown key \"turn\""));
+    std::string many;
+    for (int i = 0; i < 4097; ++i)
+        many += std::string(i ? ", " : "") + (i % 2 ? R"({"copy": "0x100", "at": [1, 2, 3]})" : R"({"addpowerup": 1, "from": [0, 0, 0], "at": [1, 1, 1]})");
+    CHECK(bad(many, "at most 4096"));
+}
+
+TEST(stagemap_copy_write_roundtrip)
+{
+    sm::Map m;
+    m.name = "COPIES";
+    m.base = "METRO";
+    m.baseHash = 0x1122334455667788ull;
+    sm::Copy c1, c2;
+    c1.node = 0x2d85a0, c1.at[0] = 768.1f, c1.at[1] = -0.f, c1.at[2] = 1e-5f, c1.turn = 22.5f;
+    c2.node = 0x404, c2.at[0] = 0.1f, c2.at[1] = -1234.567f, c2.at[2] = 3.f;
+    // added before the step 1 edits: write() still puts them in its own order
+    m.addPowerUps.push_back(powerUp(2, {1.f, 2.f, 3.f}, {-0.f, 600.7f, 1e-5f}));
+    m.addPowerUps.push_back(powerUp(2, {1.f, 2.f, 3.f}, {4.f, 5.f, 6.f}));
+    m.copies.push_back(c1);
+    m.copies.push_back(c2);
+    m.powerups.push_back(powerUp(2, {1.f, 2.f, 3.f}, {7.f, 8.f, 9.f}));
+    m.edits.push_back(moveTo(0x61e340, 0.1f, -1234.567f, 1e-5f, 22.5f));
+    m.edits.push_back(removal(0x62a1c0));
+    const std::string text = sm::write(m);
+    sm::Map back;
+    std::string why;
+    CHECK(sm::parse(text, back, why));
+    CHECK(back.edits.size() == 2 && back.copies.size() == 2 && back.powerups.size() == 1 && back.addPowerUps.size() == 2);
+    bool same = back.copies.size() == m.copies.size();
+    for (size_t i = 0; same && i < m.copies.size(); ++i)
+    {
+        const sm::Copy &a = m.copies[i], &b = back.copies[i];
+        same = a.node == b.node && bitsOf(a.turn) == bitsOf(b.turn);
+        for (int k = 0; k < 3; ++k)
+            same = same && bitsOf(a.at[k]) == bitsOf(b.at[k]);
+    }
+    CHECK(same);
+    bool samePups = back.addPowerUps.size() == m.addPowerUps.size() && back.powerups.size() == m.powerups.size() &&
+                    back.powerups[0].at[2] == 9.f;
+    for (size_t i = 0; samePups && i < m.addPowerUps.size(); ++i)
+    {
+        const sm::PowerUpEdit &a = m.addPowerUps[i], &b = back.addPowerUps[i];
+        samePups = a.index == b.index;
+        for (int k = 0; k < 3; ++k)
+            samePups = samePups && bitsOf(a.from[k]) == bitsOf(b.from[k]) && bitsOf(a.at[k]) == bitsOf(b.at[k]);
+    }
+    CHECK(samePups);
+    CHECK(back.edits.size() == 2 && back.edits[0].node == 0x61e340 && back.edits[1].remove);
+    // order in the text: node edits, copies, power-up moves, power-up additions
+    const size_t lastNode = text.rfind("\"node\""), firstCopy = text.find("\"copy\""), lastCopy = text.rfind("\"copy\""),
+                 firstPup = text.find("\"powerup\""), lastPup = text.rfind("\"powerup\""), firstAdd = text.find("\"addpowerup\"");
+    CHECK(lastNode != std::string::npos && firstCopy != std::string::npos && firstPup != std::string::npos &&
+          firstAdd != std::string::npos);
+    CHECK(lastNode < firstCopy && lastCopy < firstPup && lastPup < firstAdd);
+    CHECK(text.find("e-") == std::string::npos);   // plain decimals
+    // turn 0 is left out
+    CHECK(text.find("\"turn\": 22.5") != std::string::npos);
+    size_t turns = 0;
+    for (size_t p = text.find("\"turn\""); p != std::string::npos; p = text.find("\"turn\"", p + 1))
+        ++turns;
+    CHECK(turns == 2);   // the move's and c1's
 }
 
 // Power-up places on a fake PowerUpTool points array (64-byte points, position at +0, type and arg at +0x2C/+0x2D)

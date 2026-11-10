@@ -124,19 +124,19 @@ json::Value vec3Value(const float v[3])
     return p;
 }
 
-// {"powerup": <index>, "from": [x, y, z], "at": [x, y, z]}
-bool parsePowerUp(const json::Value &e, const std::string &at, PowerUpEdit &out, std::string &why)
+// {"<key>": <index>, "from": [x, y, z], "at": [x, y, z]}: a power-up moved (key "powerup") or a place added ("addpowerup")
+bool parsePowerUp(const json::Value &e, const std::string &at, const std::string &key, PowerUpEdit &out, std::string &why)
 {
     for (const auto &kv : e.obj)
-        if (kv.first != "powerup" && kv.first != "from" && kv.first != "at")
+        if (kv.first != key && kv.first != "from" && kv.first != "at")
         {
-            why = at + "unknown key \"" + kv.first + "\" in a power-up edit";
+            why = at + "unknown key \"" + kv.first + "\" in a power-up " + (key == "powerup" ? "edit" : "addition");
             return false;
         }
-    const json::Value *idx = e.get("powerup");
+    const json::Value *idx = e.get(key);
     if (!idx || idx->type != json::Value::Int || idx->frac || idx->i < 0 || idx->i >= int64_t(kMaxPoints))
     {
-        why = at + "\"powerup\" must be the power-up's index in the stage's .PUP (0 to " + std::to_string(kMaxPoints - 1) + ")";
+        why = at + "\"" + key + "\" must be the power-up's index in the stage's .PUP (0 to " + std::to_string(kMaxPoints - 1) + ")";
         return false;
     }
     out.index = uint32_t(idx->i);
@@ -148,6 +148,34 @@ bool parsePowerUp(const json::Value &e, const std::string &at, PowerUpEdit &out,
     if (!vec3(e.get("at"), out.at))
     {
         why = at + "\"at\" must be [x, y, z] (numbers)";
+        return false;
+    }
+    return true;
+}
+
+// {"copy": "0x<offset>", "at": [x, y, z], "turn": <degrees>} (turn optional)
+bool parseCopy(const json::Value &e, const std::string &at, Copy &out, std::string &why)
+{
+    for (const auto &kv : e.obj)
+        if (kv.first != "copy" && kv.first != "at" && kv.first != "turn")
+        {
+            why = at + "unknown key \"" + kv.first + "\" in a copy edit";
+            return false;
+        }
+    const json::Value *node = e.get("copy"), *turn = e.get("turn");
+    if (!node || node->type != json::Value::Str || !parseNode(node->s, out.node) || out.node >= kMaxNode || out.node % 4)
+    {
+        why = at + "\"copy\" must be \"0x<offset in the stage image>\" of the piece to copy, a multiple of 4";
+        return false;
+    }
+    if (!vec3(e.get("at"), out.at))
+    {
+        why = at + "\"at\" must be [x, y, z] (numbers): where the copy goes";
+        return false;
+    }
+    if (turn && !finiteFloat(turn, out.turn))
+    {
+        why = at + "\"turn\" must be a number of degrees";
         return false;
     }
     return true;
@@ -212,10 +240,26 @@ bool parse(const std::string &text, Map &out, std::string &why)
             why = at + "not an object";
             return false;
         }
+        if (e.get("copy"))
+        {
+            Copy c;
+            if (!parseCopy(e, at, c, why))
+                return false;
+            m.copies.push_back(c);
+            continue;
+        }
+        if (e.get("addpowerup"))
+        {
+            PowerUpEdit pe;   // the same index can be added any number of times, and moved too
+            if (!parsePowerUp(e, at, "addpowerup", pe, why))
+                return false;
+            m.addPowerUps.push_back(pe);
+            continue;
+        }
         if (e.get("powerup"))
         {
             PowerUpEdit pe;
-            if (!parsePowerUp(e, at, pe, why))
+            if (!parsePowerUp(e, at, "powerup", pe, why))
                 return false;
             for (const PowerUpEdit &other : m.powerups)
                 if (other.index == pe.index)
@@ -304,14 +348,24 @@ std::string write(const Map &m)
         }
         edits.arr.push_back(std::move(o));
     }
-    for (const PowerUpEdit &e : m.powerups)
+    for (const Copy &c : m.copies)
     {
         json::Value o = json::Value::object();
-        o.at("powerup") = json::Value::integer(int64_t(e.index));
-        o.at("from") = vec3Value(e.from);
-        o.at("at") = vec3Value(e.at);
+        o.at("copy") = json::Value::string(hex(c.node));
+        o.at("at") = vec3Value(c.at);
+        if (c.turn != 0)
+            o.at("turn") = numberOf(c.turn, true);
         edits.arr.push_back(std::move(o));
     }
+    for (int pass = 0; pass < 2; ++pass)   // power-up moves, then power-up places added
+        for (const PowerUpEdit &e : pass ? m.addPowerUps : m.powerups)
+        {
+            json::Value o = json::Value::object();
+            o.at(pass ? "addpowerup" : "powerup") = json::Value::integer(int64_t(e.index));
+            o.at("from") = vec3Value(e.from);
+            o.at("at") = vec3Value(e.at);
+            edits.arr.push_back(std::move(o));
+        }
     return json::dump(v);
 }
 
