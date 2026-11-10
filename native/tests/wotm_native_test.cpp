@@ -3816,12 +3816,34 @@ TEST(stagemap_stock_copies)
                                     (unsigned long long)it->second.debrisBytes);
                 }
             }
-            CHECK(differ == 0 && seen.size() == sets.size());
-            std::printf("  %s: copy column of %zu pieces compared with stage_map.py's: %d differ\n", stem.c_str(), seen.size(),
-                        differ);
+            // pieces the C++ finds that the file lacks (missing) and lines that are no C++ piece (extra)
+            std::vector<uint32_t> missing, extra;
+            for (const auto &kv : sets)
+                if (!seen.count(kv.first))
+                    missing.push_back(kv.first);
+            for (uint32_t n : seen)
+                if (!sets.count(n))
+                    extra.push_back(n);
+            auto first = [](const std::vector<uint32_t> &v) {
+                std::string s;
+                for (size_t i = 0; i < v.size() && i < 10; ++i)
+                    s += " " + hexOff(v[i] - sm::kBase);
+                return v.size() > 10 ? s + " ..." : s;
+            };
+            CHECK(differ == 0 && missing.empty() && extra.empty());
+            std::printf("  %s: copy column of %zu pieces compared with stage_map.py's: %d differ, %zu missing, %zu extra\n",
+                        stem.c_str(), seen.size(), differ, missing.size(), extra.size());
+            if (!missing.empty())
+                std::printf("    missing:%s\n", first(missing).c_str());
+            if (!extra.empty())
+                std::printf("    extra:%s\n", first(extra).c_str());
         }
         else
-            std::printf("  %s: no WOTM_TEST_PIECES file: copy column not compared\n", stem.c_str());
+        {
+            std::printf("  %s: no WOTM_TEST_PIECES entry (%zu for %zu stages): copy column not compared\n", stem.c_str(),
+                        pieceFiles.size(), stages.size());
+            CHECK(si < pieceFiles.size());   // WOTM_TEST_PIECES must list one file per WOTM_TEST_STAGE image
+        }
         {
             std::string by;
             for (const std::string &k : kinds)
@@ -4055,6 +4077,8 @@ TEST(stagemap_stock_copies)
             CHECK(ownCopied > 0);
         if (stem == "ISLAND")
             CHECK(logHas(r, "does not hang over its copies"));
+        if (stem == "CENTRAL")
+            CHECK(logHas(r, "kept inside the collision grid's edge"));   // the grid-edge clamp stays covered
 
         CHECK(r.interactives == 1 + sm::kMonsterSlots + sc.interactives + sc.debrisPickups + addInteractives);
         CHECK(r.destructibles == sc.destructibles + addDestructibles);
