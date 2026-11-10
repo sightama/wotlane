@@ -306,8 +306,19 @@ readers. Addresses in the generated recompiled code (`recomp/retail/`, not in gi
   | VEGAS | 501648 (0x8066FC, 0x880E8C) | 360864 | 117 | 97728 | 7 (2800 B) |
   | ISLAND | 501648 (0x8066FC, 0x880E8C) | 384368 | 95 | 82320 | 6 (2400 B) |
 
-  Measured on 4 stages, with one lineup (`3,1,2,5,9,8,4,7`), in the default game mode only; Task 15 spot-checks SANFRAN,
-  3-MILE and TOKYO.
+  Measured on 4 stages, with one lineup (`3,1,2,5,9,8,4,7`), in the default game mode only.
+
+  **Spot check (Task 15, 2026-11-10)**, the same way (one copy of a 32-byte prop: SANFRAN 0x487460, 3-MILE 0x550cc0, TOKYO
+  0x3f8ec0; a one-off run, not a live check):
+
+  | Stage | entry (low, hi1) | frame 2400 | pickups | used besides pickups | RAM interactives (estimate) |
+  |---|---|---|---|---|---|
+  | SANFRAN | 485252 (0x8066FC, 0x87CE80) | 402228 | 50 | 64624 | 201 (372) |
+  | 3-MILE | 501648 (0x8066FC, 0x880E8C) | 435564 | 34 | 53572 | 237 (399) |
+  | TOKYO | 501648 (0x8066FC, 0x880E8C) | 396716 | 45 | 88372 | 156 (307) |
+
+  All three under CENTRAL's 133300, so `kGlobalKeep` stands. Not covered: anything SANFRAN's quake or 3-MILE's meltdown
+  allocate later in the fight (after frame 2400).
 
   `kGlobalKeep` = 133300 rounded up to 16 KB (147456) + 64 KB = **0x34000** (212992 bytes). The transient `.ptr` read needs
   164376 + 16 bytes on top of the pickups and the PedGroups allocated before it (at most 6400 here): 170792 bytes, under
