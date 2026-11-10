@@ -15,7 +15,9 @@ $stageMap = Join-Path $PSScriptRoot 'stage_map.py'
 # 580) moved across the map, a low building (0x2d85a0, roof at 148) moved onto that start point, a TRANSLATE-only building
 # (0x4da6b0) turned 90 degrees (a ROTATE in the reserve) and a level pickup (0x5c95a0, a static truck) moved into the park.
 # make adds 8 rider edits: the removed building's 4 rooftop pickups go with it, the low building carries its rooftop car
-# (0x5cd120) and 2 pickups on its plaza, and the turned building's rooftop car (0x5cb7e0) turns with it: 13 edits.
+# (0x5cd120) and 2 pickups on its plaza, and the turned building's rooftop car (0x5cb7e0) turns with it: 13 edits. And 3
+# power-up edits (PTS/CENTRAL.PUP): the tower's rooftop power-up 4 moves with it, and the removed building's 5 (on its low
+# pad) and 15 (on its roof) drop to its ground.
 $mapMods = "$env:TEMP\wotm_map_mods"
 $makeT1 = {
     param($out)
@@ -122,10 +124,12 @@ $checks = [ordered]@{
     # the WOTM_STAGE_DUMP), and the moved pickup was placed at its new spot and none at its old one (createPickup's position,
     # from the fight's RAM: dbsTraverse's TRANSLATE case gives the edited translation). Riders: the moved building's rooftop car
     # is placed on its new roof and none on the old roof, the turned building's rooftop car on its turned roof (a TRANSLATE
-    # pickup turned: a ROTATE in the reserve) and none at the old spot, and none of the removed building's 4 rooftop pickups
+    # pickup turned: a ROTATE in the reserve) and none at the old spot, and none of the removed building's 4 rooftop pickups.
+    # Power-ups (PowerUps::instance: x, y and rest height): the tower's on its moved roof and none on the old one, the removed
+    # building's two at its ground and none at their disc places
     'map_load'      = @{ Env = "WOTM_MATCH=3,1,t1;WOTM_AIVSAI=1;WOTM_MODS=$mapMods;WOTM_STAGE_DUMP=$env:TEMP\wotm_map_t1.bin;PS2X_DUMP_RAM=2400"; Secs = 60
                          Clean = $mapMods; Setup = { & $makeT1 "$mapMods\Maps\stages" }
-                         Expect = '\[stages\] map t1 .*|||\[stages\] t1: applied 13 edits|||\[match\]'
+                         Expect = '\[stages\] map t1 .*, 3 power-up places|||\[stages\] t1: applied 13 edits|||\[stages\] t1: moved 3 power-ups|||\[match\]'
                          Reject = '\[CRASH\]|||\[watchdog\] FROZE|||does not match|||refused|||nothing applied'
                          After = {
                              param($disc)
@@ -137,7 +141,10 @@ $checks = [ordered]@{
                                  '--pickup', '724.96,532.008,152.7', '--no-pickup', '-140.1,565.7,152.7',
                                  '--pickup', '-1093.808,90.14,228.484', '--no-pickup', '-1067.1,-55.2,228.5',
                                  '--no-pickup', '969.1,533.2,276.6', '--no-pickup', '969.3,746.2,276.6',
-                                 '--no-pickup', '1026.4,475.1,262.6', '--no-pickup', '967.9,653.6,284.4')) -and $grid
+                                 '--no-pickup', '1026.4,475.1,262.6', '--no-pickup', '967.9,653.6,284.4',
+                                 '--powerup', '-88.081,634.123,630.173', '--no-powerup', '777,600.7,630.2',
+                                 '--powerup', '958.396,894.92,18.194', '--no-powerup', '958.4,894.9,56.1',
+                                 '--powerup', '947.067,615.804,41.565', '--no-powerup', '947.1,615.8,319.1')) -and $grid
                          } }
     # collision follows the moves: with nobody pressing anything, player 1 drops (hdHatTest) from its start point onto what is
     # under it and stands there. Stock: the tower's roof (580). t1: the low building's roof (148), so the moved building is solid
@@ -177,7 +184,7 @@ $checks = [ordered]@{
                              (Get-Content $f -Raw) -replace '"baseHash": "[0-9a-f]+"', '"baseHash": "0123456789abcdef"' | Set-Content $f -Encoding ascii -NoNewline
                          }
                          Expect = '\[stages\] t1: base CENTRAL does not match this disc|||\[match\] 1: .*stage 1|||\[native\] resources: CENTRAL '
-                         Reject = '\[CRASH\]|||\[watchdog\] FROZE|||\[stages\] t1: applied' }
+                         Reject = '\[CRASH\]|||\[watchdog\] FROZE|||\[stages\] t1: applied|||\[stages\] t1: moved' }
 }
 
 $failed = @()
