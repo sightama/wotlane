@@ -239,6 +239,16 @@ readers. Addresses in the generated recompiled code (`recomp/retail/`, not in gi
   alone, and no `ACTION_DATA` is in any copy set. Dominoes of copyable pieces: retargeted (target in the copy set) CAPITOL 28,
   VEGAS 36; kept (target outside the piece) 3-MILE 2, AIRPORT 6, TOKYO 2, TOKYODM 7, VEGAS 6; none inside the piece but not
   copied.
+
+  **After amendments A1 and A3** (plan, measured with `copySet()` on the 19 images, 2026-11-10): **2969 of 3476 copyable**.
+  3-MILE 267, AIRPORT 109, BIGSHOT 0, CANYON1 92, CANYON2 25, CAPITOL 109, CENTRAL 290, CRUSH 21, DBALL 8, ISLAND 417, METRO 627,
+  MINISF 68, SANFRAN 112, TOKYO 193, TOKYODM 246, TRAINING 0, UFO 89, VEGAS 185, VOLCANO 111. The table above plus A1's 83 minus
+  A3's counts gives the same on 17 stages; 3-MILE (267, not 273) and CANYON2 (25, not 29) differ because A3 was measured before
+  A1, on the pieces the old rule left copyable: of the pieces A1 frees, 3-MILE has 6 in a destructible's state (all under a
+  `CHAR_INSTANCE`) and CANYON2 has 1 mode-masked and 3 with a script action. Copyable pieces under a GROUP with collision-option
+  flags: 3-MILE 10, ISLAND 1. The later rules (a shared node holding a copied one, child counts past 4096, action trees past 20
+  levels or 256 actions in a group) refuse no stock piece, and the stage counts per traversal path equal the counts per node
+  (2b).
 - **2f. Copy sizes** of the copyable destructible pieces. Node bytes = the copy set (decision 4), 16-aligned; total = nodes +
   the private actions of a turned copy (decision 8) + its paths (`0x24 + 4 * len`, 16-aligned) + one 16-byte list node per
   stock grid cell.
