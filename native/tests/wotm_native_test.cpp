@@ -1163,6 +1163,9 @@ TEST(stagemap_copy_parse)
     CHECK(bad(first + R"({"addpowerup": 256, "from": [0, 0, 0], "at": [1, 1, 1]})", "edit 2: \"addpowerup\""));
     CHECK(bad(first + R"({"addpowerup": 1, "at": [1, 1, 1]})", "edit 2: \"from\""));
     CHECK(bad(first + R"({"addpowerup": 1, "from": [0, 0, 0], "at": [1, 1, 1], "turn": 9})", "edit 2: unknown key \"turn\""));
+    CHECK(bad(first + R"({"copy": "0x100", "addpowerup": 1, "at": [1, 2, 3]})", "edit 2: unknown key \"addpowerup\""));   // one kind per entry
+    CHECK(bad(first + R"({"copy": "0x100", "at": [1, 2, 3], "turn": 1e39})", "edit 2: \"turn\""));   // past float: not finite
+    CHECK(bad(first + R"({"addpowerup": 1.5, "from": [0, 0, 0], "at": [1, 1, 1]})", "edit 2: \"addpowerup\""));
     std::string many;
     for (int i = 0; i < 4097; ++i)
         many += std::string(i ? ", " : "") + (i % 2 ? R"({"copy": "0x100", "at": [1, 2, 3]})" : R"({"addpowerup": 1, "from": [0, 0, 0], "at": [1, 1, 1]})");
@@ -1190,6 +1193,7 @@ TEST(stagemap_copy_write_roundtrip)
     sm::Map back;
     std::string why;
     CHECK(sm::parse(text, back, why));
+    CHECK(sm::write(back) == text);   // byte stable
     CHECK(back.edits.size() == 2 && back.copies.size() == 2 && back.powerups.size() == 1 && back.addPowerUps.size() == 2);
     bool same = back.copies.size() == m.copies.size();
     for (size_t i = 0; same && i < m.copies.size(); ++i)
