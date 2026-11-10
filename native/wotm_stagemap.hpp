@@ -16,8 +16,8 @@
 namespace wotm::stagemap {
 
 constexpr uint32_t kBase = 0xA00000;                    // the stage image (file zero), as linked
-constexpr uint32_t kReserve = 0x4000000 - 0x101000;     // PS2_RAM_SIZE - 0x101000: 1 MB for list nodes and ROTATEs (spec 1d)
-constexpr uint32_t kReserveSize = 0x100000;
+constexpr uint32_t kReserve = 0x4000000 - 0x401000;     // PS2_RAM_SIZE - 0x401000: 4 MB for list nodes, ROTATEs and copies
+constexpr uint32_t kReserveSize = 0x400000;
 constexpr uint32_t kMaxNode = 0x2000000 - kBase;        // a node offset stays inside the 32 MB the game sees
 constexpr int kNameLen = 17;                            // GameLevelLongNames[][18]
 

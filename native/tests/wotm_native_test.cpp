@@ -1188,6 +1188,12 @@ TEST(stagemap_reserve_alloc)
     CHECK(r.alloc(1) == 0 && r.next == 0x1040);
 }
 
+TEST(stagemap_reserve_layout)
+{
+    CHECK(sm::kReserve == 0x3BFF000u && sm::kReserveSize == 0x400000u);
+    CHECK(sm::kReserve + sm::kReserveSize == 0x4000000u - 0x1000u);   // right under the top-of-RAM slots (wotm_split4.inc: -0x1000)
+}
+
 TEST(stagemap_walk)
 {
     Img im;
@@ -1586,7 +1592,9 @@ TEST(stagemap_same_bits_on_every_machine)
         h = (h ^ byte) * 0x100000001B3ull;
     std::printf("  stagemap digest %016llx\n", static_cast<unsigned long long>(h));
     CHECK(r.applied == 3 && s.im.gridProblems(s.g) == 0);
-    CHECK(h == 0x035d31e0eff6d986ull);
+    // 0x035d31e0eff6d986 with the 1 MB reserve at 0x3EFF000; the 4 MB reserve (0x3BFF000) changes only the 5 reserve pointers the
+    // edits write (each 0x300000 lower), no float bit
+    CHECK(h == 0x7ebbfd393eca9736ull);
 }
 
 namespace

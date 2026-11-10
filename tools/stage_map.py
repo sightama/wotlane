@@ -4,7 +4,7 @@
 """Map creator tool (docs/superpowers/specs/2026-11-09-map-creator-design.md, issue #10).
 
   stage_map.py check <NGP or dump>...      grid rule; a dump is the raw image (bytes from 0xA00000), and a sibling
-                                           <dump>.reserve, if present, is mapped at --reserve (default 0x3EFF000)
+                                           <dump>.reserve, if present, is mapped at --reserve (default 0x3BFF000)
   stage_map.py pieces <NGP or dump>        one line per piece: node, kind, world position, collision paths, riders,
                                            power-ups (indices into <disc>/PTS/<STAGE>.PUP, for an .NGP in <disc>/LVL),
                                            destructible; node is the offset from 0xA00000, or @<absolute address> outside
@@ -64,7 +64,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ngp  # noqa: E402
 
 BASE = 0xA00000
-RESERVE = 0x4000000 - 0x101000   # kReserve: PS2_RAM_SIZE - 0x101000, 1 MB
+RESERVE = 0x4000000 - 0x401000   # kReserve: PS2_RAM_SIZE - 0x401000, 4 MB
 FNV_OFF, FNV_PRIME = 0xCBF29CE484222325, 0x100000001B3
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -961,6 +961,7 @@ def cmd_make(a):
 
 def cmd_selftest(_a):
     """FNV vectors, then a built image exercising the rules the loader mirrors."""
+    assert RESERVE == 0x3BFF000, hex(RESERVE)
     assert fnv1a(b"") == 0xCBF29CE484222325
     assert fnv1a(b"a") == 0xAF63DC4C8601EC8C
     img, res = bytearray(0x1000), bytearray(0x200)

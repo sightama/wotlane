@@ -16,7 +16,7 @@
 // - The active map is set where a stage is chosen (setActive: the stage selection's confirm on a map slot, wotm_levelsel.inc; WOTM_MATCH's
 //   map id in userintMainDirect) and cleared each time the menus load (Shell::LoadUserintDB entry) and on a confirm of any other
 //   stage, so no path that starts a fight without that confirm (adventure, training, minigames) inherits an earlier map. It stays
-//   set for the whole session (REBUILD LEVEL reloads without the menus); a map on another base stage applies nothing. The edits take grid list nodes and ROTATEs from the reserve (kReserve, 1 MB under
+//   set for the whole session (REBUILD LEVEL reloads without the menus); a map on another base stage applies nothing. The edits take grid list nodes and ROTATEs from the reserve (kReserve, 4 MB under
 //   the top-of-RAM slots, 1d), cleared before each apply; if the loaded files reach it (or fileStatus can't say), nothing is applied.
 // - Power-up places (the map's {"powerup": i, "from", "at"} edits) are not in the image: TheGame::InitAfterDbLoad, after dbInitDb,
 //   calls PowerUpTool::loadPoints, which copies PTS/<STAGE>.PUP into PowerUpTool::instance's points and calls the virtual

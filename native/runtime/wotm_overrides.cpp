@@ -1225,7 +1225,7 @@ namespace
         }
         if (end > kHighBase)
         {   // upper area: only the stage's NGP stays below (fileStatus.ngpAddr[0] to the end of the file, kept in the load log). The
-            // ceiling is the map creator's reserve (wotm_stagemap.inc, 1 MB under the top-of-RAM slots), not the end of RAM; without a
+            // ceiling is the map creator's reserve (wotm_stagemap.inc, 4 MB under the top-of-RAM slots), not the end of RAM; without a
             // map the reserve is unused, and only the top-of-RAM slots (the last 4 KB) are a real ceiling
             const double used = (end - kHighBase) / 1048576.0, left = (int64_t(wotm::stagemap::kReserve) - end) / 1048576.0;
             const bool map = !wotm_stagemap::active().empty();
