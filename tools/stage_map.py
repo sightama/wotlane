@@ -1022,10 +1022,11 @@ def turn_of(deg):
     return f32(math.cos(rad)), f32(math.sin(rad))
 
 
-def clamp_to_grid(m, g, node_paths, old, to, c, s, turning):
+def clamp_to_grid(m, g, node_paths, old, to, c, s, turning, shifts=None):
     """Where the loader's planMove() puts a moved or turned piece: its paths' boxes (the old corners relative to the old
     place, turned, at the new place) are kept inside the grid's stored extent by shifting the place in X and Y. Returns the
-    place (floats) and whether it was shifted."""
+    place (floats) and whether it was shifted (as the loader: a shift too small to change the float still counts); `shifts`,
+    when given, gets the X and Y shifts."""
     to = [f32(v) for v in to]
 
     def boxes():
@@ -1054,9 +1055,38 @@ def clamp_to_grid(m, g, node_paths, old, to, c, s, turning):
         lo = min(b[0][k] for b in nb)
         hi = max(b[1][k] for b in nb)
         shift = gmin[k] - lo if lo < gmin[k] else gmax[k] - hi if hi > gmax[k] else 0
+        if shifts is not None:
+            shifts.append(shift)
         if shift != 0:
             to[k] = f32(to[k] + shift)
             clamped = True
+    return to, clamped
+
+
+def f32_step(v, up):
+    """The next float after float v, up or down."""
+    bits = struct.unpack("<i", struct.pack("<f", v))[0]
+    if v == 0:
+        return f32(1e-45 if up else -1e-45)
+    bits += 1 if (v > 0) == up else -1
+    return struct.unpack("<f", struct.pack("<i", bits))[0]
+
+
+def clamp_for_file(m, g, node_paths, old, to, c, s, turning):
+    """A place the loader keeps as it is: clamp_to_grid(), then again on its own result while it still shifts. The loader
+    clamps the file's place once more, and a turned box shifted to the edge can land a float step outside it again (the
+    loader would move the piece a hair and log a second clamp note); one more pass settles every stock case. A shift too
+    small to change the float moves the place one float step inward instead. Returns (place, shifted at all)."""
+    to, clamped = clamp_to_grid(m, g, node_paths, old, to, c, s, turning)
+    for _ in range(8):
+        shifts = []
+        again_to, again = clamp_to_grid(m, g, node_paths, old, to, c, s, turning, shifts)
+        if not again:
+            break
+        for k in range(2):
+            if shifts[k] != 0 and again_to[k] == to[k]:
+                again_to[k] = f32_step(to[k], shifts[k] > 0)
+        to, clamped = again_to, True
     return to, clamped
 
 
@@ -1087,7 +1117,7 @@ def rider_edits(m, edits, valid_riders, notes, parent=None, pups=None):
     - a removed base removes its riders;
     - a moved or turned base moves each rider rigidly with it: new = base place + turn(rider - base old place), and the rider
       gets the same turn. The base place is where the loader puts it: a move that would take the base's collision past the
-      grid's edge is shifted back inside as the loader does (clamp_to_grid()); the base's edit then holds that place (noted);
+      grid's edge is shifted back inside as the loader does (clamp_for_file()); the base's edit then holds that place (noted);
     - a base edit the loader will refuse (a turn of a TRANSLATE that carries action data) carries nothing (noted);
     - a rider the user edited: a remove or a move of the user's stands as it is (noted); a turn alone (no move) is carried
       with its base like any rider and turned by the user's turn plus the base's (noted). A rider of a removed base that the
@@ -1126,7 +1156,7 @@ def rider_edits(m, edits, valid_riders, notes, parent=None, pups=None):
                 continue
             old = position(m, BASE + base)
             want = e.get("move", list(old))
-            new, clamped = clamp_to_grid(m, g, paths_of.get(BASE + base, []), old, want, c, s, turning)
+            new, clamped = clamp_for_file(m, g, paths_of.get(BASE + base, []), old, want, c, s, turning)
             if clamped:
                 edits[at[base]]["move"] = [f32_text(v) for v in new]
                 edits[at[base]] = {k: edits[at[base]][k] for k in ("node", "move", "turn") if k in edits[at[base]]}
@@ -1178,7 +1208,7 @@ def make_copies(m, args, valid, valid_riders, pups, notes, parent=None):
     built from the disc state and power-up places are added before any power-up move (applyPointEdits()), so `from` is
     the disc place whatever else the map edits.
     Like a move (decision 9), a copy that would take the source's collision past the grid's edge is shifted back inside as
-    the loader does (clamp_to_grid(), noted) and its riders follow the clamped place. ValueError for a source that is not a
+    the loader does (clamp_for_file(), noted) and its riders follow the clamped place. ValueError for a source that is not a
     piece, that copy_set() refuses, or a turned TRANSLATE with action data (the loader refuses both); a rider copy_set()
     refuses or that the turn cannot turn is skipped with a note. Each line make prints goes to `notes`."""
     if parent is None:
@@ -1214,7 +1244,7 @@ def make_copies(m, args, valid, valid_riders, pups, notes, parent=None):
         if cannot_turn(src, turning):
             raise ValueError("copy 0x%x: a TRANSLATE with action data, which the loader cannot turn" % node)
         old = position(m, src)
-        new, clamped = clamp_to_grid(m, g, paths_of.get(src, []), old, v[:3], c, s, turning)
+        new, clamped = clamp_for_file(m, g, paths_of.get(src, []), old, v[:3], c, s, turning)
         e = {"copy": "0x%x" % node, "at": [f32_text(x) for x in new] if clamped else v[:3]}
         if deg:
             e["turn"] = deg
@@ -1924,6 +1954,13 @@ def cmd_selftest(_a):
     (cps, adds), notes = copies_of(["0x%x=100,20,0" % off(b)])
     assert cps == [C(b, [100, 40, 0]), C(wr, [120, 50, 100])] and adds[0]["at"] == [120, 50, 85], (cps, adds)
     assert any("kept inside the collision grid" in n for n in notes), notes
+    # turned past the edge: make's place is one the loader keeps (clamping it again shifts nothing)
+    b_paths = paths_by_node(m, find_grid(m, parent))[b]
+    for deg in (17, 30, 45, 133, 200, 271, 315, 12.5):
+        c_, s_ = turn_of(deg)
+        for want in ((100, -500, 0), (900, 100, 0), (-900, 900, 0), (100, 900, 3)):
+            to, moved = clamp_for_file(m, find_grid(m, parent), b_paths, position(m, b), want, c_, s_, True)
+            assert moved and not clamp_to_grid(m, find_grid(m, parent), b_paths, position(m, b), to, c_, s_, True)[1], (deg, want)
     # the same source twice: two sets
     (cps, adds), _ = copies_of(["0x%x=150,100,0" % off(b), "0x%x=150,120,0" % off(b)])
     assert [e["copy"] for e in cps] == ["0x%x" % off(b), "0x%x" % off(wr)] * 2 and [e["addpowerup"] for e in adds] == [4, 4], cps
