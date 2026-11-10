@@ -351,8 +351,8 @@ the base's `.PUP` from the disc folder and adds a power-up edit (above) for each
 `  power-up 4 follows 0x165a70, to -88.1 634.1 630.2`. A power-up hovers for good at its place's height, up to about 95 above
 what is under it, so the rule is the riders' with a height from 20 under the box top to 100 above it. A moved or turned piece
 carries them like its riders (the same place, turn and grid-edge shift); a removed one drops them to the ground under it (the
-lowest bottom of the piece's collision boxes under them, not the roof's own box, which is often a thin slab) at the same X and
-Y, keeping their hover height. `--no-riders` turns this off too; a stage with no `.PUP`
+highest top of the collision boxes the map leaves under them, below the box that carried them; not the roof's own box, which
+is often a thin slab, nor the piece's foundation) at the same X and Y, keeping their hover height. `--no-riders` turns this off too; a stage with no `.PUP`
 gets none. `pieces` lists the power-up indices per piece (`power-ups 5,15`). On the stock stages 160 of 472 power-up places
 are on 110 pieces (CENTRAL: 29 of 35, on 24 pieces; the other 6 are on open ground).
 To find a piece, take the position from `pieces` and look at it with the free camera (`WOTM_FREECAM=<s>@<x>,<y>,<z>,<heading>,<pitch>`,

@@ -1090,13 +1090,34 @@ def clamp_for_file(m, g, node_paths, old, to, c, s, turning):
     return to, clamped
 
 
-def pup_ground(m, node_paths, p):
-    """Where a power-up of a removed piece lands: the lowest bottom of the piece's solid (non-trigger) collision boxes under
-    its X and Y, any width; with none there, the lowest bottom of all of them. A roof slab's own bottom is not the ground (many
-    roof boxes are thin or flat)."""
-    boxes = [[m.f32(q + 4 * k) for k in range(6)] for q in node_paths if m.ok(q, 0x24) and not m.u32(q + 0x20) & 1]
-    under = [b[2] for b in boxes if b[0] <= p[0] <= b[3] and b[1] <= p[1] <= b[4]]
-    return min(under or [b[2] for b in boxes])
+def solid_boxes(m, paths):
+    """[(path, [x0, y0, z0, x1, y1, z1])] of the solid (non-trigger) paths among `paths`."""
+    return [(q, [m.f32(q + 4 * k) for k in range(6)]) for q in paths if m.ok(q, 0x24) and not m.u32(q + 0x20) & 1]
+
+
+GROUND_SINK = 10.0   # how far a building's boxes may reach below the ground around it (stock: up to 6.4, CENTRAL 0x18a410)
+FLAT = 1.0           # a box at most this tall is a floor or ceiling slab
+
+
+def pup_ground(m, g, p, carry, gone, node_paths):
+    """Where a power-up of a removed piece lands (the z of what is under it): the highest top among the stage's solid boxes
+    under its X and Y, other than the removed pieces' (`gone`: their paths), at most GROUND_SINK above the bottom of the box
+    that carried it (`carry`; a building's boxes often reach a few units into the ground it stands on). With none there, the
+    lowest bottom of the removed piece's own solid boxes (`node_paths`) at most RIDER_MAX_BOX wide under its X and Y, or of
+    all of them, but no lower than the grid's ground there: the lowest top of the stage's flat solid slabs (at most FLAT
+    tall) wider than RIDER_MAX_BOX under it, not above the carrying box (a ceiling is not ground). Neither a roof slab's own
+    bottom nor a foundation or animated box reaching below the ground is the ground."""
+    def under(b):
+        return b[0] <= p[0] <= b[3] and b[1] <= p[1] <= b[4]
+    stage = [b for q, b in solid_boxes(m, sorted(all_paths(m, g))) if q not in gone and under(b)]
+    tops = [b[5] for b in stage if b[5] <= carry[2] + GROUND_SINK]
+    if tops:
+        return max(tops)
+    own = [b for _q, b in solid_boxes(m, node_paths) if b[3] - b[0] <= RIDER_MAX_BOX and b[4] - b[1] <= RIDER_MAX_BOX]
+    z = min([b[2] for b in own if under(b)] or [b[2] for b in own] or [carry[2]])
+    ground = [b[5] for b in stage if (b[3] - b[0] > RIDER_MAX_BOX or b[4] - b[1] > RIDER_MAX_BOX) and b[5] - b[2] <= FLAT
+              and b[5] <= carry[5]]
+    return max(z, min(ground)) if ground else z
 
 
 def paths_by_node(m, g):
@@ -1125,7 +1146,7 @@ def rider_edits(m, edits, valid_riders, notes, parent=None, pups=None):
     - a power-up place goes the same way as a rider piece (moved and turned about the base's place, or held back with a base
       the loader cannot turn), as {"powerup": i, "from": disc place, "at": new place}; a power-up has no turn of its own. Of a
       removed base it drops to the ground at the same X and Y, keeping its hover height: new z = the ground (pup_ground(): the
-      lowest bottom of the base's solid boxes under it) + (z - the carrying box's top).
+      highest top of what the map leaves under it, below the carrying box) + (z - the carrying box's top).
     Returns the new list: the user's edits in their order (riders turned by the user updated in place), then the riders',
     then the power-ups'."""
     edits = [dict(e) for e in edits]
@@ -1135,7 +1156,7 @@ def rider_edits(m, edits, valid_riders, notes, parent=None, pups=None):
         parent = walk_all(m)
     g = find_grid(m, parent)
     paths_of = paths_by_node(m, g)
-    out, pup_out, done = [], [], set()
+    out, pup_out, done, drops = [], [], set(), []
     # list(edits): the user's edits as given. A piece the user only turned that is itself a rider of another edited piece gets
     # its edit replaced below by the carried one, but its own riders and power-ups are carried by the user's turn about its disc
     # place, not by the carried place (one level only; no stock stage has a rider that carries power-ups or riders).
@@ -1188,14 +1209,22 @@ def rider_edits(m, edits, valid_riders, notes, parent=None, pups=None):
             notes.append("  rider 0x%x (%s) follows 0x%x" % (r, kind, base))
             out.append(ed)
         for i, p, box in prs:
-            if e.get("remove"):
-                to = [f32_text(p[0]), f32_text(p[1]), round(pup_ground(m, paths_of.get(BASE + base, []), p) + (p[2] - box[5]), 3)]
-                notes.append("  power-up %d follows 0x%x down to its ground, at %.1f %.1f %.1f" % ((i, base) + tuple(to)))
+            if e.get("remove"):   # its ground needs every remove of the map: filled in below
+                drops.append((len(pup_out), len(notes), i, p, box, base))
+                notes.append(None)
+                to = None
             else:
                 d = [p[k] - old[k] for k in range(3)]
                 to = [round(v, 3) for v in (d[0] * c - d[1] * s + new[0], d[0] * s + d[1] * c + new[1], d[2] + new[2])]
                 notes.append("  power-up %d follows 0x%x, to %.1f %.1f %.1f" % ((i, base) + tuple(to)))
-            pup_out.append({"powerup": i, "from": [f32_text(v) for v in p], "at": [num(v) for v in to]})
+            pup_out.append({"powerup": i, "from": [f32_text(v) for v in p], "at": [num(v) for v in to] if to else None})
+    removed = {BASE + int(x["node"], 16) for x in edits + out if "node" in x and x.get("remove")}
+    gone = {q for n in removed for q in paths_of.get(n, ())}
+    for k, at_note, i, p, box, base in drops:
+        ground = pup_ground(m, g, p, box, gone, paths_of.get(BASE + base, []))
+        to = [f32_text(p[0]), f32_text(p[1]), round(ground + (p[2] - box[5]), 3)]
+        pup_out[k]["at"] = [num(v) for v in to]
+        notes[at_note] = "  power-up %d follows 0x%x down to its ground, at %.1f %.1f %.1f" % ((i, base) + tuple(to))
     return edits + out + pup_out
 
 
@@ -1878,12 +1907,11 @@ def cmd_selftest(_a):
     assert rest[:3] == [E(b, move=[110, 60, 5], turn=90), E(b2, remove=True), E(rb, move=[150, 150, 0])], rest
     assert any("power-up 0 follows 0x%x down to its ground" % off(b2) in n for n in notes), notes
     # a removed base whose carrying box is a thin roof slab (rb's, 70..71, over its 0..50 box): power-up 2 hovers 49 over the
-    # slab and lands 49 over the lowest box bottom under it (0), not over the slab's own bottom (70)
+    # slab and lands 49 over what is left under it, tw's box (top 50), not over the slab's own bottom (70) or rb's (0)
     assert pr[rb][0][2][2] == 70.0 and pr[rb][0][2][5] == 71.0, pr[rb]   # the slab carries it (nearest top)
     pups, _r, _n = pup_edits(E(rb, remove=True))
-    assert pups == [{"powerup": 2, "from": [200, 150, 120], "at": [200, 150, 49]}], pups
-    rb_paths = [p for p in sorted(all_paths(m, find_grid(m, parent))) if rb in path_nodes(m, p)]
-    assert pup_ground(m, rb_paths, (200.0, 150.0, 0.0)) == 0.0 and pup_ground(m, rb_paths, (900.0, 900.0, 0.0)) == 0.0
+    assert pups == [{"powerup": 2, "from": [200, 150, 120], "at": [200, 150, 99]}], pups
+    selftest_pup_ground()
     # a turn alone, not a right angle: the same angle as the piece riders
     pups, _r, _n = pup_edits(E(b, turn=-10))
     c, s = turn_of(-10)
@@ -2284,6 +2312,52 @@ def selftest_copies():
     got = check(im.mem())
     first_out = (RESERVE + 0x4000 - wrap - 0x20) // 4                 # the first slot past the reserve's end
     assert got[3] == 0xFFF and "wrapper @0x%08x: slot %d not mapped" % (wrap, first_out) in got[2], got
+
+
+def selftest_pup_ground():
+    """pup_ground() on CENTRAL's case (power-up 4 of 0x165a70): a tower whose roof box carries a power-up, its foundation box
+    reaching below the ground, another piece's animated 1000 x 1000 box reaching far below it, a flat ground slab, a
+    ceiling."""
+    img = bytearray(0x1000)
+    top = [BASE + 0x100]
+
+    def w(fmt, a, *v):
+        struct.pack_into(fmt, img, a - BASE, *v)
+
+    def alloc(size):
+        a = top[0]
+        top[0] += (size + 15) & ~15
+        return a
+    g = alloc(0x24)
+    w("<I", g, OP_GRID)
+    w("<hh5f", g + 4, 1, 1, 4000.0, -2000.0, -2000.0, 2000.0, 2000.0)   # one cell: every path listed there
+
+    def path(lo, hi):
+        p = alloc(0x24)
+        w("<6f", p, *(lo + hi))
+        ln = alloc(8)
+        w("<II", ln, struct.unpack_from("<I", img, g + 0x20 - BASE)[0], p)
+        w("<I", g + 0x20, ln)
+        return p
+    carry = path((660.0, 450.0, 0.0), (880.0, 750.0, 579.6))            # the tower: its roof carries the power-up
+    found = path((660.0, 450.0, -61.2), (880.0, 790.0, 238.5))          # its foundation, below the ground
+    sunk = path((660.0, 450.0, -6.4), (880.0, 750.0, 271.1))            # a building box a few units into the ground
+    anim = path((300.0, 100.0, -242.0), (1300.0, 1100.0, 758.0))        # another piece's animated box
+    ground = path((-1700.0, -1600.0, 0.0), (1600.0, 1500.0, 0.0))       # the flat ground slab
+    path((-1700.0, -1600.0, 1312.3), (1600.0, 1500.0, 1312.3))          # the ceiling
+    m = Mem(bytes(img))
+    p = (777.0, 600.7, 630.2)
+
+    def box(q):
+        return [m.f32(q + 4 * k) for k in range(6)]
+    tower = {carry, found, sunk}
+    assert pup_ground(m, g, p, box(carry), tower, sorted(tower)) == 0.0                 # the ground slab, not -242 or -61.2
+    assert pup_ground(m, g, p, box(sunk), tower, sorted(tower)) == 0.0                  # 6.4 into the ground: still on it
+    # nothing at or below the carrying box: the tower's own lowest box under it (-61.2), but no lower than the flat ground
+    deep = box(found)
+    assert abs(pup_ground(m, g, p, deep, tower | {ground}, sorted(tower)) - f32(-61.2)) < 1e-6    # no ground slab left
+    assert pup_ground(m, g, p, deep, tower, sorted(tower)) == 0.0                       # the slab is above -61.2 + 10: clamped
+    assert pup_ground(m, g, (1500.0, 1400.0, 0.0), box(carry), tower, sorted(tower)) == 0.0   # outside the tower too
 
 
 def main(argv=None):
