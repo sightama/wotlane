@@ -95,7 +95,7 @@ $checks = [ordered]@{
     # dumps its stage image and reserve (WOTM_STAGE_DUMP) and both pairs must match byte for byte
     'map_copy_online' = @{ Setup = $makeCopyMap; ExtraEnv = "WOTM_MODS=$mapMods"; Stage = 'c1'; Secs = 60
                          PlayerEnv = "1:WOTM_STAGE_DUMP=${copyDumps}_1.bin|||2:WOTM_STAGE_DUMP=${copyDumps}_2.bin"
-                         Expect = '\[stages\] c1: copies: \d+ applied'
+                         Expect = '\[stages\] c1: copies: 58 applied, 0 refused'
                          Reject = 'does not match|||nothing applied|||not found in mods'
                          After = {
                              $same = $true
