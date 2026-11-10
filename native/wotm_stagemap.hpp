@@ -210,8 +210,8 @@ StageCounts stageCounts(const Mem &m, const std::map<uint32_t, uint32_t> &par);
 // What copies may add to the game's tables: the Interactives and Destructibles caps, and the room left in MemoryStack::global
 // for level pickups (bytes; the runtime measures it at dbInitDb entry)
 struct Limits { int interactives = kInteractivesCap, destructibles = kDestructiblesCap; uint32_t pickupRoom = 0xFFFFFFFFu; };
-// One applied copy, as guest addresses: its source and root, its first INTERACTIVE_STATE and DESTRUCTIBLE (preorder) and the
-// source's INTERACTIVE_STATE they copy (0: none)
+// One applied copy, as guest addresses: its source and root, its first DESTRUCTIBLE (preorder) and the INTERACTIVE_STATE that
+// holds it (with no DESTRUCTIBLE, its first INTERACTIVE_STATE), and the source's INTERACTIVE_STATE that one copies (0: none)
 struct CopyInfo { uint32_t source = 0, root = 0, istate = 0, destructible = 0, sourceIstate = 0; };
 // applied, refused: piece edits; relinked: grid list nodes linked for moved paths; fromReserve: how many of them came from the
 // reserve. copied, copyRefused: copies; interactives, destructibles, pickupBytes: the estimates after the copies (Limits)

@@ -2331,6 +2331,21 @@ TEST(stagemap_copy_build)
         CHECK(copy != live && (s.im.r32(copy) & 63) == sm::kOpTranslate && s.im.rf(copy + 0x10) == 600.f && s.inReserve(s.im.r32(copy + 0x1C)));
         CHECK(copiesStandAlone(s.im, r, sets));
     }
+    {
+        CopyStage s;   // CopyInfo pairs the first DESTRUCTIBLE with its INTERACTIVE_STATE, not the first one in preorder
+        const uint32_t iX = s.im.istate(s.im.stillObject());
+        s.im.w32(s.tD + 0x1C, s.im.group({iX, s.i1}));   // tD = {GROUP {iX, i1}, i2}: iX comes first and holds no DESTRUCTIBLE
+        CHECK(s.copySet(s.tD).why == "");
+        sm::Map map;
+        map.copies.push_back(copyAt(s.off(s.tD), 500, 500, 0));
+        const sm::Result r = s.run(map);
+        CHECK(r.copies.size() == 1);
+        if (r.copies.size() == 1)
+        {
+            const sm::CopyInfo &c = r.copies[0];
+            CHECK(c.sourceIstate == s.i1 && s.inReserve(c.istate) && s.im.r32(c.istate + 0xC) == c.destructible && s.inReserve(c.destructible));
+        }
+    }
 }
 
 namespace

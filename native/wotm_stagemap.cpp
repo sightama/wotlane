@@ -1632,15 +1632,23 @@ std::string planCopy(const Mem &m, const Mem &snap, const CopySet &cs, const std
     if (!sph.empty() && rootNeed > double(m.f32(w.root + 0x1C)))
         planRadius(w.root, rootNeed, plan);
 
+    // the first DESTRUCTIBLE (preorder) and the INTERACTIVE_STATE that holds it (a pair the game drives together); with no
+    // DESTRUCTIBLE, the first INTERACTIVE_STATE
     info.source = node, info.root = root;
+    uint32_t dest = 0;
     for (uint32_t n : cs.nodes)
-    {
-        const uint32_t nop = snap.u32(n) & 63;
-        if (nop == kOpInteractive && !info.istate)
+        if ((snap.u32(n) & 63) == kOpDestructible)
+        {
+            dest = n;
+            break;
+        }
+    for (uint32_t n : cs.nodes)
+        if ((snap.u32(n) & 63) == kOpInteractive && (!dest || snap.u32(n + 0xC) == dest))
+        {
             info.istate = copyOf.at(n), info.sourceIstate = n;
-        if (nop == kOpDestructible && !info.destructible)
-            info.destructible = copyOf.at(n);
-    }
+            break;
+        }
+    info.destructible = dest ? copyOf.at(dest) : 0;
     return "";
 }
 
