@@ -1072,11 +1072,12 @@ def f32_step(v, up):
     return struct.unpack("<f", struct.pack("<i", bits))[0]
 
 
-def clamp_for_file(m, g, node_paths, old, to, c, s, turning):
+def clamp_for_file(m, g, node_paths, old, to, c, s, turning, notes=None, what="piece"):
     """A place the loader keeps as it is: clamp_to_grid(), then again on its own result while it still shifts. The loader
     clamps the file's place once more, and a turned box shifted to the edge can land a float step outside it again (the
     loader would move the piece a hair and log a second clamp note); one more pass settles every stock case. A shift too
-    small to change the float moves the place one float step inward instead. Returns (place, shifted at all)."""
+    small to change the float moves the place one float step inward instead. When 8 more passes do not settle (the
+    piece's collision is wider than the grid), a note goes to `notes`. Returns (place, shifted at all)."""
     to, clamped = clamp_to_grid(m, g, node_paths, old, to, c, s, turning)
     for _ in range(8):
         shifts = []
@@ -1087,6 +1088,10 @@ def clamp_for_file(m, g, node_paths, old, to, c, s, turning):
             if shifts[k] != 0 and again_to[k] == to[k]:
                 again_to[k] = f32_step(to[k], shifts[k] > 0)
         to, clamped = again_to, True
+    else:
+        if notes is not None:
+            notes.append("  note: %s does not fit inside the collision grid: the loader will still move it (and log it)"
+                         % what)
     return to, clamped
 
 
@@ -1200,7 +1205,7 @@ def rider_edits(m, edits, valid_riders, notes, parent=None, pups=None):
                 continue
             old = position(m, BASE + base)
             want = e.get("move", list(old))
-            new, clamped = clamp_for_file(m, g, paths_of.get(BASE + base, []), old, want, c, s, turning)
+            new, clamped = clamp_for_file(m, g, paths_of.get(BASE + base, []), old, want, c, s, turning, notes, "0x%x" % base)
             if clamped:
                 edits[at[base]]["move"] = [f32_text(v) for v in new]
                 edits[at[base]] = {k: edits[at[base]][k] for k in ("node", "move", "turn") if k in edits[at[base]]}
@@ -1296,7 +1301,7 @@ def make_copies(m, args, valid, valid_riders, pups, notes, parent=None):
         if cannot_turn(src, turning):
             raise ValueError("copy 0x%x: a TRANSLATE with action data, which the loader cannot turn" % node)
         old = position(m, src)
-        new, clamped = clamp_for_file(m, g, paths_of.get(src, []), old, v[:3], c, s, turning)
+        new, clamped = clamp_for_file(m, g, paths_of.get(src, []), old, v[:3], c, s, turning, notes, "copy 0x%x" % node)
         e = {"copy": "0x%x" % node, "at": [f32_text(x) for x in new] if clamped else v[:3]}
         if deg:
             e["turn"] = deg
@@ -2015,6 +2020,14 @@ def cmd_selftest(_a):
         for want in ((100, -500, 0), (900, 100, 0), (-900, 900, 0), (100, 900, 3)):
             to, moved = clamp_for_file(m, find_grid(m, parent), b_paths, position(m, b), want, c_, s_, True)
             assert moved and not clamp_to_grid(m, find_grid(m, parent), b_paths, position(m, b), to, c_, s_, True)[1], (deg, want)
+    # a piece wider than the grid (tw's 900-wide box in a 400-wide grid) never settles: noted
+    tw_notes = []
+    tw_paths = paths_by_node(m, find_grid(m, parent))[tw]
+    clamp_for_file(m, find_grid(m, parent), tw_paths, position(m, tw), (250, 100, 0), 1.0, 0.0, False, tw_notes, "0x%x" % off(tw))
+    assert tw_notes == ["  note: 0x%x does not fit inside the collision grid: the loader will still move it (and log it)"
+                        % off(tw)], tw_notes
+    clamp_for_file(m, find_grid(m, parent), b_paths, position(m, b), (100, 20, 0), 1.0, 0.0, False, tw_notes)
+    assert len(tw_notes) == 1, tw_notes   # one that settles adds nothing
     # the same source twice: two sets
     (cps, adds), _ = copies_of(["0x%x=150,100,0" % off(b), "0x%x=150,120,0" % off(b)])
     assert [e["copy"] for e in cps] == ["0x%x" % off(b), "0x%x" % off(wr)] * 2 and [e["addpowerup"] for e in adds] == [4, 4], cps
