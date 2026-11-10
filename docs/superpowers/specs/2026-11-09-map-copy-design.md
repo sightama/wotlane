@@ -130,6 +130,11 @@ see-through), a LOD above it (always at that detail), a SWITCH above it (stage-w
 - See-through, LOD and stage-wide switching context is lost on copies (see above).
 - About 300 to 500 copies per map depending on the stage (Interactives cap).
 - CPU routes, spawn and power-up places unchanged (as in step 1).
+- Past 1024 Interactives during a load (only what the estimate cannot see: HomingBugs, the Airplane, the UFO, bosses), the
+  runtime guard gives the extra registrations id 0 instead of writing past the table. Most users ignore id 0, but `doDomino`
+  (`ActionDispatch.cpp:385-388`), `sanFranSaveInteractive` (`Destructible.cpp:163`) and the boss registrations
+  (`FinalBoss.cpp:217`, `PlantBoss.cpp:519`, `:1037`, `:1205`) do not: through `getInteractive(0)`, slot 0 (NULL), they make
+  `ChangeState` write into guest page 0. Reachable only past 1024 entries during a load; maps are capped at 1000.
 
 ## PR 2 checks
 
@@ -300,6 +305,9 @@ readers. Addresses in the generated recompiled code (`recomp/retail/`, not in gi
   | METRO | 485252 (0x8066FC, 0x87CE80) | 309156 | 201 | 102128 | 8 (3200 B) |
   | VEGAS | 501648 (0x8066FC, 0x880E8C) | 360864 | 117 | 97728 | 7 (2800 B) |
   | ISLAND | 501648 (0x8066FC, 0x880E8C) | 384368 | 95 | 82320 | 6 (2400 B) |
+
+  Measured on 4 stages, with one lineup (`3,1,2,5,9,8,4,7`), in the default game mode only; Task 15 spot-checks SANFRAN,
+  3-MILE and TOKYO.
 
   `kGlobalKeep` = 133300 rounded up to 16 KB (147456) + 64 KB = **0x34000** (212992 bytes). The transient `.ptr` read needs
   164376 + 16 bytes on top of the pickups and the PedGroups allocated before it (at most 6400 here): 170792 bytes, under

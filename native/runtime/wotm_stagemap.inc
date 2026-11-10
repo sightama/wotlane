@@ -34,7 +34,12 @@
 //   the game never checks. Past the last slot the call writes nothing, leaves s_numInteractives as it is and returns 0, the
 //   game's own "no interactive" id (dispatchHit and HitHistory::newHit ignore id 0, Debris skips a node with id2 0, a hit on a
 //   node with id 0 reaches nobody); the first refusal of a load is logged. The maps' estimate keeps them under 1000 (decision 7):
-//   the guard is for what the estimate cannot see (HomingBugs, the Airplane, the UFO, bosses).
+//   the guard is for what the estimate cannot see (HomingBugs, the Airplane, the UFO, bosses). Not every user of the id ignores
+//   0: doDomino (ActionDispatch.cpp:385-388) calls getInteractive(id2)->ChangeState, and getInteractive(0) returns slot 0,
+//   which is NULL, so a domino aimed at a refused destructible makes ChangeState write into guest page 0; sanFranSaveInteractive
+//   (Destructible.cpp:163) keeps the 0 for a SanFran save, and the bosses (FinalBoss.cpp:217, PlantBoss.cpp:519, 1037, 1205)
+//   store it in their node's id2, with the same NULL ChangeState on their way. All of that is reachable only once the table is
+//   past 1024 entries during a load (spec, Known limits): the guard turns a write past the table into those, never more.
 // - LevelPickups::createPickup (0x181750) is guarded the same way for MemoryStack::global, whose alloc16 has no bounds check
 //   (include/memory_stack.h:58-63): an allocation past hi1 runs over the high end and the end of the 0x80000 pool. When the free
 //   room (hi1 - low) is under the pickup's size (sm::levelPickupBytes() of its id1, plus 16 for alignment) the call allocates
