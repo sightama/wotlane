@@ -120,9 +120,16 @@ is made (`stage_map.py make`, later the editor), as explicit edits the loader ap
   box top + 100 (the + 25 window would miss almost all, `CENTRAL`'s tower and 0x18a410 included), and writes
   `{"powerup": i, "from": [disc place], "at": [new place]}` edits: a moved or turned P carries them as its riders (same
   clamped place and turn; none when the turn is refused), a removed P drops them to its ground at the same X and Y, keeping
-  their hover height: new z = the lowest bottom of P's solid boxes under that X and Y (any width; with none there, the lowest
-  of all of P's solid boxes) + z - the carrying box's top. Not the carrying box's own bottom: many roof boxes are thin or flat
-  (`CAPITOL` 35 would not move, `METRO` 31 and 34 would drop 2). The runtime hooks `exportPoints` (every resume
+  their hover height: new z = the ground under that X and Y + z - the carrying box's top. The ground (`pup_ground()`) is the
+  highest top among the stage's solid boxes there, other than the removed pieces' (every remove of the map), at most 10
+  above the carrying box's bottom (a building's boxes reach up to 6.4 into the ground it stands on, `CENTRAL` 0x18a410). With
+  none, the lowest bottom of P's own solid boxes at most 700 wide under it (or of all of them), but no lower than the
+  stage's flat (at most 1 tall) solid slabs wider than 700 there that are not above the carrying box (a ceiling is not
+  ground). Not the carrying box's own bottom: many roof boxes are thin or flat (`CAPITOL` 35 would not move, `METRO` 31 and
+  34 would drop 2); and not P's lowest box: foundation and animated boxes reach far below the ground (`CENTRAL` power-up 4
+  of the tower 0x165a70 went to -191.4 under an earlier rule, a 1000 x 1000 animated box reaching -242; it now rests 50.6
+  over the ground slab at 0). Boxes are bounds, not surfaces: on hilly stages (`CAPITOL` 32 and 39, `CANYON1` 16, `SANFRAN`
+  1, 2, 22 and 26) the top found may be a wide terrain box's highest point or a hollow under a plinth. The runtime hooks `exportPoints` (every resume
   slot, acting on entry) and, for the map applied to this load, writes each `at` over the point's position when the point is
   at `from` (or already at `at`) within 0.01 on each axis; an index past the count or a point elsewhere is refused and
   logged, the rest apply (`[stages] <id>: moved N power-ups`); a second edit of an index refuses the whole file at parse. A
