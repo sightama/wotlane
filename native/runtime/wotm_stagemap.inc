@@ -18,6 +18,12 @@
 //   stage, so no path that starts a fight without that confirm (adventure, training, minigames) inherits an earlier map. It stays
 //   set for the whole session (REBUILD LEVEL reloads without the menus); a map on another base stage applies nothing. The edits take grid list nodes and ROTATEs from the reserve (kReserve, 1 MB under
 //   the top-of-RAM slots, 1d), cleared before each apply; if the loaded files reach it (or fileStatus can't say), nothing is applied.
+// - Power-up places (the map's {"powerup": i, "from", "at"} edits) are not in the image: TheGame::InitAfterDbLoad, after dbInitDb,
+//   calls PowerUpTool::loadPoints, which copies PTS/<STAGE>.PUP into PowerUpTool::instance's points and calls the virtual
+//   exportPoints (0x1881D0), which kills the power-ups and creates one per point. A hook on exportPoints (wrapAll, acting on its
+//   entry only) rewrites the points' positions first (sm::applyPowerUps), when the map's piece edits were applied to this load
+//   (g_pups, set by applyActive, cleared by the next LoadLevelDB) and the map is still the active one. Game mode 8 (Big Shot) is
+//   skipped, as InitAfterDbLoad skips loadPoints there. Writes are absolute: another exportPoints on the same points changes nothing.
 // - WOTM_STAGE_DUMP=<path>: after apply, the image goes to <path> and the reserve to <path>.reserve (tools/stage_map.py check).
 // wotm_overrides.cpp is built with strict float rules, but keep float math out of here anyway: it belongs in wotm_stagemap.cpp.
 #include <fstream>
@@ -30,8 +36,14 @@ constexpr uint32_t kLoadLevelDB = wotm::fn::LoadLevelDB__5Shell, kZipInflateAll 
                    kDbInitDb = wotm::fn::dbInitDb__FP9_dbheader10_vramAddrs;
 constexpr uint32_t kFileStatusAddr = wotm::sym::fileStatus, kWhichLevel = wotm::sym::whichLevel;
 constexpr uint32_t kLevelNumAddr = wotm::sym::shellInfo + 0x2BB0;   // Shell::m_levelNum
+// PowerUpTool::exportPoints (this in $a0: PowerUpTool::instance); the instance's PointToolKit::points[256] (64 bytes each, the
+// position first) is at +0 and numPoints at +0x4000 (getPoint(i) is this + i * 64; exportPoints reads numPoints with lw 0x4000($s0))
+constexpr uint32_t kExportPoints = wotm::fn::exportPoints__11PowerUpTool, kPowerUpTool = wotm::sym::x_11PowerUpTool_instance,
+                   kNumPointsOff = 0x4000;
+constexpr uint32_t kGameModeAddr = wotm::sym::shellGame + 0x1203C8;   // TheGame::m_gameMode
 
-PS2Runtime::RecompiledFunction g_origLoadLevelDB = nullptr, g_origZip = nullptr, g_origDbInitDb = nullptr, g_origLoadUserintDB = nullptr;
+PS2Runtime::RecompiledFunction g_origLoadLevelDB = nullptr, g_origZip = nullptr, g_origDbInitDb = nullptr, g_origLoadUserintDB = nullptr,
+                               g_origExportPoints = nullptr;
 
 std::string g_active;          // map id (Registry::stages()), or empty: no map
 bool g_hashed = false;         // g_hash is the hash of the last LoadLevelDB's image (taken only with a map active)
@@ -42,6 +54,9 @@ bool g_pending = false;        // set when LoadLevelDB completes, cleared at the
 uint32_t g_loadRa = 0;         // $ra of the LoadLevelDB call in progress (0: none); the zipInflateAll tap is live while set
 uint32_t g_zipRa = 0;          // $ra of the zipInflateAll call that inflates the stage (0: none)
 uint32_t g_zipSize = 0;        // what it returned (0: not yet)
+std::string g_pupMap;          // the map whose edits were applied to the loaded stage (empty: none), for its power-up edits
+std::vector<sm::PowerUpEdit> g_pups;
+bool g_pupLogged = false;      // the power-up line was logged for this load
 
 void setActive(const std::string &id)
 {
@@ -113,6 +128,8 @@ void loadLevelDBTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         g_zipSize = 0;
         g_pending = false;
         g_hashed = false;
+        g_pupMap.clear();
+        g_pups.clear();
     }
     g_origLoadLevelDB(rdram, ctx, runtime);
     if (!g_loadRa || ctx->pc != g_loadRa)
@@ -201,6 +218,39 @@ void applyActive(uint8_t *rdram)
     for (const std::string &l : r.log)
         std::fprintf(stderr, "[stages] %s: %s\n", id.c_str(), l.c_str());
     dump(rdram);
+    g_pupMap = id;
+    g_pups = map.powerups;
+    g_pupLogged = false;
+}
+
+// PowerUpTool::exportPoints(void). Acted on at its entry only (a resumed call comes back with pc inside it)
+void exportPointsTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+{
+    if (ctx->pc == kExportPoints && !g_pups.empty() && !g_pupMap.empty() && g_pupMap == g_active &&
+        static_cast<int32_t>(rd32(rdram, kGameModeAddr)) != 8)
+    {
+        const uint32_t self = GPR_U32(ctx, 4) & PS2_RAM_MASK, n = rd32(rdram, self + kNumPointsOff);
+        if (self != kPowerUpTool)
+        {
+            if (!g_pupLogged)
+                std::fprintf(stderr, "[stages] %s: exportPoints on 0x%X, not PowerUpTool::instance: power-ups not moved\n", g_pupMap.c_str(), self);
+            g_pupLogged = true;
+        }
+        else
+        {
+            sm::Mem mem;
+            mem.r.push_back({kPowerUpTool, rdram + kPowerUpTool, sm::kMaxPoints * sm::kPointSize});
+            const sm::PowerUpResult r = sm::applyPowerUps(mem, kPowerUpTool, n, g_pups);
+            if (!g_pupLogged)
+            {
+                std::fprintf(stderr, "[stages] %s: moved %d power-ups\n", g_pupMap.c_str(), r.moved);
+                for (const std::string &l : r.log)
+                    std::fprintf(stderr, "[stages] %s: %s\n", g_pupMap.c_str(), l.c_str());
+            }
+            g_pupLogged = true;
+        }
+    }
+    g_origExportPoints(rdram, ctx, runtime);
 }
 
 // dbInitDb(_dbheader *db, vramAddrs *v). Acted on at its entry only (a resumed call comes back with pc inside it)
@@ -260,7 +310,10 @@ void install(PS2Runtime &runtime)
     {
         runtime.registerFunction(kDbInitDb, &dbInitDbTapped);
         runtime.registerFunction(wotm::fn::LoadUserintDB__5Shell, &loadUserintDBTapped);
-        std::fprintf(stderr, "[stages] map hooks: LoadLevelDB (%d entry and resume points), zipInflateAll (%d), dbInitDb\n", nLoad, nZip);
+        // size from native/wotm_syms.h (exportPoints__11PowerUpTool 0x80)
+        const int nPup = wrapAll(runtime, kExportPoints, 0x80, &exportPointsTapped, g_origExportPoints);
+        std::fprintf(stderr, "[stages] map hooks: LoadLevelDB (%d entry and resume points), zipInflateAll (%d), dbInitDb, exportPoints (%d)%s\n",
+                     nLoad, nZip, nPup, nPup ? "" : ": power-up places stay where the disc puts them");
     }
     else
         std::fprintf(stderr, "[stages] maps unavailable: LoadLevelDB, zipInflateAll, dbInitDb or LoadUserintDB has no function in the runtime\n");

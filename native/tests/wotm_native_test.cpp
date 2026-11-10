@@ -12,6 +12,7 @@
 #include "wotm_stagemap.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -945,6 +946,14 @@ namespace
         e.node = node, e.remove = true;
         return e;
     }
+    sm::PowerUpEdit powerUp(uint32_t index, std::array<float, 3> from, std::array<float, 3> at)
+    {
+        sm::PowerUpEdit e;
+        e.index = index;
+        for (int k = 0; k < 3; ++k)
+            e.from[k] = from[size_t(k)], e.at[k] = at[size_t(k)];
+        return e;
+    }
     bool logHas(const sm::Result &r, const std::string &what)
     {
         for (const std::string &l : r.log)
@@ -1027,9 +1036,22 @@ TEST(stagemap_write_roundtrip)
     m.edits.push_back(removal(0x62a1c0));
     m.edits.push_back(turnBy(0x400, -90.f));
     m.edits.push_back(moveTo(0x404, 3.f, -0.f, 120.f));
+    m.powerups.push_back(powerUp(4, {777.f, 600.7f, 630.2f}, {-338.684f, 471.567f, 50.6f}));
+    m.powerups.push_back(powerUp(0, {-0.f, 1e-5f, 0.1f}, {1234.567f, -0.f, 3.f}));
     sm::Map back;
     std::string why;
-    CHECK(sm::parse(sm::write(m), back, why));
+    const std::string text = sm::write(m);
+    CHECK(sm::parse(text, back, why));
+    CHECK(text.find("e-") == std::string::npos && text.find("\"powerup\": 4") != std::string::npos);   // plain decimals
+    bool samePups = back.powerups.size() == m.powerups.size();
+    for (size_t i = 0; samePups && i < m.powerups.size(); ++i)
+    {
+        const sm::PowerUpEdit &a = m.powerups[i], &b = back.powerups[i];
+        samePups = a.index == b.index;
+        for (int k = 0; k < 3; ++k)
+            samePups = samePups && bitsOf(a.from[k]) == bitsOf(b.from[k]) && bitsOf(a.at[k]) == bitsOf(b.at[k]);
+    }
+    CHECK(samePups);
     CHECK(back.name == m.name && back.base == m.base && back.baseHash == m.baseHash && back.edits.size() == m.edits.size());
     bool same = back.edits.size() == m.edits.size();
     for (size_t i = 0; same && i < m.edits.size(); ++i)
@@ -1040,6 +1062,99 @@ TEST(stagemap_write_roundtrip)
             same = same && (!a.move || bitsOf(a.pos[k]) == bitsOf(b.pos[k]));
     }
     CHECK(same);
+}
+
+TEST(stagemap_powerup_parse)
+{
+    sm::Map m;
+    std::string why;
+    CHECK(sm::parse(R"({"name": "P", "base": "CENTRAL", "baseHash": "0123456789abcdef", "edits": [
+        { "node": "0x100", "remove": true },
+        { "powerup": 4, "from": [777, 600.7, 630.2], "at": [-338.5, 471.5, 680] },
+        { "node": "0x200", "turn": 90 },
+        { "powerup": 15, "from": [947.1, 615.8, 319.1], "at": [947.1, 615.8, 42.1] }
+    ]})", m, why));
+    CHECK(m.edits.size() == 2 && m.powerups.size() == 2);
+    if (m.powerups.size() == 2)
+    {
+        const sm::PowerUpEdit &a = m.powerups[0], &b = m.powerups[1];
+        CHECK(a.index == 4 && a.from[0] == 777.f && a.from[1] == 600.7f && a.from[2] == 630.2f && a.at[0] == -338.5f &&
+              a.at[1] == 471.5f && a.at[2] == 680.f);
+        CHECK(b.index == 15 && b.at[2] == 42.1f);
+    }
+    auto bad = [](const std::string &edit, const std::string &needle) {
+        const std::string text = R"({"name": "X", "base": "CENTRAL", "baseHash": "0123456789abcdef", "edits": [)" + edit + "]}";
+        sm::Map out;
+        std::string w;
+        const bool ok = sm::parse(text, out, w);
+        if (ok || w.find(needle) == std::string::npos)
+            std::printf("  parse(%s) -> %d \"%s\"\n", text.c_str(), int(ok), w.c_str());
+        return !ok && w.find(needle) != std::string::npos;
+    };
+    CHECK(bad(R"({"powerup": -1, "from": [0, 0, 0], "at": [1, 1, 1]})", "powerup"));
+    CHECK(bad(R"({"powerup": 256, "from": [0, 0, 0], "at": [1, 1, 1]})", "powerup"));
+    CHECK(bad(R"({"powerup": 1.5, "from": [0, 0, 0], "at": [1, 1, 1]})", "powerup"));
+    CHECK(bad(R"({"powerup": "1", "from": [0, 0, 0], "at": [1, 1, 1]})", "powerup"));
+    CHECK(bad(R"({"powerup": 1, "at": [1, 1, 1]})", "from"));
+    CHECK(bad(R"({"powerup": 1, "from": [0, 0], "at": [1, 1, 1]})", "from"));
+    CHECK(bad(R"({"powerup": 1, "from": [0, 0, 0]})", "at"));
+    CHECK(bad(R"({"powerup": 1, "from": [0, 0, 0], "at": [1, "a", 1]})", "at"));
+    CHECK(bad(R"({"powerup": 1, "from": [0, 0, 0], "at": [1, 1, 1], "node": "0x100"})", "node"));
+    CHECK(bad(R"({"powerup": 1, "from": [0, 0, 0], "at": [1, 1, 1], "turn": 90})", "turn"));
+}
+
+// Power-up places on a fake PowerUpTool points array (64-byte points, position at +0, type and arg at +0x2C/+0x2D)
+TEST(stagemap_powerups_apply)
+{
+    constexpr uint32_t kPoints = 0x2AF0C0;   // PowerUpTool::instance (points at +0)
+    std::vector<uint8_t> buf(sm::kMaxPoints * sm::kPointSize);
+    sm::Mem mem;
+    mem.r.push_back({kPoints, buf.data(), uint32_t(buf.size())});
+    auto put = [&](uint32_t i, float x, float y, float z) {
+        mem.wf32(kPoints + sm::kPointSize * i, x), mem.wf32(kPoints + sm::kPointSize * i + 4, y);
+        mem.wf32(kPoints + sm::kPointSize * i + 8, z);
+        buf[sm::kPointSize * i + 0x2C] = uint8_t(i), buf[sm::kPointSize * i + 0x2D] = 7;
+    };
+    auto pos = [&](uint32_t i) {
+        const uint32_t a = kPoints + sm::kPointSize * i;
+        return std::array<float, 3>{mem.f32(a), mem.f32(a + 4), mem.f32(a + 8)};
+    };
+    for (uint32_t i = 0; i < 4; ++i)
+        put(i, 100.f * float(i), -50.f, 40.f + float(i));
+    const std::vector<sm::PowerUpEdit> edits = {
+        powerUp(1, {100.f, -50.f, 41.f}, {500.f, 600.f, 70.f}),
+        powerUp(2, {200.005f, -50.f, 42.f}, {-1.5f, 2.5f, 3.5f}),   // within 0.01 of the disc place
+        powerUp(3, {300.f, -50.f, 44.f}, {9.f, 9.f, 9.f}),          // z off by 1: refused
+        powerUp(4, {0.f, 0.f, 0.f}, {9.f, 9.f, 9.f}),               // past numPoints (4): refused
+        powerUp(1, {100.f, -50.f, 41.f}, {7.f, 7.f, 7.f}),          // index 1 again: refused
+    };
+    const std::vector<uint8_t> before = buf;
+    sm::PowerUpResult r = sm::applyPowerUps(mem, kPoints, 4, edits);
+    for (const std::string &l : r.log)
+        std::printf("  %s\n", l.c_str());
+    CHECK(r.moved == 2 && r.refused == 3 && r.log.size() == 3);
+    CHECK((pos(1) == std::array<float, 3>{500.f, 600.f, 70.f}) && (pos(2) == std::array<float, 3>{-1.5f, 2.5f, 3.5f}));
+    CHECK((pos(0) == std::array<float, 3>{0.f, -50.f, 40.f}) && (pos(3) == std::array<float, 3>{300.f, -50.f, 43.f}));
+    CHECK(buf[sm::kPointSize * 1 + 0x2C] == 1 && buf[sm::kPointSize * 1 + 0x2D] == 7);   // type and arg kept
+    bool onlyPositions = true;
+    for (size_t i = 0; i < buf.size(); ++i)
+        onlyPositions = onlyPositions && (buf[i] == before[i] || ((i / sm::kPointSize == 1 || i / sm::kPointSize == 2) && i % sm::kPointSize < 12));
+    CHECK(onlyPositions);
+    if (r.log.size() == 3)
+        CHECK(r.log[0].find("power-up 3: is at 300.0 -50.0 43.0") == 0 && r.log[1].find("power-up 4: the stage has 4") == 0 &&
+              r.log[2].find("power-up 1: edited twice") == 0);
+    // a second call on the same points (exportPoints again without a new loadPoints): the moved points are at "at", same result
+    const std::vector<uint8_t> once = buf;
+    r = sm::applyPowerUps(mem, kPoints, 4, edits);
+    CHECK(r.moved == 2 && r.refused == 3 && buf == once);
+    // after a fresh loadPoints (disc places again) the same edits give the same bytes
+    put(1, 100.f, -50.f, 41.f), put(2, 200.f, -50.f, 42.f);
+    r = sm::applyPowerUps(mem, kPoints, 4, edits);
+    CHECK(r.moved == 2 && buf == once);
+    // no edits, or no points: nothing written
+    CHECK(sm::applyPowerUps(mem, kPoints, 4, {}).moved == 0 && buf == once);
+    r = sm::applyPowerUps(mem, kPoints, 0, edits);
+    CHECK(r.moved == 0 && r.refused == 5 && buf == once);
 }
 
 // The coverage rule on the same cases as tools/stage_map.py selftest: a box past both X edges, a negative start, one fully

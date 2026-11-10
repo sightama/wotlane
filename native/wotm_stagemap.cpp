@@ -110,6 +110,49 @@ bool finiteFloat(const json::Value *v, float &out)
     return std::isfinite(out);
 }
 
+bool vec3(const json::Value *v, float out[3])
+{
+    return v && v->type == json::Value::Arr && v->arr.size() == 3 && finiteFloat(&v->arr[0], out[0]) &&
+           finiteFloat(&v->arr[1], out[1]) && finiteFloat(&v->arr[2], out[2]);
+}
+
+json::Value vec3Value(const float v[3])
+{
+    json::Value p = json::Value::array();
+    for (int k = 0; k < 3; ++k)
+        p.arr.push_back(numberOf(v[k], false));
+    return p;
+}
+
+// {"powerup": <index>, "from": [x, y, z], "at": [x, y, z]}
+bool parsePowerUp(const json::Value &e, const std::string &at, PowerUpEdit &out, std::string &why)
+{
+    for (const auto &kv : e.obj)
+        if (kv.first != "powerup" && kv.first != "from" && kv.first != "at")
+        {
+            why = at + "unknown key \"" + kv.first + "\" in a power-up edit";
+            return false;
+        }
+    const json::Value *idx = e.get("powerup");
+    if (!idx || idx->type != json::Value::Int || idx->frac || idx->i < 0 || idx->i >= int64_t(kMaxPoints))
+    {
+        why = at + "\"powerup\" must be the power-up's index in the stage's .PUP (0 to " + std::to_string(kMaxPoints - 1) + ")";
+        return false;
+    }
+    out.index = uint32_t(idx->i);
+    if (!vec3(e.get("from"), out.from))
+    {
+        why = at + "\"from\" must be [x, y, z] (numbers): the power-up's place on the disc";
+        return false;
+    }
+    if (!vec3(e.get("at"), out.at))
+    {
+        why = at + "\"at\" must be [x, y, z] (numbers)";
+        return false;
+    }
+    return true;
+}
+
 } // namespace
 
 bool parse(const std::string &text, Map &out, std::string &why)
@@ -168,6 +211,14 @@ bool parse(const std::string &text, Map &out, std::string &why)
         {
             why = at + "not an object";
             return false;
+        }
+        if (e.get("powerup"))
+        {
+            PowerUpEdit pe;
+            if (!parsePowerUp(e, at, pe, why))
+                return false;
+            m.powerups.push_back(pe);
+            continue;
         }
         for (const auto &kv : e.obj)
             if (kv.first != "node" && kv.first != "move" && kv.first != "turn" && kv.first != "remove")
@@ -241,15 +292,18 @@ std::string write(const Map &m)
         else
         {
             if (e.move)
-            {
-                json::Value &p = o.at("move");
-                p = json::Value::array();
-                for (float f : e.pos)
-                    p.arr.push_back(numberOf(f, false));
-            }
+                o.at("move") = vec3Value(e.pos);
             if (e.turn != 0)
                 o.at("turn") = numberOf(e.turn, true);
         }
+        edits.arr.push_back(std::move(o));
+    }
+    for (const PowerUpEdit &e : m.powerups)
+    {
+        json::Value o = json::Value::object();
+        o.at("powerup") = json::Value::integer(int64_t(e.index));
+        o.at("from") = vec3Value(e.from);
+        o.at("at") = vec3Value(e.at);
         edits.arr.push_back(std::move(o));
     }
     return json::dump(v);
@@ -1070,6 +1124,50 @@ Result apply(const Mem &m, uint32_t imageSize, const Map &map, Reserve &res)
         out.relinked += plan.relinked;
         out.fromReserve += plan.fromReserve;
         out.log.insert(out.log.end(), plan.notes.begin(), plan.notes.end());
+    }
+    return out;
+}
+
+PowerUpResult applyPowerUps(const Mem &m, uint32_t points, uint32_t numPoints, const std::vector<PowerUpEdit> &edits)
+{
+    PowerUpResult out;
+    std::set<uint32_t> seen;
+    auto near = [](float a, float b) { return std::fabs(double(a) - double(b)) <= 0.01; };
+    for (const PowerUpEdit &e : edits)
+    {
+        const std::string at = "power-up " + std::to_string(e.index) + ": ";
+        auto refuse = [&](const std::string &why) {
+            ++out.refused;
+            out.log.push_back(at + why + ", edit refused");
+        };
+        if (!seen.insert(e.index).second)
+        {
+            refuse("edited twice (the first edit stands)");
+            continue;
+        }
+        if (e.index >= numPoints || numPoints > kMaxPoints)
+        {
+            refuse("the stage has " + std::to_string(numPoints) + " power-up places");
+            continue;
+        }
+        const uint32_t a = points + kPointSize * e.index;
+        if (!m.ok(a, 12))
+        {
+            refuse("its point is not readable");
+            continue;
+        }
+        const float p[3] = {m.f32(a), m.f32(a + 4), m.f32(a + 8)};
+        const bool atFrom = near(p[0], e.from[0]) && near(p[1], e.from[1]) && near(p[2], e.from[2]);
+        const bool atAt = near(p[0], e.at[0]) && near(p[1], e.at[1]) && near(p[2], e.at[2]);
+        if (!atFrom && !atAt)
+        {
+            refuse("is at " + num(p[0]) + " " + num(p[1]) + " " + num(p[2]) + ", not at its \"from\" " + num(e.from[0]) + " " +
+                   num(e.from[1]) + " " + num(e.from[2]));
+            continue;
+        }
+        for (uint32_t k = 0; k < 3; ++k)
+            m.wf32(a + 4 * k, e.at[k]);
+        ++out.moved;
     }
     return out;
 }

@@ -40,8 +40,15 @@ inline bool transforming(uint32_t op)
 // no transform above it, so its own translation is its world position); `turn` is degrees about Z added to the piece's rotation,
 // about its own position.
 struct Edit { uint32_t node = 0; bool remove = false; bool move = false; float pos[3] = {0, 0, 0}; float turn = 0; };
-// id and dir come from the folder (mods/<mod>/stages/<id>/), the rest from stage.json
-struct Map { std::string id, name, base, dir; uint64_t baseHash = 0; std::vector<Edit> edits; };
+// A power-up place moved: `index` into the stage's PTS/<STAGE>.PUP points, `from` the point's place on the disc (a guard: the edit
+// only applies to a point there), `at` its new place (absolute). Power-ups are not pieces: PowerUpTool::exportPoints creates them from
+// the points after the stage loads, and the runtime rewrites the points on its entry (wotm_stagemap.inc, applyPowerUps()).
+struct PowerUpEdit { uint32_t index = 0; float from[3] = {0, 0, 0}; float at[3] = {0, 0, 0}; };
+constexpr uint32_t kMaxPoints = 256;     // PointToolKit::points[256]
+constexpr uint32_t kPointSize = 0x40;    // a point: position (_fvector) at +0, power-up type +0x2C, arg +0x2D
+// id and dir come from the folder (mods/<mod>/stages/<id>/), the rest from stage.json. stage.json has one "edits" list; the
+// power-up edits ({"powerup": i, ...}) are kept apart from the piece edits, in file order, and written after them.
+struct Map { std::string id, name, base, dir; uint64_t baseHash = 0; std::vector<Edit> edits; std::vector<PowerUpEdit> powerups; };
 
 // 64-bit FNV-1a, the same as stage_map.py's baseHash
 inline uint64_t fnv1a(const uint8_t *p, size_t n)
@@ -161,5 +168,14 @@ struct Result { int applied = 0, refused = 0, relinked = 0, fromReserve = 0; std
 // paths' list nodes go to a pool; then the moves and turns, in file order, take list nodes from the pool before the reserve.
 // A move or turn is planned whole before anything is written: one that can't be done writes nothing and is logged.
 Result apply(const Mem &m, uint32_t imageSize, const Map &map, Reserve &res);
+
+// moved: power-up edits written; refused: edits left out (logged)
+struct PowerUpResult { int moved = 0, refused = 0; std::vector<std::string> log; };
+
+// Moves power-up places: `points` is the address of PowerUpTool's points (numPoints of kPointSize bytes, position at +0). In file
+// order, each edit writes its `at` over the point's position when the point is at `from` (or already at `at`: a second call on
+// the same points), within 0.01 on each axis; an index past numPoints, a point elsewhere or a second edit of an index is refused
+// and logged, and the rest apply. Writes are absolute, so calling it again on the same points changes nothing.
+PowerUpResult applyPowerUps(const Mem &m, uint32_t points, uint32_t numPoints, const std::vector<PowerUpEdit> &edits);
 
 } // namespace wotm::stagemap
