@@ -1567,6 +1567,40 @@ TEST(stagemap_powerups_append)
         const sm::PowerUpResult r = sm::appendPowerUps(mem, kPoints, sm::kMaxPoints + 1, {powerUp(0, from(0), {1.f, 2.f, 3.f})}, count);
         CHECK(r.moved == 0 && r.refused == 1 && count == sm::kMaxPoints + 1 && buf == before);
     }
+    {
+        // 0.011 off "from" on one axis: refused (the guard is 0.01), nothing written
+        std::fill(buf.begin(), buf.end(), uint8_t(0));
+        for (uint32_t i = 0; i < 3; ++i)
+            put(i, 1);
+        const std::vector<uint8_t> before = buf;
+        uint32_t count = 0;
+        const sm::PowerUpResult r = sm::appendPowerUps(mem, kPoints, 3, {powerUp(1, {100.f, -50.011f, 41.f}, {1.f, 2.f, 3.f})}, count);
+        CHECK(r.moved == 0 && r.refused == 1 && count == 3 && buf == before);
+        CHECK(r.log.size() == 1 && r.log[0].find("added power-up 1: is at 100.0 -50.0 41.0") == 0);
+    }
+    {
+        // 99 stock and one added: exactly 100 places, the game creates them all: no note
+        std::fill(buf.begin(), buf.end(), uint8_t(0));
+        for (uint32_t i = 0; i < 99; ++i)
+            put(i, 2);
+        uint32_t count = 0;
+        const sm::PowerUpResult r = sm::appendPowerUps(mem, kPoints, 99, {powerUp(7, from(7), {1.f, 2.f, 3.f})}, count);
+        CHECK(count == 100 && r.moved == 1 && r.refused == 0 && r.log.empty() && tailOf(99, 7));
+    }
+    {
+        // the new point's place is outside the memory given (a Mem of 4 points): refused, nothing written
+        std::vector<uint8_t> small(4 * sm::kPointSize);
+        sm::Mem m4;
+        m4.r.push_back({kPoints, small.data(), uint32_t(small.size())});
+        for (uint32_t i = 0; i < 4; ++i)
+            m4.wf32(kPoints + sm::kPointSize * i, 100.f * float(i)), m4.wf32(kPoints + sm::kPointSize * i + 4, -50.f),
+                m4.wf32(kPoints + sm::kPointSize * i + 8, 40.f + float(i));
+        const std::vector<uint8_t> before = small;
+        uint32_t count = 0;
+        const sm::PowerUpResult r = sm::appendPowerUps(m4, kPoints, 4, {powerUp(1, from(1), {1.f, 2.f, 3.f})}, count);
+        CHECK(r.moved == 0 && r.refused == 1 && count == 4 && small == before);
+        CHECK(r.log.size() == 1 && r.log[0].find("added power-up 1: its new point (4) is outside memory") == 0);
+    }
 }
 
 // The coverage rule on the same cases as tools/stage_map.py selftest: a box past both X edges, a negative start, one fully

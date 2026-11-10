@@ -2382,9 +2382,14 @@ PowerUpResult appendPowerUps(const Mem &m, uint32_t points, uint32_t numPoints, 
         const uint32_t src = points + kPointSize * e.index, dst = points + kPointSize * count;
         const uint8_t *s = m.at(src, kPointSize);
         uint8_t *d = m.at(dst, kPointSize);
-        if (!s || !d)
+        if (!s)
         {
             refuse("its point is not readable");
+            continue;
+        }
+        if (!d)
+        {
+            refuse("its new point (" + std::to_string(count) + ") is outside memory");
             continue;
         }
         const float p[3] = {m.f32(src), m.f32(src + 4), m.f32(src + 8)};
