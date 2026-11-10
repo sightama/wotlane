@@ -27,12 +27,13 @@
   stage_map.py inflate <NGP> <out>         writes the inflated stage image (what the game has at 0xA00000), e.g. for
                                            the native test's WOTM_TEST_STAGE
   stage_map.py ram <ram_<frame>.bin> [--monster I:ZMIN:ZMAX]... [--pickup X,Y,Z]... [--no-pickup X,Y,Z]...
-                   [--powerup X,Y,Z]... [--no-powerup X,Y,Z]...
-                                           a fight's RAM (PS2X_DUMP_RAM): the monsters' positions and the level pickups'
-                                           placed positions (what createPickup was given); exits 1 when monster I's height is
-                                           outside [ZMIN, ZMAX], or a pickup is missing at (--pickup) or present at
-                                           (--no-pickup) a place, or a power-up (X, Y and its rest height) likewise, within 1
-                                           unit (the map creator's live checks)
+                   [--powerup X,Y,Z]... [--no-powerup X,Y,Z]... [--interactives LO:HI] [--destructibles LO:HI]
+                                           a fight's RAM (PS2X_DUMP_RAM): the monsters' positions, the level pickups'
+                                           placed positions (what createPickup was given) and the Interactives and
+                                           Destructibles counts; exits 1 when monster I's height is outside [ZMIN, ZMAX], or
+                                           a pickup is missing at (--pickup) or present at (--no-pickup) a place, or a
+                                           power-up (X, Y and its rest height) likewise, within 1 unit, or a count is outside
+                                           its range (the map creator's live checks)
   stage_map.py selftest
 
 The native loader mirrors these rules exactly (keep them in step):
@@ -75,7 +76,9 @@ Power-up places ride the same way with z up to the box top + 100 (they hover), a
 runtime writes over PowerUpTool's points (native/runtime/wotm_stagemap.inc); of a removed piece they drop to its ground.
 """
 import argparse
+import contextlib
 import glob
+import io
 import json
 import math
 import os
@@ -1391,6 +1394,17 @@ def copy_estimate(m, edits, copies, parent=None):
 MONSTERS, NUM_MONSTERS = 0x3D3920, 0x3D3978   # TheGame::m_monsters[], m_numMonsters (native/wotm_syms.h)
 PICKUP_LISTS = (0x2AECA0, 0x2AECB0, 0x2AECC0, 0x2AECD0, 0x2AECE0)   # LevelPickups::s_{active,inUse,inFlight,regen,dead}List
 POWER_UPS = 0x7BDAD0                          # PowerUps::instance: m_powerUps[100] at +0xA0 (16 bytes, _cs * at +8), m_count +0x2670
+NUM_INTERACTIVES = 0x6F8DF8                   # Interactives::s_numInteractives (slot 0 counts: it starts at 1)
+DESTRUCTIBLES, DESTRUCTIBLES_COUNT = 0x6F81FC, 0x3EFD4   # Destructibles *destructibles; its m_count (src/game/Destructible.cpp:108)
+
+
+def ram_counts(ram):
+    """(interactives, destructibles) in a guest RAM image: the next free slot of the Interactives table (the loader's
+    interactives estimate is an upper bound of it) and Destructibles::m_count (0 when the table is not allocated)."""
+    def u32(a):
+        return struct.unpack_from("<I", ram, a & 0x3FFFFFF)[0]
+    table = u32(DESTRUCTIBLES)
+    return u32(NUM_INTERACTIVES), u32(table + DESTRUCTIBLES_COUNT) if table else 0
 
 
 def ram_powerups(ram):
@@ -1449,6 +1463,19 @@ def cmd_ram(a):
         print("monster %d at %.1f %.1f %.1f" % ((i,) + m))
     print("%d level pickups" % len(picks))
     bad = 0
+    inter, destr = ram_counts(ram)
+    print("interactives %d" % inter)
+    print("destructibles %d" % destr)
+    for what, n, spec in (("interactives", inter, a.interactives), ("destructibles", destr, a.destructibles)):
+        if spec is None:
+            continue
+        try:
+            lo, hi = (int(x) for x in spec.split(":"))
+        except ValueError:
+            raise SystemExit("bad range %r (expected LO:HI, integers)" % spec)
+        ok = lo <= n <= hi
+        bad += not ok
+        print("%s %s in [%d, %d]" % ("ok     " if ok else "FAILED ", what, lo, hi))
 
     def vec3(s):
         v = [float(x) for x in s.split(",")]
@@ -1826,6 +1853,27 @@ def cmd_selftest(_a):
     struct.pack_into("<4f", ram, 0x800410, -338.5, 471.5, 90.0, 80.6)          # easing down from z 90 to its rest height 80.6
     pups = ram_powerups(bytes(ram))
     assert len(pups) == 1 and near(pups[0], (-338.5, 471.5, 80.6)), pups
+    assert ram_counts(bytes(ram)) == (0, 0)                                   # no Destructibles table yet
+    struct.pack_into("<I", ram, NUM_INTERACTIVES, 412)
+    struct.pack_into("<I", ram, DESTRUCTIBLES, 0x800500)
+    struct.pack_into("<I", ram, 0x800500 + DESTRUCTIBLES_COUNT, 330)
+    assert ram_counts(bytes(ram)) == (412, 330), ram_counts(bytes(ram))
+    rtmp = tempfile.mkdtemp()
+    try:
+        rfile = os.path.join(rtmp, "ram_2400.bin")
+        with open(rfile, "wb") as f:
+            f.write(ram)
+
+        def ram_args(inter, destr):
+            return argparse.Namespace(file=rfile, monster=[], pickup=[], no_pickup=[], powerup=[], no_powerup=[],
+                                      interactives=inter, destructibles=destr)
+        with contextlib.redirect_stdout(io.StringIO()) as out:
+            assert cmd_ram(ram_args("400:412", "330:330")) == 0
+            assert cmd_ram(ram_args("0:411", None)) == 1                     # past the estimate
+            assert cmd_ram(ram_args(None, "331:1400")) == 1
+        assert "interactives 412\n" in out.getvalue() and "FAILED  interactives in [0, 411]" in out.getvalue(), out.getvalue()
+    finally:
+        shutil.rmtree(rtmp)
     valid = {0x100, 0x200, 0x300}                                             # make's edits
     got = make_edits(valid, "X", ["0x100=1,2,3"], ["0x100=90", "0x200=15"], ["0x300"])
     assert got == [{"node": "0x100", "move": [1.0, 2.0, 3.0], "turn": 90}, {"node": "0x200", "turn": 15},
@@ -2473,6 +2521,8 @@ def main(argv=None):
     p.add_argument("--no-pickup", action="append", default=[], metavar="X,Y,Z")
     p.add_argument("--powerup", action="append", default=[], metavar="X,Y,Z", help="a power-up at X,Y resting at height Z")
     p.add_argument("--no-powerup", action="append", default=[], metavar="X,Y,Z")
+    p.add_argument("--interactives", metavar="LO:HI", help="Interactives::s_numInteractives in [LO, HI]")
+    p.add_argument("--destructibles", metavar="LO:HI", help="Destructibles::m_count in [LO, HI]")
     p.set_defaults(fn=cmd_ram)
     p = sub.add_parser("selftest")
     p.set_defaults(fn=cmd_selftest)
