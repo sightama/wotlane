@@ -1100,22 +1100,45 @@ FLAT = 1.0           # a box at most this tall is a floor or ceiling slab
 
 
 def pup_ground(m, g, p, carry, gone, node_paths):
-    """Where a power-up of a removed piece lands (the z of what is under it): the highest top among the stage's solid boxes
-    under its X and Y, other than the removed pieces' (`gone`: their paths), at most GROUND_SINK above the bottom of the box
-    that carried it (`carry`; a building's boxes often reach a few units into the ground it stands on). With none there, the
-    lowest bottom of the removed piece's own solid boxes (`node_paths`) at most RIDER_MAX_BOX wide under its X and Y, or of
-    all of them, but no lower than the grid's ground there: the lowest top of the stage's flat solid slabs (at most FLAT
-    tall) wider than RIDER_MAX_BOX under it, not above the carrying box (a ceiling is not ground). Neither a roof slab's own
+    """Where a power-up of a removed piece lands (the z of what is under it; the caller adds its hover, at least 0):
+    1. the reference: the bottom of the box that carried it (`carry`), walked down the removed piece's own solid boxes
+       (`node_paths`) under its X and Y while one's top is within FLAT of it (a tier standing on a lower tier of the same
+       piece: CAPITOL 0x6631f0's upper tier at 189 stands on its base, so its ground is the base's);
+    2. the highest top among the stage's solid boxes under its X and Y, other than the removed pieces' (`gone`: their
+       paths), at most GROUND_SINK above the reference (a building's boxes often reach a few units into the ground);
+    3. with none, the same against the carrying box's bottom, then the fallback below;
+    4. a hill: when a kept box under it reaches from at or below the reference to past GROUND_SINK above it (a terrain box
+       whose highest point is far above where the piece stood), the piece stood on it: no lower than the reference;
+    5. never above the carrying box's top.
+    Fallback: the lowest bottom of the piece's own solid boxes at most RIDER_MAX_BOX wide under its X and Y, or of all of
+    them, but no lower than the grid's ground there: the lowest top of the stage's flat solid slabs (at most FLAT tall)
+    wider than RIDER_MAX_BOX under it, not above the carrying box (a ceiling is not ground). Neither a roof slab's own
     bottom nor a foundation or animated box reaching below the ground is the ground."""
     def under(b):
         return b[0] <= p[0] <= b[3] and b[1] <= p[1] <= b[4]
-    stage = [b for q, b in solid_boxes(m, sorted(all_paths(m, g))) if q not in gone and under(b)]
-    tops = [b[5] for b in stage if b[5] <= carry[2] + GROUND_SINK]
+    ref = carry[2]
+    mine = [b for _q, b in solid_boxes(m, node_paths) if under(b)]
+    while True:
+        below = [b[2] for b in mine if b[2] < ref and abs(b[5] - ref) <= FLAT]
+        if not below:
+            break
+        ref = min(below)
+    kept = [b for q, b in solid_boxes(m, sorted(all_paths(m, g))) if q not in gone and under(b)]
+    tops = [b[5] for b in kept if b[5] <= ref + GROUND_SINK]
+    z = max(tops) if tops else _ground_fallback(m, carry, kept, node_paths, under)
+    if any(b[2] <= ref and b[5] > ref + GROUND_SINK for b in kept):
+        z = max(z, ref)
+    return min(z, carry[5])
+
+
+def _ground_fallback(m, carry, kept, node_paths, under):
+    """pup_ground()'s steps 3 and fallback."""
+    tops = [b[5] for b in kept if b[5] <= carry[2] + GROUND_SINK]
     if tops:
         return max(tops)
     own = [b for _q, b in solid_boxes(m, node_paths) if b[3] - b[0] <= RIDER_MAX_BOX and b[4] - b[1] <= RIDER_MAX_BOX]
     z = min([b[2] for b in own if under(b)] or [b[2] for b in own] or [carry[2]])
-    ground = [b[5] for b in stage if (b[3] - b[0] > RIDER_MAX_BOX or b[4] - b[1] > RIDER_MAX_BOX) and b[5] - b[2] <= FLAT
+    ground = [b[5] for b in kept if (b[3] - b[0] > RIDER_MAX_BOX or b[4] - b[1] > RIDER_MAX_BOX) and b[5] - b[2] <= FLAT
               and b[5] <= carry[5]]
     return max(z, min(ground)) if ground else z
 
@@ -1222,7 +1245,7 @@ def rider_edits(m, edits, valid_riders, notes, parent=None, pups=None):
     gone = {q for n in removed for q in paths_of.get(n, ())}
     for k, at_note, i, p, box, base in drops:
         ground = pup_ground(m, g, p, box, gone, paths_of.get(BASE + base, []))
-        to = [f32_text(p[0]), f32_text(p[1]), round(ground + (p[2] - box[5]), 3)]
+        to = [f32_text(p[0]), f32_text(p[1]), round(ground + max(p[2] - box[5], 0.0), 3)]   # never under the ground
         pup_out[k]["at"] = [num(v) for v in to]
         notes[at_note] = "  power-up %d follows 0x%x down to its ground, at %.1f %.1f %.1f" % ((i, base) + tuple(to))
     return edits + out + pup_out
@@ -1911,6 +1934,9 @@ def cmd_selftest(_a):
     assert pr[rb][0][2][2] == 70.0 and pr[rb][0][2][5] == 71.0, pr[rb]   # the slab carries it (nearest top)
     pups, _r, _n = pup_edits(E(rb, remove=True))
     assert pups == [{"powerup": 2, "from": [200, 150, 120], "at": [200, 150, 99]}], pups
+    # (d) power-up 4 rests 15 under b's box top (85 on a 100 box): dropped with b, it rests on the ground (0), not 15 under it
+    pups, _r, _n = pup_edits(E(b, remove=True))
+    assert pups == [{"powerup": 4, "from": [120, 60, 85], "at": [120, 60, 0]}], pups
     selftest_pup_ground()
     # a turn alone, not a right angle: the same angle as the piece riders
     pups, _r, _n = pup_edits(E(b, turn=-10))
@@ -2358,6 +2384,23 @@ def selftest_pup_ground():
     assert abs(pup_ground(m, g, p, deep, tower | {ground}, sorted(tower)) - f32(-61.2)) < 1e-6    # no ground slab left
     assert pup_ground(m, g, p, deep, tower, sorted(tower)) == 0.0                       # the slab is above -61.2 + 10: clamped
     assert pup_ground(m, g, (1500.0, 1400.0, 0.0), box(carry), tower, sorted(tower)) == 0.0   # outside the tower too
+    # (a) tiers (CAPITOL 0x6631f0): the upper tier's box (189.1..252.1) stands on the piece's base (0..189.1); a plaza box
+    # (-41.2..182.3) is under both. The reference walks down to the base's bottom, so the ground is the slab at 0, not 182.3
+    up = path((-500.0, -500.0, 189.1), (-400.0, -400.0, 252.1))
+    base = path((-520.0, -520.0, 0.0), (-380.0, -380.0, 189.1))
+    path((-900.0, -900.0, -41.2), (-100.0, -100.0, 182.3))
+    # (b) a hill (SANFRAN 0x1dd7b0): the piece stood at 996.4 on a terrain box reaching 500..1200; lower terrain tops at 572
+    hill_carry = path((1000.0, -900.0, 996.4), (1100.0, -800.0, 1165.0))
+    path((900.0, -1000.0, 500.0), (1200.0, -700.0, 1200.0))
+    path((900.0, -1000.0, 300.0), (1200.0, -700.0, 572.0))
+    # (c) a flat roof slab carrying it, with a kept box topping out just above the slab: never above the carrying box
+    flat = path((-500.0, 800.0, 189.3), (-400.0, 900.0, 189.3))
+    path((-500.0, 800.0, 0.0), (-400.0, 900.0, 195.0))
+    m = Mem(bytes(img))
+    assert pup_ground(m, g, (-450.0, -450.0, 0.0), box(up), {up, base}, [up, base]) == 0.0
+    assert pup_ground(m, g, (-450.0, -450.0, 0.0), box(up), {up}, [up]) == f32(189.1)   # the base kept: it is the ground
+    assert pup_ground(m, g, (1050.0, -850.0, 0.0), box(hill_carry), {hill_carry}, [hill_carry]) == f32(996.4)
+    assert pup_ground(m, g, (-450.0, 850.0, 0.0), box(flat), {flat}, [flat]) == f32(189.3)
 
 
 def main(argv=None):
