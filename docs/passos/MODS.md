@@ -268,9 +268,10 @@ a fight in Midtown Park with camera, sound and name. Photo: `docs/screenshots/20
 
 ## Stages (maps)
 
-A map is a stock stage with some of its pieces moved, turned or removed. It is a folder in `mods/<mod>/stages/<id>/` and holds no
-disc data: only the list of edits, applied to the disc's stage when it loads (`native/wotm_stagemap.hpp`,
-`native/runtime/wotm_stagemap.inc`; design: `docs/superpowers/specs/2026-11-09-map-creator-design.md`, issue #10).
+A map is a stock stage with some of its pieces moved, turned, removed or copied. It is a folder in `mods/<mod>/stages/<id>/`
+and holds no disc data: only the list of edits, applied to the disc's stage when it loads (`native/wotm_stagemap.hpp`,
+`native/runtime/wotm_stagemap.inc`; design: `docs/superpowers/specs/2026-11-09-map-creator-design.md` and, for copies,
+`docs/superpowers/specs/2026-11-09-map-copy-design.md`; issue #10).
 
 ```
 mods/my_mod/
@@ -289,7 +290,8 @@ mods/my_mod/
   "baseHash": "c71c34ca37a35711",
   "edits": [
     { "node": "0x165a70", "move": [-185.7, 475.8, 0.0], "turn": 90 },
-    { "node": "0x18a410", "remove": true }
+    { "node": "0x18a410", "remove": true },
+    { "copy": "0x2d85a0", "at": [768.1, 499.6, 74.1], "turn": 90 }
   ]
 }
 ```
@@ -298,8 +300,8 @@ mods/my_mod/
 - `base`: the stock stage, by its file name in `LVL/` (`CENTRAL`, `TOKYO`, `UFO`...).
 - `baseHash`: 16 hex digits, FNV-1a 64 of the inflated base `.NGP`. A disc (or a mod that replaces `LVL/<STAGE>.NGP`) whose stage
   does not match refuses the map instead of patching the wrong bytes: `[stages] <id>: base CENTRAL does not match this disc`.
-- `edits` (at most 4096), one per piece (`node`: the piece's offset in the inflated image, a multiple of 4; the first edit of a
-  node counts):
+- `edits` (at most 4096, all kinds together), one per piece (`node`: the piece's offset in the inflated image, a multiple of
+  4; the first edit of a node counts):
   - `move`: the piece's new world position `[x, y, z]` (absolute, world units; z is up). Its collision goes with it: the loader
     relinks the stage's collision grid to the new place, so the building is solid where it now stands and not where it stood.
   - `turn`: degrees about the vertical axis, added to the piece's own rotation, about its own position. With or without `move`
@@ -311,6 +313,22 @@ mods/my_mod/
   (`PowerUpTool::exportPoints`) and logs `[stages] <id>: moved N power-ups`. An index past the stage's count or a place that
   is not at `from` (within 0.01) is refused with a log line, and the rest of the map applies; two edits of the same index make
   the file invalid. A power-up edit applies even when the loader refuses its piece's edit, as a rider's does.
+- A copy edit, `{ "copy": "0x2d85a0", "at": [768.1, 499.6, 74.1], "turn": 90 }`: a new piece built from the disc's piece
+  `copy` (its offset, as `node`). `at` is the copy's world position (absolute, as `move`); `turn` (optional) is degrees about
+  the vertical axis, added to the piece's own rotation, about `at`. The copy is built from the piece as the disc has it, so a
+  copy of a piece the same map moves, turns or removes looks like the stock piece. A copy is a real piece: drawn, solid,
+  destructible on its own (breaking it leaves the original standing), with its own effects and its own rooftop drops. The
+  same piece can be copied any number of times; copies apply after the move, turn and remove edits, in file order, and a
+  copy whose collision would pass the grid's edge is shifted back inside, as a move is. The log says, per piece, `[stages]
+  <id>: copied 0x2d85a0 x12 (96 KB, 60 grid nodes)`, per refused piece and reason `copy 0x18a410 x3 refused: <reason>`, and
+  then `copies: 12 applied, 3 refused; reserve 1234 of 4096 KB; interactives 412 of 1000, destructibles 330 of 1400, pickup
+  room 300 of 412 KB`. A refused copy changes nothing; the rest of the map applies.
+- A power-up addition, `{ "addpowerup": 4, "from": [776.9985, 600.7072, 630.1727], "at": [-88.081, 634.123, 630.173] }`: a
+  new power-up place, a copy of the stage's place `addpowerup` (its kind: health, stamina or special) at `at`, with `from`
+  guarding it as in a power-up edit. The same index can be added any number of times and also moved by a power-up edit.
+  New places go after the stock ones, in file order, and the log says `[stages] <id>: added N power-ups (M places)`. The
+  stage holds 256 places at most (the rest are refused and logged), and the game creates 100 power-ups at most: places past
+  the 100th get none (the log says so).
 - Unknown keys in an edit are refused; the scan logs why a folder was skipped (`[stages] my_mod/stages/x ignored: ...`).
 
 **What a piece is.** A building, prop, destructible or level pickup with its own position in the stage: the nearest `TRANSLATE` or
@@ -318,20 +336,60 @@ mods/my_mod/
 props) are not pieces. `CENTRAL` (Midtown Park) has 317: 202 in the world (55 of them with collision, all destructible) and
 115 level pickups. The full rule is in `tools/stage_map.py`'s docstring.
 
+**What can be copied.** Any piece, except:
+- a piece that holds something the game keeps one of per id: a monster, pedestrian, weapon, effect, power-up, script or
+  level end point, and the stages' fixed tables (CAPITOL's and CANYON2's pillars, SanFran's saves, 3-MILE's vent and
+  stacks);
+- an animated piece: vehicles and moving props, a piece with a moving part, one under a character node that drives its
+  parts, and a building whose break plays an animation or a scripted event (a cinema, a player move, a script);
+- a piece that is part of a building's broken or standing state (a copy would outlive the building) and a piece the stage
+  shows only in some game modes (a copy would show in all of them).
+
+`pieces` says why (`no copy (<reason>)`). On the stock stages 2969 of 3476 pieces can be copied: 3-MILE 267, AIRPORT 109,
+BIGSHOT 0, CANYON1 92, CANYON2 25, CAPITOL 109, CENTRAL 290, CRUSH 21, DBALL 8, ISLAND 417, METRO 627, MINISF 68, SANFRAN 112,
+TOKYO 193, TOKYODM 246, TRAINING 0, UFO 89, VEGAS 185, VOLCANO 111. A copy takes only what each piece keeps for itself
+(its state, its effects, its collision paths); the drawing is shared with the original. A typical CENTRAL or METRO building
+takes 6 to 8 KB, the largest piece (on VEGAS) 72 KB, out of the map reserve's 4 MB.
+
 **Making one with `tools/stage_map.py`** (until the in-game editor; reads the extracted disc in `disc/`, or `--disc`):
 
 ```
-python tools/stage_map.py pieces disc/LVL/CENTRAL.NGP          # one line per piece: node, kind, position, collision paths, riders, power-ups, destructible
-  0x18a410  TRANSLATE  pos 1044.6 448.2 -0.8  paths 5  riders 4  power-ups 5,15  destructible
-python tools/stage_map.py make --base CENTRAL --id downtown --name "DOWNTOWN MESS" --out mods/my_mod/stages --move "0x165a70=-185.7,475.8,0,90" --remove 0x18a410
+python tools/stage_map.py pieces disc/LVL/CENTRAL.NGP          # one line per piece: node, kind, position, collision paths, riders, power-ups, destructible, copy
+  0x18a410  TRANSLATE  pos 1044.6 448.2 -0.8  paths 5  riders 4  power-ups 5,15  destructible  copy 9568 B i1 d1 p0 debris 4 (1536 B)
+python tools/stage_map.py make --base CENTRAL --id downtown --name "DOWNTOWN MESS" --out mods/my_mod/stages --move "0x165a70=-185.7,475.8,0,90" --remove 0x18a410 --copy "0x2d85a0=768.1,499.6,74.1,90"
                                                                # writes mods/my_mod/stages/downtown/stage.json with the baseHash
 python tools/stage_map.py check disc/LVL/*.NGP                 # the collision grid rule on stock stages or on a WOTM_STAGE_DUMP
-python tools/stage_map.py ram ram_2400.bin --monster 0:140:156 # monsters, pickups and power-ups in a fight's RAM (PS2X_DUMP_RAM)
+python tools/stage_map.py ram ram_2400.bin --monster 0:140:156 # monsters, pickups, power-ups and the Interactives count in a fight's RAM (PS2X_DUMP_RAM)
 ```
 
-`--move` is `node=x,y,z[,turn]`, `--turn` is `node=degrees` (a `--turn` and a `--move` of the same node make one edit); all
-three can repeat. `python tools/stage_map.py inflate disc/LVL/CENTRAL.NGP central.bin` writes the inflated image (the native
-test's `WOTM_TEST_STAGE`). `make` refuses a node that is not a piece of the base stage.
+`--move` is `node=x,y,z[,turn]`, `--turn` is `node=degrees` (a `--turn` and a `--move` of the same node make one edit),
+`--copy` is `node=x,y,z[,turn]`; all four can repeat. `python tools/stage_map.py inflate disc/LVL/CENTRAL.NGP central.bin`
+writes the inflated image (the native test's `WOTM_TEST_STAGE`). `make` refuses a node that is not a piece of the base stage,
+and a `--copy` of a piece the loader would refuse (with the reason). It writes the edits in the loader's order: moves, turns
+and removes with their riders', then the copies, then the power-up edits, then the power-up additions.
+
+**The copy column of `pieces`.** `copy 9568 B i1 d1 p0` is what one copy takes: 9568 bytes of the map reserve, 1 entry in the
+game's Interactives table, 1 destructible, 0 level pickups (with pickups, their memory follows: `p1 (384 B)`). When the
+piece's breaks drop pickup debris (the chunks that become pickups when they land), ` debris 4 (1536 B)` counts those
+chunks and their pickup memory: each also takes an Interactives entry, so this piece costs 5 entries per copy. A piece that
+cannot be copied shows `no copy (<reason>)`. The last line (on stderr) says `N pieces, ..., K copyable`.
+
+**`make --copy`.** Each `--copy` writes the copy and, unless `--no-riders`, a copy of each of the piece's riders (below),
+placed as they stand on the original and turned with it (`  rider 0x5cd120 (pickup type <n>) copied with 0x2d85a0`), and a
+power-up addition for each power-up place on the piece (`  power-up 5 copied with 0x18a410, to <x> <y> <z>`). A rider the loader
+would refuse to copy is left out with a note. Then `make` prints the loader's count for the map:
+`copies: 7 (interactives estimate 412 of 1000, destructibles 330 of 1400, pickup memory 12 KB)`, with a warning when an
+estimate passes its cap (the loader refuses the copies past it). The pickup memory the stage has left is only known when
+the stage loads (it depends on the stage: see "Known limits"), so `make` gives the total and the loader decides.
+
+**`check` with copies.** On a `WOTM_STAGE_DUMP` (`<path>` and `<path>.reserve` next to it, the 4 MB map reserve at
+0x3BFF000) `check` also checks the copies: no copy points at the original's own nodes, and no node of the stage holds a
+copy's. It prints `N paths, M list nodes, K copies, OK`.
+
+**The demo map.** `powershell -File tools\map_demo.ps1 -Out mods\<mod>\stages [-Disc disc] [-Id demo] [-Name "TOWER PARK"]`
+writes a CENTRAL map: the park's props removed and three tall towers in it, a wall of five slim towers along the street
+south of the park, and three low blocks replaced by tower copies (29 copies with riders). The map folder is not in the repo
+(it would show in everyone's stage select). Photo: `docs/screenshots/2026-11-10/2026-11-10_map_copy_park.png`.
 
 **Riders.** A car or a crate on a roof is its own piece (a level pickup), not part of the building, so `make` adds what stands
 on an edited piece's roof as edits of its own and prints each one (`  rider 0x5cbce0 (pickup type 1) follows 0x18a410`): a
@@ -364,7 +422,9 @@ find a piece, take the position from `pieces` and look at it with the free camer
 - **Stage select:** after RANDOM, the first 6 maps (by id, across all enabled mods) take the slots 18 to 23 with their name and
   photo, when their base stage is in that screen's list and unlocked (`NATIVO.md`, "Stage selection"). RANDOM never draws a map.
   Confirming a map loads its base stage (its music, stage code, spawn points) and applies the edits; the log says
-  `[stages] <id>: applied N edits, M grid nodes relinked (K from reserve)`.
+  `[stages] <id>: applied N edits, M grid nodes relinked (K from reserve)` (N counts the move, turn and remove edits; the
+  copies have their own lines, above). The edits take their memory from the 4 MB map reserve at the top of RAM; a load that
+  reaches it applies nothing.
 - **Direct match:** `WOTM_MATCH=3,1,downtown` (the map id in the stage field).
 - **Same id in two mods:** the first one in mod order wins (`[stages] map <id>: <mod> beats <mod>`).
 - **Online:** every PC needs the same mods folder. The map's files are part of the mod digest in the config hash, so a PC without
@@ -372,21 +432,49 @@ find a piece, take the position from `pieces` and look at it with the free camer
   `WOTM_MATCH`; picking one in the launcher's lobby is a follow-up.
 
 **Known limits.**
-- Only move, turn and remove: no duplicate or add, no ground or terrain edits.
-- CPU routes (`PTS/<STAGE>.AIP`) are not updated: CPUs that hit a moved building climb it or steer around it.
+- Move, turn, remove and copy within the stage: no pieces from other stages, no ground or terrain edits.
+- CPU routes (`PTS/<STAGE>.AIP`) are not updated: CPUs that hit a moved building or a copy climb it or steer around it.
 - Spawn points (`PTS/<STAGE>.SPT`) stay where the disc puts them. Power-up places follow their piece only through `make`'s
   power-up edits (above); one not on an edited piece's box stays.
+- A removed piece's power-ups drop to the ground its collision boxes describe, not to the drawn surface: CANYON1's 16 drops
+  to the valley floor (no box bounds the cliff its piece stands on). The ground only knows the map's removes: a box the map
+  moves away or a copy it adds is not seen.
 - Trigger zones stay where the disc puts them, except 3-MILE's 13 that hang under pieces, which follow them.
-- Only riders (above) go with an edited piece, and only one level (a rider's own riders stay). Anything else on it, or a
-  stage made by hand without `make`, floats or stays where the disc puts it. A turn also turns the drop offsets of the
-  piece's destructible "hat" actions (what makes rooftop pickups fall when the building breaks), so they still fall.
+- Only riders (above) go with an edited or copied piece, and only one level (a rider's own riders stay). Anything else on
+  it, or a stage made by hand without `make`, floats or stays where the disc puts it. A turn also turns the drop offsets of
+  the piece's destructible "hat" actions (what makes rooftop pickups fall when the building breaks), so they still fall.
 - A `CONTROL` above a moved piece (the see-through "ghost" building switch: UFO, SANFRAN, ISLAND and others) keeps its volumes
   where the disc puts them, so the switch to the ghost version happens around the old place; the loader logs it.
 - A `LOD` above a moved piece keeps its sphere (the loader only widens the culling spheres of the groups above), so the
-  piece's level of detail switches by the distance to the old place; the loader logs it (`LOD <node> above it no longer covers it`).
-- Water and kill zones were only researched (water is a height per stage plus the surface of collision polygons, which move with
-  their hull); no live check covers them.
+  piece's level of detail switches by the distance to the old place; the loader logs it (`LOD <node> above it no longer
+  covers it`).
+- Water and kill zones were only researched (water is a height per stage plus the surface of collision polygons, which move
+  with their hull); no live check covers them.
 - Six maps listed at once in the stage select.
+
+**Copy limits.**
+- **How many.** The game has one table for everything you can hit or pick up (Interactives: 1024 entries and no check). The
+  loader counts the stage's entries plus each copy's (its states, its level pickups and the pickup debris its breaks drop)
+  and refuses copies past 1000 (`refused: the Interactives table would pass its cap`); destructibles stop at 1400. Pickups
+  and pickup debris also take the game's pickup memory, measured when the stage loads: what is left for a map's copies is
+  about 171 KB on CENTRAL, 76 KB on METRO, 98 KB on VEGAS and 209 KB on ISLAND (`refused: not enough pickup memory`). A
+  typical CENTRAL building (0x2d85a0: 1 state and 4 debris pickups, 5 entries) fits about 114 times on CENTRAL by pickup
+  memory and 135 by the table; a piece with one state and no pickups fits 200 or more times (676 entries left on CENTRAL,
+  353 on METRO, 447 on VEGAS, 670 on ISLAND). The copies' nodes take the 4 MB map reserve.
+- **Power-ups.** 256 power-up places per stage, and the game creates 100 power-ups at most.
+- **Lost context.** A copy hangs under the stage's root, not where its original hangs, so what a node above the original does
+  to it does not reach the copy: a see-through switch (`CONTROL`, the copy stays solid and opaque), a `LOD` (the copy is
+  always at its piece's detail), a stage-wide `SWITCH` (3-MILE: the copy is not switched with the stage), and a group with
+  collision options (3-MILE 10 pieces, ISLAND 1: a collision query with that option passes through the original and hits
+  the copy). The loader logs each (`copy 0x...: LOD 0x... above it does not hang over its copies`).
+- **Hit ids.** On 3-MILE (pieces under the stage-wide switch) and SANFRAN (pieces under a save), a hit on a copy reports a
+  plain building, not the id the original's hit carries. A few hulls on AIRPORT, ISLAND, VEGAS and VOLCANO carry a fixed hit
+  id on the disc; their copies keep it, as the original does.
+- **Dominoes.** A building whose break knocks down a part of itself knocks down the copy's own part. One whose break knocks
+  down a neighbour (TOKYO, TOKYODM, AIRPORT, VEGAS, 3-MILE) knocks down the original's neighbour from every copy; the loader
+  logs it (`copy 0x...: N domino actions point outside it`).
+- **Online.** Both PCs build the same copies from the same map. The network's per-frame check covers the game's 32 MB, not
+  the map reserve where copies live, so a difference there would not be caught as it happens.
 
 ## Stage select photos
 `mods/<mod>/levelpics/<name>.png` replaces the photo of the stages that `SHELL.TEX` does not have (`training`, `lakepowell`, `tokyodeathmatch`) and
