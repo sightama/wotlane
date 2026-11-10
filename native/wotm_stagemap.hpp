@@ -214,7 +214,10 @@ struct Limits { int interactives = kInteractivesCap, destructibles = kDestructib
 // holds it (with no DESTRUCTIBLE, its first INTERACTIVE_STATE), and the source's INTERACTIVE_STATE that one copies (0: none)
 struct CopyInfo { uint32_t source = 0, root = 0, istate = 0, destructible = 0, sourceIstate = 0; };
 // applied, refused: piece edits; relinked: grid list nodes linked for moved paths; fromReserve: how many of them came from the
-// reserve. copied, copyRefused: copies; interactives, destructibles, pickupBytes: the estimates after the copies (Limits)
+// reserve (copies' list nodes are not counted here: the "copied" log lines give them). copied, copyRefused: copies;
+// interactives, destructibles, pickupBytes: the estimates after the copies (Limits). copySummary: one line, for a map with
+// copies only ("copies: N applied, M refused; reserve U of T KB; interactives I of cap, destructibles D of cap, pickup room
+// P of R KB")
 struct Result { int applied = 0, refused = 0, relinked = 0, fromReserve = 0; std::vector<std::string> log;
                 int copied = 0, copyRefused = 0, interactives = 0, destructibles = 0; uint32_t pickupBytes = 0;
                 std::vector<CopyInfo> copies; std::string copySummary; };
@@ -233,7 +236,15 @@ struct Result { int applied = 0, refused = 0, relinked = 0, fromReserve = 0; std
 // of the header root above its source: one wrapper per root (the world root, each pickup root), reserved before the first
 // copy, holding the slot's old child first and linked by the first copy that applies. The wrapper keeps the root's ctx, flags
 // and sphere centre, with ids 0; its radius covers its children, and the root's radius grows to cover the copies (centre
-// kept). A copy is planned whole before anything is written: one that can't be done writes nothing and is logged.
+// kept). Each collision path through the source becomes a path [header root, wrapper, the source's path from the piece root
+// down with copied nodes replaced] with its box moved (and turned) as the piece, listed with the grid rule, taking list nodes
+// left by the removes and moves first, then the reserve. Caps (Limits) are checked before a copy takes anything: the
+// Interactives estimate (slot 0, the monster slots, stageCounts() of the image after the piece edits, the applied copies),
+// the Destructibles one and the pickup memory (kPickupBytes per level pickup); a copy that would pass one is refused.
+// A copy is planned whole before anything is written: one that can't be done writes no byte of the image or the reserve and
+// takes no list node. Logs: a copy kept inside the grid's edge (one line each), what each source loses under the wrapper and
+// its domino notes (once per source), then "copied <source> xN (K KB, G grid nodes)" per source and "copy <source> xN
+// refused: <why>" per source and reason, in order of first appearance.
 Result apply(const Mem &m, uint32_t imageSize, const Map &map, Reserve &res, const Limits &lim = Limits{});
 
 // moved: power-up edits written; refused: edits left out (logged)

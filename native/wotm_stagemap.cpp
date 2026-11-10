@@ -1664,16 +1664,21 @@ struct ActionCopier
 // children need so far.
 struct Wrapper { uint32_t root = 0, at = 0, cap = 0, kids = 0; double need = 0; };
 
-// Plans copy `e` of piece `node`, whose copy set `cs` and collision `paths` are read from `snap` (the image on entry), under
-// wrapper `w`; returns the reason for refusing it, or "" with `plan`, `w`, `res` and `info` updated (the caller commits them
-// only on success). Live state (the root's last slot and sphere) is read from `m`.
+// Plans copy `e` of piece `node` (edit number `editNo` in the file write() writes), whose copy set `cs` and collision `paths`
+// are read from `snap` (the image on entry), under wrapper `w`; returns the reason for refusing it, or "" with `plan`, `w`,
+// `grid`, `pool`, `res` and `info` updated (the caller commits them only on success). Live state (the root's last slot and
+// sphere, the grid's lists) is read from `m` and `grid`.
 std::string planCopy(const Mem &m, const Mem &snap, const CopySet &cs, const std::vector<uint32_t> &paths, const Copy &e,
-                     uint32_t node, const GridDims &gd, Wrapper &w, Reserve &res, Plan &plan, CopyInfo &info)
+                     uint32_t node, size_t editNo, Grid &grid, std::deque<uint32_t> &pool, Wrapper &w, Reserve &res, Plan &plan,
+                     CopyInfo &info)
 {
     double old[3];
     discPlace(snap, node, old);
-    const Placement pl = place(snap, paths, old, e.at, e.turn, gd);
+    const Placement pl = place(snap, paths, old, e.at, e.turn, grid.d);
     const float *to = pl.to;
+    if (pl.clamped)
+        plan.notes.push_back("copy " + hex(node - kBase) + " (edit " + std::to_string(editNo) +
+                             "): kept inside the collision grid's edge, at " + num(to[0]) + " " + num(to[1]) + " " + num(to[2]));
     const uint32_t op = snap.u32(node) & 63;
     const bool toRotate = op == kOpTranslate && pl.turning;   // a turned TRANSLATE's copy is a ROTATE (as a turn)
     if (toRotate && snap.u32(node + 0xC) != 0)
@@ -1778,6 +1783,54 @@ std::string planCopy(const Mem &m, const Mem &snap, const CopySet &cs, const std
         for (uint32_t k = 0; k < 3; ++k)
             plan.f32(root + 0x10 + 4 * k, to[k]);
 
+    // collision paths (decision 2): [header root, wrapper, the source's path from the piece root down with copied nodes
+    // replaced]. The ancestors between the root and the piece (SWITCH, LOD, CONTROL, flagged GROUP) do not hang over the copy,
+    // so its path does not go through them either. Header words (traceId +0x18, flags +0x20) copied, the box from place().
+    // Linked with the step 1 rule: list nodes from the pool first (step 1's removes and moves left them), then the reserve.
+    std::set<int> dirty;
+    for (size_t i = 0; i < paths.size(); ++i)
+    {
+        const uint32_t p = paths[i];
+        const std::vector<uint32_t> nodes = pathNodes(snap, p);
+        if (nodes.size() != snap.u32(p + 0x1C))
+            return "a collision path through it is not readable";
+        const auto from = std::find(nodes.begin(), nodes.end(), node);
+        if (from == nodes.end())
+            return "a collision path through it does not reach it";
+        std::vector<uint32_t> np{w.root, w.at};
+        for (auto it = from; it != nodes.end(); ++it)
+            np.push_back(mapped(*it));
+        const uint32_t len = uint32_t(np.size()), size = 0x24 + 4 * len;
+        const uint32_t q = res.alloc(size);
+        if (!q || !m.ok(q, size))
+            return "the reserve is full (no room for its collision paths)";
+        const Box &b = pl.boxes[i];
+        for (uint32_t k = 0; k < 3; ++k)
+            plan.f32(q + 4 * k, b.first[k]), plan.f32(q + 0xC + 4 * k, b.second[k]);
+        plan.u32(q + 0x18, snap.u32(p + 0x18));
+        plan.u32(q + 0x1C, len);
+        plan.u32(q + 0x20, snap.u32(p + 0x20));
+        for (uint32_t j = 0; j < len; ++j)
+            plan.u32(q + 0x24 + 4 * j, np[j]);
+        for (int cell : covered(grid.d, b.first.data(), b.second.data()))
+        {
+            uint32_t ln = 0;
+            if (!pool.empty())
+                ln = pool.front(), pool.pop_front();
+            else
+            {
+                ln = res.alloc(8);
+                if (!ln || !m.ok(ln, 8))
+                    return "the reserve is full (no room for its collision grid nodes)";
+                ++plan.fromReserve;
+            }
+            grid.cells[size_t(cell)].push_back({ln, q});
+            dirty.insert(cell);
+            ++plan.relinked;
+        }
+    }
+    writeCells(grid, dirty, plan);
+
     // the wrapper: on the first copy its header (the root's opcode and isRelocated bits, ids 0: an id1 of 1 would make it a
     // second world root; the root's ctx, flags and sphere centre) and the root's last slot, its old child kept first
     if (!w.kids)
@@ -1834,11 +1887,35 @@ std::string planCopy(const Mem &m, const Mem &snap, const CopySet &cs, const std
     return "";
 }
 
+// What a copy of piece `node` loses by hanging under the wrapper (decision 12, amendment A3): each CONTROL, LOD and SWITCH between
+// the header root and the piece (read from `snap`, as `par`), and the GROUP with collision-option flags copySet() found (a
+// query with that option stops at the original, not at its copies). Logged once per source.
+std::vector<std::string> ancestorNotes(const Mem &snap, const std::map<uint32_t, uint32_t> &par, uint32_t node, const CopySet &cs)
+{
+    std::vector<std::string> out;
+    const std::string head = "copy " + hex(node - kBase) + ": ";
+    for (uint32_t a = par.at(node); a && par.at(a); a = par.at(a))
+    {
+        const uint32_t op = snap.u32(a) & 63;
+        if (op == kOpControl || op == kOpLod || op == kOpSwitch)
+            out.push_back(head + (op == kOpControl ? "CONTROL " : op == kOpLod ? "LOD " : "SWITCH ") + hex(a - kBase) +
+                          " above it does not hang over its copies");
+    }
+    if (cs.optionGroup && par.count(cs.optionGroup) && par.at(cs.optionGroup))   // the header root's flags: the wrapper has them
+        out.push_back(head + "GROUP " + hex(cs.optionGroup - kBase) + " above it does not hang over its copies (its collision-option " +
+                      "flags " + hex(snap.u16(cs.optionGroup + 0xA)) + ": a query with that option still hits them)");
+    return out;
+}
+
+// Text of a byte count in KB, rounded to the nearest
+std::string kbOf(uint64_t bytes) { return std::to_string((bytes + 512) / 1024); }
+
 } // namespace
 
 Result apply(const Mem &m, uint32_t imageSize, const Map &map, Reserve &res, const Limits &lim)
 {
     Result out;
+    const Reserve entry = res;   // the summary counts the reserve from here (step 1's ROTATEs and list nodes too)
     // copies read their sources from the image as it is on entry (the disc state), before any edit writes
     std::vector<uint8_t> disc;
     if (!map.copies.empty())
@@ -1973,7 +2050,11 @@ Result apply(const Mem &m, uint32_t imageSize, const Map &map, Reserve &res, con
     // One wrapper per header root above a copy's source, reserved first with room for every copy under it.
     if (map.copies.empty())
         return out;
-    (void)lim;   // the caps are checked with the copies' paths and grid nodes
+    // caps (decision 7), counted on the image after the step 1 edits and before any copy is linked in: slot 0, the monster
+    // slots and the stage's own entries, then each applied copy's
+    const StageCounts stock = stageCounts(m, parents(m));
+    int64_t interactives = 1 + kMonsterSlots + int64_t(stock.interactives), destructibles = stock.destructibles;
+    uint64_t pickups = uint64_t(std::max(stock.pickups, 0));
     std::vector<uint32_t> tops(map.copies.size(), 0), wrapOrder;
     std::map<uint32_t, Wrapper> wraps;
     for (size_t i = 0; i < map.copies.size(); ++i)
@@ -2002,12 +2083,21 @@ Result apply(const Mem &m, uint32_t imageSize, const Map &map, Reserve &res, con
     }
     std::map<uint32_t, CopySet> sets;   // per source
     std::set<uint32_t> noted;           // sources whose notes are logged
+    // the logs of decision 12, per source (and reason) in order of first appearance
+    struct Tally { uint32_t source; int copies; uint64_t bytes; int gridNodes; };
+    std::vector<Tally> applied;
+    std::vector<std::pair<std::pair<uint32_t, std::string>, int>> refusals;
     for (size_t i = 0; i < map.copies.size(); ++i)
     {
         const Copy &e = map.copies[i];
         auto refuse = [&](const std::string &why) {
             ++out.copyRefused;
-            out.log.push_back("copy " + hex(e.node) + ": " + why + ", refused");
+            const std::pair<uint32_t, std::string> key{e.node, why};
+            const auto it = std::find_if(refusals.begin(), refusals.end(), [&](const auto &x) { return x.first == key; });
+            if (it == refusals.end())
+                refusals.push_back({key, 1});
+            else
+                ++it->second;
         };
         if (disc.empty())
         {
@@ -2054,11 +2144,34 @@ Result apply(const Mem &m, uint32_t imageSize, const Map &map, Reserve &res, con
             refuse("the root above it is not a GROUP");
             continue;
         }
+        // caps, before anything is allocated; a copy that adds nothing to a table passes whatever its count
+        if (cs.interactives && interactives + cs.interactives > lim.interactives)
+        {
+            refuse("the Interactives table would pass its cap (" + std::to_string(lim.interactives) + "; each copy adds " +
+                   std::to_string(cs.interactives) + ")");
+            continue;
+        }
+        if (cs.destructibles && destructibles + cs.destructibles > lim.destructibles)
+        {
+            refuse("the Destructibles table would pass its cap (" + std::to_string(lim.destructibles) + "; each copy adds " +
+                   std::to_string(cs.destructibles) + ")");
+            continue;
+        }
+        if (cs.pickups && (pickups + uint64_t(cs.pickups)) * kPickupBytes > lim.pickupRoom)
+        {
+            refuse("not enough pickup memory (room for " + std::to_string(lim.pickupRoom / kPickupBytes) + " level pickups)");
+            continue;
+        }
+        // planned whole on copies of the grid, the pool, the wrapper and the reserve: a refused copy writes nothing and takes
+        // nothing (decision 11)
         Wrapper w2 = wraps.at(tops[i]);
+        Grid g2 = grid;
+        std::deque<uint32_t> pool2 = pool;
         Reserve r2 = res;
         Plan plan;
         CopyInfo info;
-        const std::string why = planCopy(m, snap, cs, pathsOf(node), e, node, grid.d, w2, r2, plan, info);
+        const std::string why =
+            planCopy(m, snap, cs, pathsOf(node), e, node, map.edits.size() + i + 1, g2, pool2, w2, r2, plan, info);
         if (!why.empty())
         {
             refuse(why);
@@ -2066,14 +2179,43 @@ Result apply(const Mem &m, uint32_t imageSize, const Map &map, Reserve &res, con
         }
         for (const auto &w : plan.writes)
             m.w32(w.first, w.second);
+        const uint64_t took = uint64_t(r2.next) - res.next;
         wraps[tops[i]] = w2;
+        grid = std::move(g2);
+        pool = std::move(pool2);
         res = r2;
+        interactives += cs.interactives, destructibles += cs.destructibles, pickups += uint64_t(cs.pickups);
         ++out.copied;
         out.copies.push_back(info);
+        const auto t = std::find_if(applied.begin(), applied.end(), [&](const Tally &x) { return x.source == e.node; });
+        if (t == applied.end())
+            applied.push_back({e.node, 1, took, plan.relinked});
+        else
+            ++t->copies, t->bytes += took, t->gridNodes += plan.relinked;
         out.log.insert(out.log.end(), plan.notes.begin(), plan.notes.end());
         if (noted.insert(node).second)
+        {
+            const std::vector<std::string> above = ancestorNotes(snap, par, node, cs);
+            out.log.insert(out.log.end(), above.begin(), above.end());
             out.log.insert(out.log.end(), plan.sourceNotes.begin(), plan.sourceNotes.end());
+        }
     }
+
+    // decision 12: what each source gave, then the refusals per source and reason, then the summary (integers only)
+    for (const Tally &t : applied)
+        out.log.push_back("copied " + hex(t.source) + " x" + std::to_string(t.copies) + " (" + kbOf(t.bytes) + " KB, " +
+                          std::to_string(t.gridNodes) + " grid nodes)");
+    for (const auto &rf : refusals)
+        out.log.push_back("copy " + hex(rf.first.first) + " x" + std::to_string(rf.second) + " refused: " + rf.first.second);
+    out.interactives = int(std::min<int64_t>(interactives, INT32_MAX));
+    out.destructibles = int(std::min<int64_t>(destructibles, INT32_MAX));
+    out.pickupBytes = uint32_t(std::min<uint64_t>(pickups * kPickupBytes, 0xFFFFFFFFu));
+    out.copySummary = "copies: " + std::to_string(out.copied) + " applied, " + std::to_string(out.copyRefused) + " refused; reserve " +
+                      kbOf(uint64_t(res.next) - entry.next) + " of " + kbOf(uint64_t(entry.end) - entry.next) + " KB; interactives " +
+                      std::to_string(out.interactives) + " of " + std::to_string(lim.interactives) + ", destructibles " +
+                      std::to_string(out.destructibles) + " of " + std::to_string(lim.destructibles) + ", pickup room " +
+                      kbOf(out.pickupBytes) +
+                      (lim.pickupRoom == 0xFFFFFFFFu ? std::string(" KB (no limit)") : " of " + kbOf(lim.pickupRoom) + " KB");
     return out;
 }
 
