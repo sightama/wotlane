@@ -2461,6 +2461,29 @@ TEST(stagemap_copy_actions)
         CHECK(r.copied == 0 && r.copyRefused == 1 && logHas(r, "the reserve is full (no room for its actions)"));
         CHECK(s.im.img == img && s.im.res == resBytes && res.next == sm::kReserve + aligned(0x20 + 4 * 2));
     }
+    {
+        CopyStage s;   // step 1 turns tD (its hat in the live image turns); an unturned copy keeps the disc's hat bits
+        const std::vector<uint8_t> hatDisc(s.im.at(s.hat1), s.im.at(s.hat1) + 0x18);
+        sm::Map map;
+        map.edits.push_back(turnBy(s.off(s.tD), 90));
+        map.copies.push_back(copyAt(s.off(s.tD), 500, 500, 0));
+        const sm::Result r = s.run(map);
+        CHECK(r.applied == 1 && r.copied == 1);
+        CHECK(s.im.rf(s.hat1 + 0xC) == 0.f && s.im.rf(s.hat1 + 0x10) == 10.f);   // step 1's turn
+        const uint32_t d1c = destOf(s, rootOf(s, 0)), hatc = s.im.r32(s.im.r32(d1c + 0x10) + 0xC);
+        CHECK(s.inReserve(hatc) && s.im.r32(d1c + 0x1C) == hatc && std::memcmp(s.im.at(hatc), hatDisc.data(), 0x18) == 0);
+    }
+    {
+        CopyStage s;   // step 1 turns tD 90; a copy turned 45 turns the disc offset (10, 0) by 45, not the live (0, 10)
+        sm::Map map;
+        map.edits.push_back(turnBy(s.off(s.tD), 90));
+        map.copies.push_back(copyAt(s.off(s.tD), 500, 500, 0, 45));
+        const sm::Result r = s.run(map);
+        CopyStage t;
+        t.run([&] { sm::Map m2; m2.edits.push_back(turnBy(t.off(t.tD), 45)); return m2; }());
+        const uint32_t hatc = s.im.r32(s.im.r32(destOf(s, rootOf(s, 0)) + 0x10) + 0xC);
+        CHECK(r.copied == 1 && s.im.r32(hatc + 0xC) == t.im.r32(t.hat1 + 0xC) && s.im.r32(hatc + 0x10) == t.im.r32(t.hat1 + 0x10));
+    }
 }
 
 namespace

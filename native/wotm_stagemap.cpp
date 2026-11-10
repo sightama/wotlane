@@ -1532,9 +1532,11 @@ std::string planMove(const Mem &m, const std::map<uint32_t, uint32_t> &par, cons
 }
 
 // A copy's private action trees (decision 8). The leaves a copy owns: an ACT_HATPICKUP when the copy is turned (its offset turned
-// as a turned piece's), an ACT_DOMINO whose target is a copied node (retargeted to the copy). Every ACT_GROUP and ACT_TRANSFORM
+// as a turned piece's) or when step 1 changed its offset in the live image (the copy keeps the disc's), an ACT_DOMINO whose target is a copied node (retargeted to the copy). Every ACT_GROUP and ACT_TRANSFORM
 // on the way from a state's actions to an owned leaf is copied too; everything else is shared. One per copy: `memo` maps an
 // action to what the copy stores in its place, so an action reached twice (two states, two groups, a cycle) is copied once.
+// It reads whole trees with no depth limit of its own: it relies on copySet() refusing a source whose action trees go past 20
+// levels or 256 actions in a group (so nothing it reaches is cut, and its recursion stays shallow).
 struct ActionCopier
 {
     const Mem &m, &snap;
@@ -1575,8 +1577,11 @@ struct ActionCopier
     bool owned(uint32_t a) const
     {
         const uint16_t type = snap.u16(a);
+        // a hat is also owned when the live image no longer holds its disc offset (step 1 turned the source): a shared hat would
+        // drop the copy's pickups at that turn
         if (type == kActHatPickup)
-            return turning && snap.ok(a, 0x18);
+            return snap.ok(a, 0x18) && (turning || !m.ok(a, 0x18) || m.u32(a + 0xC) != snap.u32(a + 0xC) ||
+                                        m.u32(a + 0x10) != snap.u32(a + 0x10));
         return type == kActDomino && snap.ok(a, 0x10) && copyOf.count(snap.u32(a + 0xC));
     }
 
@@ -1643,7 +1648,10 @@ struct ActionCopier
             break;
         }
         case kActTransform: plan.u32(na + 8, copy(snap.u32(a + 8))); break;
-        case kActHatPickup: planHatTurn(snap, a, na, c, s, plan); break;
+        case kActHatPickup:   // unturned, the disc bytes copied above stand as they are
+            if (turning)
+                planHatTurn(snap, a, na, c, s, plan);
+            break;
         case kActDomino: plan.u32(na + 0xC, copyOf.at(snap.u32(a + 0xC))); break;
         default: break;
         }
