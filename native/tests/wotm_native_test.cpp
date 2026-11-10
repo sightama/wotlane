@@ -2840,6 +2840,40 @@ TEST(stagemap_copy_atomic)
         CHECK(s.im.gridProblems(s.g) == 0);
     }
     {
+        // the grid's lists and the pool are put back after a refusal that had already linked a list node: a copy of tD over
+        // cells 2 and 3 takes tE's freed node for cell 2, then finds no room for cell 3's. The next copy (tE at its own place,
+        // cell 3) gets that freed node, and the bytes are those of a map without the refused copy
+        auto mapWith = [](CopyStage &s, bool refusedFirst) {
+            sm::Map map;
+            map.edits.push_back(removal(s.off(s.tE)));
+            if (refusedFirst)
+                map.copies.push_back(copyAt(s.off(s.tD), 600, 100, 0));
+            map.copies.push_back(copyAt(s.off(s.tE), 700, 100, 0));
+            return map;
+        };
+        uint32_t pathEnd = 0;
+        {
+            CopyStage t;
+            sm::Map map;
+            map.edits.push_back(removal(t.off(t.tE)));
+            map.copies.push_back(copyAt(t.off(t.tD), 600, 100, 0));
+            sm::Reserve full = t.im.reserve();
+            CHECK(t.run(map, full).copied == 1);
+            const std::vector<uint32_t> np = otherPaths(t.im, t.g, {t.pD});
+            CHECK(np.size() == 1 && t.im.cellsOf(t.g, np[0]) == std::vector<int>({2, 3}));
+            if (np.size() == 1)
+                pathEnd = np[0] + aligned(0x24 + 4 * 7);
+        }
+        CopyStage s, t;
+        const uint32_t freedNode = s.im.listing(s.g, s.pE)[0].second;
+        sm::Reserve rs{sm::kReserve, pathEnd}, rt{sm::kReserve, pathEnd};
+        const sm::Result a = s.run(mapWith(s, true), rs), b = t.run(mapWith(t, false), rt);
+        CHECK(a.copied == 1 && a.copyRefused == 1 && logHas(a, "no room for its collision grid nodes") && b.copied == 1);
+        const std::vector<uint32_t> np = otherPaths(s.im, s.g, {s.pD});
+        CHECK(np.size() == 1 && s.im.listing(s.g, np[0]) == decltype(s.im.listing(s.g, 0))({{3, freedNode}}));
+        CHECK(s.im.gridProblems(s.g) == 0 && s.im.img == t.im.img && s.im.res == t.im.res && rs.next == rt.next);
+    }
+    {
         // a copy refused half-way (the reserve runs out in its nodes) between two that apply leaves the same bytes as one refused
         // before it took anything (a turned TRANSLATE with action data): the last copy gets the reserve the first left
         sm::Map late, early;

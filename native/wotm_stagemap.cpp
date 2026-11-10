@@ -1725,13 +1725,29 @@ struct ActionCopier
 // children need so far.
 struct Wrapper { uint32_t root = 0, at = 0, cap = 0, kids = 0; double need = 0; };
 
+// What a copy's planning changed in the grid's lists and the pool, to put back when the copy is refused: each touched cell's
+// list as it was before its first change, and the pool's list nodes taken, in order
+struct GridUndo {
+    std::map<int, std::vector<std::pair<uint32_t, uint32_t>>> cells;
+    std::vector<uint32_t> taken;
+    void restore(Grid &grid, std::deque<uint32_t> &pool)
+    {
+        for (auto &kv : cells)
+            grid.cells[size_t(kv.first)] = std::move(kv.second);
+        for (auto it = taken.rbegin(); it != taken.rend(); ++it)
+            pool.push_front(*it);
+        cells.clear(), taken.clear();
+    }
+};
+
 // Plans copy `e` of piece `node` (edit number `editNo` in the file write() writes), whose copy set `cs` and collision `paths`
 // are read from `snap` (the image on entry), under wrapper `w`; returns the reason for refusing it, or "" with `plan`, `w`,
-// `grid`, `pool`, `res` and `info` updated (the caller commits them only on success). Live state (the root's last slot and
-// sphere, the grid's lists) is read from `m` and `grid`.
+// `grid`, `pool`, `res` and `info` updated (the caller commits `w`, `res` and the writes only on success, and puts `grid` and
+// `pool` back with `undo` on a refusal). Live state (the root's last slot and sphere, the grid's lists) is read from `m` and
+// `grid`.
 std::string planCopy(const Mem &m, const Mem &snap, const CopySet &cs, const std::vector<uint32_t> &paths, const Copy &e,
-                     uint32_t node, size_t editNo, Grid &grid, std::deque<uint32_t> &pool, Wrapper &w, Reserve &res, Plan &plan,
-                     CopyInfo &info)
+                     uint32_t node, size_t editNo, Grid &grid, std::deque<uint32_t> &pool, GridUndo &undo, Wrapper &w, Reserve &res,
+                     Plan &plan, CopyInfo &info)
 {
     double old[3];
     discPlace(snap, node, old);
@@ -1877,7 +1893,7 @@ std::string planCopy(const Mem &m, const Mem &snap, const CopySet &cs, const std
         {
             uint32_t ln = 0;
             if (!pool.empty())
-                ln = pool.front(), pool.pop_front();
+                ln = pool.front(), pool.pop_front(), undo.taken.push_back(ln);
             else
             {
                 ln = res.alloc(8);
@@ -1885,6 +1901,7 @@ std::string planCopy(const Mem &m, const Mem &snap, const CopySet &cs, const std
                     return "the reserve is full (no room for its collision grid nodes)";
                 ++plan.fromReserve;
             }
+            undo.cells.emplace(cell, grid.cells[size_t(cell)]);   // its list before this copy's first change
             grid.cells[size_t(cell)].push_back({ln, q});
             dirty.insert(cell);
             ++plan.relinked;
@@ -2229,18 +2246,18 @@ Result apply(const Mem &m, uint32_t imageSize, const Map &map, Reserve &res, con
                    " KB)");
             continue;
         }
-        // planned whole on copies of the grid, the pool, the wrapper and the reserve: a refused copy writes nothing and takes
-        // nothing (decision 11)
+        // planned whole on copies of the wrapper and the reserve, the grid's lists and the pool with an undo list: a refused copy
+        // writes nothing and takes nothing (decision 11)
         Wrapper w2 = wraps.at(tops[i]);
-        Grid g2 = grid;
-        std::deque<uint32_t> pool2 = pool;
+        GridUndo undo;
         Reserve r2 = res;
         Plan plan;
         CopyInfo info;
         const std::string why =
-            planCopy(m, snap, cs, pathsOf(node), e, node, map.edits.size() + i + 1, g2, pool2, w2, r2, plan, info);
+            planCopy(m, snap, cs, pathsOf(node), e, node, map.edits.size() + i + 1, grid, pool, undo, w2, r2, plan, info);
         if (!why.empty())
         {
+            undo.restore(grid, pool);
             refuse(why);
             continue;
         }
@@ -2248,8 +2265,6 @@ Result apply(const Mem &m, uint32_t imageSize, const Map &map, Reserve &res, con
             m.w32(w.first, w.second);
         const uint64_t took = uint64_t(r2.next) - res.next;
         wraps[tops[i]] = w2;
-        grid = std::move(g2);
-        pool = std::move(pool2);
         res = r2;
         interactives += addInteractives, destructibles += cs.destructibles, pickupBytes += addPickupBytes;
         ++out.copied;
