@@ -14,11 +14,13 @@
                                            destructibles drop pickup debris, or "no copy (<reason>)" (copy_set()); node is
                                            the offset from 0xA00000, or @<absolute address> outside the image
   stage_map.py make --base CENTRAL --id <id> --name "<NAME>" --out <stages folder> [--remove 0x..]...
-                    [--move 0x..=x,y,z[,turn]]... [--turn 0x..=degrees]... [--no-riders]
+                    [--move 0x..=x,y,z[,turn]]... [--turn 0x..=degrees]... [--copy 0x..=x,y,z[,turn]]... [--no-riders]
                                            writes <stages folder>/<id>/stage.json (--turn and --move on the same node make
                                            one edit), plus an edit per rider of an edited piece (rider_map(),
                                            rider_edits()) and per power-up place on it (powerup_riders(), from the disc's
-                                           PTS/<BASE>.PUP when there is one), printed as it is added
+                                           PTS/<BASE>.PUP when there is one), printed as it is added; then per --copy the
+                                           copy and its riders' copies, then the power-up places on the copied pieces added
+                                           (make_copies()), and the loader's cap estimates (copy_estimate())
   stage_map.py inflate <NGP> <out>         writes the inflated stage image (what the game has at 0xA00000), e.g. for
                                            the native test's WOTM_TEST_STAGE
   stage_map.py ram <ram_<frame>.bin> [--monster I:ZMIN:ZMAX]... [--pickup X,Y,Z]... [--no-pickup X,Y,Z]...
@@ -434,6 +436,10 @@ ACT_GROUP, ACT_TRANSFORM, ACT_ANIM, ACT_DEBRIS = 0, 1, 2, 3
 SCRIPT_ACTIONS = {9: "ACT_CINEMA", 11: "ACT_PLAYERPOS", 12: "ACT_RUNSCRIPT", 13: "ACT_AINAVIGATION", 14: "ACT_GENERICEVENT"}
 DISPATCHED = (0, 1, 2, 3, 4, 6, 11, 17, 30, 40, 41)   # kinds dbsTraverse hands to dbProcInteractive with a nonzero id1
 DEBRIS_CHUNKS = 32
+INTERACTIVES_CAP, DESTRUCTIBLES_CAP, MONSTER_SLOTS = 1000, 1400, 8   # kInteractivesCap, kDestructiblesCap, kMonsterSlots
+PICKUP_BYTES = 0x500                                                  # kPickupBytes: MemoryStack::global per level pickup
+MAX_POINTS, MAX_POWER_UPS = 256, 100                                  # PointToolKit::points[256]; PowerUps::m_powerUps[100]
+MAX_EDITS = 4096                                                      # stage.json's "edits", all kinds together
 COUNT_MAX = 0x7FFFFFFF                                # addCount() saturates here
 OP_NAMES = {0: "OBJECT", 1: "GROUP", 2: "LOD", 3: "TRANSLATE", 4: "ROTATE", 6: "SWITCH", 8: "CONTROL", 9: "NULL", 15: "GRID",
             17: "ANIM_XFORM", 22: "PARTICLE_EMITTER", 23: "ACTION_DATA", 25: "CHAR_INSTANCE", 30: "SCALE", 31: "DESTRUCTIBLE",
@@ -1060,6 +1066,18 @@ def pup_ground(m, node_paths, p):
     return min(under or [b[2] for b in boxes])
 
 
+def paths_by_node(m, g):
+    """{node: [collision paths through it, address order]} over the grid's listed paths (wholly mapped ones)."""
+    paths_of = {}
+    for p in sorted(all_paths(m, g)):
+        nodes = path_nodes(m, p)
+        if not m.ok(p, 0x24 + 4 * len(nodes)):
+            continue
+        for n in set(nodes):
+            paths_of.setdefault(n, []).append(p)
+    return paths_of
+
+
 def rider_edits(m, edits, valid_riders, notes, parent=None, pups=None):
     """make's edits (stage.json form, offsets) with their riders' edits added (valid_riders: {base offset: [(rider offset,
     kind)]}; pups: power-up riders, {base offset: [(index, (x, y, z), box)]}, powerup_riders()):
@@ -1083,13 +1101,7 @@ def rider_edits(m, edits, valid_riders, notes, parent=None, pups=None):
     if parent is None:
         parent = walk_all(m)
     g = find_grid(m, parent)
-    paths_of = {}
-    for p in sorted(all_paths(m, g)):
-        nodes = path_nodes(m, p)
-        if not m.ok(p, 0x24 + 4 * len(nodes)):
-            continue
-        for n in set(nodes):
-            paths_of.setdefault(n, []).append(p)
+    paths_of = paths_by_node(m, g)
     out, pup_out, done = [], [], set()
     # list(edits): the user's edits as given. A piece the user only turned that is itself a rider of another edited piece gets
     # its edit replaced below by the carried one, but its own riders and power-ups are carried by the user's turn about its disc
@@ -1152,6 +1164,113 @@ def rider_edits(m, edits, valid_riders, notes, parent=None, pups=None):
                 notes.append("  power-up %d follows 0x%x, to %.1f %.1f %.1f" % ((i, base) + tuple(to)))
             pup_out.append({"powerup": i, "from": [f32_text(v) for v in p], "at": [num(v) for v in to]})
     return edits + out + pup_out
+
+
+def make_copies(m, args, valid, valid_riders, pups, notes, parent=None):
+    """make's copies from --copy 0x..=x,y,z[,turn] (valid: the base's piece offsets; valid_riders and pups as rider_edits()).
+    Returns (copies, additions) in stage.json form: per --copy in order, {"copy", "at", "turn"} for the source, then one per
+    rider (rider_map(): the riders on its roof on the disc), carried rigidly: at = the copy's place + turn(rider - source's
+    disc place), with the copy's turn (on top of the rider's own rotation, as a copy keeps its source's); and for every
+    --copy, an {"addpowerup": i, "from": disc place, "at": carried place} per power-up place riding the source. Copies are
+    built from the disc state and power-up places are added before any power-up move (applyPointEdits()), so `from` is
+    the disc place whatever else the map edits.
+    Like a move (decision 9), a copy that would take the source's collision past the grid's edge is shifted back inside as
+    the loader does (clamp_to_grid(), noted) and its riders follow the clamped place. ValueError for a source that is not a
+    piece, that copy_set() refuses, or a turned TRANSLATE with action data (the loader refuses both); a rider copy_set()
+    refuses or that the turn cannot turn is skipped with a note. Each line make prints goes to `notes`."""
+    if parent is None:
+        parent = walk_all(m)
+    g = find_grid(m, parent)
+    paths_of = paths_by_node(m, g)
+    copies, adds = [], []
+
+    def turned_place(p, old, new, c, s):
+        d = [p[k] - old[k] for k in range(3)]
+        return [round(v, 3) for v in (d[0] * c - d[1] * s + new[0], d[0] * s + d[1] * c + new[1], d[2] + new[2])]
+
+    def cannot_turn(n, turning):
+        return turning and op(m, n) == OP_TRANSLATE and m.u32(n + 0xC) != 0
+    for arg in args:
+        node_s, _, vals = arg.partition("=")
+        try:
+            v = [float(x) for x in vals.split(",")]
+            node = int(node_s, 16)
+        except ValueError:
+            v, node = [], None
+        if node is None or len(v) not in (3, 4) or not all(math.isfinite(x) for x in v):
+            raise ValueError("bad --copy %r (expected 0x..=x,y,z[,turn], finite numbers)" % arg)
+        if node not in valid:
+            raise ValueError("node 0x%x is not a piece of this stage (see: stage_map.py pieces)" % node)
+        src = BASE + node
+        why = copy_set(m, parent, src).why
+        if why:
+            raise ValueError("copy 0x%x: the loader would refuse it: %s" % (node, why))
+        deg = num(v[3]) if len(v) == 4 else 0
+        c, s = turn_of(deg)
+        turning = (c, s) != (1.0, 0.0)
+        if cannot_turn(src, turning):
+            raise ValueError("copy 0x%x: a TRANSLATE with action data, which the loader cannot turn" % node)
+        old = position(m, src)
+        new, clamped = clamp_to_grid(m, g, paths_of.get(src, []), old, v[:3], c, s, turning)
+        e = {"copy": "0x%x" % node, "at": [f32_text(x) for x in new] if clamped else v[:3]}
+        if deg:
+            e["turn"] = deg
+        copies.append(e)
+        notes.append("  copy 0x%x to %.1f %.1f %.1f" % ((node,) + tuple(new)))
+        if clamped:
+            notes.append("  note: copy 0x%x kept inside the collision grid's edge, at %.1f %.1f %.1f (as the loader does)"
+                         % ((node,) + tuple(new)))
+        for r, kind in valid_riders.get(node, ()):
+            rn = BASE + r
+            why = copy_set(m, parent, rn).why or (cannot_turn(rn, turning) and "a TRANSLATE with action data, which the "
+                                                  "loader cannot turn")
+            if why:
+                notes.append("  note: rider 0x%x of 0x%x is not copied: %s" % (r, node, why))
+                continue
+            re_ = {"copy": "0x%x" % r, "at": turned_place(position(m, rn), old, new, c, s)}
+            if deg:
+                re_["turn"] = deg
+            copies.append(re_)
+            notes.append("  rider 0x%x (%s) copied with 0x%x" % (r, kind, node))
+        for i, p, _box in pups.get(node, ()):
+            to = turned_place(p, old, new, c, s)
+            adds.append({"addpowerup": i, "from": [f32_text(x) for x in p], "at": [num(x) for x in to]})
+            notes.append("  power-up %d copied with 0x%x, to %.1f %.1f %.1f" % ((i, node) + tuple(to)))
+    return copies, adds
+
+
+def copy_estimate(m, edits, copies, parent=None):
+    """(interactives, destructibles, pickup bytes): what the loader's caps count once the map's copies are in (native apply(),
+    decision 7, amendment A4): slot 0, the 8 monster slots and the stage's own entries (stage_counts() of the image after the
+    map's removes, which NULL their pieces; debris pickups included), plus each copy's (copy_set() of its source on the
+    disc). Pickup bytes: PICKUP_BYTES per level pickup and debris_pickup_bytes() per debris pickup. Copies copy_set()
+    refuses add nothing (the loader refuses them)."""
+    if parent is None:
+        parent = walk_all(m)
+    removed = [BASE + int(e["node"], 16) for e in edits if e.get("remove")]
+    after, par_after = m, parent
+    if removed:
+        image = bytearray(m.regions[0][1])
+        for n in removed:
+            if m.in_image(n) and m.ok(n, 4):
+                struct.pack_into("<I", image, n - BASE, (m.u32(n) & ~63) | OP_NULL)
+        after = Mem(bytes(image), m.regions[1:])
+        par_after = walk_all(after)
+    st = stage_counts(after, par_after)
+    inter = 1 + MONSTER_SLOTS + st.interactives + st.debris_pickups
+    destr = st.destructibles
+    nbytes = st.pickups * PICKUP_BYTES + st.debris_bytes
+    sets = {}
+    for e in copies:
+        n = BASE + int(e["copy"], 16)
+        if n not in sets:
+            sets[n] = copy_set(m, parent, n)
+        cs = sets[n]
+        if not cs.why:
+            inter += cs.interactives + cs.debris_pickups
+            destr += cs.destructibles
+            nbytes += cs.pickups * PICKUP_BYTES + cs.debris_bytes
+    return inter, destr, nbytes
 
 
 # ---------------------------------------------------------------- fight RAM (PS2X_DUMP_RAM)
@@ -1433,8 +1552,31 @@ def cmd_make(a):
         return fail(str(e))
     notes = []
     edits = rider_edits(m, edits, rm, notes, parent, pm)
+    try:
+        copies, adds = make_copies(m, a.copy, valid, rm, pm, notes, parent)
+    except ValueError as e:
+        for line in notes:
+            print(line)
+        return fail(str(e))
     for line in notes:
         print(line)
+    if len(edits) + len(copies) + len(adds) > MAX_EDITS:
+        return fail("%d edits: a map holds %d at most" % (len(edits) + len(copies) + len(adds), MAX_EDITS))
+    if copies:
+        inter, destr, nbytes = copy_estimate(m, edits, copies, parent)
+        print("copies: %d (interactives estimate %d of %d, destructibles %d of %d, pickup memory %d KB)"
+              % (len(copies), inter, INTERACTIVES_CAP, destr, DESTRUCTIBLES_CAP, (nbytes + 512) // 1024))
+        for what, est, cap in (("interactives", inter, INTERACTIVES_CAP), ("destructibles", destr, DESTRUCTIBLES_CAP)):
+            if est > cap:
+                print("warning: the %s estimate %d passes %d: the loader refuses the copies past it" % (what, est, cap))
+    if adds:
+        points = read_pup(os.path.join(os.path.dirname(os.path.dirname(ngp_path)), "PTS", base + ".PUP")) or []
+        total = len(points) + len(adds)
+        if total > MAX_POINTS:
+            print("warning: %d power-up places: the loader adds up to %d, the rest are refused" % (total, MAX_POINTS))
+        elif total > MAX_POWER_UPS:
+            print("note: %d power-up places: the game creates %d power-ups at most" % (total, MAX_POWER_UPS))
+    edits = edits + copies + adds
     doc = {"name": name, "base": base, "baseHash": "%016x" % fnv1a(image), "edits": edits}
     folder = os.path.join(a.out, a.id)
     os.makedirs(folder, exist_ok=True)
@@ -1743,6 +1885,54 @@ def cmd_selftest(_a):
     got, notes = edits_of(E(b2, turn=90))
     assert got == [E(b2, turn=90)] and any("action data" in n for n in notes), (got, notes)
     assert rider_edits(m, [E(b2, turn=90)], valid, [], parent, pv) == [E(b2, turn=90)]
+
+    # make --copy: the copy, its riders' copies (the same turn, about the copy's place) and its power-up places added
+    pieces_of = {off(n) for n, *_ in pieces(m, parent)}
+
+    def C(n, at, turn=0):
+        e = {"copy": "0x%x" % off(n), "at": at}
+        if turn:
+            e["turn"] = turn
+        return e
+
+    def copies_of(args, riders_=None, pups_=None):
+        notes = []
+        got = make_copies(m, args, pieces_of, valid if riders_ is None else riders_, pv if pups_ is None else pups_, notes,
+                          parent)
+        return got, notes
+    # pk6 holds its pickup id on an OBJECT here, which a copy cannot hold: the rider is skipped with a note
+    (cps, adds), notes = copies_of(["0x%x=150,100,0,90" % off(b)])
+    assert cps == [C(b, [150, 100, 0], 90), C(wr, [140, 120, 100], 90)], cps
+    assert adds == [{"addpowerup": 4, "from": [120, 60, 85], "at": [140, 120, 85]}], adds
+    assert notes == ["  copy 0x%x to 150.0 100.0 0.0" % off(b),
+                     "  rider 0x%x (world piece) copied with 0x%x" % (off(wr), off(b)),
+                     "  note: rider 0x%x of 0x%x is not copied: its copy would hold a node of kind 0 (OBJECT)"
+                     % (off(pk6), off(b)),
+                     "  power-up 4 copied with 0x%x, to 140.0 120.0 85.0" % off(b)], notes
+    assert copies_of(["0x%x=150,100,0,90" % off(b)], {}, {})[0] == ([C(b, [150, 100, 0], 90)], [])   # --no-riders
+    # past the grid's edge (box y 10..90 at y 50, copied to y 20): kept inside like a move, its riders follow the clamped place
+    (cps, adds), notes = copies_of(["0x%x=100,20,0" % off(b)])
+    assert cps == [C(b, [100, 40, 0]), C(wr, [120, 50, 100])] and adds[0]["at"] == [120, 50, 85], (cps, adds)
+    assert any("kept inside the collision grid" in n for n in notes), notes
+    # the same source twice: two sets
+    (cps, adds), _ = copies_of(["0x%x=150,100,0" % off(b), "0x%x=150,120,0" % off(b)])
+    assert [e["copy"] for e in cps] == ["0x%x" % off(b), "0x%x" % off(wr)] * 2 and [e["addpowerup"] for e in adds] == [4, 4], cps
+    # refused: a source copy_set refuses, a turned TRANSLATE with action data (b2), not a piece, bad numbers
+    for args, text in ((["0x%x=150,100,0" % off(pk1)], "kind 0 (OBJECT)"), (["0x%x=150,100,0,90" % off(b2)], "action data"),
+                       (["0x%x=150,100,0" % off(pcs[0])], "not a piece"), (["0x%x=150,100" % off(b)], "bad --copy")):
+        try:
+            copies_of(args)
+            raise AssertionError("make_copies accepted %r" % args)
+        except ValueError as e:
+            assert text in str(e), (str(e), text)
+    assert copies_of(["0x%x=150,100,0" % off(b2)])[0][0][0] == C(b2, [150, 100, 0])   # unturned it is fine
+    # with the pickup id on its GROUP (as on the disc), pk6 is copied too
+    pk6g = children(m, pk6)[0]
+    w("<I", pk6g, 5001 << 18 | OP_GROUP), w("<I", children(m, pk6g)[0], OP_OBJECT)
+    m = mem()
+    (cps, _a), notes = copies_of(["0x%x=150,100,0,90" % off(b)])
+    assert cps == [C(b, [150, 100, 0], 90), C(wr, [140, 120, 100], 90), C(pk6, [150, 100, 104], 90)], cps
+    assert "  rider 0x%x (pickup type 1) copied with 0x%x" % (off(pk6), off(b)) in notes, notes
     selftest_copies()
     print("selftest OK")
     return 0
@@ -1927,6 +2117,12 @@ def selftest_copies():
     assert copy_set(m, parent, s["g0"]).why == "not a piece"
     assert node_size(m, s["obj0"]) == 0 and node_size(m, s["pc"]) == 0 and node_size(m, s["sw"]) == 0x14
     assert stage_counts(m, parent).as_tuple() == (4, 3, 1, 0, 0)
+    # make's estimates (the loader's caps): 1 + 8 + the stage's (after the map's removes) + each copy's
+    cp_d = {"copy": "0x%x" % (s["tD"] - BASE), "at": [500, 500, 0]}
+    cp_p = {"copy": "0x%x" % (s["tP"] - BASE), "at": [600, 600, 10]}
+    assert copy_estimate(m, [], [cp_d, cp_p], parent) == (1 + 8 + 4 + 2 + 1, 3 + 2, 2 * 0x500)
+    assert copy_estimate(m, [{"node": "0x%x" % (s["tE"] - BASE), "remove": True}], [cp_d, cp_p], parent) == (15, 4, 2 * 0x500)
+    assert copy_estimate(m, [], [], parent) == (13, 3, 0x500)
 
     def why(change):
         im2, s2 = _copy_stage()
@@ -1991,6 +2187,7 @@ def selftest_copies():
     assert (c2.debris_pickups, c2.debris_bytes, c2.interactives) == (2, 0x4D0 + 0x180, 2), c2.column()
     assert c2.column().endswith(" debris 2 (%d B)" % (0x4D0 + 0x180)), c2.column()
     assert stage_counts(m2, par2).as_tuple() == (4, 3, 1, 2, 0x4D0 + 0x180)
+    assert copy_estimate(m2, [], [cp_d], par2) == (1 + 8 + 4 + 2 + 2 + 2, 3 + 2, 0x500 + 2 * (0x4D0 + 0x180))
     # a NULL ends a branch
     im.w("<I", s["tE"], OP_NULL)
     m = im.mem()
@@ -2055,8 +2252,10 @@ def main(argv=None):
     p.add_argument("--move", action="append", default=[], metavar="0x..=X,Y,Z[,TURN]")
     p.add_argument("--turn", action="append", default=[], metavar="0x..=DEGREES",
                    help="turn about Z without moving; with a --move of the same node, one edit")
+    p.add_argument("--copy", action="append", default=[], metavar="0x..=X,Y,Z[,TURN]",
+                   help="copy a piece to a place (turned about Z), with copies of its riders and power-up places")
     p.add_argument("--no-riders", action="store_true",
-                   help="do not carry the riders (pickups and pieces standing on an edited piece's roof) with it")
+                   help="do not carry the riders (pickups and pieces standing on an edited or copied piece's roof) with it")
     p.add_argument("--disc", default="disc", help="disc folder (relative to the repo root unless absolute)")
     p.set_defaults(fn=cmd_make)
     p = sub.add_parser("inflate", help="write a stage .NGP's inflated image (WOTM_TEST_STAGE)")
