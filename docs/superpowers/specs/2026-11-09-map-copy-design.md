@@ -41,7 +41,8 @@ Decisions taken with Jake:
 - **Copies are built in guest RAM at load**, like step 1's turn: no `.NGP` writer and no `.PTR` rewrite (step 2 of #10 as
   filed is no longer needed for copies). The map file stays a small edit list with no disc data.
 - **Only per-instance state is copied; geometry is shared.** A copy costs about 8 to 14 KB for a typical destructible
-  building (CENTRAL, METRO), up to 77 KB for the largest (VEGAS).
+  building (CENTRAL, METRO), up to 77 KB for the largest (VEGAS). (Superseded by 2f: 7 to 8 KB median on CENTRAL and METRO,
+  72 KB for the largest VEGAS piece.)
 
 ## What the research found (2026-11-09, all 19 stages by script)
 
@@ -67,7 +68,8 @@ Decisions taken with Jake:
   INTERACTIVE: checked in PR), debris chunks (drawn at the destructible's matrix).
 - **Action trees:** `ACT_DOMINO` targets inside the piece are retargeted to the copy (CAPITOL 28, VEGAS 38); targets outside the
   piece (TOKYO 16, TOKYODM 9, AIRPORT 6, VEGAS 6, 3-MILE 2) are kept and logged (a copy would knock down the original's
-  neighbour). `ACT_HATPICKUP` offsets get a private, turned copy (`ActionDispatch.cpp:390-397`).
+  neighbour). (Superseded by 2e, copyable pieces only: retargeted CAPITOL 28, VEGAS 36; kept TOKYO 2, TOKYODM 7, AIRPORT 6,
+  VEGAS 6, 3-MILE 2.) `ACT_HATPICKUP` offsets get a private, turned copy (`ActionDispatch.cpp:390-397`).
 - **Collision:** a copy's path is the original path with each copied node replaced by its copy (same length, same ancestor
   GROUPs, so flags and hit ids stay right), `0x24 + 4 * len` bytes with its own `traceId`; box = moved box (turned: bounding box
   of the turned corners), linked into the grid with the step 1 rule. Median paths / grid nodes per destructible piece:
@@ -113,7 +115,8 @@ tool's 256 slots; past that the rest are refused and logged.
 ## Refused sources (logged, the rest of the map applies)
 
 - Pieces holding special ids: monster, pedestrian, weapon, power-up, script or level end-point ranges (29 pieces on 8 stages),
-  and the fixed id1 tables (CAPITOL and CANYON2 pillars, SanFran saves).
+  and the fixed id1 tables (CAPITOL and CANYON2 pillars, SanFran saves). (The count is superseded by 2e: under the plan's
+  split, 12 pieces with a special id and 14 in a fixed table, most also animated.)
 - Animated pieces: ANIM_XFORM, CHAR_INSTANCE, or an `ACT_ANIM` action (2 to 58 per stage).
 - Copies past the cap: the loader counts the stage's Interactives (interactives + pickups + 8 monsters) plus each copy's
   INTERACTIVE_STATE and pickup nodes, and refuses copies that would go past 1000 (headroom under 1024), and past 1400
