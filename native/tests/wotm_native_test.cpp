@@ -3244,7 +3244,9 @@ TEST(stagemap_stock_grid_rule)
 // pieces with collision paths (a destructible, a TRANSLATE, a ROTATE: address order) each copied twice, three cells over and
 // turned 90 two cells the other way. Every copy applies, the grid rule holds, the listed paths are the stock ones minus the
 // removed piece's plus one per copied path, every per-instance node keeps one holder, the Interactives estimate is the
-// stage's plus the copies', and the copies take the pool's list nodes before the reserve's.
+// stage's plus the copies' (debris pickups included, amendment A4), the copies take the pool's list nodes before the
+// reserve's, and each copy path is [header root, wrapper, copy root] then a chain of children (to a disc NULL at most). Prints
+// each stage's own counts, debris pickups included.
 TEST(stagemap_stock_copies_grid_rule)
 {
     const std::vector<std::string> stages = envList("WOTM_TEST_STAGE");
@@ -3269,6 +3271,12 @@ TEST(stagemap_stock_copies_grid_rule)
         for (const auto &kv : par)
             if ((m.u32(kv.first) & 63) == sm::kOpGrid)
                 g = kv.first;
+        {
+            const sm::StageCounts sc = sm::stageCounts(m, par);   // amendment A4: the stage's own debris pickups
+            std::printf("  %s: stock interactives %d, destructibles %d, level pickups %d, debris pickups %d (%llu KB)\n", stem.c_str(),
+                        sc.interactives, sc.destructibles, sc.pickups, sc.debrisPickups,
+                        (unsigned long long)((sc.debrisBytes + 512) / 1024));
+        }
         if (!g)
             continue;
         const GridScan stock = scanGrid(m, g);
@@ -3346,7 +3354,7 @@ TEST(stagemap_stock_copies_grid_rule)
             map.copies.push_back(copyAt(n - sm::kBase, px + dx, py + dy, pz));
             map.copies.push_back(copyAt(n - sm::kBase, px - dx / 3 * 2, py - dy, pz, 90));
             setNodes[n] = sets[n].nodes;
-            addInteractives += 2 * sets[n].interactives;
+            addInteractives += 2 * (sets[n].interactives + sets[n].debrisPickups);   // amendment A4: debris pickups too
             addPaths += 2 * through[n].size();
         }
         sm::StageCounts after;   // the stage's counts after the remove alone
@@ -3370,7 +3378,58 @@ TEST(stagemap_stock_copies_grid_rule)
         CHECK(scan.problems == 0);
         CHECK(scan.listed.size() == stock.listed.size() - through[removed].size() + addPaths);
         CHECK(copiesStandAlone(im, r, setNodes));
-        CHECK(r.interactives == 1 + sm::kMonsterSlots + after.interactives + addInteractives);
+        // each copy's path (the paths in the reserve): a header root, its wrapper (in the root's last slot, ids 0), a copy's root,
+        // then a chain of children down to the hull
+        {
+            const std::vector<uint32_t> rs = sm::roots(m);
+            std::set<uint32_t> copyRoots;
+            for (const sm::CopyInfo &c : r.copies)
+                copyRoots.insert(c.root);
+            size_t copyPaths = 0;
+            int bad = 0, throughNull = 0;
+            for (const auto &kv : scan.listed)
+            {
+                const uint32_t p = kv.first;
+                if (p < sm::kReserve)
+                    continue;
+                ++copyPaths;
+                const uint32_t len = m.u32(p + 0x1C);
+                std::vector<uint32_t> nodes;
+                for (uint32_t i = 0; i < len && i < 256; ++i)
+                    nodes.push_back(m.u32(p + 0x24 + 4 * i));
+                bool ok = nodes.size() >= 4 && std::find(rs.begin(), rs.end(), nodes[0]) != rs.end();
+                if (ok)
+                {
+                    const std::vector<uint32_t> sl = sm::slots(m, nodes[0]);
+                    ok = !sl.empty() && m.u32(sl.back()) == nodes[1] && nodes[1] >= sm::kReserve &&
+                         (m.u32(nodes[1]) & 63) == sm::kOpGroup && (m.u32(nodes[1]) >> 7) == 0 && copyRoots.count(nodes[2]);
+                }
+                // a NULL on the way (as on the disc: AIRPORT, ISLAND and VEGAS have such paths) has no children to check: the
+                // game stops there (hdTraverse.cpp:179), for the source and its copies alike
+                for (size_t j = 1; ok && j + 1 < nodes.size(); ++j)
+                {
+                    if ((m.u32(nodes[j]) & 63) == sm::kOpNull)
+                    {
+                        ok = nodes[j] < sm::kReserve && (bytes[nodes[j] - sm::kBase] & 63) == sm::kOpNull;   // NULL on the disc
+                        ++throughNull;
+                        break;
+                    }
+                    const std::vector<uint32_t> ks = sm::children(m, nodes[j]);
+                    ok = std::find(ks.begin(), ks.end(), nodes[j + 1]) != ks.end();
+                }
+                if (!ok && bad++ < 5)
+                {
+                    std::printf("  %s: copy path %s is not [root, wrapper, copy root, children...]:", stem.c_str(), hexOff(p).c_str());
+                    for (uint32_t n : nodes)
+                        std::printf(" %s/%u", hexOff(n).c_str(), m.u32(n) & 63);
+                    std::printf("\n");
+                }
+            }
+            CHECK(bad == 0 && copyPaths == addPaths);
+            std::printf("  %s: %zu copy paths [root, wrapper, copy root, children...] (%d through a disc NULL)\n", stem.c_str(),
+                        copyPaths, throughNull);
+        }
+        CHECK(r.interactives == 1 + sm::kMonsterSlots + after.interactives + after.debrisPickups + addInteractives);
         // the pool first: the copies' list nodes include every node the remove freed, or all of theirs are freed ones
         const sm::Mem disc{{{sm::kBase, bytes.data(), uint32_t(bytes.size())}}};
         const int cells = m.s16(g + 4) * m.s16(g + 6);
