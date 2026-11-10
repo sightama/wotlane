@@ -701,6 +701,8 @@ def copy_set(m, parent, n):
                 c.option_group = a
         if o == OP_CHAR_INSTANCE and not char_above:
             char_above = a
+        # ANIM_XFORM and ANIM_SCALE are in TRANSFORMING, so is_piece() already refuses any node below one: kept here as a
+        # defence. SKEL_BONE does not transform; this is what refuses it.
         if o in (OP_ANIM_XFORM, OP_ANIM_SCALE, OP_SKEL_BONE):
             return CopySet("animated (%s above it)" % with_article(o))
         a = parent[a]

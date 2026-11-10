@@ -938,6 +938,8 @@ CopySet copySet(const Mem &m, const std::map<uint32_t, uint32_t> &par, uint32_t 
         }
         if (op == kOpCharInstance && !charAbove)
             charAbove = a;
+        // ANIM_XFORM and ANIM_SCALE transform, so isPiece() already refuses any node below one: kept here as a defence.
+        // SKEL_BONE does not transform; this is what refuses it.
         if (op == kOpAnimXform || op == kOpAnimScale || op == kOpSkelBone)
             return refused("animated (" + withArticle(op) + " above it)");
     }
