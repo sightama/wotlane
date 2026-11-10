@@ -666,7 +666,8 @@ std::vector<uint32_t> stateActions(const Mem &m, uint32_t n, bool &cut)
 
 // The debris pickups of DESTRUCTIBLE n (amendment A4): per state, the chunks with a pickup type in the ACT_DEBRIS actions that
 // state reaches (each once per state; a state's actions fire when the destructible enters it), and their pickup memory.
-// Counting each ACT_DEBRIS once per state is exact: no stock tree reaches one twice in a state, and maps cannot change action trees.
+// Counting each ACT_DEBRIS once per state is exact: no stock tree reaches one twice in a state, and maps copy action trees but
+// never change their shape; ACT_DEBRIS leaves stay shared.
 void debrisOf(const Mem &m, uint32_t n, uint64_t &count, uint64_t &bytes)
 {
     if (!m.ok(n, 0xC) || (m.u32(n) & 63) != kOpDestructible)
@@ -2350,7 +2351,6 @@ PowerUpResult applyPowerUps(const Mem &m, uint32_t points, uint32_t numPoints, c
     }
     return out;
 }
-
 
 PowerUpResult appendPowerUps(const Mem &m, uint32_t points, uint32_t numPoints, const std::vector<PowerUpEdit> &adds, uint32_t &count)
 {
