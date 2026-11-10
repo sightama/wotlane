@@ -831,25 +831,25 @@ bool turnOf(float deg, float &c, float &s)
 
 using Box = std::pair<std::array<float, 3>, std::array<float, 3>>;
 
-// Plans a move and/or turn of piece `node`; returns the reason for refusing it, or "" with `plan`, `grid`, `pool` and `res`
-// updated (the caller commits them only on success).
-std::string planMove(const Mem &m, const std::map<uint32_t, uint32_t> &par, const std::vector<uint32_t> &through,
-                     const std::map<uint32_t, std::set<uint32_t>> &hatOwners, const Edit &e, uint32_t node, Grid &grid,
-                     std::deque<uint32_t> &pool, Reserve &res, Plan &plan)
+struct Placement { float to[3] = {0, 0, 0}; float c = 1, s = 0; bool turning = false, clamped = false; std::vector<Box> boxes; };
+
+// Where a piece whose disc place is `old` lands at `want` turned by `turn`: the boxes of `paths` (read from `m`), turned about
+// `old` and moved to the place, and the place shifted back inside the grid's stored extent when they leave it (spec 1f)
+Placement place(const Mem &m, const std::vector<uint32_t> &paths, const double old[3], const float want[3], float turn,
+                const GridDims &g)
 {
-    const uint32_t op = m.u32(node) & 63, posAt = op == kOpRotate ? 0x40 : 0x10;
-    const double old[3] = {m.f32(node + posAt), m.f32(node + posAt + 4), m.f32(node + posAt + 8)};
-    float to[3] = {float(old[0]), float(old[1]), float(old[2])};
-    if (e.move)
-        to[0] = e.pos[0], to[1] = e.pos[1], to[2] = e.pos[2];
-    float c = 1, s = 0;
-    const bool turning = turnOf(e.turn, c, s);
+    Placement pl;
+    float *to = pl.to;
+    to[0] = want[0], to[1] = want[1], to[2] = want[2];
+    float &c = pl.c, &s = pl.s;
+    pl.turning = turnOf(turn, c, s);
+    const bool turning = pl.turning;
 
     // new boxes: the old corners relative to the old place, turned, at the new place
-    std::vector<Box> nb;
+    std::vector<Box> &nb = pl.boxes;
     auto boxes = [&]() {
         nb.clear();
-        for (uint32_t p : through)
+        for (uint32_t p : paths)
         {
             std::array<float, 3> lo, hi;
             if (!turning)
@@ -886,21 +886,51 @@ std::string planMove(const Mem &m, const std::map<uint32_t, uint32_t> &par, cons
         for (const Box &b : nb)
             for (int k = 0; k < 2; ++k)
                 lo[k] = std::min(lo[k], double(b.first[size_t(k)])), hi[k] = std::max(hi[k], double(b.second[size_t(k)]));
-        const double gmin[2] = {grid.d.minX, grid.d.minY}, gmax[2] = {grid.d.maxX, grid.d.maxY};
-        bool clamped = false;
+        const double gmin[2] = {g.minX, g.minY}, gmax[2] = {g.maxX, g.maxY};
         for (int k = 0; k < 2; ++k)
         {
             const double shift = lo[k] < gmin[k] ? gmin[k] - lo[k] : hi[k] > gmax[k] ? gmax[k] - hi[k] : 0;
             if (shift != 0)
-                to[k] = float(double(to[k]) + shift), clamped = true;
+                to[k] = float(double(to[k]) + shift), pl.clamped = true;
         }
-        if (clamped)
-        {
+        if (pl.clamped)
             boxes();
-            plan.notes.push_back("node " + hex(node - kBase) + ": kept inside the collision grid's edge, at " + num(to[0]) + " " +
-                                 num(to[1]) + " " + num(to[2]));
-        }
     }
+    return pl;
+}
+
+// The 3x3 rows of ROTATE `node` (read from `m`) turned by (c, s) about Z: each row's x and y turned, z kept
+void rootMatrix(const Mem &m, uint32_t node, bool turning, float c, float s, float rows[3][3])
+{
+    for (int i = 0; i < 3; ++i)
+    {
+        const uint32_t row = node + 0x10 + 16 * uint32_t(i);
+        const double a = m.f32(row), b = m.f32(row + 4);
+        rows[i][0] = turning ? float(a * c - b * s) : float(a);
+        rows[i][1] = turning ? float(a * s + b * c) : float(b);
+        rows[i][2] = m.f32(row + 8);
+    }
+}
+
+// Plans a move and/or turn of piece `node`; returns the reason for refusing it, or "" with `plan`, `grid`, `pool` and `res`
+// updated (the caller commits them only on success).
+std::string planMove(const Mem &m, const std::map<uint32_t, uint32_t> &par, const std::vector<uint32_t> &through,
+                     const std::map<uint32_t, std::set<uint32_t>> &hatOwners, const Edit &e, uint32_t node, Grid &grid,
+                     std::deque<uint32_t> &pool, Reserve &res, Plan &plan)
+{
+    const uint32_t op = m.u32(node) & 63, posAt = op == kOpRotate ? 0x40 : 0x10;
+    const double old[3] = {m.f32(node + posAt), m.f32(node + posAt + 4), m.f32(node + posAt + 8)};
+    float want[3] = {float(old[0]), float(old[1]), float(old[2])};
+    if (e.move)
+        want[0] = e.pos[0], want[1] = e.pos[1], want[2] = e.pos[2];
+    const Placement pl = place(m, through, old, want, e.turn, grid.d);
+    const float *to = pl.to;
+    const float c = pl.c, s = pl.s;
+    const bool turning = pl.turning;
+    const std::vector<Box> &nb = pl.boxes;
+    if (pl.clamped)
+        plan.notes.push_back("node " + hex(node - kBase) + ": kept inside the collision grid's edge, at " + num(to[0]) + " " +
+                             num(to[1]) + " " + num(to[2]));
 
     // the piece's own transform
     uint32_t replaceWith = 0;   // a new ROTATE for a turned TRANSLATE
@@ -908,14 +938,14 @@ std::string planMove(const Mem &m, const std::map<uint32_t, uint32_t> &par, cons
     world.t[0] = to[0], world.t[1] = to[1], world.t[2] = to[2];
     if (op == kOpRotate)
     {
+        float rows[3][3];
+        rootMatrix(m, node, turning, c, s, rows);
         for (int i = 0; i < 3; ++i)
         {
             const uint32_t row = node + 0x10 + 16 * uint32_t(i);
-            const double a = m.f32(row), b = m.f32(row + 4);
-            const float n0 = turning ? float(a * c - b * s) : float(a), n1 = turning ? float(a * s + b * c) : float(b);
             if (turning)
-                plan.f32(row, n0), plan.f32(row + 4, n1);
-            world.r[i][0] = n0, world.r[i][1] = n1, world.r[i][2] = m.f32(row + 8);
+                plan.f32(row, rows[i][0]), plan.f32(row + 4, rows[i][1]);
+            world.r[i][0] = rows[i][0], world.r[i][1] = rows[i][1], world.r[i][2] = rows[i][2];
         }
         for (int k = 0; k < 3; ++k)
             plan.f32(node + 0x40 + 4 * uint32_t(k), to[k]);
