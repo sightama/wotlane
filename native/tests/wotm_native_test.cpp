@@ -1901,6 +1901,30 @@ TEST(stagemap_same_bits_on_every_machine)
     CHECK(h == 0x7ebbfd393eca9736ull);
 }
 
+// The same for copies: a step 1 move, turned and plain copies of a world piece (one past the grid's edge, so the clamp's bits are
+// in it too) and a turned pickup copy, image and reserve hashed
+TEST(stagemap_copy_same_bits_on_every_machine)
+{
+    CopyStage s;
+    sm::Map map;
+    map.edits = {moveTo(s.off(s.tE), 650.5f, 150.25f, 0.f, 30.f)};
+    map.copies = {copyAt(s.off(s.tD), 590.5f, 410.25f, 3.f, 45.f), copyAt(s.off(s.tD), 395.5f, 610.25f, 0.f, 15.f),
+                  copyAt(s.off(s.tD), 100.f, 700.f, 0.f, 0.f), copyAt(s.off(s.tP), 650.f, 120.f, 10.f, 90.f),
+                  copyAt(s.off(s.tD), 797.25f, 795.5f, 0.f, 30.f)};
+    sm::Reserve res = s.im.reserve();
+    const sm::Result r = s.run(map, res);
+    uint64_t h = sm::fnv1a(s.im.img.data(), s.im.img.size());
+    for (uint8_t byte : s.im.res)
+        h = (h ^ byte) * 0x100000001B3ull;
+    std::printf("  stagemap copy digest %016llx\n", static_cast<unsigned long long>(h));
+    for (const std::string &l : r.log)
+        std::printf("  %s\n", l.c_str());
+    CHECK(r.applied == 1 && r.copied == 5 && r.copyRefused == 0 && s.im.gridProblems(s.g) == 0);
+    CHECK(logHas(r, "copy " + hexOff(s.off(s.tD)) + " (edit 6): kept inside the collision grid's edge, at "));
+    // measured on Windows, MSVC x64; the Mac (clang, arm64) must print the same
+    CHECK(h == 0x946f58d8ff7f329eull);
+}
+
 TEST(stagemap_copy_set)
 {
     CopyStage s;
