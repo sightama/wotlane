@@ -320,6 +320,15 @@ readers. Addresses in the generated recompiled code (`recomp/retail/`, not in gi
   All three under CENTRAL's 133300, so `kGlobalKeep` stands. Not covered: anything SANFRAN's quake or 3-MILE's meltdown
   allocate later in the fight (after frame 2400).
 
+  **Interactives estimate against RAM (Task 15).** The estimate overcounts nodes under a mode-masked GROUP (flags & 0xB0,
+  amendment A3) that the game does not traverse in the mode being played: `stageCounts()` and `stage_counts()` walk every
+  reachable node. CENTRAL has 4 `INTERACTIVE_STATE`s there (image 0x7A1F10, 0x7A1F80, 0x7A1FF0, 0x7A2060, under GROUP
+  0xb0670, flags 0x31), each holding a `DESTRUCTIBLE`: the RAM Destructibles count is 4 under its estimate as well. (Not
+  their id1: all 67 of CENTRAL's states have id1 0 on the disc and the other 63 register.) An overcount refuses copies early,
+  never lets the table overflow: the safe direction. In `map_copy_200` and `map_copy_cap` (CENTRAL, `WOTM_MATCH=3,1,<map>`, 2 monsters) the RAM count of frame 2400
+  is 143 under the estimate, all accounted for: 133 debris pickups not landed yet, 6 of the 8 monster slots unused and those
+  4 states. The checks' lower bound (estimate - 143) is specific to CENTRAL with that lineup.
+
   `kGlobalKeep` = 133300 rounded up to 16 KB (147456) + 64 KB = **0x34000** (212992 bytes). The transient `.ptr` read needs
   164376 + 16 bytes on top of the pickups and the PedGroups allocated before it (at most 6400 here): 170792 bytes, under
   0x34000. With it the pickup room is 281 KB on CENTRAL, VEGAS and ISLAND and 265 KB on METRO.
