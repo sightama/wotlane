@@ -449,10 +449,6 @@ def _z16(m, a):
     return m.u16(a) if m.ok(a, 2) else 0
 
 
-def _z8(m, a):
-    return m.u8(a) if m.ok(a, 1) else 0
-
-
 def _off(a):
     """The native loader's hex(a - kBase) in reasons."""
     return "0x%x" % ((a - BASE) & 0xFFFFFFFF)
