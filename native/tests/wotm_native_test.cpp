@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -3260,6 +3261,59 @@ namespace
         }
         return s;
     }
+
+    // Each copy's collision path (the listed paths in the reserve) is [header root, its wrapper (in the root's last slot, a
+    // reserve GROUP with ids 0), a copy's root] then a chain of children down to the hull. A NULL on the way (as on the disc:
+    // AIRPORT, ISLAND and VEGAS have such paths) has no children to check: the game stops there (hdTraverse.cpp:179), for the
+    // source and its copies alike; it must be a NULL on the disc (`disc`: the image bytes before apply). Prints the first bad
+    // paths.
+    struct CopyPathScan { size_t paths = 0; int bad = 0, throughNull = 0; };
+    CopyPathScan scanCopyPaths(const sm::Mem &m, const sm::Result &r, const GridScan &scan, const std::vector<uint8_t> &disc,
+                               const std::string &stem)
+    {
+        CopyPathScan s;
+        const std::vector<uint32_t> rs = sm::roots(m);
+        std::set<uint32_t> copyRoots;
+        for (const sm::CopyInfo &c : r.copies)
+            copyRoots.insert(c.root);
+        for (const auto &kv : scan.listed)
+        {
+            const uint32_t p = kv.first;
+            if (p < sm::kReserve)
+                continue;
+            ++s.paths;
+            const uint32_t len = m.u32(p + 0x1C);
+            std::vector<uint32_t> nodes;
+            for (uint32_t i = 0; i < len && i < 256; ++i)
+                nodes.push_back(m.u32(p + 0x24 + 4 * i));
+            bool ok = nodes.size() >= 4 && std::find(rs.begin(), rs.end(), nodes[0]) != rs.end();
+            if (ok)
+            {
+                const std::vector<uint32_t> sl = sm::slots(m, nodes[0]);
+                ok = !sl.empty() && m.u32(sl.back()) == nodes[1] && nodes[1] >= sm::kReserve &&
+                     (m.u32(nodes[1]) & 63) == sm::kOpGroup && (m.u32(nodes[1]) >> 7) == 0 && copyRoots.count(nodes[2]);
+            }
+            for (size_t j = 1; ok && j + 1 < nodes.size(); ++j)
+            {
+                if ((m.u32(nodes[j]) & 63) == sm::kOpNull)
+                {
+                    ok = nodes[j] < sm::kReserve && (disc[nodes[j] - sm::kBase] & 63) == sm::kOpNull;   // NULL on the disc
+                    ++s.throughNull;
+                    break;
+                }
+                const std::vector<uint32_t> ks = sm::children(m, nodes[j]);
+                ok = std::find(ks.begin(), ks.end(), nodes[j + 1]) != ks.end();
+            }
+            if (!ok && s.bad++ < 5)
+            {
+                std::printf("  %s: copy path %s is not [root, wrapper, copy root, children...]:", stem.c_str(), hexOff(p).c_str());
+                for (uint32_t n : nodes)
+                    std::printf(" %s/%u", hexOff(n).c_str(), m.u32(n) & 63);
+                std::printf("\n");
+            }
+        }
+        return s;
+    }
 }
 
 // Cross-check against a stock stage (spec "PR 1 checks", 1f and 1i). Needs the disc, so it runs only with these set:
@@ -3584,56 +3638,11 @@ TEST(stagemap_stock_copies_grid_rule)
         CHECK(scan.problems == 0);
         CHECK(scan.listed.size() == stock.listed.size() - through[removed].size() + addPaths);
         CHECK(copiesStandAlone(im, r, setNodes));
-        // each copy's path (the paths in the reserve): a header root, its wrapper (in the root's last slot, ids 0), a copy's root,
-        // then a chain of children down to the hull
         {
-            const std::vector<uint32_t> rs = sm::roots(m);
-            std::set<uint32_t> copyRoots;
-            for (const sm::CopyInfo &c : r.copies)
-                copyRoots.insert(c.root);
-            size_t copyPaths = 0;
-            int bad = 0, throughNull = 0;
-            for (const auto &kv : scan.listed)
-            {
-                const uint32_t p = kv.first;
-                if (p < sm::kReserve)
-                    continue;
-                ++copyPaths;
-                const uint32_t len = m.u32(p + 0x1C);
-                std::vector<uint32_t> nodes;
-                for (uint32_t i = 0; i < len && i < 256; ++i)
-                    nodes.push_back(m.u32(p + 0x24 + 4 * i));
-                bool ok = nodes.size() >= 4 && std::find(rs.begin(), rs.end(), nodes[0]) != rs.end();
-                if (ok)
-                {
-                    const std::vector<uint32_t> sl = sm::slots(m, nodes[0]);
-                    ok = !sl.empty() && m.u32(sl.back()) == nodes[1] && nodes[1] >= sm::kReserve &&
-                         (m.u32(nodes[1]) & 63) == sm::kOpGroup && (m.u32(nodes[1]) >> 7) == 0 && copyRoots.count(nodes[2]);
-                }
-                // a NULL on the way (as on the disc: AIRPORT, ISLAND and VEGAS have such paths) has no children to check: the
-                // game stops there (hdTraverse.cpp:179), for the source and its copies alike
-                for (size_t j = 1; ok && j + 1 < nodes.size(); ++j)
-                {
-                    if ((m.u32(nodes[j]) & 63) == sm::kOpNull)
-                    {
-                        ok = nodes[j] < sm::kReserve && (bytes[nodes[j] - sm::kBase] & 63) == sm::kOpNull;   // NULL on the disc
-                        ++throughNull;
-                        break;
-                    }
-                    const std::vector<uint32_t> ks = sm::children(m, nodes[j]);
-                    ok = std::find(ks.begin(), ks.end(), nodes[j + 1]) != ks.end();
-                }
-                if (!ok && bad++ < 5)
-                {
-                    std::printf("  %s: copy path %s is not [root, wrapper, copy root, children...]:", stem.c_str(), hexOff(p).c_str());
-                    for (uint32_t n : nodes)
-                        std::printf(" %s/%u", hexOff(n).c_str(), m.u32(n) & 63);
-                    std::printf("\n");
-                }
-            }
-            CHECK(bad == 0 && copyPaths == addPaths);
+            const CopyPathScan cp = scanCopyPaths(m, r, scan, bytes, stem);
+            CHECK(cp.bad == 0 && cp.paths == addPaths);
             std::printf("  %s: %zu copy paths [root, wrapper, copy root, children...] (%d through a disc NULL)\n", stem.c_str(),
-                        copyPaths, throughNull);
+                        cp.paths, cp.throughNull);
         }
         CHECK(r.interactives == 1 + sm::kMonsterSlots + after.interactives + after.debrisPickups + addInteractives);
         // the pool first: the copies' list nodes include every node the remove freed, or all of theirs are freed ones
@@ -3656,6 +3665,416 @@ TEST(stagemap_stock_copies_grid_rule)
         {
             const std::string out = (std::filesystem::path(dumpDir) / (stem + ".copies.bin")).string();
             CHECK(writeFile(out, im.img) && writeFile(out + ".reserve", im.res));
+        }
+    }
+}
+
+namespace
+{
+    // A copy refusal reason with its addresses blanked ("0x6e7a70" -> "0x.."), to count refusals by kind
+    std::string reasonKind(const std::string &why)
+    {
+        std::string out;
+        for (size_t i = 0; i < why.size(); ++i)
+        {
+            if (why.compare(i, 2, "0x") == 0 && (i == 0 || !std::isalnum(static_cast<unsigned char>(why[i - 1]))))
+            {
+                out += "0x..";
+                for (i += 2; i < why.size() && std::isxdigit(static_cast<unsigned char>(why[i])); ++i)
+                    ;
+                --i;
+            }
+            else
+                out += why[i];
+        }
+        return out;
+    }
+
+    // stage_map.py pieces' copy column at the end of a piece line: "copy B B iI dD pP" plus " debris N (M B)" with debris pickups,
+    // or "no copy (why)" (the reason may hold parentheses: up to the last ')'). False when the line has neither.
+    bool parseCopyColumn(const std::string &line, sm::CopySet &out)
+    {
+        const size_t no = line.find("  no copy (");
+        if (no != std::string::npos)
+        {
+            const size_t from = no + std::strlen("  no copy ("), to = line.rfind(')');
+            if (to == std::string::npos || to < from)
+                return false;
+            out.why = line.substr(from, to - from);
+            return !out.why.empty();
+        }
+        const size_t at = line.rfind("  copy ");
+        if (at == std::string::npos)
+            return false;
+        unsigned bytes = 0;
+        if (std::sscanf(line.c_str() + at, "  copy %u B i%d d%d p%d", &bytes, &out.interactives, &out.destructibles, &out.pickups) != 4)
+            return false;
+        out.bytes = bytes;
+        const size_t deb = line.find(" debris ", at);
+        if (deb != std::string::npos)
+        {
+            unsigned long long db = 0;
+            if (std::sscanf(line.c_str() + deb, " debris %d (%llu B)", &out.debrisPickups, &db) != 2)
+                return false;
+            out.debrisBytes = db;
+        }
+        return true;
+    }
+}
+
+// Copies on real stages (plan 2026-11-10-map-copy.md, Task 13; same WOTM_TEST_STAGE images and WOTM_TEST_PIECES files as
+// stagemap_stock_grid_rule; WOTM_TEST_STAGE_DUMP writes <stem>.copied.bin and .reserve for python tools/stage_map.py check).
+// Runs on CENTRAL, METRO, VEGAS and ISLAND, and on VOLCANO and UFO, whose pickup root's last child is itself a pickup piece
+// (amendment A2: the pickup wrapper holds a copy's source first).
+// 1. Every piece's copySet() against stage_map.py's copy column (reason text, bytes, counts, debris pickups).
+// 2. CENTRAL, METRO, VEGAS, ISLAND: three copyable destructible pieces with collision paths (address order; VEGAS prefers pieces
+//    whose dominoes target their own nodes, ISLAND pieces under a LOD), each copied twice (three cells over; elsewhere turned 90,
+//    15 and 90), and the first copyable level pickup once: 7 copies. VOLCANO, UFO: the pickup root's last child copied twice
+//    (three cells over; elsewhere turned 90) and the first other copyable pickup once: 3 copies.
+//    Every copy applies; the grid rule holds and the listed paths grew by the copies' paths, each [root, wrapper, copy root,
+//    children...]; one wrapper per root that got copies, holding the root's old last child first; every per-instance node keeps
+//    one holder and no reserve node (but a wrapper's first slot) holds a source's copied node; each copy's dominoes target its
+//    own nodes as its source's target the source's; the estimates are the stage's plus the copies'.
+TEST(stagemap_stock_copies)
+{
+    const std::vector<std::string> stages = envList("WOTM_TEST_STAGE"), pieceFiles = envList("WOTM_TEST_PIECES");
+    const char *dumpDir = std::getenv("WOTM_TEST_STAGE_DUMP");
+    if (stages.empty())
+    {
+        std::printf("  skip (WOTM_TEST_STAGE not set)\n");
+        return;
+    }
+    const std::set<std::string> buildings = {"CENTRAL", "METRO", "VEGAS", "ISLAND"}, pickupStages = {"VOLCANO", "UFO"};
+    for (size_t si = 0; si < stages.size(); ++si)
+    {
+        const std::string stem = std::filesystem::path(stages[si]).stem().string();
+        if (!buildings.count(stem) && !pickupStages.count(stem))
+        {
+            std::printf("  %s: skip (copies run on CENTRAL, METRO, VEGAS, ISLAND, VOLCANO and UFO)\n", stem.c_str());
+            continue;
+        }
+        std::vector<uint8_t> bytes;
+        CHECK(readFile(stages[si], bytes) && bytes.size() > 8);
+        if (bytes.size() <= 8)
+            continue;
+        Img im(uint32_t(bytes.size()), sm::kReserveSize);
+        im.img = bytes;
+        const sm::Mem m = im.mem();
+        const std::map<uint32_t, uint32_t> par = sm::parents(m);
+
+        // 1. copy verdicts, C++ against stage_map.py
+        std::map<uint32_t, sm::CopySet> sets;   // every piece (guest address)
+        for (const auto &kv : par)
+            if (sm::isPiece(m, par, kv.first))
+                sets[kv.first] = sm::copySet(m, par, kv.first);
+        int copyable = 0;
+        std::vector<std::string> kinds;   // refusal kinds, first appearance order
+        std::map<std::string, int> refusedBy;
+        for (const auto &kv : sets)
+        {
+            if (kv.second.why.empty())
+            {
+                ++copyable;
+                continue;
+            }
+            const std::string k = reasonKind(kv.second.why);
+            if (!refusedBy[k]++)
+                kinds.push_back(k);
+        }
+        if (si < pieceFiles.size())
+        {
+            std::ifstream f(pieceFiles[si]);
+            CHECK(bool(f));
+            std::set<uint32_t> seen;
+            int differ = 0;
+            std::string line;
+            while (std::getline(f, line))
+            {
+                if (line.rfind("0x", 0) != 0)
+                    continue;
+                const uint32_t n = uint32_t(std::strtoul(line.c_str(), nullptr, 16)) + sm::kBase;
+                seen.insert(n);
+                sm::CopySet py;
+                const bool parsed = parseCopyColumn(line, py);
+                const auto it = sets.find(n);
+                bool same = parsed && it != sets.end();
+                if (same)
+                {
+                    const sm::CopySet &cs = it->second;
+                    same = py.why == cs.why &&
+                           (!cs.why.empty() || (py.bytes == cs.bytes && py.interactives == cs.interactives &&
+                                                py.destructibles == cs.destructibles && py.pickups == cs.pickups &&
+                                                py.debrisPickups == cs.debrisPickups && py.debrisBytes == cs.debrisBytes));
+                }
+                if (!same && differ++ < 10)
+                {
+                    std::printf("  %s: copy column differs: %s\n", stem.c_str(), line.c_str());
+                    if (it != sets.end())
+                        std::printf("    C++: %s (%u B i%d d%d p%d debris %d (%llu B))\n",
+                                    it->second.why.empty() ? "copy" : ("no copy: " + it->second.why).c_str(), it->second.bytes,
+                                    it->second.interactives, it->second.destructibles, it->second.pickups, it->second.debrisPickups,
+                                    (unsigned long long)it->second.debrisBytes);
+                }
+            }
+            CHECK(differ == 0 && seen.size() == sets.size());
+            std::printf("  %s: copy column of %zu pieces compared with stage_map.py's: %d differ\n", stem.c_str(), seen.size(),
+                        differ);
+        }
+        else
+            std::printf("  %s: no WOTM_TEST_PIECES file: copy column not compared\n", stem.c_str());
+        {
+            std::string by;
+            for (const std::string &k : kinds)
+                by += (by.empty() ? "" : "; ") + k + " x" + std::to_string(refusedBy[k]);
+            std::printf("  %s: %zu pieces, %d copyable, refused by reason: %s\n", stem.c_str(), sets.size(), copyable,
+                        by.empty() ? "none" : by.c_str());
+        }
+
+        // 2. a copy map
+        uint32_t g = 0;
+        for (const auto &kv : par)
+            if ((m.u32(kv.first) & 63) == sm::kOpGrid)
+                g = kv.first;
+        CHECK(g != 0);
+        if (!g)
+            continue;
+        const GridScan stock = scanGrid(m, g);
+        std::map<uint32_t, std::set<uint32_t>> through;
+        for (const auto &kv : stock.listed)
+        {
+            const uint32_t k = std::min<uint32_t>(m.u32(kv.first + 0x1C), 256);
+            for (uint32_t i = 0; i < k; ++i)
+                through[m.u32(kv.first + 0x24 + 4 * i)].insert(kv.first);
+        }
+        std::map<uint32_t, int> holders;
+        for (const auto &kv : par)
+            for (uint32_t sl : sm::slots(m, kv.first))
+                if (const uint32_t k = m.u32(sl))
+                    ++holders[k];
+        auto above = [&](uint32_t n, uint32_t op) {
+            for (uint32_t a = par.at(n); a; a = par.at(a))
+                if ((m.u32(a) & 63) == op)
+                    return true;
+            return false;
+        };
+        // dominoes of the destructibles under `root` whose target is under `root` too
+        auto ownDominoes = [&](uint32_t root) {
+            const std::vector<uint32_t> sub = sm::subtree(m, root);
+            const std::set<uint32_t> under(sub.begin(), sub.end());
+            int n = 0;
+            for (uint32_t k : sub)
+                if ((m.u32(k) & 63) == sm::kOpDestructible)
+                    for (uint32_t a : sm::dominoActions(m, k))
+                        n += int(under.count(m.u32(a + 0xC)));
+            return n;
+        };
+        auto topOf = [&](uint32_t n) {
+            while (par.at(n))
+                n = par.at(n);
+            return n;
+        };
+        // copyable, held by its parent only, and turnable (a TRANSLATE with action data cannot be turned)
+        auto eligible = [&](uint32_t n) {
+            return sets.at(n).why.empty() && holders[n] == 1 && !((m.u32(n) & 63) == sm::kOpTranslate && m.u32(n + 0xC) != 0);
+        };
+        std::vector<uint32_t> sources;   // in map order, each once
+        std::vector<std::pair<uint32_t, float>> placed;   // (source, turn) per copy; the first of each source three cells over
+        uint32_t lastPickup = 0;   // VOLCANO, UFO: the source that is its pickup root's last child
+        if (buildings.count(stem))
+        {
+            auto preferred = [&](uint32_t n) {
+                return stem == "VEGAS" ? ownDominoes(n) > 0 : stem == "ISLAND" ? above(n, sm::kOpLod) : false;
+            };
+            for (int pass = 0; pass < 2 && sources.size() < 3; ++pass)
+                for (const auto &kv : sets)
+                {
+                    const uint32_t n = kv.first;
+                    if (sources.size() == 3)
+                        break;
+                    if (std::find(sources.begin(), sources.end(), n) != sources.end() || !eligible(n) || !kv.second.destructibles ||
+                        !through.count(n) || (pass == 0 && !preferred(n)))
+                        continue;
+                    sources.push_back(n);
+                }
+            const float turns[3] = {90, 15, 90};
+            for (size_t i = 0; i < sources.size(); ++i)
+                placed.push_back({sources[i], 0.f}), placed.push_back({sources[i], turns[i]});
+            for (const auto &kv : sets)
+                if (eligible(kv.first) && kv.second.pickups > 0)
+                {
+                    sources.push_back(kv.first), placed.push_back({kv.first, 0.f});
+                    break;
+                }
+            CHECK(placed.size() == 7);
+            if (stem == "VEGAS")
+                CHECK(ownDominoes(sources[0]) > 0);   // VEGAS has copyable pieces whose dominoes stay inside them
+            if (stem == "ISLAND")
+                CHECK(above(sources[0], sm::kOpLod));   // and ISLAND pieces under a LOD
+        }
+        else
+        {
+            for (const auto &kv : sets)
+            {
+                const uint32_t n = kv.first;
+                if (eligible(n) && kv.second.pickups > 0)
+                {
+                    const std::vector<uint32_t> sl = sm::slots(m, topOf(n));
+                    if (!sl.empty() && m.u32(sl.back()) == n)
+                        lastPickup = n;
+                }
+            }
+            CHECK(lastPickup != 0);
+            if (!lastPickup)
+                continue;
+            sources.push_back(lastPickup), placed.push_back({lastPickup, 0.f}), placed.push_back({lastPickup, 90.f});
+            for (const auto &kv : sets)
+                if (kv.first != lastPickup && eligible(kv.first) && kv.second.pickups > 0)
+                {
+                    sources.push_back(kv.first), placed.push_back({kv.first, 0.f});
+                    break;
+                }
+            CHECK(placed.size() == 3);
+        }
+
+        const float cell = m.f32(g + 8), minX = m.f32(g + 0xC), minY = m.f32(g + 0x10), maxX = m.f32(g + 0x14), maxY = m.f32(g + 0x18);
+        sm::Map map;
+        std::map<uint32_t, std::vector<uint32_t>> setNodes;
+        std::set<uint32_t> sourceNodes;   // every source's copied nodes
+        std::map<uint32_t, int> srcDominoes;
+        int addInteractives = 0, addDestructibles = 0;
+        uint64_t addPickupBytes = 0;
+        size_t addPaths = 0;
+        std::set<uint32_t> firstDone;
+        for (const auto &pc : placed)
+        {
+            const uint32_t n = pc.first;
+            const sm::CopySet &cs = sets.at(n);
+            const uint32_t at = (m.u32(n) & 63) == sm::kOpRotate ? 0x40 : 0x10;
+            const float px = m.f32(n + at), py = m.f32(n + at + 4), pz = m.f32(n + at + 8);
+            const float dx = (px < (minX + maxX) / 2 ? 3 : -3) * cell, dy = (py < (minY + maxY) / 2 ? 2 : -2) * cell;
+            if (firstDone.insert(n).second)
+                map.copies.push_back(copyAt(n - sm::kBase, px + dx, py + dy, pz, pc.second));
+            else
+                map.copies.push_back(copyAt(n - sm::kBase, px - dx / 3 * 2, py - dy, pz, pc.second));
+            setNodes[n] = cs.nodes;
+            sourceNodes.insert(cs.nodes.begin(), cs.nodes.end());
+            srcDominoes[n] = ownDominoes(n);
+            addInteractives += cs.interactives + cs.debrisPickups;
+            addDestructibles += cs.destructibles;
+            addPickupBytes += uint64_t(cs.pickups) * sm::kPickupBytes + cs.debrisBytes;
+            addPaths += through.count(n) ? through.at(n).size() : 0;
+        }
+        const sm::StageCounts sc = sm::stageCounts(m, par);
+        std::map<uint32_t, uint32_t> oldLast;   // each header root's last child, before
+        for (uint32_t rt : sm::roots(m))
+        {
+            const std::vector<uint32_t> sl = sm::slots(m, rt);
+            if (!sl.empty())
+                oldLast[rt] = m.u32(sl.back());
+        }
+        std::set<uint32_t> copiedTops;
+        for (uint32_t n : sources)
+            copiedTops.insert(topOf(n));
+
+        sm::Reserve res = im.reserve();
+        const uint32_t reserveStart = res.next;
+        const sm::Result r = sm::apply(m, uint32_t(bytes.size()), map, res);
+        for (const std::string &l : r.log)
+            std::printf("  %s: %s\n", stem.c_str(), l.c_str());
+        std::printf("  %s: %s\n", stem.c_str(), r.copySummary.c_str());
+        CHECK(r.applied == 0 && r.refused == 0 && r.copied == int(map.copies.size()) && r.copyRefused == 0 &&
+              r.copies.size() == map.copies.size());
+
+        const GridScan scan = scanGrid(m, g);
+        CHECK(scan.problems == 0);
+        CHECK(scan.listed.size() == stock.listed.size() + addPaths);
+        const CopyPathScan cp = scanCopyPaths(m, r, scan, bytes, stem);
+        CHECK(cp.bad == 0 && cp.paths == addPaths);
+        CHECK(copiesStandAlone(im, r, setNodes));
+
+        // the wrappers: one per root that got copies, in its last slot, holding the old last child first
+        const std::map<uint32_t, uint32_t> after = sm::parents(m);
+        std::set<uint32_t> wrappers;
+        for (uint32_t rt : sm::roots(m))
+        {
+            const std::vector<uint32_t> sl = sm::slots(m, rt);
+            const uint32_t w = sl.empty() ? 0 : m.u32(sl.back());
+            if (w < sm::kReserve)
+            {
+                CHECK(!copiedTops.count(rt));
+                continue;
+            }
+            wrappers.insert(w);
+            const std::vector<uint32_t> ws = sm::slots(m, w);
+            CHECK(copiedTops.count(rt) && (m.u32(w) & 63) == sm::kOpGroup && !ws.empty() && m.u32(ws[0]) == oldLast.at(rt));
+        }
+        CHECK(wrappers.size() == copiedTops.size());
+        bool underWrapper = true;
+        for (const sm::CopyInfo &c : r.copies)
+            underWrapper = underWrapper && after.count(c.root) && wrappers.count(after.at(c.root));
+        CHECK(underWrapper);
+        if (lastPickup)   // amendment A2: the source itself is the wrapper's first child now, held by it alone
+        {
+            int held = 0;
+            for (const auto &kv : after)
+                for (uint32_t sl : sm::slots(m, kv.first))
+                    held += int(m.u32(sl) == lastPickup);
+            CHECK(wrappers.count(after.at(lastPickup)) && held == 1);
+        }
+
+        // no reserve node holds a source's copied node (a wrapper's first slot holds the root's old last child)
+        int strays = 0;
+        for (const auto &kv : after)
+        {
+            if (kv.first < sm::kReserve)
+                continue;
+            const std::vector<uint32_t> sl = sm::slots(m, kv.first);
+            for (size_t i = wrappers.count(kv.first) ? 1 : 0; i < sl.size(); ++i)
+                if (sourceNodes.count(m.u32(sl[i])) && strays++ < 5)
+                    std::printf("  %s: reserve node %s holds source node %s\n", stem.c_str(), hexOff(kv.first).c_str(),
+                                hexOff(m.u32(sl[i]) - sm::kBase).c_str());
+        }
+        CHECK(strays == 0);
+
+        // each copy's dominoes: none targets its source's copied nodes, and as many target the copy's own nodes as the source's
+        // target the source's
+        int dominoBad = 0, ownCopied = 0;
+        for (const sm::CopyInfo &c : r.copies)
+        {
+            const std::vector<uint32_t> &orig = setNodes.at(c.source);
+            for (uint32_t k : sm::subtree(m, c.root))
+                if ((m.u32(k) & 63) == sm::kOpDestructible)
+                    for (uint32_t a : sm::dominoActions(m, k))
+                        dominoBad += int(std::find(orig.begin(), orig.end(), m.u32(a + 0xC)) != orig.end());
+            const int own = ownDominoes(c.root);
+            dominoBad += int(own != srcDominoes.at(c.source));
+            ownCopied += own;
+        }
+        CHECK(dominoBad == 0);
+        if (stem == "VEGAS")
+            CHECK(ownCopied > 0);
+        if (stem == "ISLAND")
+            CHECK(logHas(r, "does not hang over its copies"));
+
+        CHECK(r.interactives == 1 + sm::kMonsterSlots + sc.interactives + sc.debrisPickups + addInteractives);
+        CHECK(r.destructibles == sc.destructibles + addDestructibles);
+        CHECK(r.pickupBytes == uint64_t(sc.pickups) * sm::kPickupBytes + sc.debrisBytes + addPickupBytes);
+        std::printf("  %s: %d copies of %zu sources (%s), %zu wrappers, %d own dominoes copied, reserve %u KB; grid %zu paths "
+                    "(+%zu), %d list nodes (+%d)\n",
+                    stem.c_str(), r.copied, sources.size(),
+                    [&] {
+                        std::string s;
+                        for (uint32_t n : sources)
+                            s += (s.empty() ? "" : " ") + hexOff(n - sm::kBase);
+                        return s;
+                    }().c_str(),
+                    wrappers.size(), ownCopied, (res.next - reserveStart + 512) / 1024, scan.listed.size(), addPaths, scan.nodes,
+                    scan.nodes - stock.nodes);
+        if (dumpDir && *dumpDir)
+        {
+            const std::string out = (std::filesystem::path(dumpDir) / (stem + ".copied.bin")).string();
+            CHECK(writeFile(out, im.img) && writeFile(out + ".reserve", im.res));
+            std::printf("  %s: wrote %s(.reserve)\n", stem.c_str(), out.c_str());
         }
     }
 }
