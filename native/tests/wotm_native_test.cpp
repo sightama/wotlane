@@ -2793,7 +2793,12 @@ TEST(stagemap_debris_pickup_bytes)
     CHECK(sm::debrisPickupBytes(0x13A0 - 0x1388) == 0x1E0);   // turret
     CHECK(sm::debrisPickupBytes(31) == 0x180);
     for (uint32_t t = 1; t < 32; ++t)
-        CHECK(sm::debrisPickupBytes(t) <= sm::kPickupBytes && sm::debrisPickupBytes(t) % 16 == 0);
+        CHECK(sm::debrisPickupBytes(t) <= 0x4D0 && sm::debrisPickupBytes(t) % 16 == 0);
+    // a level pickup node: createPickup takes the type from its id1 (Pickup.cpp:1094-1095)
+    CHECK(sm::levelPickupBytes(0x12C1) == 0x180 && sm::levelPickupBytes(0x1387) == 0x180);   // ids below 0x1388: a Pickup
+    CHECK(sm::levelPickupBytes(0x1395) == 0x4D0 && sm::levelPickupBytes(0x13A1) == 0x240 && sm::levelPickupBytes(0x138D) == 0);
+    for (uint32_t id = sm::kPickupFirst; id <= sm::kPickupLast; ++id)
+        CHECK(sm::levelPickupBytes(id) <= 0x4D0 && sm::levelPickupBytes(id) % 16 == 0);
 }
 
 // Amendment A4: debris chunks with a pickup type count against the Interactives cap and the pickup memory, in the copy set and in
@@ -2840,14 +2845,14 @@ TEST(stagemap_copy_debris_pickups)
         CHECK(r.copied == 1 && r.copyRefused == 1 && r.interactives == 15 + 4);
         CHECK(logLine(r, "copy " + hexOff(s.off(s.tD)) + " x1 refused: the Interactives table would pass its cap (22; each copy "
                          "adds 4, 2 of them debris pickups)") >= 0);
-        CHECK(r.pickupBytes == sm::kPickupBytes + 2 * perCopy);
+        CHECK(r.pickupBytes == sm::levelPickupBytes(0x12C1) + 2 * perCopy);
     }
     {
         // pickup memory: the stage's level pickup and debris, plus one copy's debris
         CopyStage s;
         withDebris(s);
         sm::Limits lim;
-        lim.pickupRoom = uint32_t(sm::kPickupBytes + 2 * perCopy);
+        lim.pickupRoom = uint32_t(sm::levelPickupBytes(0x12C1) + 2 * perCopy);
         sm::Map map;
         map.copies = {copyAt(s.off(s.tD), 500, 500, 0), copyAt(s.off(s.tD), 100, 500, 0)};
         sm::Reserve res = s.im.reserve();
@@ -2948,7 +2953,7 @@ TEST(stagemap_copy_caps)
         const sm::Result r = sm::apply(s.im.mem(), size, map, res, lim);
         CHECK(r.copied == 1 && r.copyRefused == 2);
         CHECK(logLine(r, "copy " + hexOff(s.off(s.tD)) + " x2 refused: the Interactives table would pass its cap (") >= 0);
-        CHECK(r.interactives == base + 2 && r.destructibles == st.destructibles + 2 && r.pickupBytes == sm::kPickupBytes * uint32_t(st.pickups));
+        CHECK(r.interactives == base + 2 && r.destructibles == st.destructibles + 2 && r.pickupBytes == uint32_t(st.pickupBytes));
     }
     {
         CopyStage s;   // reaching the cap exactly is fine
@@ -2977,14 +2982,14 @@ TEST(stagemap_copy_caps)
         CopyStage s;   // pickup memory: room for the stage's pickup and one more; a copy with no pickup is not held back
         const sm::StageCounts st = stockCounts(s);
         sm::Limits lim;
-        lim.pickupRoom = sm::kPickupBytes * uint32_t(st.pickups + 1);
+        lim.pickupRoom = uint32_t(st.pickupBytes) + sm::levelPickupBytes(0x12C1);
         sm::Map map;
         map.copies = {copyAt(s.off(s.tP), 600, 600, 10), copyAt(s.off(s.tP), 100, 600, 10), copyAt(s.off(s.tD), 500, 500, 0)};
         sm::Reserve res = s.im.reserve();
         const sm::Result r = sm::apply(s.im.mem(), size, map, res, lim);
         CHECK(r.copied == 2 && r.copyRefused == 1);
         CHECK(logLine(r, "copy " + hexOff(s.off(s.tP)) + " x1 refused: ") >= 0 && logHas(r, "pickup memory"));
-        CHECK(r.pickupBytes == sm::kPickupBytes * uint32_t(st.pickups + 1) && r.interactives == 13 + 1 + 2);
+        CHECK(r.pickupBytes == uint32_t(st.pickupBytes) + sm::levelPickupBytes(0x12C1) && r.interactives == 13 + 1 + 2);
     }
     {
         CopyStage s;   // a stage already past a cap still takes copies that add nothing to it
@@ -3119,7 +3124,7 @@ TEST(stagemap_copy_logs)
         CHECK(clamp >= 0 && copied > clamp && refused > copied);
         CHECK(int(r.log.size()) == refused + 1);   // the refusals come last
         CHECK(r.copySummary == "copies: 2 applied, 1 refused; reserve " + kb(res.next - sm::kReserve) +
-                                   " of 16 KB; interactives 17 of 17, destructibles 7 of 1400, pickup room 1 KB (no limit)");
+                                   " of 16 KB; interactives 17 of 17, destructibles 7 of 1400, pickup room 0 KB (no limit)");
         for (const std::string &l : r.log)
             std::printf("  %s\n", l.c_str());
         std::printf("  %s\n", r.copySummary.c_str());
@@ -3136,7 +3141,7 @@ TEST(stagemap_copy_logs)
     {
         CopyStage s;   // pickup room with a limit; refusals grouped per source and reason, in first-appearance order
         sm::Limits lim;
-        lim.pickupRoom = sm::kPickupBytes * 2;
+        lim.pickupRoom = sm::levelPickupBytes(0x12C1) * 2;
         sm::Map map;
         map.copies = {copyAt(s.off(s.tP), 600, 600, 10), copyAt(s.off(s.mid), 0, 0, 0), copyAt(s.off(s.tP), 100, 600, 10),
                       copyAt(s.off(s.tP), 200, 600, 10), copyAt(s.off(s.mid), 0, 0, 0)};
@@ -3146,7 +3151,7 @@ TEST(stagemap_copy_logs)
         const int notPiece = logLine(r, "copy " + hexOff(s.off(s.mid)) + " x2 refused: not a piece");
         const int room = logLine(r, "copy " + hexOff(s.off(s.tP)) + " x2 refused: ");
         CHECK(logLine(r, "copied " + hexOff(s.off(s.tP)) + " x1 (") >= 0 && notPiece >= 0 && room > notPiece);
-        CHECK(has(r.copySummary, "pickup room 3 of 3 KB"));   // 2 x 0x500 bytes
+        CHECK(has(r.copySummary, "pickup room 1 of 1 KB"));   // 2 x 0x180 bytes (a plain Pickup), rounded
     }
     {
         // a source under a CONTROL, a LOD, a SWITCH and a GROUP with collision-option flags: one line each, however many copies;
@@ -3707,9 +3712,18 @@ namespace
         if (at == std::string::npos)
             return false;
         unsigned bytes = 0;
-        if (std::sscanf(line.c_str() + at, "  copy %u B i%d d%d p%d", &bytes, &out.interactives, &out.destructibles, &out.pickups) != 4)
+        int used = 0;
+        if (std::sscanf(line.c_str() + at, "  copy %u B i%d d%d p%d%n", &bytes, &out.interactives, &out.destructibles, &out.pickups,
+                        &used) != 4)
             return false;
         out.bytes = bytes;
+        if (out.pickups)   // " (M B)": the level pickups' memory
+        {
+            unsigned long long pb = 0;
+            if (std::sscanf(line.c_str() + at + used, " (%llu B)", &pb) != 1)
+                return false;
+            out.pickupBytes = pb;
+        }
         const size_t deb = line.find(" debris ", at);
         if (deb != std::string::npos)
         {
@@ -3804,6 +3818,7 @@ TEST(stagemap_stock_copies)
                     same = py.why == cs.why &&
                            (!cs.why.empty() || (py.bytes == cs.bytes && py.interactives == cs.interactives &&
                                                 py.destructibles == cs.destructibles && py.pickups == cs.pickups &&
+                                                py.pickupBytes == cs.pickupBytes &&
                                                 py.debrisPickups == cs.debrisPickups && py.debrisBytes == cs.debrisBytes));
                 }
                 if (!same && differ++ < 10)
@@ -3983,7 +3998,7 @@ TEST(stagemap_stock_copies)
             srcDominoes[n] = ownDominoes(n);
             addInteractives += cs.interactives + cs.debrisPickups;
             addDestructibles += cs.destructibles;
-            addPickupBytes += uint64_t(cs.pickups) * sm::kPickupBytes + cs.debrisBytes;
+            addPickupBytes += cs.pickupBytes + cs.debrisBytes;
             addPaths += through.count(n) ? through.at(n).size() : 0;
         }
         const sm::StageCounts sc = sm::stageCounts(m, par);
@@ -4082,7 +4097,7 @@ TEST(stagemap_stock_copies)
 
         CHECK(r.interactives == 1 + sm::kMonsterSlots + sc.interactives + sc.debrisPickups + addInteractives);
         CHECK(r.destructibles == sc.destructibles + addDestructibles);
-        CHECK(r.pickupBytes == uint64_t(sc.pickups) * sm::kPickupBytes + sc.debrisBytes + addPickupBytes);
+        CHECK(r.pickupBytes == sc.pickupBytes + sc.debrisBytes + addPickupBytes);
         std::printf("  %s: %d copies of %zu sources (%s), %zu wrappers, %d own dominoes copied, reserve %u KB; grid %zu paths "
                     "(+%zu), %d list nodes (+%d)\n",
                     stem.c_str(), r.copied, sources.size(),

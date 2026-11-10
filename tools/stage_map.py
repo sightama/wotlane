@@ -65,8 +65,8 @@ Copies (copy_set(), stage_counts(); native copySet(), stageCounts(); spec 2026-1
   dispatched kind with a level pickup id1) and their first-parent ancestors inside the piece, in preorder; bytes = their
   16-aligned sizes. Counts per copy, each node once per path from the root to it (path_counts()): Interactives
   (INTERACTIVE_STATE, level pickup nodes), Destructibles (DESTRUCTIBLE, dispatched nodes with id1 0x1450..0x1B57), level
-  pickups, and debris pickups (ACT_DEBRIS chunks with a pickup type, per state reaching them, 32 chunks at most) with their
-  memory (debris_pickup_bytes()).
+  pickups with their memory (level_pickup_bytes()), and debris pickups (ACT_DEBRIS chunks with a pickup type, per state
+  reaching them, 32 chunks at most) with their memory (debris_pickup_bytes()).
 - Stage counts: the same over every node reachable from the header roots, plus HomingBugs (0x11F8, 0x1203) as Interactives.
 Riders (rider_map(), make only; the loader applies them as ordinary edits): a piece whose origin (a pickup: its position; a
 world piece: the bottom of its lowest OBJECT) lies in X and Y inside one of another piece's solid collision boxes at most 700
@@ -440,7 +440,6 @@ SCRIPT_ACTIONS = {9: "ACT_CINEMA", 11: "ACT_PLAYERPOS", 12: "ACT_RUNSCRIPT", 13:
 DISPATCHED = (0, 1, 2, 3, 4, 6, 11, 17, 30, 40, 41)   # kinds dbsTraverse hands to dbProcInteractive with a nonzero id1
 DEBRIS_CHUNKS = 32
 INTERACTIVES_CAP, DESTRUCTIBLES_CAP, MONSTER_SLOTS = 1000, 1400, 8   # kInteractivesCap, kDestructiblesCap, kMonsterSlots
-PICKUP_BYTES = 0x500                                                  # kPickupBytes: MemoryStack::global per level pickup
 MAX_POINTS, MAX_POWER_UPS = 256, 100                                  # PointToolKit::points[256]; PowerUps::m_powerUps[100]
 MAX_EDITS = 4096                                                      # stage.json's "edits", all kinds together
 COUNT_MAX = 0x7FFFFFFF                                # addCount() saturates here
@@ -515,6 +514,16 @@ def debris_pickup_bytes(t):
             0x1395: 0x4C0, 0x1399: 0x4C0, 0x139A: 0x4C0, 0x139B: 0x4C0, 0x139C: 0x4C0, 0x139D: 0x4C0, 0x139E: 0x4C0,
             0x138A: 0x270, 0x138B: 0x270, 0x1397: 0x270, 0x13A2: 0x270, 0x13A3: 0x250}.get(i, 0x170)
     return size + 0x10
+
+
+def level_pickup_bytes(i):
+    """The same for a level pickup node of id1 i: createPickup takes its type from the id1 (native levelPickupBytes())."""
+    return debris_pickup_bytes(i - 0x1388)
+
+
+def _bytes_add(acc, field, nbytes, times):
+    """acc.field += nbytes `times` over, saturating (native addBytes())."""
+    setattr(acc, field, min(getattr(acc, field) + nbytes * min(times, 1 << 20), 1 << 40))
 
 
 def actions_under(m, a, depth, seen, out, cut):
@@ -667,23 +676,26 @@ def per_instance(m, n):
 
 class CopySet:
     """What copying a piece takes (native CopySet): `why` "" when it can be copied, else the reason; `nodes` the copy set in
-    preorder; `bytes` their 16-aligned sizes; per copy: Interactives, Destructibles, level pickups, debris pickups and their
-    memory; `option_group` a GROUP above with collision-option flags (0: none)."""
-    __slots__ = ("why", "nodes", "bytes", "interactives", "destructibles", "pickups", "debris_pickups", "debris_bytes",
-                 "option_group")
+    preorder; `bytes` their 16-aligned sizes; per copy: Interactives, Destructibles, level pickups and their memory, debris
+    pickups and their memory; `option_group` a GROUP above with collision-option flags (0: none)."""
+    __slots__ = ("why", "nodes", "bytes", "interactives", "destructibles", "pickups", "pickup_bytes", "debris_pickups",
+                 "debris_bytes", "option_group")
 
     def __init__(self, why=""):
         self.why, self.nodes, self.bytes = why, [], 0
         self.interactives = self.destructibles = self.pickups = self.debris_pickups = self.debris_bytes = 0
+        self.pickup_bytes = 0
         self.option_group = 0
 
     def column(self):
-        """pieces' copy column: "copy B B iI dD pP" (plus " debris N (M B)" with debris pickups), or "no copy (why)"."""
+        """pieces' copy column: "copy B B iI dD pP" (plus " (M B)" with level pickups and " debris N (M B)" with debris
+        pickups), or "no copy (why)"."""
         if self.why:
             return "no copy (%s)" % self.why
-        return "copy %d B i%d d%d p%d%s" % (self.bytes, self.interactives, self.destructibles, self.pickups,
-                                             " debris %d (%d B)" % (self.debris_pickups, self.debris_bytes)
-                                             if self.debris_pickups else "")
+        return "copy %d B i%d d%d p%d%s%s" % (self.bytes, self.interactives, self.destructibles, self.pickups,
+                                               " (%d B)" % self.pickup_bytes if self.pickups else "",
+                                               " debris %d (%d B)" % (self.debris_pickups, self.debris_bytes)
+                                               if self.debris_pickups else "")
 
 
 def copy_set(m, parent, n):
@@ -769,6 +781,7 @@ def copy_set(m, parent, n):
                 own = True
                 add("interactives", times)
                 add("pickups", times)
+                _bytes_add(c, "pickup_bytes", level_pickup_bytes(i), times)
             elif 0x1450 <= i < 0x1B58:
                 add("destructibles", times)
         if o == OP_EMITTER and 0x1D4C <= i <= 0x1D6B:
@@ -797,15 +810,16 @@ def copy_set(m, parent, n):
 
 class StageCounts:
     """The stage's own entries (native StageCounts): Interactives (INTERACTIVE_STATE + level pickup + HomingBug nodes),
-    Destructibles (DESTRUCTIBLE + dispatched nodes with a destructible id1), level pickups, debris pickups and their memory; each
-    node once per traversal path from the header roots."""
-    __slots__ = ("interactives", "destructibles", "pickups", "debris_pickups", "debris_bytes")
+    Destructibles (DESTRUCTIBLE + dispatched nodes with a destructible id1), level pickups and their memory, debris pickups and
+    their memory; each node once per traversal path from the header roots."""
+    __slots__ = ("interactives", "destructibles", "pickups", "pickup_bytes", "debris_pickups", "debris_bytes")
 
     def __init__(self):
         self.interactives = self.destructibles = self.pickups = self.debris_pickups = self.debris_bytes = 0
+        self.pickup_bytes = 0
 
     def as_tuple(self):
-        return (self.interactives, self.destructibles, self.pickups, self.debris_pickups, self.debris_bytes)
+        return (self.interactives, self.destructibles, self.pickups, self.pickup_bytes, self.debris_pickups, self.debris_bytes)
 
 
 def stage_counts(m, parent):
@@ -829,6 +843,7 @@ def stage_counts(m, parent):
             if PICKUP_IDS[0] <= i <= PICKUP_IDS[1]:
                 add("interactives", times)
                 add("pickups", times)
+                _bytes_add(s, "pickup_bytes", level_pickup_bytes(i), times)
             elif i in (0x11F8, 0x1203):
                 add("interactives", times)
             elif 0x1450 <= i < 0x1B58:
@@ -1340,7 +1355,7 @@ def copy_estimate(m, edits, copies, parent=None):
     """(interactives, destructibles, pickup bytes): what the loader's caps count once the map's copies are in (native apply(),
     decision 7, amendment A4): slot 0, the 8 monster slots and the stage's own entries (stage_counts() of the image after the
     map's removes, which NULL their pieces; debris pickups included), plus each copy's (copy_set() of its source on the
-    disc). Pickup bytes: PICKUP_BYTES per level pickup and debris_pickup_bytes() per debris pickup. Copies copy_set()
+    disc). Pickup bytes: level_pickup_bytes() per level pickup and debris_pickup_bytes() per debris pickup. Copies copy_set()
     refuses add nothing (the loader refuses them)."""
     if parent is None:
         parent = walk_all(m)
@@ -1356,7 +1371,7 @@ def copy_estimate(m, edits, copies, parent=None):
     st = stage_counts(after, par_after)
     inter = 1 + MONSTER_SLOTS + st.interactives + st.debris_pickups
     destr = st.destructibles
-    nbytes = st.pickups * PICKUP_BYTES + st.debris_bytes
+    nbytes = st.pickup_bytes + st.debris_bytes
     sets = {}
     for e in copies:
         n = BASE + int(e["copy"], 16)
@@ -1366,7 +1381,7 @@ def copy_estimate(m, edits, copies, parent=None):
         if not cs.why:
             inter += cs.interactives + cs.debris_pickups
             destr += cs.destructibles
-            nbytes += cs.pickups * PICKUP_BYTES + cs.debris_bytes
+            nbytes += cs.pickup_bytes + cs.debris_bytes
     return inter, destr, nbytes
 
 
@@ -2235,15 +2250,18 @@ def selftest_copies():
     assert c.column() == "copy %d B i2 d2 p0" % nbytes, c.column()
     p = copy_set(m, parent, s["tP"])
     assert (p.why, p.nodes, p.interactives, p.destructibles, p.pickups) == ("", [s["tP"], s["gP"], s["swP"]], 1, 0, 1)
+    # a level pickup is charged its own size (id1 0x12C1: a plain Pickup, 0x170 + the list node)
+    assert level_pickup_bytes(0x12C1) == 0x180 and level_pickup_bytes(0x1395) == 0x4D0 and level_pickup_bytes(0x138D) == 0
+    assert p.pickup_bytes == 0x180 and " p1 (384 B)" in p.column(), p.column()
     assert copy_set(m, parent, s["g0"]).why == "not a piece"
     assert node_size(m, s["obj0"]) == 0 and node_size(m, s["pc"]) == 0 and node_size(m, s["sw"]) == 0x14
-    assert stage_counts(m, parent).as_tuple() == (4, 3, 1, 0, 0)
+    assert stage_counts(m, parent).as_tuple() == (4, 3, 1, 0x180, 0, 0)
     # make's estimates (the loader's caps): 1 + 8 + the stage's (after the map's removes) + each copy's
     cp_d = {"copy": "0x%x" % (s["tD"] - BASE), "at": [500, 500, 0]}
     cp_p = {"copy": "0x%x" % (s["tP"] - BASE), "at": [600, 600, 10]}
-    assert copy_estimate(m, [], [cp_d, cp_p], parent) == (1 + 8 + 4 + 2 + 1, 3 + 2, 2 * 0x500)
-    assert copy_estimate(m, [{"node": "0x%x" % (s["tE"] - BASE), "remove": True}], [cp_d, cp_p], parent) == (15, 4, 2 * 0x500)
-    assert copy_estimate(m, [], [], parent) == (13, 3, 0x500)
+    assert copy_estimate(m, [], [cp_d, cp_p], parent) == (1 + 8 + 4 + 2 + 1, 3 + 2, 2 * 0x180)
+    assert copy_estimate(m, [{"node": "0x%x" % (s["tE"] - BASE), "remove": True}], [cp_d, cp_p], parent) == (15, 4, 2 * 0x180)
+    assert copy_estimate(m, [], [], parent) == (13, 3, 0x180)
 
     def why(change):
         im2, s2 = _copy_stage()
@@ -2307,8 +2325,8 @@ def selftest_copies():
     c2 = copy_set(m2, par2, s2["tD"])
     assert (c2.debris_pickups, c2.debris_bytes, c2.interactives) == (2, 0x4D0 + 0x180, 2), c2.column()
     assert c2.column().endswith(" debris 2 (%d B)" % (0x4D0 + 0x180)), c2.column()
-    assert stage_counts(m2, par2).as_tuple() == (4, 3, 1, 2, 0x4D0 + 0x180)
-    assert copy_estimate(m2, [], [cp_d], par2) == (1 + 8 + 4 + 2 + 2 + 2, 3 + 2, 0x500 + 2 * (0x4D0 + 0x180))
+    assert stage_counts(m2, par2).as_tuple() == (4, 3, 1, 0x180, 2, 0x4D0 + 0x180)
+    assert copy_estimate(m2, [], [cp_d], par2) == (1 + 8 + 4 + 2 + 2 + 2, 3 + 2, 0x180 + 2 * (0x4D0 + 0x180))
     # a NULL ends a branch
     im.w("<I", s["tE"], OP_NULL)
     m = im.mem()

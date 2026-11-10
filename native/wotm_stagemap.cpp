@@ -622,6 +622,8 @@ uint32_t debrisPickupBytes(uint32_t type)
     return size + 0x10;   // + the list node (alloc16(0xC))
 }
 
+uint32_t levelPickupBytes(uint32_t id1) { return debrisPickupBytes(id1 - 0x1388u); }
+
 namespace {
 
 // Every action under `a` (through ACT_GROUP and ACT_TRANSFORM, 20 levels at most), each once, depth first in slot order.
@@ -760,6 +762,12 @@ std::map<uint32_t, uint64_t> pathCounts(const Mem &m, const std::vector<uint32_t
 void addCount(int &x, uint64_t v)
 {
     x = int(std::min<uint64_t>(uint64_t(x) + v, 0x7FFFFFFF));
+}
+
+// `bytes` per pickup, `times` over, added to `total` (saturating like addDebris())
+void addBytes(uint64_t &total, uint32_t bytes, uint64_t times)
+{
+    total = std::min<uint64_t>(total + uint64_t(bytes) * std::min<uint64_t>(times, 1u << 20), uint64_t(1) << 40);
 }
 
 // DESTRUCTIBLE n's debris pickups (debrisOf()), `times` over: added to `count` and `bytes`, saturating (2^40 bytes is past any
@@ -1008,7 +1016,8 @@ CopySet copySet(const Mem &m, const std::map<uint32_t, uint32_t> &par, uint32_t 
             if (const char *r = specialRange(id))
                 return refused("holds special id " + hex(id) + " (" + r + ")");
             if (pickupId(id))
-                own = true, addCount(c.interactives, times), addCount(c.pickups, times);
+                own = true, addCount(c.interactives, times), addCount(c.pickups, times),
+                    addBytes(c.pickupBytes, levelPickupBytes(id), times);
             else if (id >= 0x1450 && id < 0x1B58)
                 addCount(c.destructibles, times);
         }
@@ -1054,7 +1063,8 @@ StageCounts stageCounts(const Mem &m, const std::map<uint32_t, uint32_t> &par)
         else if (dispatched(op) && id)
         {
             if (pickupId(id))
-                addCount(s.interactives, times), addCount(s.pickups, times);
+                addCount(s.interactives, times), addCount(s.pickups, times),
+                    addBytes(s.pickupBytes, levelPickupBytes(id), times);
             else if (id == 0x11F8 || id == 0x1203)
                 addCount(s.interactives, times);
             else if (id >= 0x1450 && id < 0x1B58)
@@ -2141,11 +2151,11 @@ Result apply(const Mem &m, uint32_t imageSize, const Map &map, Reserve &res, con
         return out;
     // caps (decision 7, amendment A4), counted on the image after the step 1 edits and before any copy is linked in: slot 0,
     // the monster slots and the stage's own entries (its debris pickups included), then each applied copy's. Pickup memory:
-    // kPickupBytes per level pickup and debrisPickupBytes() per debris pickup.
+    // levelPickupBytes() per level pickup and debrisPickupBytes() per debris pickup.
     const StageCounts stock = stageCounts(m, parents(m));
     int64_t interactives = 1 + kMonsterSlots + int64_t(stock.interactives) + stock.debrisPickups,
             destructibles = stock.destructibles;
-    uint64_t pickupBytes = uint64_t(std::max(stock.pickups, 0)) * kPickupBytes + stock.debrisBytes;
+    uint64_t pickupBytes = stock.pickupBytes + stock.debrisBytes;
     std::vector<uint32_t> tops(map.copies.size(), 0), wrapOrder;
     std::map<uint32_t, Wrapper> wraps;
     for (size_t i = 0; i < map.copies.size(); ++i)
@@ -2237,7 +2247,7 @@ Result apply(const Mem &m, uint32_t imageSize, const Map &map, Reserve &res, con
         }
         // caps, before anything is allocated; a copy that adds nothing to a table passes whatever its count
         const int64_t addInteractives = int64_t(cs.interactives) + cs.debrisPickups;
-        const uint64_t addPickupBytes = uint64_t(cs.pickups) * kPickupBytes + cs.debrisBytes;
+        const uint64_t addPickupBytes = cs.pickupBytes + cs.debrisBytes;
         if (addInteractives && interactives + addInteractives > lim.interactives)
         {
             refuse("the Interactives table would pass its cap (" + std::to_string(lim.interactives) + "; each copy adds " +
