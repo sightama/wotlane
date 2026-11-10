@@ -1366,6 +1366,15 @@ void planRadius(uint32_t a, double need, Plan &plan)
     plan.f32(a + 0xC, r * r);
 }
 
+// Writes into hat action `to` the offset (+0xC, +0x10) of hat action `h` (read from `m`) turned by (c, s): doPickupHat adds the
+// offset to the destructible's place unrotated. Moves and copies share it, so a turned copy's hat has a turned piece's bits.
+void planHatTurn(const Mem &m, uint32_t h, uint32_t to, float c, float s, Plan &plan)
+{
+    const double x = m.f32(h + 0xC), y = m.f32(h + 0x10);
+    plan.f32(to + 0xC, float(x * c - y * s));
+    plan.f32(to + 0x10, float(x * s + y * c));
+}
+
 // Plans a move and/or turn of piece `node`; returns the reason for refusing it, or "" with `plan`, `grid`, `pool` and `res`
 // updated (the caller commits them only on success).
 std::string planMove(const Mem &m, const std::map<uint32_t, uint32_t> &par, const std::vector<uint32_t> &through,
@@ -1452,9 +1461,7 @@ std::string planMove(const Mem &m, const std::map<uint32_t, uint32_t> &par, cons
                                          " is also used by a destructible outside it, offset left as is");
                     continue;
                 }
-                const double x = m.f32(h + 0xC), y = m.f32(h + 0x10);
-                plan.f32(h + 0xC, float(x * c - y * s));
-                plan.f32(h + 0x10, float(x * s + y * c));
+                planHatTurn(m, h, h, c, s, plan);
             }
     }
 
