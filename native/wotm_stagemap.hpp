@@ -274,4 +274,15 @@ struct PowerUpResult { int moved = 0, refused = 0; std::vector<std::string> log;
 // and logged, and the rest apply. Writes are absolute, so calling it again on the same points changes nothing.
 PowerUpResult applyPowerUps(const Mem &m, uint32_t points, uint32_t numPoints, const std::vector<PowerUpEdit> &edits);
 
+// The game creates at most this many power-ups (PowerUps::CreatePowerUp returns -1 once m_count >= 100, src/game/PowerUps.cpp:243;
+// m_powerUps[100]); points past it create nothing
+constexpr uint32_t kMaxPowerUps = 100;
+
+// Appends a copy of point `index` at `at` for each addition, in order, after the stock points (`numPoints` of them at `points`):
+// the whole 64-byte point is copied and its position set; an index past the stock count, a stock point not at `from` (0.01) or
+// a 257th point is refused and logged. Returns the result; `count` gets the new point count.
+// Runs before applyPowerUps() (the step 1 moves), so `from` is the disc place. moved: points appended. Past kMaxPowerUps points
+// it adds the note "added N power-ups (M places: the game creates 100 at most)" after the refusals.
+PowerUpResult appendPowerUps(const Mem &m, uint32_t points, uint32_t numPoints, const std::vector<PowerUpEdit> &adds, uint32_t &count);
+
 } // namespace wotm::stagemap

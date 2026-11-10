@@ -1486,6 +1486,89 @@ TEST(stagemap_powerups_apply)
         CHECK(r.log[0].find("the point count 257 is past the 256 points") != std::string::npos);
 }
 
+// Power-up places added by a map: copies of stock points appended after them, the whole 64-byte point with its position set
+TEST(stagemap_powerups_append)
+{
+    constexpr uint32_t kPoints = 0x2AF0C0;
+    std::vector<uint8_t> buf(sm::kMaxPoints * sm::kPointSize);
+    sm::Mem mem;
+    mem.r.push_back({kPoints, buf.data(), uint32_t(buf.size())});
+    auto put = [&](uint32_t i, uint8_t type) {
+        const uint32_t a = kPoints + sm::kPointSize * i;
+        mem.wf32(a, 100.f * float(i)), mem.wf32(a + 4, -50.f), mem.wf32(a + 8, 40.f + float(i));
+        for (uint32_t k = 12; k < sm::kPointSize; ++k)
+            buf[a - kPoints + k] = uint8_t(i * 7 + k);
+        buf[a - kPoints + 0x2C] = type, buf[a - kPoints + 0x2D] = uint8_t(type + 10);
+    };
+    auto pos = [&](uint32_t i) {
+        const uint32_t a = kPoints + sm::kPointSize * i;
+        return std::array<float, 3>{mem.f32(a), mem.f32(a + 4), mem.f32(a + 8)};
+    };
+    auto tailOf = [&](uint32_t i, uint32_t src) {   // bytes 12..63 of point i equal those of point src
+        return std::equal(buf.begin() + sm::kPointSize * i + 12, buf.begin() + sm::kPointSize * (i + 1),
+                          buf.begin() + sm::kPointSize * src + 12);
+    };
+    auto from = [](uint32_t i) { return std::array<float, 3>{100.f * float(i), -50.f, 40.f + float(i)}; };
+    {
+        for (uint32_t i = 0; i < 3; ++i)
+            put(i, uint8_t(i + 1));
+        const std::vector<uint8_t> stock(buf.begin(), buf.begin() + 3 * sm::kPointSize);
+        const std::vector<sm::PowerUpEdit> adds = {
+            powerUp(1, from(1), {500.f, 600.f, 70.f}),
+            powerUp(1, {100.005f, -50.f, 41.f}, {-1.5f, 2.5f, 3.5f}),   // the same index again, within 0.01 of the disc place
+            powerUp(0, {0.f, -50.f, 41.f}, {9.f, 9.f, 9.f}),            // z off by 1: refused
+            powerUp(2, from(2), {7.f, 8.f, 9.f}),
+            powerUp(3, from(3), {9.f, 9.f, 9.f}),                       // past the stock points: refused
+        };
+        uint32_t count = 0;
+        const sm::PowerUpResult r = sm::appendPowerUps(mem, kPoints, 3, adds, count);
+        for (const std::string &l : r.log)
+            std::printf("  %s\n", l.c_str());
+        CHECK(count == 6 && r.moved == 3 && r.refused == 2 && r.log.size() == 2);
+        CHECK(tailOf(3, 1) && tailOf(4, 1) && tailOf(5, 2) && buf[sm::kPointSize * 5 + 0x2C] == 3);
+        CHECK((pos(3) == std::array<float, 3>{500.f, 600.f, 70.f}) && (pos(4) == std::array<float, 3>{-1.5f, 2.5f, 3.5f}) &&
+              (pos(5) == std::array<float, 3>{7.f, 8.f, 9.f}));
+        CHECK(std::equal(stock.begin(), stock.end(), buf.begin()));   // the stock points are untouched
+        CHECK(std::all_of(buf.begin() + 6 * sm::kPointSize, buf.end(), [](uint8_t b) { return b == 0; }));
+        if (r.log.size() == 2)
+            CHECK(r.log[0].find("added power-up 0: is at 0.0 -50.0 40.0") == 0 &&
+                  r.log[1].find("added power-up 3: the stage has 3 power-up places") == 0);
+    }
+    {
+        std::fill(buf.begin(), buf.end(), uint8_t(0));
+        for (uint32_t i = 0; i < 255; ++i)
+            put(i, 1);
+        uint32_t count = 0;
+        const sm::PowerUpResult r = sm::appendPowerUps(mem, kPoints, 255, {powerUp(4, from(4), {1.f, 2.f, 3.f}),
+                                                                            powerUp(5, from(5), {1.f, 2.f, 3.f})}, count);
+        CHECK(count == 256 && r.moved == 1 && r.refused == 1 && tailOf(255, 4));
+        CHECK(r.log.size() == 2 && r.log[0].find("added power-up 5: ") == 0 && r.log[0].find("256 points") != std::string::npos);
+        CHECK(r.log.size() == 2 && r.log[1].find("the game creates 100 at most") != std::string::npos);
+    }
+    {
+        std::fill(buf.begin(), buf.end(), uint8_t(0));
+        for (uint32_t i = 0; i < 98; ++i)
+            put(i, 2);
+        uint32_t count = 0;
+        const sm::PowerUpResult r = sm::appendPowerUps(mem, kPoints, 98, {powerUp(0, from(0), {1.f, 2.f, 3.f}),
+                                                                           powerUp(1, from(1), {1.f, 2.f, 3.f}),
+                                                                           powerUp(2, from(2), {1.f, 2.f, 3.f})}, count);
+        CHECK(count == 101 && r.moved == 3 && r.refused == 0);
+        CHECK(r.log.size() == 1 && r.log[0] == "added 3 power-ups (101 places: the game creates 100 at most)");
+        // two short of 100 and one added: no note
+        uint32_t c2 = 0;
+        CHECK(sm::appendPowerUps(mem, kPoints, 98, {powerUp(0, from(0), {1.f, 2.f, 3.f})}, c2).log.empty() && c2 == 99);
+    }
+    {
+        // no additions: nothing written, the count stays; a broken count past 256: everything refused, nothing written
+        const std::vector<uint8_t> before = buf;
+        uint32_t count = 0;
+        CHECK(sm::appendPowerUps(mem, kPoints, 98, {}, count).moved == 0 && count == 98 && buf == before);
+        const sm::PowerUpResult r = sm::appendPowerUps(mem, kPoints, sm::kMaxPoints + 1, {powerUp(0, from(0), {1.f, 2.f, 3.f})}, count);
+        CHECK(r.moved == 0 && r.refused == 1 && count == sm::kMaxPoints + 1 && buf == before);
+    }
+}
+
 // The coverage rule on the same cases as tools/stage_map.py selftest: a box past both X edges, a negative start, one fully
 // outside, and one ending exactly on a cell line (floor-inclusive takes the next cell).
 TEST(stagemap_covered)

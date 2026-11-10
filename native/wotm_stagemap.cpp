@@ -2351,4 +2351,59 @@ PowerUpResult applyPowerUps(const Mem &m, uint32_t points, uint32_t numPoints, c
     return out;
 }
 
+
+PowerUpResult appendPowerUps(const Mem &m, uint32_t points, uint32_t numPoints, const std::vector<PowerUpEdit> &adds, uint32_t &count)
+{
+    PowerUpResult out;
+    count = numPoints;
+    auto near = [](float a, float b) { return std::fabs(double(a) - double(b)) <= 0.01; };
+    for (const PowerUpEdit &e : adds)
+    {
+        const std::string at = "added power-up " + std::to_string(e.index) + ": ";
+        auto refuse = [&](const std::string &why) {
+            ++out.refused;
+            out.log.push_back(at + why + ", refused");
+        };
+        if (numPoints > kMaxPoints)
+        {
+            refuse("the point count " + std::to_string(numPoints) + " is past the " + std::to_string(kMaxPoints) + " points PowerUpTool holds");
+            continue;
+        }
+        if (e.index >= numPoints)
+        {
+            refuse("the stage has " + std::to_string(numPoints) + " power-up places");
+            continue;
+        }
+        if (count >= kMaxPoints)
+        {
+            refuse("PowerUpTool holds " + std::to_string(kMaxPoints) + " points");
+            continue;
+        }
+        const uint32_t src = points + kPointSize * e.index, dst = points + kPointSize * count;
+        const uint8_t *s = m.at(src, kPointSize);
+        uint8_t *d = m.at(dst, kPointSize);
+        if (!s || !d)
+        {
+            refuse("its point is not readable");
+            continue;
+        }
+        const float p[3] = {m.f32(src), m.f32(src + 4), m.f32(src + 8)};
+        if (!near(p[0], e.from[0]) || !near(p[1], e.from[1]) || !near(p[2], e.from[2]))
+        {
+            refuse("is at " + num(p[0]) + " " + num(p[1]) + " " + num(p[2]) + ", not at its \"from\" " + num(e.from[0]) + " " +
+                   num(e.from[1]) + " " + num(e.from[2]));
+            continue;
+        }
+        std::memmove(d, s, kPointSize);
+        for (uint32_t k = 0; k < 3; ++k)
+            m.wf32(dst + 4 * k, e.at[k]);
+        ++count;
+        ++out.moved;
+    }
+    if (out.moved > 0 && count > kMaxPowerUps)
+        out.log.push_back("added " + std::to_string(out.moved) + " power-ups (" + std::to_string(count) + " places: the game creates " +
+                          std::to_string(kMaxPowerUps) + " at most)");
+    return out;
+}
+
 } // namespace wotm::stagemap
