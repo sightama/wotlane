@@ -568,6 +568,15 @@ def clamp_to_grid(m, g, node_paths, old, to, c, s, turning):
     return to, clamped
 
 
+def pup_ground(m, node_paths, p):
+    """Where a power-up of a removed piece lands: the lowest bottom of the piece's solid (non-trigger) collision boxes under
+    its X and Y, any width; with none there, the lowest bottom of all of them. A roof slab's own bottom is not the ground (many
+    roof boxes are thin or flat)."""
+    boxes = [[m.f32(q + 4 * k) for k in range(6)] for q in node_paths if m.ok(q, 0x24) and not m.u32(q + 0x20) & 1]
+    under = [b[2] for b in boxes if b[0] <= p[0] <= b[3] and b[1] <= p[1] <= b[4]]
+    return min(under or [b[2] for b in boxes])
+
+
 def rider_edits(m, edits, valid_riders, notes, parent=None, pups=None):
     """make's edits (stage.json form, offsets) with their riders' edits added (valid_riders: {base offset: [(rider offset,
     kind)]}; pups: power-up riders, {base offset: [(index, (x, y, z), box)]}, powerup_riders()):
@@ -581,8 +590,8 @@ def rider_edits(m, edits, valid_riders, notes, parent=None, pups=None):
       user edited keeps the user's edit.
     - a power-up place goes the same way as a rider piece (moved and turned about the base's place, or held back with a base
       the loader cannot turn), as {"powerup": i, "from": disc place, "at": new place}; a power-up has no turn of its own. Of a
-      removed base it drops to the ground at the same X and Y, keeping its hover height: new z = the carrying box's bottom +
-      (z - the box top).
+      removed base it drops to the ground at the same X and Y, keeping its hover height: new z = the ground (pup_ground(): the
+      lowest bottom of the base's solid boxes under it) + (z - the carrying box's top).
     Returns the new list: the user's edits in their order (riders turned by the user updated in place), then the riders',
     then the power-ups'."""
     edits = [dict(e) for e in edits]
@@ -599,6 +608,9 @@ def rider_edits(m, edits, valid_riders, notes, parent=None, pups=None):
         for n in set(nodes):
             paths_of.setdefault(n, []).append(p)
     out, pup_out, done = [], [], set()
+    # list(edits): the user's edits as given. A piece the user only turned that is itself a rider of another edited piece gets
+    # its edit replaced below by the carried one, but its own riders and power-ups are carried by the user's turn about its disc
+    # place, not by the carried place (one level only; no stock stage has a rider that carries power-ups or riders).
     for e in list(edits):
         if "node" not in e:
             continue
@@ -649,7 +661,7 @@ def rider_edits(m, edits, valid_riders, notes, parent=None, pups=None):
             out.append(ed)
         for i, p, box in prs:
             if e.get("remove"):
-                to = [f32_text(p[0]), f32_text(p[1]), round(box[2] + (p[2] - box[5]), 3)]
+                to = [f32_text(p[0]), f32_text(p[1]), round(pup_ground(m, paths_of.get(BASE + base, []), p) + (p[2] - box[5]), 3)]
                 notes.append("  power-up %d follows 0x%x down to its ground, at %.1f %.1f %.1f" % ((i, base) + tuple(to)))
             else:
                 d = [p[k] - old[k] for k in range(3)]
@@ -1117,7 +1129,8 @@ def cmd_selftest(_a):
              ((40.0, 10.0, 0.0), (160.0, 90.0, 108.0), [world, b2, pcs[1]], 0),
              ((40.0, 10.0, 0.0), (160.0, 90.0, 205.0), [world, b, pcs[0]], 1),     # a trigger box: carries nothing
              ((-500.0, 0.0, 0.0), (400.0, 200.0, 50.0), [world, tw, pcs[2]], 0),   # 900 wide: carries nothing
-             ((180.0, 130.0, 0.0), (220.0, 170.0, 50.0), [world, rb, pcs[3]], 0)]
+             ((180.0, 130.0, 0.0), (220.0, 170.0, 50.0), [world, rb, pcs[3]], 0),
+             ((180.0, 130.0, 70.0), (220.0, 170.0, 71.0), [world, rb, pcs[3]], 0)]     # rb's thin roof slab above it
     head = 0
     for lo, hi, nodes, trig in boxes:
         p = path(lo, hi, nodes)
@@ -1194,6 +1207,13 @@ def cmd_selftest(_a):
                     {"powerup": 2, "from": [200, 150, 120], "at": [150, 150, 120]}], pups
     assert rest[:3] == [E(b, move=[110, 60, 5], turn=90), E(b2, remove=True), E(rb, move=[150, 150, 0])], rest
     assert any("power-up 0 follows 0x%x down to its ground" % off(b2) in n for n in notes), notes
+    # a removed base whose carrying box is a thin roof slab (rb's, 70..71, over its 0..50 box): power-up 2 hovers 49 over the
+    # slab and lands 49 over the lowest box bottom under it (0), not over the slab's own bottom (70)
+    assert pr[rb][0][2][2] == 70.0 and pr[rb][0][2][5] == 71.0, pr[rb]   # the slab carries it (nearest top)
+    pups, _r, _n = pup_edits(E(rb, remove=True))
+    assert pups == [{"powerup": 2, "from": [200, 150, 120], "at": [200, 150, 49]}], pups
+    rb_paths = [p for p in sorted(all_paths(m, find_grid(m, parent))) if rb in path_nodes(m, p)]
+    assert pup_ground(m, rb_paths, (200.0, 150.0, 0.0)) == 0.0 and pup_ground(m, rb_paths, (900.0, 900.0, 0.0)) == 0.0
     # a turn alone, not a right angle: the same angle as the piece riders
     pups, _r, _n = pup_edits(E(b, turn=-10))
     c, s = turn_of(-10)
