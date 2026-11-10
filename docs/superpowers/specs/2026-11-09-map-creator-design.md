@@ -136,14 +136,13 @@ is made (`stage_map.py make`, later the editor), as explicit edits the loader ap
   the highest point of what it bounds: `CAPITOL` 0x6631f0's upper tier (189) stands on its own base, over a plaza box
   whose top is 182.3 (its tiers bring 32 and 39 to 2.1 and 2.2, not 184), and `SANFRAN`'s hillside pieces stand partway up
   terrain boxes (1, 2, 26 and 22 rest at 1050.4, 857.3, 256.4 and 0.3, not in the valley under them). The runtime hooks
-  `exportPoints` (every resume
-  slot, acting on entry) and, for the map applied to this load, writes each `at` over the point's position when the point is
-  at `from` (or already at `at`) within 0.01 on each axis; an index past the count or a point elsewhere is refused and
-  logged, the rest apply (`[stages] <id>: moved N power-ups`); a second edit of an index refuses the whole file at parse. A
-  power-up edit is independent of its base piece's edit, like a rider's: when the loader refuses the base's move or turn (the
-  reserve is full, the piece is not a piece on this image...), the power-up still moves to `at`. Stock stages: 160 of 472 places ride 110
-  pieces (`CENTRAL` 29 of 35 on 24; the other 6 are on open ground). On `CENTRAL`, the tower 0x165a70 carries power-up 4 on
-  its roof, and 0x18a410 carries 15 (roof) and 5 (low pad).
+  `exportPoints` (every resume slot, acting on entry) and, for the map applied to this load, writes each `at` over the
+  point's position when the point is at `from` (or already at `at`) within 0.01 on each axis; an index past the count or a
+  point elsewhere is refused and logged, the rest apply (`[stages] <id>: moved N power-ups`); a second edit of an index
+  refuses the whole file at parse. A power-up edit is independent of its base piece's edit, like a rider's: when the loader
+  refuses the base's move or turn (the reserve is full, the piece is not a piece on this image...), the power-up still moves
+  to `at`. Stock stages: 160 of 472 places ride 110 pieces (`CENTRAL` 29 of 35 on 24; the other 6 are on open ground). On
+  `CENTRAL`, the tower 0x165a70 carries power-up 4 on its roof, and 0x18a410 carries 15 (roof) and 5 (low pad).
 
 ## Loading a map
 

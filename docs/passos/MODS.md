@@ -355,10 +355,10 @@ the same X and Y, keeping their hover height (at least 0). The ground is the hig
 leaves under them, at most 10 above the bottom of the box that carried them (or of the piece's lower tier that box stands
 on), and no lower than where the piece stood on a hillside; with none, the piece's own lowest box there, no lower than a
 flat ground slab. Not the roof's own box, which is often a thin slab, nor the piece's foundation. `--no-riders` turns this
-off too; a stage with no `.PUP` gets none. `pieces` lists the power-up indices per piece (`power-ups 5,15`). On the stock stages 160 of 472 power-up places
-are on 110 pieces (CENTRAL: 29 of 35, on 24 pieces; the other 6 are on open ground).
-To find a piece, take the position from `pieces` and look at it with the free camera (`WOTM_FREECAM=<s>@<x>,<y>,<z>,<heading>,<pitch>`,
-`NATIVO.md`, "Diagnostics").
+off too; a stage with no `.PUP` gets none. `pieces` lists the power-up indices per piece (`power-ups 5,15`). On the stock
+stages 160 of 472 power-up places are on 110 pieces (CENTRAL: 29 of 35, on 24 pieces; the other 6 are on open ground). To
+find a piece, take the position from `pieces` and look at it with the free camera
+(`WOTM_FREECAM=<s>@<x>,<y>,<z>,<heading>,<pitch>`, `NATIVO.md`, "Diagnostics").
 
 **How it loads.**
 - **Stage select:** after RANDOM, the first 6 maps (by id, across all enabled mods) take the slots 18 to 23 with their name and
