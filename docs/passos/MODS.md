@@ -389,7 +389,9 @@ copy's. It prints `N paths, M list nodes, K copies, OK`.
 **The demo map.** `powershell -File tools\map_demo.ps1 -Out mods\<mod>\stages [-Disc disc] [-Id demo] [-Name "TOWER PARK"]`
 writes a CENTRAL map: the park's props removed and three tall towers in it, a wall of five slim towers along the street
 south of the park, and three low blocks replaced by tower copies (29 copies with riders). The map folder is not in the repo
-(it would show in everyone's stage select). Photo: `docs/screenshots/2026-11-10/2026-11-10_map_copy_park.png`.
+(it would show in everyone's stage select). Photos: `docs/screenshots/2026-11-10/2026-11-10_map_copy_park.png` (the map),
+`docs/screenshots/2026-11-10/2026-11-10_map_copy_park_stock.png` (the stock park, for comparison) and
+`docs/screenshots/2026-11-10/2026-11-10_map_copy_park_street.png` (the park from street level).
 
 **Riders.** A car or a crate on a roof is its own piece (a level pickup), not part of the building, so `make` adds what stands
 on an edited piece's roof as edits of its own and prints each one (`  rider 0x5cbce0 (pickup type 1) follows 0x18a410`): a
