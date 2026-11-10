@@ -181,17 +181,21 @@ constexpr uint32_t kPickupBytes = 0x500;
 //
 // Refused: not a piece; part of a destructible's state (a DESTRUCTIBLE or INTERACTIVE_STATE above it: a copy would outlive its
 // building); under a mode-masked GROUP (flags & 0xB0: a copy would show in modes that blank the original); animated (ANIM_XFORM,
-// CHAR_INSTANCE, SKEL_BONE or ANIM_SCALE in the subtree, an ANIM_XFORM above, a CHAR_INSTANCE above when an OBJECT of the
-// piece reads an animation channel, an ACT_ANIM in its destructibles' actions); a script action (ACT_CINEMA, ACT_PLAYERPOS,
-// ACT_RUNSCRIPT, ACT_AINAVIGATION, ACT_GENERICEVENT); a special id on a node dbsTraverse hands to dbProcInteractive (world, sky,
-// font, monsters, pedestrians, weapons, effects, power-ups, particle textures, HUD, scripts, end points); an id1 of a fixed
-// table on an INTERACTIVE_STATE or DESTRUCTIBLE (SanFran saves, CANYON2 and CAPITOL pillars, the 3-MILE vent and stacks); an
-// emitter with a locator id (0x1D4C..0x1D6B, one fx per id); a node of another kind in the copy set.
+// CHAR_INSTANCE, SKEL_BONE or ANIM_SCALE in the subtree, an ANIM_XFORM, SKEL_BONE or ANIM_SCALE above, a CHAR_INSTANCE above
+// when an OBJECT of the piece reads an animation channel, an ACT_ANIM in its destructibles' actions); a script action
+// (ACT_CINEMA, ACT_PLAYERPOS, ACT_RUNSCRIPT, ACT_AINAVIGATION, ACT_GENERICEVENT); an action tree past 20 levels or 256 actions
+// in a group (not read in part); a special id on a node dbsTraverse hands to dbProcInteractive (world, sky, font, monsters,
+// pedestrians, weapons, effects, power-ups, particle textures, HUD, scripts, end points); an id1 of a fixed table on an
+// INTERACTIVE_STATE or DESTRUCTIBLE (SanFran saves, CANYON2 and CAPITOL pillars, the 3-MILE vent and stacks); an emitter with a
+// locator id (0x1D4C..0x1D6B, one fx per id); a shared node inside the piece holding a copied one (the copy set follows first
+// parents: the copy would reach the original's state through it); a node in the copy set that nodeSize() gives 0 for. A level
+// pickup id1 on any dispatched kind makes the node per-instance (a pickup id on an OBJECT therefore refuses the piece).
 struct CopySet { std::string why; std::vector<uint32_t> nodes; uint32_t bytes = 0;
                  int interactives = 0, destructibles = 0, pickups = 0;
                  uint32_t optionGroup = 0; };
 CopySet copySet(const Mem &m, const std::map<uint32_t, uint32_t> &par, uint32_t node);
-// Size in bytes of a node of the copy set (include/hieri_types.h), 0 for a kind a copy cannot hold
+// Size in bytes of a node of the copy set (include/hieri_types.h), 0 for a kind a copy cannot hold, for a node not wholly mapped
+// and for a child count past what slots() reads (4096; a LOD's 16)
 uint32_t nodeSize(const Mem &m, uint32_t n);
 // The domino actions of DESTRUCTIBLE n's states (as hatActions())
 std::vector<uint32_t> dominoActions(const Mem &m, uint32_t n);

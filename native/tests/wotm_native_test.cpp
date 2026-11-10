@@ -1851,6 +1851,12 @@ TEST(stagemap_copy_set)
     CHECK(sm::nodeSize(m, s.obj0) == 0 && sm::nodeSize(m, s.pc) == 0);   // shared kinds are never copied
     const uint32_t ad = s.im.node(sm::kOpActionData, 0x10);
     CHECK(sm::nodeSize(m, ad) == 0);
+    CHECK(sm::nodeSize(m, s.im.node(sm::kOpScriptAction, 0x60)) == 0x60);
+    const uint32_t lod = s.im.lod(s.obj0, 0, 0, 0, 10), ctl = s.im.node(sm::kOpControl, 0x28);
+    *s.im.at(ctl + 0xC) = 2;   // numVolumes 2: bspNodes[] +0x20
+    CHECK(sm::nodeSize(m, lod) == 0x30 && sm::nodeSize(m, ctl) == 0x28);
+    s.im.w32(lod + 4, 16);     // a LOD of 16 levels is past what slots() reads
+    CHECK(sm::nodeSize(m, lod) == 0);
     CHECK(sm::dominoActions(m, s.d1) == std::vector<uint32_t>({s.dom, s.domOut}));
     CHECK(sm::dominoActions(m, s.tD).empty());
 }
@@ -1959,11 +1965,19 @@ TEST(stagemap_copy_refusals)
               s.im.w32(s.d1 + 0x18, gs);                                        // state 1 = gs
           }) == "");
     CHECK(why([&](CopyStage &s) { s.im.w32(s.d1 + 0x18, s.obj0); }) == "");   // a shared OBJECT held twice is fine
+    // the other animation kinds: SKEL_BONE and ANIM_SCALE in the piece, a SKEL_BONE above it; an ANIM_SCALE above transforms
+    // it, so the source is not a piece at all
+    CHECK(has(why([&](CopyStage &s) { s.im.w32(s.g0 + 0x24, s.im.holder(sm::kOpSkelBone, 4, 0xC, {s.pc})); }), "animated"));
+    CHECK(has(why([&](CopyStage &s) { s.im.w32(s.g0 + 0x24, s.im.holder(sm::kOpAnimScale, 4, 0x60, {s.pc})); }), "animated"));
+    CHECK(has(why([&](CopyStage &s) { s.im.w32(s.mid + 0x20, s.im.holder(sm::kOpSkelBone, 4, 0xC, {s.tD})); }), "animated"));
+    CHECK(has(why([&](CopyStage &s) { s.im.w32(s.mid + 0x20, s.im.holder(sm::kOpAnimScale, 4, 0x60, {s.tD})); }), "not a piece"));
     // lost context (amendment A3): part of a destructible's state, mode-masked GROUP above
     CHECK(has(why([&](CopyStage &s) { s.im.w32(s.mid + 0x20, s.im.istate(s.im.destructible({{s.tD, 0}}))); }),
               "in a destructible's state"));
     CHECK(has(why([&](CopyStage &s) { s.im.w16(s.mid + 0xA, 0x21); }), "mode-masked"));
     CHECK(has(why([&](CopyStage &s) { s.im.w16(s.mid + 0xA, 0x81); }), "mode-masked"));
+    CHECK(has(why([&](CopyStage &s) { s.im.w16(s.mid + 0xA, 0x11); }), "mode-masked"));   // 0x10: modes 2, 4, 5
+    CHECK(why([&](CopyStage &s) { s.im.w16(s.mid + 0xA, 0x4F); }) == "");                 // other low bits are not masks
     {
         CopyStage s;   // a GROUP above with collision-option flags: copyable, named for the log
         s.im.w16(s.mid + 0xA, 0x0102);
@@ -1982,6 +1996,20 @@ TEST(stagemap_copy_refusals)
         setId(s, s.g0, 0x12C5);
         const sm::CopySet c = s.copySet(s.tD);
         CHECK(c.why == "" && c.interactives == 3 && c.pickups == 1);
+    }
+    // a pickup id1 on a node that is not a GROUP: still per-instance (Pickup::init writes into it). A SWITCH is copied (CANYON1
+    // has two); an OBJECT cannot be, so the piece is refused rather than two pickups sharing one node
+    {
+        CopyStage s;
+        setId(s, s.sw, 0x12C3);
+        const sm::CopySet c = s.copySet(s.tD);
+        CHECK(c.why == "" && c.interactives == 3 && c.pickups == 1);
+        CHECK(std::find(c.nodes.begin(), c.nodes.end(), s.sw) != c.nodes.end());
+    }
+    {
+        CopyStage s;
+        setId(s, s.obj2, 0x12C3);
+        CHECK(has(s.copySet(s.tD).why, "kind 0 (OBJECT)"));
     }
 }
 
