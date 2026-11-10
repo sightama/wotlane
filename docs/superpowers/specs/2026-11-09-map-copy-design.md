@@ -197,6 +197,9 @@ see-through), a LOD above it (always at that detail), a SWITCH above it (stage-w
   no null test (retail 0x12F768-0x12F774), so that call is let through and logged, and only the maps' room charge (every
   debris pickup counted) keeps it in bounds. `kGlobalKeep` was measured in the default game mode with one lineup on 4 stages
   and spot-checked on 3 more (2g); what SANFRAN's quake or 3-MILE's meltdown allocate after frame 2400 is not covered.
+- **CS pool.** The CS pool (1024, shared with monsters, debris and shots, `CsPool.cpp:34`) is not counted: a map with many
+  pickup copies can run it out, and later debris then gets no CS. Safe (`Debris::Activate` null-checks it, `Debris.cpp:244`,
+  and stops its chunks there), but visible: those breaks drop fewer or no chunks. Not logged by the loader.
 - **Online** (decision 16). The network's per-frame RAM hash covers the low 32 MB, not the reserve where the copies' nodes
   live; `map_copy_online` compares the two PCs' as-built image and reserve dumps (`WOTM_STAGE_DUMP`) byte for byte, so a
   difference that grows during the fight is not caught as it happens.

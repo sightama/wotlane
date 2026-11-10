@@ -462,6 +462,9 @@ find a piece, take the position from `pieces` and look at it with the free camer
   memory and 135 by the table; a piece with one state and no pickups fits 200 or more times (676 entries left on CENTRAL,
   353 on METRO, 447 on VEGAS, 670 on ISLAND). The copies' nodes take the 4 MB map reserve.
 - **Power-ups.** 256 power-up places per stage, and the game creates 100 power-ups at most.
+- **Debris.** The game has 1024 CSs (the slots that draw monsters, debris and shots), and the loader does not count them: a map
+  with many pickup copies can run them out, and later debris then gets no CS. Safe (the game checks for it), but visible:
+  those breaks drop fewer chunks or none.
 - **Lost context.** A copy hangs under the stage's root, not where its original hangs, so what a node above the original does
   to it does not reach the copy: a see-through switch (`CONTROL`, the copy stays solid and opaque), a `LOD` (the copy is
   always at its piece's detail), a stage-wide `SWITCH` (3-MILE: the copy is not switched with the stage), and a group with
