@@ -303,10 +303,38 @@ readers. Addresses in the generated recompiled code (`recomp/retail/`, not in gi
 
   `kGlobalKeep` = 133300 rounded up to 16 KB (147456) + 64 KB = **0x34000** (212992 bytes). The transient `.ptr` read needs
   164376 + 16 bytes on top of the pickups and the PedGroups allocated before it (at most 6400 here): 170792 bytes, under
-  0x34000. With it the pickup room is 281 KB on CENTRAL, VEGAS and ISLAND and 265 KB on METRO. **Open:** the estimate charges
-  every stock pickup `kPickupBytes` (0x500) plus the stock debris pickups, which already passes that room on METRO (338 KB)
-  and leaves VEGAS 18 KB and CENTRAL 87 KB: a copy with debris pickups (most destructibles: 0x2d85a0 takes 1536 B) is
-  refused after a few dozen on CENTRAL and at once on METRO.
+  0x34000. With it the pickup room is 281 KB on CENTRAL, VEGAS and ISLAND and 265 KB on METRO.
+
+  **Pickup sizes.** A flat 0x500 per stock pickup (the first estimate) already passed that room on METRO (338 KB). A level
+  pickup is now charged its own size: `dbProcInteractive` calls `createPickup` with type 0, which takes the type from the id1
+  (`src/game/Pickup.cpp:1094-1095`) and allocates by it (`:1098-1160`), so `levelPickupBytes(id1)` =
+  `debrisPickupBytes(id1 - 0x1388)`, the largest over game modes and flags (0x180 for a plain pickup, 0x4D0 for a rigid one).
+
+  **A fight that runs out of room.** `MemoryStack::alloc16` has no bounds check (`include/memory_stack.h:58-63`): it moves
+  `low` past `hi1`, over the high end and past the pool's end (0x880E90), so the overflowing pickup corrupts memory. It never
+  returns null. Of `createPickup`'s four retail callers, three ignore its result, which is 0 already for a type that creates
+  nothing (`Pickup.cpp:1166-1167`): `dbProcInteractive` (`db.cpp:223`; retail 0x12E818 branches to the return) and
+  `Debris::update` for settled and dying chunks (`Debris.cpp:412`, `:442`; retail 0x12FD74 and 0x12FE54 go on to
+  `csDeactivate`). The fourth, `Debris::Activate`'s rigid chunk (`Debris.cpp:294`), uses it: retail 0x12F768-0x12F774
+  (`daddu $s0, $v0`; `lw $a0, 0($s0)`; `jal huck`) has no null test. So option (b): debris pickups stay in the room charge,
+  and the runtime guards `createPickup` (`wotm_stagemap.inc`, integers only): when `hi1 - low` is under the pickup's size + 16,
+  a call from one of the three tolerant return addresses allocates nothing and returns 0 (logged once per load); any other
+  call (Activate's) is let through and logged, and the charge is what keeps it in bounds.
+
+  **Budget** (room = entry - 0x34000; stock = level pickups at their size + debris pickups; Interactives left = 1000 - 1 - 8 -
+  the stage's interactives and debris pickups):
+
+  | Stage | room | stock charge | room left | Interactives left | 0x2d85a0 (1536 B, 5 interactives) | median copyable destructible |
+  |---|---|---|---|---|---|---|
+  | CENTRAL | 281 KB | 110 KB (115 pickups 62144 B, 133 debris 51072 B) | 171 KB | 676 | 114 (room), 135 (Interactives) | 1536 B, 5: 114 |
+  | METRO | 265 KB | 189 KB (201 pickups 105344 B, 231 debris 88704 B) | 76 KB | 353 | (not on METRO) | 384 B, 3: 117 |
+  | VEGAS | 281 KB | 183 KB (117 pickups 68368 B, 302 debris 119616 B) | 98 KB | 447 | | 0 B, 1: 447 |
+  | ISLAND | 281 KB | 72 KB (95 pickups 51392 B, 56 debris 23200 B) | 209 KB | 670 | | 0 B, 1: 670 |
+
+  200 copies of 0x2d85a0 do not fit on CENTRAL, by room (114) and by the Interactives cap alone (135: its 4 debris pickups
+  count there, amendment A4), so not charging debris against the room would not make them fit either. 200 copies of a
+  destructible with one interactive and no pickup memory fit on CENTRAL (20 such pieces, e.g. 0x61e340: 200 of 676
+  interactives, 0 B) and on METRO (37 such pieces: 200 of 353).
 - **2h. `exportPoints` callers.** Besides `PointToolKit::loadPoints` (through vtable slot 3, `PointToolKit.cpp:51-58`), two
   game functions call `PowerUpTool::exportPoints` directly with `$a0` = `PowerUpTool::instance` (0x2AF0C0) and no
   `loadPoints` before: `sanFranUpdate` (retail 0x18D874 and 0x18D8FC, each after `sanFranQuake`, `AiPathTool::exportPoints`
