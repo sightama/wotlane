@@ -6,20 +6,24 @@
   stage_map.py check <NGP or dump>...      grid rule; a dump is the raw image (bytes from 0xA00000), and a sibling
                                            <dump>.reserve, if present, is mapped at --reserve (default 0x3EFF000)
   stage_map.py pieces <NGP or dump>        one line per piece: node, kind, world position, collision paths, riders,
+                                           power-ups (indices into <disc>/PTS/<STAGE>.PUP, for an .NGP in <disc>/LVL),
                                            destructible; node is the offset from 0xA00000, or @<absolute address> outside
                                            the image
   stage_map.py make --base CENTRAL --id <id> --name "<NAME>" --out <stages folder> [--remove 0x..]...
                     [--move 0x..=x,y,z[,turn]]... [--turn 0x..=degrees]... [--no-riders]
                                            writes <stages folder>/<id>/stage.json (--turn and --move on the same node make
                                            one edit), plus an edit per rider of an edited piece (rider_map(),
-                                           rider_edits()), printed as it is added
+                                           rider_edits()) and per power-up place on it (powerup_riders(), from the disc's
+                                           PTS/<BASE>.PUP when there is one), printed as it is added
   stage_map.py inflate <NGP> <out>         writes the inflated stage image (what the game has at 0xA00000), e.g. for
                                            the native test's WOTM_TEST_STAGE
   stage_map.py ram <ram_<frame>.bin> [--monster I:ZMIN:ZMAX]... [--pickup X,Y,Z]... [--no-pickup X,Y,Z]...
+                   [--powerup X,Y,Z]... [--no-powerup X,Y,Z]...
                                            a fight's RAM (PS2X_DUMP_RAM): the monsters' positions and the level pickups'
                                            placed positions (what createPickup was given); exits 1 when monster I's height is
                                            outside [ZMIN, ZMAX], or a pickup is missing at (--pickup) or present at
-                                           (--no-pickup) a place, within 1 unit (the map creator's live checks)
+                                           (--no-pickup) a place, or a power-up (X, Y and its rest height) likewise, within 1
+                                           unit (the map creator's live checks)
   stage_map.py selftest
 
 The native loader mirrors these rules exactly (keep them in step):
@@ -42,6 +46,8 @@ The native loader mirrors these rules exactly (keep them in step):
 Riders (rider_map(), make only; the loader applies them as ordinary edits): a piece whose origin (a pickup: its position; a
 world piece: the bottom of its lowest OBJECT) lies in X and Y inside one of another piece's solid collision boxes at most 700
 wide, at z from the box top - 20 to the box top + 25; on two pieces, the one whose box top is nearest, then the lower node.
+Power-up places ride the same way with z up to the box top + 100 (they hover), as {"powerup": i, "from", "at"} edits that the
+runtime writes over PowerUpTool's points (native/runtime/wotm_stagemap.inc); of a removed piece they drop to its ground.
 """
 import argparse
 import glob
@@ -49,8 +55,10 @@ import json
 import math
 import os
 import re
+import shutil
 import struct
 import sys
+import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ngp  # noqa: E402
@@ -392,16 +400,9 @@ def lowest_bottom(m, n):
     return best
 
 
-def rider_map(m, parent=None, ps=None):
-    """{base piece: [rider pieces, walk order]}. A rider is another piece whose origin (a pickup: its position; a world piece:
-    the bottom of its lowest OBJECT, lowest_bottom()) lies inside, in X and Y, one of the base's solid (non-trigger) collision
-    path boxes at most RIDER_MAX_BOX wide, with its z in [box top - RIDER_BELOW, box top + RIDER_ABOVE]. A rider on two bases
-    goes to the one whose box top is closest to its z (then the lower node). One level only: a rider's riders are not carried."""
-    if parent is None:
-        parent = walk_all(m)
-    if ps is None:
-        ps = pieces(m, parent)
-    g = find_grid(m, parent)
+def rider_boxes(m, g):
+    """{node: [box [x0, y0, z0, x1, y1, z1]]}: the solid (non-trigger) collision path boxes at most RIDER_MAX_BOX wide through
+    each node, in path address order."""
     boxes = {}
     for p in sorted(all_paths(m, g)):
         if not m.ok(p, 0x24) or m.u32(p + 0x20) & 1:
@@ -411,6 +412,19 @@ def rider_map(m, parent=None, ps=None):
             continue
         for n in set(path_nodes(m, p)):
             boxes.setdefault(n, []).append(b)
+    return boxes
+
+
+def rider_map(m, parent=None, ps=None):
+    """{base piece: [rider pieces, walk order]}. A rider is another piece whose origin (a pickup: its position; a world piece:
+    the bottom of its lowest OBJECT, lowest_bottom()) lies inside, in X and Y, one of the base's solid (non-trigger) collision
+    path boxes at most RIDER_MAX_BOX wide, with its z in [box top - RIDER_BELOW, box top + RIDER_ABOVE]. A rider on two bases
+    goes to the one whose box top is closest to its z (then the lower node). One level only: a rider's riders are not carried."""
+    if parent is None:
+        parent = walk_all(m)
+    if ps is None:
+        ps = pieces(m, parent)
+    boxes = rider_boxes(m, find_grid(m, parent))
     origin = {}
     for n, _o, pos, _k, _d in ps:
         origin[n] = pos if is_pickup(m, parent, n) else lowest_bottom(m, n)
@@ -434,6 +448,52 @@ def rider_map(m, parent=None, ps=None):
 def riders(m, piece):
     """The riders of one piece (rider_map())."""
     return rider_map(m).get(piece, [])
+
+
+# Power-up places (PTS/<STAGE>.PUP; PowerUpTool::loadPoints -> exportPoints -> PowerUps::CreatePowerUp): a power-up hovers at its
+# point's z for good (its first placement drops only the shadow, PowerUp::placeShadow), on the stock stages 0 to about 95 above
+# the surface under it, most 10 to 90. So a power-up rides with a window above the box top of 100 instead of RIDER_ABOVE.
+PUP_VERSION, PUP_SIZE = 0x12282000, 64   # file: version, count, then count 64-byte points (position at +0, type +0x2C, arg +0x2D)
+PUP_ABOVE = 100.0
+
+
+def read_pup(path):
+    """[(x, y, z)] of a .PUP's points; None when there is no such file. ValueError on a bad file."""
+    if not os.path.isfile(path):
+        return None
+    with open(path, "rb") as f:
+        d = f.read()
+    if len(d) < 8:
+        raise ValueError("%s: too short for a point file" % path)
+    ver, n = struct.unpack_from("<II", d, 0)
+    if ver != PUP_VERSION or n > 256 or len(d) < 8 + PUP_SIZE * n:
+        raise ValueError("%s: not a point file (version %08x, %d points, %d bytes)" % (path, ver, n, len(d)))
+    return [struct.unpack_from("<3f", d, 8 + PUP_SIZE * i) for i in range(n)]
+
+
+def powerup_riders(m, points, parent=None, ps=None):
+    """{base piece: [(index, (x, y, z), box)]} for the power-up places `points` (read_pup()). The piece rider rule (rider_map())
+    with the power-up window: a point rides piece P when it lies, in X and Y, inside one of P's solid collision boxes at most
+    RIDER_MAX_BOX wide, with its z in [box top - RIDER_BELOW, box top + PUP_ABOVE]; on two pieces, the one whose box top is
+    nearest its z, then the lower node. `box` is the box that carries it."""
+    if parent is None:
+        parent = walk_all(m)
+    if ps is None:
+        ps = pieces(m, parent)
+    boxes = rider_boxes(m, find_grid(m, parent))
+    claim = {}
+    for base, *_ in ps:
+        for b in boxes.get(base, ()):
+            for i, pt in enumerate(points):
+                if b[0] <= pt[0] <= b[3] and b[1] <= pt[1] <= b[4] and b[5] - RIDER_BELOW <= pt[2] <= b[5] + PUP_ABOVE:
+                    key = (abs(pt[2] - b[5]), base)
+                    if i not in claim or key < claim[i][0]:
+                        claim[i] = (key, b)
+    out = {}
+    for i in sorted(claim):
+        (_d, base), b = claim[i]
+        out.setdefault(base, []).append((i, tuple(points[i]), b))
+    return out
 
 
 def kind_of(m, parent, n):
@@ -508,9 +568,9 @@ def clamp_to_grid(m, g, node_paths, old, to, c, s, turning):
     return to, clamped
 
 
-def rider_edits(m, edits, valid_riders, notes, parent=None):
+def rider_edits(m, edits, valid_riders, notes, parent=None, pups=None):
     """make's edits (stage.json form, offsets) with their riders' edits added (valid_riders: {base offset: [(rider offset,
-    kind)]}):
+    kind)]}; pups: power-up riders, {base offset: [(index, (x, y, z), box)]}, powerup_riders()):
     - a removed base removes its riders;
     - a moved or turned base moves each rider rigidly with it: new = base place + turn(rider - base old place), and the rider
       gets the same turn. The base place is where the loader puts it: a move that would take the base's collision past the
@@ -519,9 +579,15 @@ def rider_edits(m, edits, valid_riders, notes, parent=None):
     - a rider the user edited: a remove or a move of the user's stands as it is (noted); a turn alone (no move) is carried
       with its base like any rider and turned by the user's turn plus the base's (noted). A rider of a removed base that the
       user edited keeps the user's edit.
-    Returns the new list: the user's edits in their order (riders turned by the user updated in place), then the riders'."""
+    - a power-up place goes the same way as a rider piece (moved and turned about the base's place, or held back with a base
+      the loader cannot turn), as {"powerup": i, "from": disc place, "at": new place}; a power-up has no turn of its own. Of a
+      removed base it drops to the ground at the same X and Y, keeping its hover height: new z = the carrying box's bottom +
+      (z - the box top).
+    Returns the new list: the user's edits in their order (riders turned by the user updated in place), then the riders',
+    then the power-ups'."""
     edits = [dict(e) for e in edits]
-    at = {int(e["node"], 16): i for i, e in enumerate(edits)}
+    at = {int(e["node"], 16): i for i, e in enumerate(edits) if "node" in e}
+    pups = pups or {}
     if parent is None:
         parent = walk_all(m)
     g = find_grid(m, parent)
@@ -532,11 +598,14 @@ def rider_edits(m, edits, valid_riders, notes, parent=None):
             continue
         for n in set(nodes):
             paths_of.setdefault(n, []).append(p)
-    out, done = [], set()
+    out, pup_out, done = [], [], set()
     for e in list(edits):
+        if "node" not in e:
+            continue
         base = int(e["node"], 16)
         rs = [(r, kind) for r, kind in valid_riders.get(base, ()) if r not in done]
-        if not rs:
+        prs = pups.get(base, ())
+        if not rs and not prs:
             continue
         deg = e.get("turn", 0)
         c, s = turn_of(deg)
@@ -578,13 +647,37 @@ def rider_edits(m, edits, valid_riders, notes, parent=None):
                 ed["turn"] = deg
             notes.append("  rider 0x%x (%s) follows 0x%x" % (r, kind, base))
             out.append(ed)
-    return edits + out
+        for i, p, box in prs:
+            if e.get("remove"):
+                to = [p[0], p[1], round(box[2] + (p[2] - box[5]), 3)]
+                notes.append("  power-up %d follows 0x%x down to its ground, at %.1f %.1f %.1f" % ((i, base) + tuple(to)))
+            else:
+                d = [p[k] - old[k] for k in range(3)]
+                to = [round(v, 3) for v in (d[0] * c - d[1] * s + new[0], d[0] * s + d[1] * c + new[1], d[2] + new[2])]
+                notes.append("  power-up %d follows 0x%x, to %.1f %.1f %.1f" % ((i, base) + tuple(to)))
+            pup_out.append({"powerup": i, "from": [f32_text(v) for v in p], "at": [num(v) for v in to]})
+    return edits + out + pup_out
 
 
 # ---------------------------------------------------------------- fight RAM (PS2X_DUMP_RAM)
 
 MONSTERS, NUM_MONSTERS = 0x3D3920, 0x3D3978   # TheGame::m_monsters[], m_numMonsters (native/wotm_syms.h)
 PICKUP_LISTS = (0x2AECA0, 0x2AECB0, 0x2AECC0, 0x2AECD0, 0x2AECE0)   # LevelPickups::s_{active,inUse,inFlight,regen,dead}List
+POWER_UPS = 0x7BDAD0                          # PowerUps::instance: m_powerUps[100] at +0xA0 (16 bytes, _cs * at +8), m_count +0x2670
+
+
+def ram_powerups(ram):
+    """[(x, y, rest z)] per power-up in a guest RAM image: its _cs's trans x and y and trans.w, the height it rests at
+    (CreatePowerUp sets it to the point's z; the model eases down to it, and a taken one comes back there)."""
+    def u32(a):
+        return struct.unpack_from("<I", ram, a & 0x3FFFFFF)[0]
+    out = []
+    for i in range(min(u32(POWER_UPS + 0x2670), 100)):
+        cs = u32(POWER_UPS + 0xA0 + 16 * i + 8)
+        if cs:
+            x, y, _z, w = struct.unpack_from("<4f", ram, (cs + 0x10) & 0x3FFFFFF)
+            out.append((x, y, w))
+    return out
 
 
 def ram_state(ram):
@@ -651,6 +744,17 @@ def cmd_ram(a):
         ok = not any(near(p, vec3(s)) for p in picks)
         bad += not ok
         print("%s no pickup placed at %s" % ("ok     " if ok else "FAILED ", s))
+    if a.powerup or a.no_powerup:
+        pups = ram_powerups(ram)
+        print("%d power-ups" % len(pups))
+        for s in a.powerup:
+            ok = any(near(p, vec3(s)) for p in pups)
+            bad += not ok
+            print("%s power-up at %s" % ("ok     " if ok else "FAILED ", s))
+        for s in a.no_powerup:
+            ok = not any(near(p, vec3(s)) for p in pups)
+            bad += not ok
+            print("%s no power-up at %s" % ("ok     " if ok else "FAILED ", s))
     return 1 if bad else 0
 
 
@@ -702,14 +806,21 @@ def cmd_pieces(a):
         parent = walk_all(m)
         ps = pieces(m, parent)
         rm = rider_map(m, parent, ps)
+        pm = {}
+        if a.file.upper().endswith(".NGP"):   # <disc>/LVL/<STAGE>.NGP: the power-up places are <disc>/PTS/<STAGE>.PUP
+            stem = os.path.splitext(os.path.basename(a.file))[0].upper()
+            points = read_pup(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(a.file))), "PTS", stem + ".PUP"))
+            if points:
+                pm = powerup_riders(m, points, parent, ps)
     except (ValueError, IndexError, OSError) as e:
         print("%s: %s" % (a.file, e))
         return 1
     for n, o, pos, npaths, destr in ps:
-        print("%s  %-9s  pos %.1f %.1f %.1f  paths %d  riders %d%s" % (
+        print("%s  %-9s  pos %.1f %.1f %.1f  paths %d  riders %d%s%s" % (
             addr(m, n), "TRANSLATE" if o == OP_TRANSLATE else "ROTATE", pos[0], pos[1], pos[2], npaths, len(rm.get(n, ())),
-            "  destructible" if destr else ""))
-    print("%d pieces" % len(ps), file=sys.stderr)
+            "  power-ups %s" % ",".join(str(i) for i, *_ in pm[n]) if n in pm else "", "  destructible" if destr else ""))
+    print("%d pieces%s" % (len(ps), ", %d power-up places on %d of them" % (sum(len(v) for v in pm.values()), len(pm)) if pm else ""),
+          file=sys.stderr)
     return 0
 
 
@@ -783,6 +894,17 @@ def cmd_inflate(a):
     return 0
 
 
+def make_riders(m, parent, ps, pup_file, no_riders):
+    """make's riders, both keyed by base offset: ({base: [(rider offset, kind)]}, {base: [(index, (x, y, z), box)]}); nothing
+    with --no-riders, and no power-ups when the stage has no .PUP (pup_file missing)."""
+    if no_riders:
+        return {}, {}
+    rm = {b - BASE: [(r - BASE, kind_of(m, parent, r)) for r in rs] for b, rs in rider_map(m, parent, ps).items()}
+    points = read_pup(pup_file)
+    pm = {b - BASE: v for b, v in powerup_riders(m, points, parent, ps).items()} if points else {}
+    return rm, pm
+
+
 def cmd_make(a):
     def fail(msg):
         print(msg)
@@ -802,7 +924,8 @@ def cmd_make(a):
         parent = walk_all(m)
         ps = pieces(m, parent)
         valid = {n - BASE for n, *_ in ps}
-        rm = {} if a.no_riders else rider_map(m, parent, ps)
+        rm, pm = make_riders(m, parent, ps, os.path.join(os.path.dirname(os.path.dirname(ngp_path)), "PTS", base + ".PUP"),
+                             a.no_riders)
     except (ValueError, IndexError) as e:
         return fail("%s: %s" % (ngp_path, e))
     try:
@@ -810,8 +933,7 @@ def cmd_make(a):
     except ValueError as e:
         return fail(str(e))
     notes = []
-    edits = rider_edits(m, edits, {b - BASE: [(r - BASE, kind_of(m, parent, r)) for r in rs] for b, rs in rm.items()}, notes,
-                        parent)
+    edits = rider_edits(m, edits, rm, notes, parent, pm)
     for line in notes:
         print(line)
     doc = {"name": name, "base": base, "baseHash": "%016x" % fnv1a(image), "edits": edits}
@@ -944,6 +1066,11 @@ def cmd_selftest(_a):
         struct.pack_into("<I", ram, h + 4, h)                                 # empty: points at its own head
     mons, picks = ram_state(bytes(ram))
     assert mons == [(1.0, 2.0, 148.0)] and len(picks) == 1 and near(picks[0], (400, -100, 11.9)), (mons, picks)
+    struct.pack_into("<I", ram, POWER_UPS + 0x2670, 2)                        # 2 power-ups, the second with no _cs
+    struct.pack_into("<I", ram, POWER_UPS + 0xA0 + 8, 0x800400)
+    struct.pack_into("<4f", ram, 0x800410, -338.5, 471.5, 90.0, 80.6)          # easing down from z 90 to its rest height 80.6
+    pups = ram_powerups(bytes(ram))
+    assert len(pups) == 1 and near(pups[0], (-338.5, 471.5, 80.6)), pups
     valid = {0x100, 0x200, 0x300}                                             # make's edits
     got = make_edits(valid, "X", ["0x100=1,2,3"], ["0x100=90", "0x200=15"], ["0x300"])
     assert got == [{"node": "0x100", "move": [1.0, 2.0, 3.0], "turn": 90}, {"node": "0x200", "turn": 15},
@@ -1047,11 +1174,67 @@ def cmd_selftest(_a):
     # a ROTATE base: its place is the matrix's fourth row
     got, _ = edits_of(E(rb, move=[150, 150, 0]))
     assert got == [E(rb, move=[150, 150, 0]), E(pk7, move=[160.0, 160.0, 60.0])], got
-    # a turn the loader will refuse (a TRANSLATE with action data): no riders
+
+    # power-up places: the piece rule with z up to the box top + 100. 0 hovers 52 over b2's roof (60 over b's: b2 is nearer),
+    # 1 is 130 over b's roof (only a trigger box is nearer), 2 hovers 70 over rb, 3 is over the 900-wide box only, 4 is 15 under
+    # b's roof top (and 23 under b2's: past the 20 below)
+    pts = [(150.0, 20.0, 160.0), (60.0, 30.0, 230.0), (200.0, 150.0, 120.0), (300.0, 100.0, 60.0), (120.0, 60.0, 85.0)]
+    pr = powerup_riders(m, pts, parent)
+    assert {k: [i for i, *_ in v] for k, v in pr.items()} == {b2: [0], rb: [2], b: [4]}, pr
+    pv = {off(k): v for k, v in pr.items()}
+
+    def pup_edits(*user):
+        notes = []
+        got = rider_edits(m, list(user), valid, notes, parent, pv)
+        return [e for e in got if "powerup" in e], [e for e in got if "powerup" not in e], notes
+    # moved and turned 90 about the base's place, removed (down to the ground, keeping the 52 hover), moved (a ROTATE base)
+    pups, rest, notes = pup_edits(E(b, move=[110, 60, 5], turn=90), E(b2, remove=True), E(rb, move=[150, 150, 0]))
+    assert pups == [{"powerup": 4, "from": [120, 60, 85], "at": [100, 80, 90]},
+                    {"powerup": 0, "from": [150, 20, 160], "at": [150, 20, 52]},
+                    {"powerup": 2, "from": [200, 150, 120], "at": [150, 150, 120]}], pups
+    assert rest[:3] == [E(b, move=[110, 60, 5], turn=90), E(b2, remove=True), E(rb, move=[150, 150, 0])], rest
+    assert any("power-up 0 follows 0x%x down to its ground" % off(b2) in n for n in notes), notes
+    # a turn alone, not a right angle: the same angle as the piece riders
+    pups, _r, _n = pup_edits(E(b, turn=-10))
+    c, s = turn_of(-10)
+    assert pups[0]["at"] == [round(v, 3) for v in (20 * c - 10 * s + 100, 20 * s + 10 * c + 50, 85.0)], pups
+    # past the grid's edge: the power-up follows the clamped place (box y 10..90 at y 50, moved to y 20: kept at y 40)
+    pups, rest, _n = pup_edits(E(b, move=[100, 20, 0]))
+    assert rest[0] == E(b, move=[100, 40, 0]) and pups == [{"powerup": 4, "from": [120, 60, 85], "at": [120, 50, 85]}], (rest, pups)
+    # an unedited base carries nothing; a non-float-exact place is written as its shortest float text
+    assert pup_edits(E(wr, move=[0, 0, 0]))[0] == []
+    pv2 = {off(b): [(4, (f32(120.3), f32(60.7), f32(85.1)), pr[b][0][2])]}
+    got = rider_edits(m, [E(b, move=[100, 50, 10])], valid, [], parent, pv2)
+    assert got[-1] == {"powerup": 4, "from": [120.3, 60.7, 85.1], "at": [120.3, 60.7, 95.1]}, got[-1]
+    # make: power-ups from <disc>/PTS/<BASE>.PUP; none without the file; neither riders nor power-ups with --no-riders
+    tmp = tempfile.mkdtemp()
+    try:
+        pup = os.path.join(tmp, "X.PUP")
+        with open(pup, "wb") as f:
+            f.write(struct.pack("<II", PUP_VERSION, len(pts)))
+            for p in pts:
+                f.write(struct.pack("<3f", *p) + bytes(PUP_SIZE - 12))
+        assert read_pup(pup) == pts and read_pup(os.path.join(tmp, "none.PUP")) is None
+        rmk, pmk = make_riders(m, parent, None, pup, False)
+        assert rmk == valid and {k: [i for i, *_ in v] for k, v in pmk.items()} == {off(b2): [0], off(rb): [2], off(b): [4]}, pmk
+        assert make_riders(m, parent, None, os.path.join(tmp, "none.PUP"), False) == (valid, {})
+        assert make_riders(m, parent, None, pup, True) == ({}, {})
+        with open(pup, "r+b") as f:
+            f.write(struct.pack("<I", 0x1234))
+        try:
+            read_pup(pup)
+            raise AssertionError("read_pup accepted a bad version")
+        except ValueError:
+            pass
+    finally:
+        shutil.rmtree(tmp)
+
+    # a turn the loader will refuse (a TRANSLATE with action data): no riders, no power-ups
     w("<I", b2 + 0xC, 0x1000)
     m = mem()
     got, notes = edits_of(E(b2, turn=90))
     assert got == [E(b2, turn=90)] and any("action data" in n for n in notes), (got, notes)
+    assert rider_edits(m, [E(b2, turn=90)], valid, [], parent, pv) == [E(b2, turn=90)]
     print("selftest OK")
     return 0
 
@@ -1089,6 +1272,8 @@ def main(argv=None):
     p.add_argument("--monster", action="append", default=[], metavar="I:ZMIN:ZMAX")
     p.add_argument("--pickup", action="append", default=[], metavar="X,Y,Z")
     p.add_argument("--no-pickup", action="append", default=[], metavar="X,Y,Z")
+    p.add_argument("--powerup", action="append", default=[], metavar="X,Y,Z", help="a power-up at X,Y resting at height Z")
+    p.add_argument("--no-powerup", action="append", default=[], metavar="X,Y,Z")
     p.set_defaults(fn=cmd_ram)
     p = sub.add_parser("selftest")
     p.set_defaults(fn=cmd_selftest)
