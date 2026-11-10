@@ -217,6 +217,12 @@ bool parse(const std::string &text, Map &out, std::string &why)
             PowerUpEdit pe;
             if (!parsePowerUp(e, at, pe, why))
                 return false;
+            for (const PowerUpEdit &other : m.powerups)
+                if (other.index == pe.index)
+                {
+                    why = at + "power-up " + std::to_string(pe.index) + " is edited twice";
+                    return false;
+                }
             m.powerups.push_back(pe);
             continue;
         }
@@ -1145,7 +1151,12 @@ PowerUpResult applyPowerUps(const Mem &m, uint32_t points, uint32_t numPoints, c
             refuse("edited twice (the first edit stands)");
             continue;
         }
-        if (e.index >= numPoints || numPoints > kMaxPoints)
+        if (numPoints > kMaxPoints)
+        {
+            refuse("the point count " + std::to_string(numPoints) + " is past the " + std::to_string(kMaxPoints) + " points PowerUpTool holds");
+            continue;
+        }
+        if (e.index >= numPoints)
         {
             refuse("the stage has " + std::to_string(numPoints) + " power-up places");
             continue;

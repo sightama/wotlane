@@ -60,7 +60,7 @@ inline uint64_t fnv1a(const uint8_t *p, size_t n)
 }
 
 // Reads stage.json; false with `why` (plain English) when a field is missing or wrong. Unknown top-level keys are ignored,
-// unknown keys in an edit are refused.
+// unknown keys in an edit are refused, and so is a second power-up edit of the same index.
 bool parse(const std::string &json, Map &out, std::string &why);
 // stage.json text for a map; parse() reads it back to the same values (floats bit for bit, -0 included)
 std::string write(const Map &m);

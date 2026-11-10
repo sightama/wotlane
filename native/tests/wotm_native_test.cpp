@@ -1101,6 +1101,8 @@ TEST(stagemap_powerup_parse)
     CHECK(bad(R"({"powerup": 1, "from": [0, 0, 0], "at": [1, "a", 1]})", "at"));
     CHECK(bad(R"({"powerup": 1, "from": [0, 0, 0], "at": [1, 1, 1], "node": "0x100"})", "node"));
     CHECK(bad(R"({"powerup": 1, "from": [0, 0, 0], "at": [1, 1, 1], "turn": 90})", "turn"));
+    CHECK(bad(R"({"powerup": 7, "from": [0, 0, 0], "at": [1, 1, 1]}, {"node": "0x100", "remove": true},
+                 {"powerup": 7, "from": [0, 0, 0], "at": [2, 2, 2]})", "edit 3: power-up 7 is edited twice"));
 }
 
 // Power-up places on a fake PowerUpTool points array (64-byte points, position at +0, type and arg at +0x2C/+0x2D)
@@ -1155,6 +1157,12 @@ TEST(stagemap_powerups_apply)
     CHECK(sm::applyPowerUps(mem, kPoints, 4, {}).moved == 0 && buf == once);
     r = sm::applyPowerUps(mem, kPoints, 0, edits);
     CHECK(r.moved == 0 && r.refused == 5 && buf == once);
+    // a count past PointToolKit::points[256] (a broken numPoints): everything refused, nothing written past the array
+    r = sm::applyPowerUps(mem, kPoints, sm::kMaxPoints + 1, {powerUp(1, {500.f, 600.f, 70.f}, {1.f, 2.f, 3.f}),
+                                                             powerUp(255, {0.f, 0.f, 0.f}, {1.f, 2.f, 3.f})});
+    CHECK(r.moved == 0 && r.refused == 2 && buf == once);
+    if (!r.log.empty())
+        CHECK(r.log[0].find("the point count 257 is past the 256 points") != std::string::npos);
 }
 
 // The coverage rule on the same cases as tools/stage_map.py selftest: a box past both X edges, a negative start, one fully
