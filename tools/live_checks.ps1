@@ -73,6 +73,14 @@ function Test-MapDump([string]$file, [int]$copies = -1) {
     return $ok
 }
 # the copy checks' rejects: a refused edit or copy (not the summary's "0 refused;"), and the runtime guards (wotm_stagemap.inc)
+# How far under the loader's Interactives estimate the RAM count of frame 2400 may be on CENTRAL with WOTM_MATCH=3,1,<map>
+# (2 monsters), for maps whose copies have no debris pickups. All 143 of the measured gap (c700's RAM dump, 2026-11-10) are
+# accounted for: 133 stock debris pickups not landed yet (they register as debris lands, so the gap only shrinks), 6 of the 8
+# monster slots unused, and 4 stock INTERACTIVE_STATE nodes (image 0x7A1F10, 0x7A1F80, 0x7A1FF0, 0x7A2060, each holding a
+# DESTRUCTIBLE: RAM Destructibles is 4 under its estimate too) under GROUP 0xb0670, flags 0x31, a mode-masked GROUP the game
+# does not traverse in this mode, which stage_counts() and the loader's stageCounts() count anyway (an overcount: the safe
+# direction, spec 2g). Specific to CENTRAL and this lineup
+$copyGap = 133 + 6 + 4
 $copyReject = '\[CRASH\]|||\[watchdog\] FROZE|||does not match|||nothing applied|||refused(?!;)|||Interactives table full|||MemoryStack::global has \d+ bytes free'
 
 # the RAM of the runtime's frame 2400 (PS2X_DUMP_RAM's count, about 30 s in: the fight has started, the start-point drop is over),
@@ -243,6 +251,7 @@ $checks = [ordered]@{
                              $edits = Get-MapEdits 'c1'
                              $copies = @($edits | Where-Object { $_.copy })
                              $grid = Test-MapDump "$env:TEMP\wotm_map_c1.bin" $copies.Count
+                             # the counts: upper bounds only (overshoot), c1's copies carry debris pickups ($copyGap does not apply)
                              $expect = @('--monster', '0:140:156', '--interactives', "0:$(Get-CopyEstimate 'c1' 'interactives')",
                                  '--destructibles', "0:$(Get-CopyEstimate 'c1' 'destructibles')")
                              $adds = @($edits | Where-Object { $null -ne $_.addpowerup })
@@ -264,9 +273,8 @@ $checks = [ordered]@{
     # 200 copies of CENTRAL's 0x61e340 (a small destructible: 1 interactive, no debris pickups, no pickup memory, 1 collision
     # path; 0x2d85a0 costs 5 interactives and 1536 B, so 200 of it do not fit, spec 2g) on a 20 x 10 lattice, at its disc z 0.
     # make's estimate: 324 stock (1 + 8 monster slots + 67 interactive states + 115 level pickups + 133 debris pickups) + 200 =
-    # 524. In RAM the Interactives count stays at or under the loader's estimate, and within 150 of it: the debris pickups
-    # register only as debris lands and the monster slots are a reserve (measured 2026-11-10: 381, 143 under; 200 copies
-    # missing would put it 200 under)
+    # 524. In RAM the Interactives count stays at or under the loader's estimate, and at most $copyGap under it (below; 200
+    # copies missing would put it 200 under). The Destructibles bound is an upper bound only (overshoot)
     'map_copy_200'  = @{ Env = "WOTM_MATCH=3,1,c200;WOTM_AIVSAI=1;WOTM_MODS=$mapMods;WOTM_STAGE_DUMP=$env:TEMP\wotm_map_c200.bin;PS2X_DUMP_RAM=2400"; Secs = 60
                          Clean = $mapMods; Setup = { New-CopyLattice 'c200' '0x61e340' 200 20 130 220 '0' }
                          Expect = '\[stages\] c200: copies: 200 applied, 0 refused|||\[match\]'
@@ -275,23 +283,25 @@ $checks = [ordered]@{
                              param($disc)
                              $grid = Test-MapDump "$env:TEMP\wotm_map_c200.bin" 200
                              $est = Get-CopyEstimate 'c200' 'interactives'
-                             (Test-MapRam $disc @('--interactives', "$($est - 150):$est", '--destructibles', "0:$(Get-CopyEstimate 'c200' 'destructibles')")) -and $grid
+                             (Test-MapRam $disc @('--interactives', "$($est - $copyGap):$est", '--destructibles', "0:$(Get-CopyEstimate 'c200' 'destructibles')")) -and $grid
                          } }
     # 700 copies of CENTRAL's smallest copyable destructible with one interactive state (0x66c800, 576 B, no debris pickups):
     # past the Interactives cap, so the loader applies copies up to it (676) and refuses the rest with a log line. The RAM count
-    # stays at or under the loader's estimate (at most 1000) and within 150 of it, as for map_copy_200 (measured 2026-11-10: 676
-    # applied, 24 refused, estimate 1000, RAM 857), and neither runtime guard (Interactives table full, pickup memory) steps in
+    # stays at or under the loader's estimate (at most 1000) and at most $copyGap under it, as for map_copy_200 (measured
+    # 2026-11-10: 676 applied, 24 refused, estimate 1000, RAM 857), and neither runtime guard (Interactives table full, pickup
+    # memory) steps in
     'map_copy_cap'  = @{ Env = "WOTM_MATCH=3,1,c700;WOTM_AIVSAI=1;WOTM_MODS=$mapMods;WOTM_STAGE_DUMP=$env:TEMP\wotm_map_c700.bin;PS2X_DUMP_RAM=2400"; Secs = 60
                          Clean = $mapMods; Setup = { New-CopyLattice 'c700' '0x66c800' 700 35 75 110 '-3.8' }
                          Expect = '\[stages\] c700: copies: \d+ applied, [1-9]\d* refused|||\[stages\] c700: copy 0x66c800 x\d+ refused: the Interactives table would pass its cap|||\[match\]'
-                         Reject = '\[CRASH\]|||\[watchdog\] FROZE|||does not match|||nothing applied|||Interactives table full|||MemoryStack::global has \d+ bytes free'
+                         # any refusal other than the cap's (reserve, pickup memory, Destructibles, an edit) fails the check
+                         Reject = '\[CRASH\]|||\[watchdog\] FROZE|||does not match|||nothing applied|||refused(?!;|: the Interactives table would pass its cap)|||Interactives table full|||MemoryStack::global has \d+ bytes free'
                          After = {
                              param($disc)
                              $applied = Select-String -Path (Join-Path $runtime 'live_check.log') -Pattern '\[stages\] c700: copies: (\d+) applied' | Select-Object -First 1
                              $grid = Test-MapDump "$env:TEMP\wotm_map_c700.bin" ([int]$applied.Matches[0].Groups[1].Value)
                              $est = Get-CopyEstimate 'c700' 'interactives'
                              if ($est -gt 1000) { Write-Host "FAILED  c700's estimate $est passes 1000" -ForegroundColor Red; return $false }
-                             (Test-MapRam $disc @('--interactives', "$($est - 150):$est", '--destructibles', "0:$(Get-CopyEstimate 'c700' 'destructibles')")) -and $grid
+                             (Test-MapRam $disc @('--interactives', "$($est - $copyGap):$est", '--destructibles', "0:$(Get-CopyEstimate 'c700' 'destructibles')")) -and $grid
                          } }
 }
 
@@ -309,7 +319,8 @@ foreach ($name in $checks.Keys) {
     if ($LASTEXITCODE -ne 0) { $failed += $name; continue }
     if ($c.After) {
         if (-not $runtime) { Write-Host "FAILED  $name (after the run): no runtime folder (set WOTM_RECOMP_DIR or .wotm_recomp_dir)" -ForegroundColor Red; $failed += $name; continue }
-        if (-not (& $c.After (Join-Path $runtime 'discroot'))) { Write-Host "FAILED  $name (after the run)" -ForegroundColor Red; $failed += $name }
+        $ok = try { & $c.After (Join-Path $runtime 'discroot') } catch { Write-Host "FAILED  after the run: $_" -ForegroundColor Red; $false }
+        if (-not $ok) { Write-Host "FAILED  $name (after the run)" -ForegroundColor Red; $failed += $name }
     }
 }
 if ($failed.Count) { Write-Host "Failed: $($failed -join ', ')" -ForegroundColor Red; exit 1 }
