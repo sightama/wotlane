@@ -757,6 +757,8 @@ namespace
                     g_wotmCheatWin = true;
                 }
             }
+            if (slot == 0)
+                wotm_stagemap::tick(rdram, ctx, runtime);   // WOTM_STAGE_BREAK (test only): breaks a map copy mid-fight
             if (slot == 0 && g_wotmCheatWin.exchange(false))
             {
                 const int32_t ais = static_cast<int32_t>(READ32(kGame + 0x1203E0));   // m_numAIs

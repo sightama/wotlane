@@ -24,6 +24,20 @@
 //   entry only) rewrites the points' positions first (sm::applyPowerUps), when the map's piece edits were applied to this load
 //   (g_pups, set by applyActive, cleared by the next LoadLevelDB) and the map is still the active one. Game mode 8 (Big Shot) is
 //   skipped, as InitAfterDbLoad skips loadPoints there. Writes are absolute: another exportPoints on the same points changes nothing.
+// - Copies (PR 2, spec 2026-11-09-map-copy-design.md): apply() builds them in the reserve at the same dbInitDb entry, within the
+//   Limits passed in (pickup room: MemoryStack::global's free room at that entry minus sm::kGlobalKeep). The map's power-up places
+//   added ({"addpowerup": i, ...}) are appended by the exportPoints hook through sm::applyPointEdits, on the first exportPoints of
+//   the load only (it sets g_pupStock, the stock count; LoadLevelDB resets it). sanFranUpdate and threeMileUpdateCountDown call
+//   exportPoints again mid-fight without loadPoints (spec 2h): those calls get no additions (the points already hold them) and
+//   rerun the moves against the stock count, which writes the same values.
+// - Interactives::addInteractive (0x147198) is guarded for every load, map or not (amendment A4): the table has 1024 slots and
+//   the game never checks. Past the last slot the call writes nothing, leaves s_numInteractives as it is and returns 0, the
+//   game's own "no interactive" id (dispatchHit and HitHistory::newHit ignore id 0, Debris skips a node with id2 0, a hit on a
+//   node with id 0 reaches nobody); the first refusal of a load is logged. The maps' estimate keeps them under 1000 (decision 7):
+//   the guard is for what the estimate cannot see (HomingBugs, the Airplane, the UFO, bosses).
+// - WOTM_STAGE_BREAK=<seconds> (test only): that long after the fight's first frame, the first applied copy with a destructible
+//   goes to its last state through Destructible::ChangeState (integer arguments), and 120 frames later the copy's and the
+//   source's INTERACTIVE_STATE whichChild are logged (tick(), called from the Monster::update hook's slot-0 path).
 // - WOTM_STAGE_DUMP=<path>: after apply, the image goes to <path> and the reserve to <path>.reserve (tools/stage_map.py check).
 // wotm_overrides.cpp is built with strict float rules, but keep float math out of here anyway: it belongs in wotm_stagemap.cpp.
 #include <fstream>
@@ -41,9 +55,17 @@ constexpr uint32_t kLevelNumAddr = wotm::sym::shellInfo + 0x2BB0;   // Shell::m_
 constexpr uint32_t kExportPoints = wotm::fn::exportPoints__11PowerUpTool, kPowerUpTool = wotm::sym::x_11PowerUpTool_instance,
                    kNumPointsOff = 0x4000;
 constexpr uint32_t kGameModeAddr = wotm::sym::shellGame + 0x1203C8;   // TheGame::m_gameMode
+// MemoryStack::global {start +0, low +4, mark +8, end +0xC, hi1 +0x10, hi2 +0x14} (include/memory_stack.h): the free room is hi1 - low
+constexpr uint32_t kGlobalStack = wotm::sym::x_11MemoryStack_global;
+// Interactives: DbInteractive *s_dbInteractive[1024], int s_numInteractives (src/game/Interactives.cpp)
+constexpr uint32_t kAddInteractive = wotm::fn::addInteractive__12InteractivesP13DbInteractive,
+                   kNumInteractives = wotm::sym::x_12Interactives_s_numInteractives,
+                   kDbInteractive = wotm::sym::x_12Interactives_s_dbInteractive, kInteractiveSlots = 1024;
+constexpr uint32_t kChangeState = wotm::fn::ChangeState__12DestructibleibT2;   // Destructible::ChangeState(int, bool, bool)
+constexpr uint32_t kNoStock = 0xFFFFFFFFu;   // g_pupStock before the load's first exportPoints
 
 PS2Runtime::RecompiledFunction g_origLoadLevelDB = nullptr, g_origZip = nullptr, g_origDbInitDb = nullptr, g_origLoadUserintDB = nullptr,
-                               g_origExportPoints = nullptr;
+                               g_origExportPoints = nullptr, g_origAddInteractive = nullptr;
 
 std::string g_active;          // map id (Registry::stages()), or empty: no map
 bool g_hashed = false;         // g_hash is the hash of the last LoadLevelDB's image (taken only with a map active)
@@ -55,8 +77,16 @@ uint32_t g_loadRa = 0;         // $ra of the LoadLevelDB call in progress (0: no
 uint32_t g_zipRa = 0;          // $ra of the zipInflateAll call that inflates the stage (0: none)
 uint32_t g_zipSize = 0;        // what it returned (0: not yet)
 std::string g_pupMap;          // the map whose edits were applied to the loaded stage (empty: none), for its power-up edits
-std::vector<sm::PowerUpEdit> g_pups;
-bool g_pupLogged = false;      // the power-up line was logged for this load
+std::vector<sm::PowerUpEdit> g_pups;   // its power-up moves
+std::vector<sm::PowerUpEdit> g_adds;   // its power-up places added
+bool g_pupLogged = false;      // the "exportPoints on another object" line was logged for this load
+uint32_t g_pupStock = kNoStock;   // numPoints at the load's first exportPoints (the stock points), kNoStock before it
+uint32_t g_pupTotal = 0;          // numPoints written back by that call (stock plus the places added), for the log
+bool g_addFullLogged = false;     // the Interactives guard logged its refusal for this load
+// WOTM_STAGE_BREAK (tick()): the first applied copy with a destructible, its source, and the break's progress for this load
+sm::CopyInfo g_copy;
+uint32_t g_breakStart = 0, g_breakAt = 0;   // g_frame of the fight's first tick seen (0: none yet), of the break (0: not yet)
+bool g_breakDone = false;
 
 void setActive(const std::string &id)
 {
@@ -130,6 +160,13 @@ void loadLevelDBTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         g_hashed = false;
         g_pupMap.clear();
         g_pups.clear();
+        g_adds.clear();
+        g_pupStock = kNoStock;
+        g_pupTotal = 0;
+        g_addFullLogged = false;
+        g_copy = sm::CopyInfo{};
+        g_breakStart = g_breakAt = 0;
+        g_breakDone = false;
     }
     g_origLoadLevelDB(rdram, ctx, runtime);
     if (!g_loadRa || ctx->pc != g_loadRa)
@@ -212,46 +249,107 @@ void applyActive(uint8_t *rdram)
     mem.r.push_back({sm::kBase, rdram + sm::kBase, g_size});
     mem.r.push_back({sm::kReserve, rdram + sm::kReserve, sm::kReserveSize});
     sm::Reserve res{sm::kReserve, sm::kReserve + sm::kReserveSize};
-    const sm::Result r = sm::apply(mem, g_size, map, res);
+    // pickup room for copies: MemoryStack::global's free room now (the level's pickups are allocated from it during this
+    // dbInitDb), minus what the rest of the load takes from it (sm::kGlobalKeep, spec 2g)
+    const uint32_t low = rd32(rdram, kGlobalStack + 4), hi1 = rd32(rdram, kGlobalStack + 0x10);
+    const uint32_t room = hi1 > low ? hi1 - low : 0;
+    sm::Limits lim;
+    lim.pickupRoom = room > sm::kGlobalKeep ? room - sm::kGlobalKeep : 0;
+    const sm::Result r = sm::apply(mem, g_size, map, res, lim);
     std::fprintf(stderr, "[stages] %s: applied %d edits, %d grid nodes relinked (%d from reserve)\n", id.c_str(), r.applied, r.relinked,
                  r.fromReserve);
     for (const std::string &l : r.log)
         std::fprintf(stderr, "[stages] %s: %s\n", id.c_str(), l.c_str());
+    if (!map.copies.empty())
+    {
+        std::fprintf(stderr, "[stages] %s: %s\n", id.c_str(), r.copySummary.c_str());
+        std::fprintf(stderr, "[stages] %s: MemoryStack::global %u bytes free at dbInitDb entry (low 0x%X, hi1 0x%X), %u kept for the rest of the load\n",
+                     id.c_str(), room, low, hi1, sm::kGlobalKeep);
+    }
+    for (const sm::CopyInfo &c : r.copies)   // the break hook's copy: the first one with a destructible
+        if (c.destructible && c.istate)
+        {
+            g_copy = c;
+            break;
+        }
     dump(rdram);
     g_pupMap = id;
     g_pups = map.powerups;
+    g_adds = map.addPowerUps;
     g_pupLogged = false;
 }
 
-// PowerUpTool::exportPoints(void). Acted on at its entry only (a resumed call comes back with pc inside it)
+// PowerUpTool::exportPoints(void). Acted on at its entry only (a resumed call comes back with pc inside it). The load's first call
+// (from loadPoints, on the stock points) takes the stock count, appends the places added and moves the stock points; a later
+// call in the same load (sanFranUpdate, threeMileUpdateCountDown: spec 2h) passes no additions, so it appends nothing whatever
+// the point count is, and reruns the moves (absolute writes: the same values). Logs come from the first call only.
 void exportPointsTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
-    if (ctx->pc == kExportPoints && !g_pups.empty() && !g_pupMap.empty() && g_pupMap == g_active &&
+    if (ctx->pc == kExportPoints && (!g_pups.empty() || !g_adds.empty()) && !g_pupMap.empty() && g_pupMap == g_active &&
         static_cast<int32_t>(rd32(rdram, kGameModeAddr)) != 8)
     {
         const uint32_t self = GPR_U32(ctx, 4) & PS2_RAM_MASK;
         if (self != kPowerUpTool)
         {
             if (!g_pupLogged)
-                std::fprintf(stderr, "[stages] %s: exportPoints on 0x%X, not PowerUpTool::instance: power-ups not moved\n", g_pupMap.c_str(), self);
+                std::fprintf(stderr, "[stages] %s: exportPoints on 0x%X, not PowerUpTool::instance: power-ups not moved or added\n",
+                             g_pupMap.c_str(), self);
             g_pupLogged = true;
         }
         else
         {
             const uint32_t n = rd32(rdram, kPowerUpTool + kNumPointsOff);
+            const bool first = g_pupStock == kNoStock;
+            if (first)
+                g_pupStock = n;
             sm::Mem mem;
             mem.r.push_back({kPowerUpTool, rdram + kPowerUpTool, sm::kMaxPoints * sm::kPointSize});
-            const sm::PowerUpResult r = sm::applyPowerUps(mem, kPowerUpTool, n, g_pups);
-            if (!g_pupLogged)
+            static const std::vector<sm::PowerUpEdit> kNone;
+            uint32_t count = n;
+            const sm::PointEditsResult r = sm::applyPointEdits(mem, kPowerUpTool, n, g_pupStock, first ? g_adds : kNone, g_pups, count);
+            if (count != n)
+                std::memcpy(rdram + kPowerUpTool + kNumPointsOff, &count, 4);
+            if (first)
             {
-                std::fprintf(stderr, "[stages] %s: moved %d power-ups\n", g_pupMap.c_str(), r.moved);
-                for (const std::string &l : r.log)
-                    std::fprintf(stderr, "[stages] %s: %s\n", g_pupMap.c_str(), l.c_str());
+                g_pupTotal = count;
+                const std::string &id = g_pupMap;
+                if (!g_adds.empty())
+                {
+                    // past 100 points appendPowerUps() logs its own "added N power-ups (M places: the game creates 100 at most)"
+                    if (g_pupTotal <= sm::kMaxPowerUps || r.added.moved == 0)
+                        std::fprintf(stderr, "[stages] %s: added %d power-ups (%u places)\n", id.c_str(), r.added.moved, g_pupTotal);
+                    for (const std::string &l : r.added.log)
+                        std::fprintf(stderr, "[stages] %s: %s\n", id.c_str(), l.c_str());
+                }
+                if (!g_pups.empty())
+                {
+                    std::fprintf(stderr, "[stages] %s: moved %d power-ups\n", id.c_str(), r.moved.moved);
+                    for (const std::string &l : r.moved.log)
+                        std::fprintf(stderr, "[stages] %s: %s\n", id.c_str(), l.c_str());
+                }
             }
-            g_pupLogged = true;
         }
     }
     g_origExportPoints(rdram, ctx, runtime);
+}
+
+// int Interactives::addInteractive(DbInteractive *p): the table's next slot. A leaf (no call, no thread switch): hooked at its entry.
+// Past slot 1023 it writes nothing and returns 0 (see the header).
+void addInteractiveTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+{
+    const uint32_t n = rd32(rdram, kNumInteractives);
+    if (ctx->pc != kAddInteractive || n < kInteractiveSlots)
+    {
+        g_origAddInteractive(rdram, ctx, runtime);
+        return;
+    }
+    if (!g_addFullLogged)
+        std::fprintf(stderr, "[stages] Interactives table full (%u of %u slots): interactive 0x%X (called from 0x%X) gets id 0 and is "
+                     "not registered; the rest of this load's are refused silently\n",
+                     n, kInteractiveSlots, GPR_U32(ctx, 4), GPR_U32(ctx, 31));
+    g_addFullLogged = true;
+    SET_GPR_U32(ctx, 2, 0);
+    ctx->pc = GPR_U32(ctx, 31);
 }
 
 // dbInitDb(_dbheader *db, vramAddrs *v). Acted on at its entry only (a resumed call comes back with pc inside it)
@@ -273,6 +371,72 @@ void dbInitDbTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
             applyActive(rdram);
     }
     g_origDbInitDb(rdram, ctx, runtime);
+}
+
+// Calls a game function with up to 4 integer arguments (a0..a3); the context is restored afterwards (wotm_padsel.inc's callGuest,
+// which is in another translation unit)
+void callGuest(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt, uint32_t fn, uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3)
+{
+    const PS2Runtime::RecompiledFunction f = rt->lookupFunction(fn);
+    if (!f)
+        return;
+    const R5900Context saved = *ctx;
+    const uint32_t a[4] = {a0, a1, a2, a3};
+    for (int i = 0; i < 4; ++i)
+        ctx->r[4 + i] = _mm_set_epi64x(0, static_cast<int64_t>(static_cast<int32_t>(a[i])));
+    ctx->r[31] = _mm_set_epi64x(0, 0);
+    ctx->pc = fn;
+    f(rdram, ctx, rt);
+    *ctx = saved;
+}
+
+// WOTM_STAGE_BREAK=<seconds> (test only): called once per frame from the Monster::update hook's slot-0 path (wotm_overrides.cpp,
+// where vencer runs). `seconds` of game time (g_frame, 60 per second) after the first tick of the fight, the first applied copy
+// with a destructible goes to its last state (Destructible::ChangeState(last, false, false), integer arguments); 120 frames later
+// the copy's and its source's INTERACTIVE_STATE whichChild (+4) are logged. Once per load. Integers only.
+void tick(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+{
+    static const int secs = [] {
+        const char *v = std::getenv("WOTM_STAGE_BREAK");
+        const int s = v && *v ? std::atoi(v) : 0;
+        if (s > 0)
+            std::fprintf(stderr, "[stages] WOTM_STAGE_BREAK=%d: the map's first copy with a destructible breaks %d s into the fight\n", s, s);
+        return s > 0 ? s : 0;
+    }();
+    if (!secs || g_breakDone || !g_copy.istate || g_pupMap.empty() || g_pupMap != g_active)
+        return;
+    const uint32_t f = rd32(rdram, wotm::sym::g_frame);
+    if (!g_breakStart || f < g_breakStart || (g_breakAt && f < g_breakAt))   // first tick of the fight (or g_frame went back:
+    {                                                                         // rtMain resets it after a pause): count from here
+        g_breakStart = f ? f : 1;
+        if (g_breakAt)
+            g_breakAt = g_breakStart;
+        return;
+    }
+    if (!g_breakAt)
+    {
+        if (f - g_breakStart < static_cast<uint32_t>(secs) * 60u)
+            return;
+        const uint32_t id = (rd32(rdram, g_copy.istate) >> 7) & 0x7FF;   // the head word's id2: the copy's interactive id
+        const uint32_t d = id && id < rd32(rdram, kNumInteractives) ? rd32(rdram, kDbInteractive + 4 * id) : 0;
+        const uint32_t kids = rd32(rdram, g_copy.destructible + 8) >> 16;   // DESTRUCTIBLE numKids (u16 +0xA)
+        if (!d || !kids)
+        {
+            std::fprintf(stderr, "[stages] break: copy of 0x%x has no registered destructible (interactive %u, 0x%X, %u states), nothing broken\n",
+                         g_copy.source - sm::kBase, id, d, kids);
+            g_breakDone = true;
+            return;
+        }
+        callGuest(rdram, ctx, runtime, kChangeState, d, kids - 1, 0, 0);
+        std::fprintf(stderr, "[stages] break: copy of 0x%x (interactive %u) to state %u\n", g_copy.source - sm::kBase, id, kids - 1);
+        g_breakAt = f;
+        return;
+    }
+    if (f - g_breakAt < 120)
+        return;
+    std::fprintf(stderr, "[stages] break check: copy state %u, source state %u\n", rd32(rdram, g_copy.istate + 4),
+                 g_copy.sourceIstate ? rd32(rdram, g_copy.sourceIstate + 4) : 0xFFFFFFFFu);
+    g_breakDone = true;
 }
 
 // Shell::LoadUserintDB (shell.ngp: the menus load, Shell.cpp's main loop, before userintMain): no map until a stage is chosen again
@@ -303,6 +467,13 @@ int wrapAll(PS2Runtime &runtime, uint32_t entry, uint32_t size, PS2Runtime::Reco
 
 void install(PS2Runtime &runtime)
 {
+    // the Interactives guard stands on its own (a leaf, size 0x2C, no call: no resume point inside it); its log resets with
+    // LoadLevelDB's hook below
+    const bool guard = runtime.hasFunction(kAddInteractive) && (g_origAddInteractive = runtime.lookupFunction(kAddInteractive));
+    if (guard)
+        runtime.registerFunction(kAddInteractive, &addInteractiveTapped);
+    else
+        std::fprintf(stderr, "[stages] Interactives guard unavailable: addInteractive has no function in the runtime\n");
     // sizes from native/wotm_syms.h (LoadLevelDB__5Shell 0x140, zipInflateAll__FPcPv 0x108)
     const int nLoad = wrapAll(runtime, kLoadLevelDB, 0x140, &loadLevelDBTapped, g_origLoadLevelDB);
     const int nZip = nLoad ? wrapAll(runtime, kZipInflateAll, 0x108, &zipTapped, g_origZip) : 0;
@@ -313,8 +484,9 @@ void install(PS2Runtime &runtime)
         runtime.registerFunction(wotm::fn::LoadUserintDB__5Shell, &loadUserintDBTapped);
         // size from native/wotm_syms.h (exportPoints__11PowerUpTool 0x80)
         const int nPup = wrapAll(runtime, kExportPoints, 0x80, &exportPointsTapped, g_origExportPoints);
-        std::fprintf(stderr, "[stages] map hooks: LoadLevelDB (%d entry and resume points), zipInflateAll (%d), dbInitDb, exportPoints (%d)%s\n",
-                     nLoad, nZip, nPup, nPup ? "" : ": power-up places stay where the disc puts them");
+        std::fprintf(stderr, "[stages] map hooks: LoadLevelDB (%d entry and resume points), zipInflateAll (%d), dbInitDb, exportPoints (%d)%s, "
+                     "Interactives guard %s\n",
+                     nLoad, nZip, nPup, nPup ? "" : ": power-up places stay where the disc puts them", guard ? "on" : "unavailable");
     }
     else
         std::fprintf(stderr, "[stages] maps unavailable: LoadLevelDB, zipInflateAll, dbInitDb or LoadUserintDB has no function in the runtime\n");

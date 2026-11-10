@@ -170,6 +170,12 @@ constexpr uint16_t kActAnim = 2, kActDomino = 8, kActCinema = 9, kActPlayerPos =
                    kActGenericEvent = 14;   // ACT_DOMINO {state +8, target +0xC}
 constexpr int kInteractivesCap = 1000, kDestructiblesCap = 1400, kMonsterSlots = 8;
 constexpr uint32_t kPickupBytes = 0x500;
+// MemoryStack::global bytes the runtime keeps out of the pickup room (Limits::pickupRoom = free room at dbInitDb entry minus
+// this): what the load takes from the stack after dbInitDb's entry besides the level pickups (PedGroups, the monsters' .ptr
+// reads, loadPoints, the BoxFormations, TheGame's mark), plus 64 KB. Measured in the spec's PR 2 checks, 2g (CENTRAL, METRO,
+// VEGAS, ISLAND, 8 monsters: at most 133300 bytes, rounded up to 144 KB, plus 64 KB; it also covers the largest monster .ptr read,
+// 164376 bytes, with the PedGroups allocated before it).
+constexpr uint32_t kGlobalKeep = 0x34000;
 // ACT_DEBRIS {numChunks +8, chunks[] +0x10 of 0x30 bytes}; a chunk's pickup type (ePickupType, 0 none) is bits 5..9 of its u16
 // at +0xE (src/game/Debris.cpp ActDebrisChunk; retail 0x12f744: ld +8, dsrl32 21, andi 0x1F). Debris::Activate uses 32 chunks
 // at most.
