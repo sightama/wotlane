@@ -649,7 +649,7 @@ def rider_edits(m, edits, valid_riders, notes, parent=None, pups=None):
             out.append(ed)
         for i, p, box in prs:
             if e.get("remove"):
-                to = [p[0], p[1], round(box[2] + (p[2] - box[5]), 3)]
+                to = [f32_text(p[0]), f32_text(p[1]), round(box[2] + (p[2] - box[5]), 3)]
                 notes.append("  power-up %d follows 0x%x down to its ground, at %.1f %.1f %.1f" % ((i, base) + tuple(to)))
             else:
                 d = [p[k] - old[k] for k in range(3)]
