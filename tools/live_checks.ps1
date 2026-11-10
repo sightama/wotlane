@@ -244,7 +244,7 @@ $checks = [ordered]@{
     # originals at theirs; the copied rider pickups are placed at their copies' places
     'map_copy_solid' = @{ Env = "WOTM_MATCH=3,1,c1;WOTM_PLAYERS=2;WOTM_MODS=$mapMods;WOTM_STAGE_DUMP=$env:TEMP\wotm_map_c1.bin;PS2X_DUMP_RAM=2400"; Secs = 60
                          Clean = $mapMods; Setup = { & $makeC1 "$mapMods\Maps\stages" }
-                         Expect = '\[stages\] c1: copied 0x2d85a0 x1|||\[stages\] c1: copies: \d+ applied, 0 refused|||\[stages\] c1: added 2 power-ups|||\[match\]'
+                         Expect = '\[stages\] c1: copied 0x2d85a0 x1|||\[stages\] c1: copies: \d+ applied, 0 refused|||\[stages\] c1: added 2 power-ups|||Interactives guard on, pickup memory guard on|||\[match\]'
                          Reject = $copyReject
                          After = {
                              param($disc)
