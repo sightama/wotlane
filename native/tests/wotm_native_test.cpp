@@ -1985,15 +1985,19 @@ TEST(stagemap_same_bits_on_every_machine)
 }
 
 // The same for copies: a step 1 move, turned and plain copies of a world piece (one past the grid's edge, so the clamp's bits are
-// in it too) and a turned pickup copy, image and reserve hashed
+// in it too), a turned copy of a ROTATE piece and a turned pickup copy, image and reserve hashed
 TEST(stagemap_copy_same_bits_on_every_machine)
 {
     CopyStage s;
+    // a ROTATE piece under oldLast; its rows are written as exact constants (cos 0.6, sin 0.8), not from the host's sin/cos
+    const uint32_t rB = s.im.rotate({s.im.stillObject()}, 0, 200, 600, 0);
+    s.im.wf(rB + 0x10, 0.6f), s.im.wf(rB + 0x14, 0.8f), s.im.wf(rB + 0x20, -0.8f), s.im.wf(rB + 0x24, 0.6f);
+    s.im.w32(s.oldLast + 0x20, rB);
     sm::Map map;
     map.edits = {moveTo(s.off(s.tE), 650.5f, 150.25f, 0.f, 30.f)};
     map.copies = {copyAt(s.off(s.tD), 590.5f, 410.25f, 3.f, 45.f), copyAt(s.off(s.tD), 395.5f, 610.25f, 0.f, 15.f),
                   copyAt(s.off(s.tD), 100.f, 700.f, 0.f, 0.f), copyAt(s.off(s.tP), 650.f, 120.f, 10.f, 90.f),
-                  copyAt(s.off(s.tD), 797.25f, 795.5f, 0.f, 30.f)};
+                  copyAt(s.off(s.tD), 797.25f, 795.5f, 0.f, 30.f), copyAt(s.off(rB), 210.5f, 590.25f, 2.f, 22.5f)};
     sm::Reserve res = s.im.reserve();
     const sm::Result r = s.run(map, res);
     uint64_t h = sm::fnv1a(s.im.img.data(), s.im.img.size());
@@ -2002,10 +2006,17 @@ TEST(stagemap_copy_same_bits_on_every_machine)
     std::printf("  stagemap copy digest %016llx\n", static_cast<unsigned long long>(h));
     for (const std::string &l : r.log)
         std::printf("  %s\n", l.c_str());
-    CHECK(r.applied == 1 && r.copied == 5 && r.copyRefused == 0 && s.im.gridProblems(s.g) == 0);
+    CHECK(r.applied == 1 && r.copied == 6 && r.copyRefused == 0 && s.im.gridProblems(s.g) == 0);
     CHECK(logHas(r, "copy " + hexOff(s.off(s.tD)) + " (edit 6): kept inside the collision grid's edge, at "));
-    // measured on Windows, MSVC x64; the Mac (clang, arm64) must print the same
-    CHECK(h == 0x946f58d8ff7f329eull);
+    // the ROTATE's copy is a ROTATE at its place with turned rows (wotm_stagemap.cpp's ROTATE root branch)
+    uint32_t rc = 0;
+    for (const sm::CopyInfo &c : r.copies)
+        if (c.source == rB)
+            rc = c.root;
+    CHECK(rc && s.im.r32(rc) == s.im.r32(rB) && s.im.rf(rc + 0x40) == 210.5f && s.im.rf(rc + 0x44) == 590.25f &&
+          s.im.rf(rc + 0x48) == 2.f && s.im.rf(rc + 0x10) != 0.6f && s.im.rf(rc + 0x18) == s.im.rf(rB + 0x18));
+    // measured on Windows, MSVC x64; the Mac (clang, arm64) must print the same. 0x946f58d8ff7f329e before the ROTATE copy
+    CHECK(h == 0xe6ad18f1f1b154feull);
 }
 
 TEST(stagemap_copy_set)
