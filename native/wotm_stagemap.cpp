@@ -873,6 +873,13 @@ CopySet copySet(const Mem &m, const std::map<uint32_t, uint32_t> &par, uint32_t 
         for (uint32_t k = n; own && k && keep.insert(k).second;)
             k = up.at(k);
     }
+    // the copy set follows first parents; a node of the piece that is shared (not copied) but holds a copied node would let the
+    // copy reach the original's per-instance nodes through it
+    for (uint32_t n : order)
+        if (!keep.count(n))
+            for (uint32_t k : children(m, n))
+                if (keep.count(k))
+                    return refused("a shared node inside it (" + hex(n - kBase) + ") holds a copied node (" + hex(k - kBase) + ")");
     for (uint32_t n : order)
         if (keep.count(n))
         {

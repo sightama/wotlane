@@ -1895,6 +1895,19 @@ TEST(stagemap_copy_refusals)
               s.im.w32(ad + 4, s.i1);
               s.im.w32(s.tD + 0x1C, ad);
           }), "ACTION_DATA"));
+    // a GROUP over a SWITCH held twice inside the piece: first by g0 (so it is copied), then by `plain` (not copied). The copy's
+    // `plain` would still reach the original SWITCH and share its state: refused.
+    CHECK(has(why([&](CopyStage &s) {
+              const uint32_t gs = s.im.group({s.im.switchNode({s.im.stillObject()})});
+              s.im.w32(s.g0 + 0x24, gs);                                        // g0 = {sw, gs, em}
+              s.im.w32(s.d1 + 0x18, s.im.group({gs, s.im.stillObject()}));      // state 1 = plain {gs, OBJECT}
+          }), "shared node inside"));
+    CHECK(why([&](CopyStage &s) {   // `plain` reached first: then both holders (plain, d1) are copied and map to one gs'
+              const uint32_t gs = s.im.group({s.im.switchNode({s.im.stillObject()})});
+              s.im.w32(s.g0 + 0x24, s.im.group({gs, s.im.stillObject()}));      // g0 = {sw, plain, em}
+              s.im.w32(s.d1 + 0x18, gs);                                        // state 1 = gs
+          }) == "");
+    CHECK(why([&](CopyStage &s) { s.im.w32(s.d1 + 0x18, s.obj0); }) == "");   // a shared OBJECT held twice is fine
     // lost context (amendment A3): part of a destructible's state, mode-masked GROUP above
     CHECK(has(why([&](CopyStage &s) { s.im.w32(s.mid + 0x20, s.im.istate(s.im.destructible({{s.tD, 0}}))); }),
               "in a destructible's state"));
