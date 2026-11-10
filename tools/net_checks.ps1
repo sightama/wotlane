@@ -96,7 +96,7 @@ $checks = [ordered]@{
     'map_copy_online' = @{ Setup = $makeCopyMap; ExtraEnv = "WOTM_MODS=$mapMods"; Stage = 'c1'; Secs = 60
                          PlayerEnv = "1:WOTM_STAGE_DUMP=${copyDumps}_1.bin|||2:WOTM_STAGE_DUMP=${copyDumps}_2.bin"
                          Expect = '\[stages\] c1: copies: 58 applied, 0 refused'
-                         Reject = 'does not match|||nothing applied|||not found in mods'
+                         Reject = 'does not match|||nothing applied|||not found in mods|||Interactives table full|||MemoryStack::global has \d+ bytes free'
                          After = {
                              $same = $true
                              foreach ($ext in '.bin', '.bin.reserve') {
