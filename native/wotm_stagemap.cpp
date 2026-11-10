@@ -605,33 +605,43 @@ std::vector<uint32_t> hatActions(const Mem &m, uint32_t n)
 
 namespace {
 
-// Every action under `a` (through ACT_GROUP and ACT_TRANSFORM, 20 levels at most), each once, depth first in slot order
-void actionsUnder(const Mem &m, uint32_t a, int depth, std::set<uint32_t> &seen, std::vector<uint32_t> &out)
+// Every action under `a` (through ACT_GROUP and ACT_TRANSFORM, 20 levels at most), each once, depth first in slot order.
+// `cut` is set when a limit (20 levels, 256 actions in a group) leaves part of the tree unread.
+void actionsUnder(const Mem &m, uint32_t a, int depth, std::set<uint32_t> &seen, std::vector<uint32_t> &out, bool &cut)
 {
-    if (!a || depth > 20 || !m.ok(a, 8) || !seen.insert(a).second)
+    if (!a || seen.count(a))
         return;
+    if (depth > 20)
+    {
+        cut = true;
+        return;
+    }
+    if (!m.ok(a, 8))
+        return;
+    seen.insert(a);
     out.push_back(a);
     const uint16_t type = m.u16(a);
     if (type == kActGroup)
     {
+        cut = cut || m.u32(a + 8) > 256;
         const uint32_t k = std::min<uint32_t>(m.u32(a + 8), 256);
         for (uint32_t i = 0; i < k && m.ok(a + 0xC + 4 * i, 4); ++i)
-            actionsUnder(m, m.u32(a + 0xC + 4 * i), depth + 1, seen, out);
+            actionsUnder(m, m.u32(a + 0xC + 4 * i), depth + 1, seen, out, cut);
     }
     else if (type == kActTransform)
-        actionsUnder(m, m.u32(a + 8), depth + 1, seen, out);
+        actionsUnder(m, m.u32(a + 8), depth + 1, seen, out, cut);
 }
 
-// The actions of DESTRUCTIBLE n's states, each once, in state and slot order
-std::vector<uint32_t> stateActions(const Mem &m, uint32_t n)
+// The actions of DESTRUCTIBLE n's states, each once, in state and slot order; `cut` as actionsUnder()
+std::vector<uint32_t> stateActions(const Mem &m, uint32_t n, bool &cut)
 {
     std::vector<uint32_t> out;
     if (!m.ok(n, 0xC) || (m.u32(n) & 63) != kOpDestructible)
         return out;
     std::set<uint32_t> seen;
-    const uint32_t k = std::min<uint32_t>(m.u16(n + 0xA), 4096);
+    const uint32_t k = m.u16(n + 0xA);
     for (uint32_t i = 0; i < k && m.ok(n + 0xC + 12 * i + 4, 4); ++i)
-        actionsUnder(m, m.u32(n + 0xC + 12 * i + 4), 0, seen, out);
+        actionsUnder(m, m.u32(n + 0xC + 12 * i + 4), 0, seen, out, cut);
     return out;
 }
 
@@ -750,18 +760,20 @@ uint32_t nodeSize(const Mem &m, uint32_t n)
 {
     if (!m.ok(n, 4))
         return 0;
+    // a child count past what slots() reads (4096) gives 0: the piece is refused rather than copied in part
+    auto kids = [&](uint32_t base, uint32_t count, uint32_t each) { return count <= 4096 ? base + each * count : 0u; };
     uint32_t size = 0;
     switch (m.u32(n) & 63)
     {
-    case kOpGroup: size = m.ok(n + 8, 2) ? 0x20 + 4 * uint32_t(m.u16(n + 8)) : 0; break;
-    case kOpTranslate: size = m.ok(n + 8) ? 0x1C + 4 * std::min<uint32_t>(m.u32(n + 8), 4096) : 0; break;
-    case kOpRotate: size = m.ok(n + 8) ? 0x50 + 4 * std::min<uint32_t>(m.u32(n + 8), 4096) : 0; break;
-    case kOpScale: size = m.ok(n + 8) ? 0x2C + 4 * std::min<uint32_t>(m.u32(n + 8), 4096) : 0; break;
+    case kOpGroup: size = m.ok(n + 8, 2) ? kids(0x20, m.u16(n + 8), 4) : 0; break;
+    case kOpTranslate: size = m.ok(n + 8) ? kids(0x1C, m.u32(n + 8), 4) : 0; break;
+    case kOpRotate: size = m.ok(n + 8) ? kids(0x50, m.u32(n + 8), 4) : 0; break;
+    case kOpScale: size = m.ok(n + 8) ? kids(0x2C, m.u32(n + 8), 4) : 0; break;
     case kOpSwitch: size = m.ok(n + 0xB, 1) ? 0xC + 4 * uint32_t(m.u8(n + 0xB)) : 0; break;
     case kOpLod: size = m.ok(n + 4) && m.u32(n + 4) < 16 ? 0x20 + 16 * m.u32(n + 4) : 0; break;
     case kOpControl: size = m.ok(n + 0xC, 1) ? 0x20 + 4 * uint32_t(m.u8(n + 0xC)) : 0; break;
     case kOpInteractive: size = 0x10; break;
-    case kOpDestructible: size = m.ok(n + 0xA, 2) ? 0xC + 12 * uint32_t(m.u16(n + 0xA)) : 0; break;
+    case kOpDestructible: size = m.ok(n + 0xA, 2) ? kids(0xC, m.u16(n + 0xA), 12) : 0; break;
     case kOpEmitter: size = 0xB0; break;
     case kOpScriptAction: size = 0x60; break;
     default: return 0;
@@ -772,7 +784,8 @@ uint32_t nodeSize(const Mem &m, uint32_t n)
 std::vector<uint32_t> dominoActions(const Mem &m, uint32_t n)
 {
     std::vector<uint32_t> out;
-    for (uint32_t a : stateActions(m, n))
+    bool cut = false;
+    for (uint32_t a : stateActions(m, n, cut))
         if (m.u16(a) == kActDomino && m.ok(a, 0x10))
             out.push_back(a);
     return out;
@@ -838,7 +851,9 @@ CopySet copySet(const Mem &m, const std::map<uint32_t, uint32_t> &par, uint32_t 
         return refused("animated (the CHAR_INSTANCE " + hex(charAbove - kBase) + " above it drives its OBJECTs' channels)");
     for (uint32_t n : order)
         if ((m.u32(n) & 63) == kOpDestructible)
-            for (uint32_t a : stateActions(m, n))
+        {
+            bool cut = false;
+            for (uint32_t a : stateActions(m, n, cut))
             {
                 const uint16_t type = m.u16(a);
                 if (type == kActAnim)
@@ -846,6 +861,9 @@ CopySet copySet(const Mem &m, const std::map<uint32_t, uint32_t> &par, uint32_t 
                 if (const char *s = scriptAction(type))
                     return refused(std::string("a script action (") + s + ")");
             }
+            if (cut)
+                return refused("an action tree past 20 levels or 256 actions in a group (" + hex(n - kBase) + ")");
+        }
     // ids, per-instance nodes and what each copy registers
     std::set<uint32_t> keep{node};
     for (uint32_t n : order)

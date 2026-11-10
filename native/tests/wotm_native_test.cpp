@@ -1855,6 +1855,57 @@ TEST(stagemap_copy_set)
     CHECK(sm::dominoActions(m, s.tD).empty());
 }
 
+TEST(stagemap_copy_limits_refuse)
+{
+    // a child count past what slots() reads (4096) makes nodeSize 0 (the piece is refused), not a truncated copy
+    {
+        Img im(0x20000);
+        const sm::Mem m = im.mem();
+        const uint32_t t = im.node(sm::kOpTranslate, 0x1C + 4 * 4097), r = im.node(sm::kOpRotate, 0x50 + 4 * 4097),
+                       sc = im.node(sm::kOpScale, 0x2C + 4 * 4097), gr = im.node(sm::kOpGroup, 0x20 + 4 * 4097),
+                       d = im.node(sm::kOpDestructible, 0xC + 12 * 4097);
+        im.w32(t + 8, 4097), im.w32(r + 8, 4097), im.w32(sc + 8, 4097), im.w16(gr + 8, 4097), im.w16(d + 0xA, 4097);
+        CHECK(sm::nodeSize(m, t) == 0 && sm::nodeSize(m, r) == 0 && sm::nodeSize(m, sc) == 0);
+        CHECK(sm::nodeSize(m, gr) == 0 && sm::nodeSize(m, d) == 0);
+        im.w32(t + 8, 4096), im.w16(gr + 8, 4096);
+        CHECK(sm::nodeSize(m, t) == 0x1C + 4 * 4096 && sm::nodeSize(m, gr) == 0x20 + 4 * 4096);
+    }
+    // action trees past 20 levels or 256 actions in a group refuse the piece instead of being read in part
+    {
+        CopyStage s;   // a chain of ACT_TRANSFORMs 22 deep under a1
+        uint32_t next = s.hat1;
+        for (int i = 0; i < 21; ++i)
+        {
+            const uint32_t xf = s.im.act(sm::kActTransform, 0x50);
+            s.im.w32(xf + 8, next);
+            next = xf;
+        }
+        s.im.w32(s.a1 + 0xC, next);
+        CHECK(has(s.copySet(s.tD).why, "action tree"));
+    }
+    {
+        CopyStage s;   // 20 levels are read whole: fine
+        uint32_t next = s.hat1;
+        for (int i = 0; i < 19; ++i)
+        {
+            const uint32_t xf = s.im.act(sm::kActTransform, 0x50);
+            s.im.w32(xf + 8, next);
+            next = xf;
+        }
+        s.im.w32(s.a1 + 0xC, next);
+        CHECK(s.copySet(s.tD).why == "");
+    }
+    {
+        CopyStage s;   // an ACT_GROUP of 257 actions
+        const uint32_t big = s.im.act(sm::kActGroup, 0xC + 4 * 257);
+        s.im.w32(big + 8, 257);
+        s.im.w32(s.a1 + 0xC, big);
+        CHECK(has(s.copySet(s.tD).why, "action tree"));
+        s.im.w32(big + 8, 256);
+        CHECK(s.copySet(s.tD).why == "");
+    }
+}
+
 TEST(stagemap_copy_refusals)
 {
     auto why = [](const std::function<void(CopyStage &)> &change) {
