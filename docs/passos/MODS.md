@@ -305,6 +305,11 @@ mods/my_mod/
   - `turn`: degrees about the vertical axis, added to the piece's own rotation, about its own position. With or without `move`
     (`stage_map.py make`: `--turn 0x..=degrees`, or a fourth number in `--move`).
   - `remove: true` (alone): the piece is gone, drawing and collision.
+- A power-up edit in the same list, `{ "powerup": 4, "from": [776.9985, 600.7072, 630.1727], "at": [-88.081, 634.123, 630.173] }`:
+  `powerup` is the index into the stage's power-up places (`PTS/<STAGE>.PUP`, 0 to 255), `from` its place on the disc and `at`
+  its new place (absolute; z is the height it hovers at). The runtime moves the place before the game creates the power-ups
+  (`PowerUpTool::exportPoints`) and logs `[stages] <id>: moved N power-ups`. An index past the stage's count, a place that is
+  not at `from` (within 0.01), or a second edit of the same index is refused with a log line, and the rest of the map applies.
 - Unknown keys in an edit are refused; the scan logs why a folder was skipped (`[stages] my_mod/stages/x ignored: ...`).
 
 **What a piece is.** A building, prop, destructible or level pickup with its own position in the stage: the nearest `TRANSLATE` or
@@ -315,12 +320,12 @@ props) are not pieces. `CENTRAL` (Midtown Park) has 317: 202 in the world (55 of
 **Making one with `tools/stage_map.py`** (until the in-game editor; reads the extracted disc in `disc/`, or `--disc`):
 
 ```
-python tools/stage_map.py pieces disc/LVL/CENTRAL.NGP          # one line per piece: node, kind, position, collision paths, riders, destructible
-  0x18a410  TRANSLATE  pos 1044.6 448.2 -0.8  paths 5  riders 4  destructible
+python tools/stage_map.py pieces disc/LVL/CENTRAL.NGP          # one line per piece: node, kind, position, collision paths, riders, power-ups, destructible
+  0x18a410  TRANSLATE  pos 1044.6 448.2 -0.8  paths 5  riders 4  power-ups 5,15  destructible
 python tools/stage_map.py make --base CENTRAL --id downtown --name "DOWNTOWN MESS" --out mods/my_mod/stages --move "0x165a70=-185.7,475.8,0,90" --remove 0x18a410
                                                                # writes mods/my_mod/stages/downtown/stage.json with the baseHash
 python tools/stage_map.py check disc/LVL/*.NGP                 # the collision grid rule on stock stages or on a WOTM_STAGE_DUMP
-python tools/stage_map.py ram ram_2400.bin --monster 0:140:156 # monsters and pickups in a fight's RAM (PS2X_DUMP_RAM)
+python tools/stage_map.py ram ram_2400.bin --monster 0:140:156 # monsters, pickups and power-ups in a fight's RAM (PS2X_DUMP_RAM)
 ```
 
 `--move` is `node=x,y,z[,turn]`, `--turn` is `node=degrees` (a `--turn` and a `--move` of the same node make one edit); all
@@ -339,6 +344,15 @@ piece and turns by your turn plus the piece's. A move that would take the piece'
 back inside as the loader does, and `make` writes that place and carries the riders there (with a note). A turn the loader
 will refuse (a `TRANSLATE` that carries action data) carries nothing. `--no-riders` turns the rule off. `pieces` shows
 `riders N` per piece. On the 19 stock stages, 164 pieces carry 408 riders (CENTRAL: 31 carry 66, all pickups).
+
+**Power-ups on a piece.** Power-ups (health, stamina, special) are not pieces: they come from `PTS/<STAGE>.PUP`. `make` reads
+the base's `.PUP` from the disc folder and adds a power-up edit (above) for each power-up place on an edited piece, printed as
+`  power-up 4 follows 0x165a70, to -88.1 634.1 630.2`. A power-up hovers for good at its place's height, up to about 95 above
+what is under it, so the rule is the riders' with a height from 20 under the box top to 100 above it. A moved or turned piece
+carries them like its riders (the same place, turn and grid-edge shift); a removed one drops them to the ground under it (the
+carrying box's bottom) at the same X and Y, keeping their hover height. `--no-riders` turns this off too; a stage with no `.PUP`
+gets none. `pieces` lists the power-up indices per piece (`power-ups 5,15`). On the stock stages 160 of 472 power-up places
+are on 110 pieces (CENTRAL: 29 of 35, on 24 pieces; the other 6 are on open ground).
 To find a piece, take the position from `pieces` and look at it with the free camera (`WOTM_FREECAM=<s>@<x>,<y>,<z>,<heading>,<pitch>`,
 `NATIVO.md`, "Diagnostics").
 
@@ -356,7 +370,8 @@ To find a piece, take the position from `pieces` and look at it with the free ca
 **Known limits.**
 - Only move, turn and remove: no duplicate or add, no ground or terrain edits.
 - CPU routes (`PTS/<STAGE>.AIP`) are not updated: CPUs that hit a moved building climb it or steer around it.
-- Spawn points and power-up places stay where the disc puts them.
+- Spawn points (`PTS/<STAGE>.SPT`) stay where the disc puts them. Power-up places follow their piece only through `make`'s
+  power-up edits (above); one not on an edited piece's box stays.
 - Trigger zones stay where the disc puts them, except 3-MILE's 13 that hang under pieces, which follow them.
 - Only riders (above) go with an edited piece, and only one level (a rider's own riders stay). Anything else on it, or a
   stage made by hand without `make`, floats or stays where the disc puts it. A turn also turns the drop offsets of the

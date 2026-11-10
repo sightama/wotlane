@@ -40,7 +40,7 @@ Decisions taken with Jake:
 - **CPU routes are baked separately.** `PTS/<STAGE>.AIP` (`AiPathTool::loadPoints`, `src/game/AiPathTool.cpp:28`) is a
   world-space route net searched by A* (`AiPathFinder.cpp:27`); `AiNavigator::ObstacleSensor` and the climb/avoid code react to
   live collision. Spawn points (`.SPT`), power-ups (`.PUP`), flyers (`.FOP`) and pedestrians (`.PED`) are world-space files in
-  `PTS/` too. None follow a moved piece.
+  `PTS/` too. None follow a moved piece by themselves (power-up places get edits of their own, "Riders").
 - **Stage selection** already has a native extension: `wotm_levelsel.inc` adds entries, renames them and supplies
   `levelpics/<name>.png`; `resolveRandom` rewrites the index at confirm. Indices 18 to 24 are unused developer slots.
 
@@ -59,6 +59,7 @@ Decisions taken with Jake:
     ]
   }
   ```
+  A power-up edit, `{ "powerup": 4, "from": [x, y, z], "at": [x, y, z] }`, moves a power-up place ("Riders").
   `node` is the piece's offset in the inflated image. `move` is the new translation (absolute, world units) and `turn` the
   rotation about Z in degrees, added to the piece's own rotation. A `baseHash` that does not match the loaded image refuses
   the map (`[stages] <id>: base CENTRAL does not match this disc`) instead of patching the wrong bytes.
@@ -110,6 +111,21 @@ is made (`stage_map.py make`, later the editor), as explicit edits the loader ap
   helicopter, as its hat action would have dropped them; moving 0x2d85a0 carries its rooftop car 0x5cd120 and the 2 pickups
   on its plaza; turning 0x4da6b0 turns its rooftop car 0x5cb7e0 about the building's origin (a corner of the building); the
   tower 0x165a70 carries none.
+- **Power-up places** are not pieces: `TheGame::InitAfterDbLoad` (after `dbInitDb`, not in mode 8) calls
+  `PowerUpTool::loadPoints`, which copies `PTS/<STAGE>.PUP` (version 0x12282000, count, 64-byte points: position at +0, type
+  +0x2C, arg +0x2D) into `PowerUpTool::instance`'s points (+0, numPoints +0x4000) and calls `exportPoints`, which creates one
+  power-up per point (`PowerUps::CreatePowerUp`). A power-up hovers at its point's z for good: its first placement drops only
+  the shadow (`PowerUp::placeShadow` never lowers the rest height then), and on the stock stages it rests 0 to about 95 above
+  the surface under it (most 10 to 90). So `make` (`powerup_riders()`) uses the rider rule with z from the box top - 20 to the
+  box top + 100 (the + 25 window would miss almost all, `CENTRAL`'s tower and 0x18a410 included), and writes
+  `{"powerup": i, "from": [disc place], "at": [new place]}` edits: a moved or turned P carries them as its riders (same
+  clamped place and turn; none when the turn is refused), a removed P drops them to the carrying box's bottom at the same X
+  and Y, keeping their hover height (new z = box bottom + z - box top). The runtime hooks `exportPoints` (every resume
+  slot, acting on entry) and, for the map applied to this load, writes each `at` over the point's position when the point is
+  at `from` (or already at `at`) within 0.01 on each axis; an index past the count, a point elsewhere or a second edit of an
+  index is refused and logged, the rest apply (`[stages] <id>: moved N power-ups`). Stock stages: 160 of 472 places ride 110
+  pieces (`CENTRAL` 29 of 35 on 24; the other 6 are on open ground). On `CENTRAL`, the tower 0x165a70 carries power-up 4 on
+  its roof, and 0x18a410 carries 15 (roof) and 5 (low pad).
 
 ## Loading a map
 
@@ -194,7 +210,8 @@ Nothing is merged by us; Lane reviews.
 
 - No duplicate or add, no ground or terrain edits.
 - CPU routes (`.AIP`) are not updated: CPUs that hit a moved building climb or steer around it.
-- Spawn and power-up places stay where the disc puts them.
+- Spawn points (`.SPT`) stay where the disc puts them. Power-up places follow their piece ("Riders"); one not on an edited
+  piece's box stays.
 - Trigger zones stay where the disc puts them (except 3-MILE's 13 under pieces, which follow).
 - Only riders follow an edited piece ("Riders"): things standing on its collision box tops within the tolerances, one level
   deep. Anything else on it floats or stays, and a map written by hand gets no riders.
