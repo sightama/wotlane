@@ -1303,14 +1303,78 @@ void rootMatrix(const Mem &m, uint32_t node, bool turning, float c, float s, flo
     }
 }
 
+// Piece `node`'s place in `m`: a ROTATE's fourth row (+0x40), a TRANSLATE's trans (+0x10)
+void discPlace(const Mem &m, uint32_t node, double old[3])
+{
+    const uint32_t posAt = (m.u32(node) & 63) == kOpRotate ? 0x40 : 0x10;
+    for (uint32_t k = 0; k < 3; ++k)
+        old[k] = m.f32(node + posAt + 4 * k);
+}
+
+// The first 0x50 bytes of the ROTATE that stands, at `r`, for TRANSLATE `node` (read from `m`) turned by (c, s) at `to`: the
+// TRANSLATE's header word with the ROTATE opcode (ids and the other header bits kept: dbProcInteractive dispatches on the ids),
+// its ctx (the GS state the TRANSLATE handed to its children), `k` children, no action data, the turned matrix
+void planTurnedTranslate(const Mem &m, uint32_t node, uint32_t r, uint32_t k, float c, float s, const float to[3], Plan &plan)
+{
+    plan.u32(r, (m.u32(node) & ~63u) | kOpRotate);
+    plan.u32(r + 4, m.u32(node + 4));
+    plan.u32(r + 8, k);
+    plan.u32(r + 0xC, 0);
+    const float mat[16] = {c, s, 0, 0, -s, c, 0, 0, 0, 0, 1, 0, to[0], to[1], to[2], 1};
+    for (uint32_t i = 0; i < 16; ++i)
+        plan.f32(r + 0x10 + 4 * i, mat[i]);
+}
+
+// The world transform of piece `node` (read from `m`) placed at `to` turned by (c, s): a ROTATE's rows turned (rootMatrix()),
+// a turned TRANSLATE's (c, s) rows, else none
+Xf placedXf(const Mem &m, uint32_t node, bool turning, float c, float s, const float to[3])
+{
+    Xf world;
+    world.t[0] = to[0], world.t[1] = to[1], world.t[2] = to[2];
+    if ((m.u32(node) & 63) == kOpRotate)
+    {
+        float rows[3][3];
+        rootMatrix(m, node, turning, c, s, rows);
+        for (int i = 0; i < 3; ++i)
+            world.r[i][0] = rows[i][0], world.r[i][1] = rows[i][1], world.r[i][2] = rows[i][2];
+    }
+    else if (turning)
+        world.r[0][0] = c, world.r[0][1] = s, world.r[1][0] = -s, world.r[1][1] = c;
+    return world;
+}
+
+// The radius a sphere centred where node `a`'s is (read from `m`) needs to hold `sph`
+double reach(const Mem &m, uint32_t a, const std::vector<Sphere> &sph)
+{
+    const double cx = m.f32(a + 0x10), cy = m.f32(a + 0x14), cz = m.f32(a + 0x18);
+    double need = 0;
+    for (const Sphere &sp : sph)
+    {
+        const double dx = sp.c[0] - cx, dy = sp.c[1] - cy, dz = sp.c[2] - cz;
+        need = std::max(need, std::sqrt(dx * dx + dy * dy + dz * dz) + sp.r);
+    }
+    return need;
+}
+
+// Writes radius `need` (rounded up to a float) and its square into the sphere of GROUP `a`
+void planRadius(uint32_t a, double need, Plan &plan)
+{
+    float r = float(need);
+    if (double(r) < need)
+        r = std::nextafter(r, INFINITY);
+    plan.f32(a + 0x1C, r);
+    plan.f32(a + 0xC, r * r);
+}
+
 // Plans a move and/or turn of piece `node`; returns the reason for refusing it, or "" with `plan`, `grid`, `pool` and `res`
 // updated (the caller commits them only on success).
 std::string planMove(const Mem &m, const std::map<uint32_t, uint32_t> &par, const std::vector<uint32_t> &through,
                      const std::map<uint32_t, std::set<uint32_t>> &hatOwners, const Edit &e, uint32_t node, Grid &grid,
                      std::deque<uint32_t> &pool, Reserve &res, Plan &plan)
 {
-    const uint32_t op = m.u32(node) & 63, posAt = op == kOpRotate ? 0x40 : 0x10;
-    const double old[3] = {m.f32(node + posAt), m.f32(node + posAt + 4), m.f32(node + posAt + 8)};
+    const uint32_t op = m.u32(node) & 63;
+    double old[3];
+    discPlace(m, node, old);
     float want[3] = {float(old[0]), float(old[1]), float(old[2])};
     if (e.move)
         want[0] = e.pos[0], want[1] = e.pos[1], want[2] = e.pos[2];
@@ -1325,8 +1389,7 @@ std::string planMove(const Mem &m, const std::map<uint32_t, uint32_t> &par, cons
 
     // the piece's own transform
     uint32_t replaceWith = 0;   // a new ROTATE for a turned TRANSLATE
-    Xf world;
-    world.t[0] = to[0], world.t[1] = to[1], world.t[2] = to[2];
+    const Xf world = placedXf(m, node, turning, c, s, to);
     if (op == kOpRotate)
     {
         float rows[3][3];
@@ -1336,7 +1399,6 @@ std::string planMove(const Mem &m, const std::map<uint32_t, uint32_t> &par, cons
             const uint32_t row = node + 0x10 + 16 * uint32_t(i);
             if (turning)
                 plan.f32(row, rows[i][0]), plan.f32(row + 4, rows[i][1]);
-            world.r[i][0] = rows[i][0], world.r[i][1] = rows[i][1], world.r[i][2] = rows[i][2];
         }
         for (int k = 0; k < 3; ++k)
             plan.f32(node + 0x40 + 4 * uint32_t(k), to[k]);
@@ -1357,16 +1419,9 @@ std::string planMove(const Mem &m, const std::map<uint32_t, uint32_t> &par, cons
         if (!replaceWith || !m.ok(replaceWith, 0x50 + 4 * k))
             return "the reserve is full (no room for the ROTATE a turn needs)";
         const uint32_t r = replaceWith;
-        plan.u32(r, (m.u32(node) & ~63u) | kOpRotate);   // ids and the other header bits kept (dbProcInteractive dispatches on the ids)
-        plan.u32(r + 4, m.u32(node + 4));                 // ctx: the GS state the TRANSLATE handed to its children
-        plan.u32(r + 8, k);
-        plan.u32(r + 0xC, 0);
-        const float mat[16] = {c, s, 0, 0, -s, c, 0, 0, 0, 0, 1, 0, to[0], to[1], to[2], 1};
-        for (uint32_t i = 0; i < 16; ++i)
-            plan.f32(r + 0x10 + 4 * i, mat[i]);
+        planTurnedTranslate(m, node, r, k, c, s, to, plan);
         for (uint32_t i = 0; i < k; ++i)
             plan.u32(r + 0x50 + 4 * i, m.u32(node + 0x1C + 4 * i));
-        world.r[0][0] = c, world.r[0][1] = s, world.r[1][0] = -s, world.r[1][1] = c;
         bool slotted = false;
         for (uint32_t sl : slots(m, par.at(node)))
             if (m.u32(sl) == node)
@@ -1454,13 +1509,7 @@ std::string planMove(const Mem &m, const std::map<uint32_t, uint32_t> &par, cons
         }
         if ((aop != kOpGroup && aop != kOpLod) || !m.ok(a, 0x20) || sph.empty())
             continue;
-        const double cx = m.f32(a + 0x10), cy = m.f32(a + 0x14), cz = m.f32(a + 0x18), rad = m.f32(a + 0x1C);
-        double need = 0;
-        for (const Sphere &sp : sph)
-        {
-            const double dx = sp.c[0] - cx, dy = sp.c[1] - cy, dz = sp.c[2] - cz;
-            need = std::max(need, std::sqrt(dx * dx + dy * dy + dz * dz) + sp.r);
-        }
+        const double rad = m.f32(a + 0x1C), need = reach(m, a, sph);
         if (need <= rad)
             continue;
         if (aop == kOpLod)
@@ -1469,11 +1518,7 @@ std::string planMove(const Mem &m, const std::map<uint32_t, uint32_t> &par, cons
                                  " above it no longer covers it (sphere left as is: it drives LOD switching)");
             continue;
         }
-        float r = float(need);
-        if (double(r) < need)
-            r = std::nextafter(r, INFINITY);
-        plan.f32(a + 0x1C, r);
-        plan.f32(a + 0xC, r * r);
+        planRadius(a, need, plan);
     }
     return "";
 }
