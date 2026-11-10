@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -614,12 +615,15 @@ TEST(mods_scan_stages)
     put(root / "A" / "stages" / "abcdefghijklmnopq" / "stage.json", kStageJson);   // 17 chars: too long
     put(root / "B" / "Stages" / "M1" / "stage.json", R"({"name": "LOSER", "base": "CENTRAL", "baseHash": "0123456789abcdef", "edits": []})");
     put(root / "C" / "Stages" / "M2" / "stage.json", kStageJson);   // mixed case: lists as m2
+    put(root / "A" / "stages" / "m3" / "stage.json",
+        R"({"name": "COPY TOWN", "base": "CENTRAL", "baseHash": "0123456789abcdef", "edits": [{"copy": "0x100", "at": [1, 2, 3]},
+            {"node": "0x200", "turn": 90}, {"addpowerup": 1, "from": [0, 0, 0], "at": [1, 1, 1]}, {"copy": "0x100", "at": [4, 5, 6], "turn": 45}]})");
     put(root / "A" / "MON" / "LIZARD1.TEX", "tex");   // a real override, so the file list is not empty
     wotm::mods::Registry reg;
     reg.scan(root);
     const std::vector<wotm::mods::Stage> st = reg.stages();
-    CHECK(st.size() == 2);
-    if (st.size() == 2)
+    CHECK(st.size() == 3);
+    if (st.size() == 3)
     {
         CHECK(st[1].map.id == "m2" && st[1].mod == "C");
         CHECK(st[0].map.id == "m1" && st[0].map.name == "DOWNTOWN MESS" && st[0].map.base == "CENTRAL" && st[0].map.edits.size() == 2);
@@ -636,6 +640,8 @@ TEST(mods_scan_stages)
     CHECK(logged("A/stages/abcdefghijklmnopq ignored", "up to 16"));
     CHECK(logged("map m1: A beats B", ""));
     CHECK(logged("[stages] map m1 (\"DOWNTOWN MESS\", A): base CENTRAL, 2 edits", ""));
+    CHECK(logged("[stages] map m3 (\"COPY TOWN\", A): base CENTRAL, 1 edits, 2 copies, 1 new power-up places", ""));
+    CHECK(!logged("[stages] map m1 (", "copies"));
     CHECK(reg.files().count("MON/LIZARD1.TEX") == 1);
     bool stagesInFiles = false;
     for (const auto &[rel, f] : reg.files())
@@ -707,6 +713,7 @@ namespace
         void w16(uint32_t a, uint16_t v) { std::memcpy(at(a), &v, 2); }
         void wf(uint32_t a, float v) { std::memcpy(at(a), &v, 4); }
         uint32_t r32(uint32_t a) { uint32_t v; std::memcpy(&v, at(a), 4); return v; }
+        uint16_t r16(uint32_t a) { uint16_t v; std::memcpy(&v, at(a), 2); return v; }
         float rf(uint32_t a) { float v; std::memcpy(&v, at(a), 4); return v; }
 
         uint32_t alloc(uint32_t size)
@@ -738,7 +745,82 @@ namespace
             wf(a + 0xC, 0);
             return a;
         }
+        // an OBJECT at its full size (0xA0) whose animation channels (+0x30..+0x3C) are all -1: it reads none
+        uint32_t stillObject(float x = 0, float y = 0, float z = 0, float r = 10)
+        {
+            const uint32_t a = node(0, 0xA0);
+            sphere(a, x, y, z, r);
+            wf(a + 8, r * r);
+            wf(a + 0xC, 0);
+            for (uint32_t k = 0; k < 7; ++k)
+                w16(a + 0x30 + 2 * k, 0xFFFF);
+            return a;
+        }
         uint32_t polycoll() { return node(42, 0x10); }
+        // INTERACTIVE_STATE: child +0xC
+        uint32_t istate(uint32_t child, uint32_t id1 = 0)
+        {
+            const uint32_t a = node(39, 0x10, id1);
+            w32(a + 0xC, child);
+            return a;
+        }
+        // PARTICLE_EMITTER (0xB0 bytes, no children)
+        uint32_t emitter(uint32_t id1 = 0) { return node(22, 0xB0, id1); }
+        // SWITCH: numKids u8 +0xB, child[] +0xC
+        uint32_t switchNode(const std::vector<uint32_t> &ks)
+        {
+            const uint32_t a = node(6, 0xC + 4 * uint32_t(ks.size()));
+            *at(a + 0xB) = uint8_t(ks.size());
+            kids(a + 0xC, ks);
+            return a;
+        }
+        // actions (ActHead: type u16 at +0)
+        uint32_t act(uint16_t type, uint32_t size)
+        {
+            const uint32_t a = alloc(size);
+            w32(a, type);
+            return a;
+        }
+        // ACT_DEBRIS {numChunks +8, chunks[] +0x10 of 0x30}; a chunk's pickup type is bits 5..9 of its u16 at +0xE (kind 1 in
+        // bits 0..2, damage 3 in bits 10..15 around it, so the field is read alone)
+        uint32_t debris(const std::vector<uint32_t> &pickupTypes)
+        {
+            const uint32_t a = act(sm::kActDebris, 0x10 + 0x30 * uint32_t(pickupTypes.size()));
+            w32(a + 8, uint32_t(pickupTypes.size()));
+            for (size_t i = 0; i < pickupTypes.size(); ++i)
+                w16(a + 0x10 + 0x30 * uint32_t(i) + 0xE, uint16_t(1 | pickupTypes[i] << 5 | 3u << 10));
+            return a;
+        }
+        uint32_t hat(float r, float x, float y, float z)
+        {
+            const uint32_t a = act(sm::kActHatPickup, 0x18);
+            wf(a + 8, r), wf(a + 0xC, x), wf(a + 0x10, y), wf(a + 0x14, z);
+            return a;
+        }
+        // ACT_DOMINO {state +8, target +0xC}
+        uint32_t domino(uint32_t target, uint32_t state)
+        {
+            const uint32_t a = act(sm::kActDomino, 0x10);
+            w32(a + 8, state), w32(a + 0xC, target);
+            return a;
+        }
+        // ACT_GROUP {count +8, acts[] +0xC}
+        uint32_t actGroup(const std::vector<uint32_t> &acts)
+        {
+            const uint32_t a = act(sm::kActGroup, 0xC + 4 * uint32_t(acts.size()));
+            w32(a + 8, uint32_t(acts.size()));
+            kids(a + 0xC, acts);
+            return a;
+        }
+        // DESTRUCTIBLE: numKids u16 +0xA, states[] +0xC of 12 bytes (child +0, actions +4)
+        uint32_t destructible(const std::vector<std::pair<uint32_t, uint32_t>> &states)   // (child, actions)
+        {
+            const uint32_t d = node(31, 0xC + 12 * uint32_t(states.size()));
+            w16(d + 0xA, uint16_t(states.size()));
+            for (size_t i = 0; i < states.size(); ++i)
+                w32(d + 0xC + 12 * uint32_t(i), states[i].first), w32(d + 0x10 + 12 * uint32_t(i), states[i].second);
+            return d;
+        }
         uint32_t group(const std::vector<uint32_t> &ks, float x = 0, float y = 0, float z = 0, float r = 20, uint32_t id1 = 0)
         {
             const uint32_t a = node(1, 0x20 + 4 * uint32_t(ks.size()), id1);
@@ -928,6 +1010,126 @@ namespace
         }
     };
 
+    // The copy tests' stage: a 4 x 4 grid of 200-unit cells from (0, 0).
+    //   world (GROUP, id1 1, flags 3) = {mid, tE, oldLast}
+    //   piece tD (TRANSLATE 300,300,0) under mid = {i1, i2}: i1 -> d1, state 0 g0 = {sw {obj0, obj1}, pc, em} with actions
+    //     a1 = {hat1, dom (-> i2, state 1), domOut (-> iE)}, state 1 obj2 with actions hat1; i2 -> d2 (state 0 an OBJECT)
+    //   piece tE (TRANSLATE 700,100,0): iE -> dE, state 0 gE = {OBJECT, pcE}
+    //   pickup root proot (GROUP, id1 0) = {holder}, holder = {tP (TRANSLATE 500,500,10) -> gP (GROUP id1 0x12C1) = {swP {OBJECT}}}
+    //   paths pD {world, mid, tD, i1, d1, g0, pc} and pE {world, tE, iE, dE, gE, pcE}; roots {world, proot, grid}
+    struct CopyStage
+    {
+        Img im{0x8000, 0x4000};
+        uint32_t g, world, mid, oldLast, tD, i1, d1, g0, sw, obj0, obj1, pc, em, a1, hat1, dom, domOut, obj2, i2, d2;
+        uint32_t tE, iE, dE, gE, pcE, proot, holder, tP, gP, swP, pD, pE;
+        CopyStage()
+        {
+            pcE = im.polycoll();
+            gE = im.group({im.stillObject(), pcE}, 700, 100, 0, 20);
+            dE = im.destructible({{gE, 0}});
+            iE = im.istate(dE);
+            tE = im.translate({iE}, 700, 100, 0);
+            d2 = im.destructible({{im.stillObject(), 0}});
+            i2 = im.istate(d2);
+            hat1 = im.hat(300, 10, 0, 5);
+            dom = im.domino(i2, 1);
+            domOut = im.domino(iE, 0);
+            a1 = im.actGroup({hat1, dom, domOut});
+            obj0 = im.stillObject(), obj1 = im.stillObject();
+            sw = im.switchNode({obj0, obj1});
+            pc = im.polycoll();
+            em = im.emitter();
+            g0 = im.group({sw, pc, em}, 300, 300, 0, 20);
+            obj2 = im.stillObject();
+            d1 = im.destructible({{g0, a1}, {obj2, hat1}});
+            i1 = im.istate(d1);
+            tD = im.translate({i1, i2}, 300, 300, 0);
+            mid = im.group({tD}, 300, 300, 0, 100);
+            oldLast = im.group({im.stillObject()});
+            world = im.group({mid, tE, oldLast}, 400, 400, 0, 600, 1);
+            im.w16(world + 0xA, 3);
+            swP = im.switchNode({im.stillObject()});
+            gP = im.group({swP}, 500, 500, 10, 20, 0x12C1);
+            tP = im.translate({gP}, 500, 500, 10);
+            holder = im.group({tP});
+            proot = im.group({holder});
+            g = im.grid(4, 4, 200, 0, 0, 800, 800);
+            pD = im.path(290, 290, 0, 320, 310, 40, {world, mid, tD, i1, d1, g0, pc});
+            pE = im.path(690, 90, 0, 710, 110, 20, {world, tE, iE, dE, gE, pcE});
+            im.link(g, {pD, pE});
+            im.roots({world, proot, g});
+        }
+        uint32_t off(uint32_t a) const { return a - sm::kBase; }
+        sm::CopySet copySet(uint32_t node)
+        {
+            const sm::Mem m = im.mem();
+            return sm::copySet(m, sm::parents(m), node);
+        }
+        sm::Result run(const sm::Map &map, sm::Reserve &res) { return sm::apply(im.mem(), uint32_t(im.img.size()), map, res); }
+        sm::Result run(const sm::Map &map)
+        {
+            sm::Reserve res = im.reserve();
+            return run(map, res);
+        }
+        bool inReserve(uint32_t a) const { return a >= sm::kReserve && a < sm::kReserve + uint32_t(im.res.size()); }
+    };
+
+    sm::Copy copyAt(uint32_t node, float x, float y, float z, float turn = 0)
+    {
+        sm::Copy c;
+        c.node = node, c.at[0] = x, c.at[1] = y, c.at[2] = z, c.turn = turn;
+        return c;
+    }
+
+    // Copy `copy` of node `orig` (`size` bytes) holds the original's bytes, except child slots that held a copied node (`to`
+    // maps original -> copy): those hold its copy
+    bool copiedBytes(Img &im, uint32_t orig, uint32_t copy, uint32_t size, const std::map<uint32_t, uint32_t> &to)
+    {
+        const sm::Mem m = im.mem();
+        const std::vector<uint32_t> sl = sm::slots(m, orig);
+        for (uint32_t i = 0; i < size; i += 4)
+        {
+            uint32_t want = im.r32(orig + i);
+            if (std::find(sl.begin(), sl.end(), orig + i) != sl.end() && to.count(want))
+                want = to.at(want);
+            if (im.r32(copy + i) != want)
+                return false;
+        }
+        return true;
+    }
+
+    // Review focus 1: nothing reachable from a copy's root is one of its source's copied (per-instance) nodes, and every
+    // per-instance node reachable from the header roots has exactly one holder slot
+    bool copiesStandAlone(Img &im, const sm::Result &r, const std::map<uint32_t, std::vector<uint32_t>> &sets)
+    {
+        const sm::Mem m = im.mem();
+        for (const sm::CopyInfo &c : r.copies)
+        {
+            const std::vector<uint32_t> &orig = sets.at(c.source);
+            for (uint32_t k : sm::subtree(m, c.root))
+                if (std::find(orig.begin(), orig.end(), k) != orig.end())
+                    return false;
+        }
+        std::map<uint32_t, int> held;
+        const std::map<uint32_t, uint32_t> par = sm::parents(m);
+        for (const auto &kv : par)
+            for (uint32_t s : sm::slots(m, kv.first))
+                if (const uint32_t k = m.u32(s))
+                    ++held[k];
+        for (const auto &kv : par)
+        {
+            const uint32_t w = m.u32(kv.first), op = w & 63, id = w >> 18;
+            const bool own = op == sm::kOpInteractive || op == sm::kOpDestructible || op == sm::kOpSwitch || op == sm::kOpEmitter ||
+                             op == sm::kOpScriptAction || (op == sm::kOpGroup && id >= sm::kPickupFirst && id <= sm::kPickupLast);
+            if (own && held[kv.first] != 1)
+                return false;
+        }
+        return true;
+    }
+
+    uint32_t aligned(uint32_t n) { return (n + 15) & ~15u; }
+    bool has(const std::string &s, const std::string &what) { return s.find(what) != std::string::npos; }
+
     sm::Edit moveTo(uint32_t node, float x, float y, float z, float turn = 0)
     {
         sm::Edit e;
@@ -1105,6 +1307,126 @@ TEST(stagemap_powerup_parse)
                  {"powerup": 7, "from": [0, 0, 0], "at": [2, 2, 2]})", "edit 3: power-up 7 is edited twice"));
 }
 
+// Copies ({"copy": ...}) and power-up places added ({"addpowerup": ...}) share the one "edits" list with the step 1 edits
+TEST(stagemap_copy_parse)
+{
+    sm::Map m;
+    std::string why;
+    CHECK(sm::parse(R"({"name": "C", "base": "CENTRAL", "baseHash": "0123456789abcdef", "edits": [
+        { "copy": "0x2d85a0", "at": [768.1, 499.6, 74.1], "turn": 90 },
+        { "node": "0x100", "remove": true },
+        { "addpowerup": 4, "from": [1, 2, 3], "at": [4, 5, 6] },
+        { "copy": "0x2d85a0", "at": [1, 2, 3] },
+        { "powerup": 4, "from": [1, 2, 3], "at": [7, 8, 9] },
+        { "addpowerup": 4, "from": [1, 2, 3], "at": [10, 11, 12.5] }
+    ]})", m, why));
+    if (!why.empty())
+        std::printf("  parse -> \"%s\"\n", why.c_str());
+    CHECK(m.edits.size() == 1 && m.copies.size() == 2 && m.powerups.size() == 1 && m.addPowerUps.size() == 2);
+    if (m.copies.size() == 2)
+    {
+        const sm::Copy &a = m.copies[0], &b = m.copies[1];
+        CHECK(a.node == 0x2d85a0 && a.at[0] == 768.1f && a.at[1] == 499.6f && a.at[2] == 74.1f && a.turn == 90.f);
+        CHECK(b.node == 0x2d85a0 && b.at[0] == 1.f && b.at[1] == 2.f && b.at[2] == 3.f && b.turn == 0.f);
+    }
+    if (m.powerups.size() == 1)
+        CHECK(m.powerups[0].index == 4 && m.powerups[0].at[0] == 7.f);
+    if (m.addPowerUps.size() == 2)
+    {
+        const sm::PowerUpEdit &a = m.addPowerUps[0], &b = m.addPowerUps[1];
+        CHECK(a.index == 4 && a.from[0] == 1.f && a.from[1] == 2.f && a.from[2] == 3.f && a.at[0] == 4.f && a.at[1] == 5.f &&
+              a.at[2] == 6.f);
+        CHECK(b.index == 4 && b.at[0] == 10.f && b.at[1] == 11.f && b.at[2] == 12.5f);
+    }
+    auto bad = [](const std::string &edits, const std::string &needle) {
+        const std::string text = R"({"name": "X", "base": "CENTRAL", "baseHash": "0123456789abcdef", "edits": [)" + edits + "]}";
+        sm::Map out;
+        std::string w;
+        const bool ok = sm::parse(text, out, w);
+        if (ok || w.find(needle) == std::string::npos)
+            std::printf("  parse(%.200s) -> %d \"%s\"\n", text.c_str(), int(ok), w.c_str());
+        return !ok && w.find(needle) != std::string::npos;
+    };
+    const std::string first = R"({"node": "0x100", "remove": true}, )";   // so the bad edit is edit 2
+    CHECK(bad(first + R"({"copy": "0xZZ", "at": [1, 2, 3]})", "edit 2: \"copy\""));
+    CHECK(bad(first + R"({"copy": "0x102", "at": [1, 2, 3]})", "edit 2: \"copy\""));       // not a multiple of 4
+    CHECK(bad(first + R"({"copy": "0x1600000", "at": [1, 2, 3]})", "edit 2: \"copy\""));   // kMaxNode
+    CHECK(bad(first + R"({"copy": 256, "at": [1, 2, 3]})", "edit 2: \"copy\""));
+    CHECK(bad(first + R"({"copy": "0x100"})", "edit 2: \"at\""));
+    CHECK(bad(first + R"({"copy": "0x100", "at": [1, 2]})", "edit 2: \"at\""));
+    CHECK(bad(first + R"({"copy": "0x100", "at": [1, 2, 3], "turn": "90"})", "edit 2: \"turn\""));
+    CHECK(bad(first + R"({"copy": "0x100", "at": [1, 2, 3], "move": [1, 2, 3]})", "edit 2: unknown key \"move\""));
+    CHECK(bad(first + R"({"addpowerup": -1, "from": [0, 0, 0], "at": [1, 1, 1]})", "edit 2: \"addpowerup\""));
+    CHECK(bad(first + R"({"addpowerup": 256, "from": [0, 0, 0], "at": [1, 1, 1]})", "edit 2: \"addpowerup\""));
+    CHECK(bad(first + R"({"addpowerup": 1, "at": [1, 1, 1]})", "edit 2: \"from\""));
+    CHECK(bad(first + R"({"addpowerup": 1, "from": [0, 0, 0], "at": [1, 1, 1], "turn": 9})", "edit 2: unknown key \"turn\""));
+    CHECK(bad(first + R"({"copy": "0x100", "addpowerup": 1, "at": [1, 2, 3]})", "edit 2: unknown key \"addpowerup\""));   // one kind per entry
+    CHECK(bad(first + R"({"copy": "0x100", "at": [1, 2, 3], "turn": 1e39})", "edit 2: \"turn\""));   // past float: not finite
+    CHECK(bad(first + R"({"addpowerup": 1.5, "from": [0, 0, 0], "at": [1, 1, 1]})", "edit 2: \"addpowerup\""));
+    std::string many;
+    for (int i = 0; i < 4097; ++i)
+        many += std::string(i ? ", " : "") + (i % 2 ? R"({"copy": "0x100", "at": [1, 2, 3]})" : R"({"addpowerup": 1, "from": [0, 0, 0], "at": [1, 1, 1]})");
+    CHECK(bad(many, "at most 4096"));
+}
+
+TEST(stagemap_copy_write_roundtrip)
+{
+    sm::Map m;
+    m.name = "COPIES";
+    m.base = "METRO";
+    m.baseHash = 0x1122334455667788ull;
+    sm::Copy c1, c2;
+    c1.node = 0x2d85a0, c1.at[0] = 768.1f, c1.at[1] = -0.f, c1.at[2] = 1e-5f, c1.turn = 22.5f;
+    c2.node = 0x404, c2.at[0] = 0.1f, c2.at[1] = -1234.567f, c2.at[2] = 3.f;
+    // added before the step 1 edits: write() still puts them in its own order
+    m.addPowerUps.push_back(powerUp(2, {1.f, 2.f, 3.f}, {-0.f, 600.7f, 1e-5f}));
+    m.addPowerUps.push_back(powerUp(2, {1.f, 2.f, 3.f}, {4.f, 5.f, 6.f}));
+    m.copies.push_back(c1);
+    m.copies.push_back(c2);
+    m.powerups.push_back(powerUp(2, {1.f, 2.f, 3.f}, {7.f, 8.f, 9.f}));
+    m.edits.push_back(moveTo(0x61e340, 0.1f, -1234.567f, 1e-5f, 22.5f));
+    m.edits.push_back(removal(0x62a1c0));
+    const std::string text = sm::write(m);
+    sm::Map back;
+    std::string why;
+    CHECK(sm::parse(text, back, why));
+    CHECK(sm::write(back) == text);   // byte stable
+    CHECK(back.edits.size() == 2 && back.copies.size() == 2 && back.powerups.size() == 1 && back.addPowerUps.size() == 2);
+    bool same = back.copies.size() == m.copies.size();
+    for (size_t i = 0; same && i < m.copies.size(); ++i)
+    {
+        const sm::Copy &a = m.copies[i], &b = back.copies[i];
+        same = a.node == b.node && bitsOf(a.turn) == bitsOf(b.turn);
+        for (int k = 0; k < 3; ++k)
+            same = same && bitsOf(a.at[k]) == bitsOf(b.at[k]);
+    }
+    CHECK(same);
+    bool samePups = back.addPowerUps.size() == m.addPowerUps.size() && back.powerups.size() == m.powerups.size() &&
+                    back.powerups[0].at[2] == 9.f;
+    for (size_t i = 0; samePups && i < m.addPowerUps.size(); ++i)
+    {
+        const sm::PowerUpEdit &a = m.addPowerUps[i], &b = back.addPowerUps[i];
+        samePups = a.index == b.index;
+        for (int k = 0; k < 3; ++k)
+            samePups = samePups && bitsOf(a.from[k]) == bitsOf(b.from[k]) && bitsOf(a.at[k]) == bitsOf(b.at[k]);
+    }
+    CHECK(samePups);
+    CHECK(back.edits.size() == 2 && back.edits[0].node == 0x61e340 && back.edits[1].remove);
+    // order in the text: node edits, copies, power-up moves, power-up additions
+    const size_t lastNode = text.rfind("\"node\""), firstCopy = text.find("\"copy\""), lastCopy = text.rfind("\"copy\""),
+                 firstPup = text.find("\"powerup\""), lastPup = text.rfind("\"powerup\""), firstAdd = text.find("\"addpowerup\"");
+    CHECK(lastNode != std::string::npos && firstCopy != std::string::npos && firstPup != std::string::npos &&
+          firstAdd != std::string::npos);
+    CHECK(lastNode < firstCopy && lastCopy < firstPup && lastPup < firstAdd);
+    CHECK(text.find("e-") == std::string::npos);   // plain decimals
+    // turn 0 is left out
+    CHECK(text.find("\"turn\": 22.5") != std::string::npos);
+    size_t turns = 0;
+    for (size_t p = text.find("\"turn\""); p != std::string::npos; p = text.find("\"turn\"", p + 1))
+        ++turns;
+    CHECK(turns == 2);   // the move's and c1's
+}
+
 // Power-up places on a fake PowerUpTool points array (64-byte points, position at +0, type and arg at +0x2C/+0x2D)
 TEST(stagemap_powerups_apply)
 {
@@ -1165,6 +1487,177 @@ TEST(stagemap_powerups_apply)
         CHECK(r.log[0].find("the point count 257 is past the 256 points") != std::string::npos);
 }
 
+// Power-up places added by a map: copies of stock points appended after them, the whole 64-byte point with its position set
+TEST(stagemap_powerups_append)
+{
+    constexpr uint32_t kPoints = 0x2AF0C0;
+    std::vector<uint8_t> buf(sm::kMaxPoints * sm::kPointSize);
+    sm::Mem mem;
+    mem.r.push_back({kPoints, buf.data(), uint32_t(buf.size())});
+    auto put = [&](uint32_t i, uint8_t type) {
+        const uint32_t a = kPoints + sm::kPointSize * i;
+        mem.wf32(a, 100.f * float(i)), mem.wf32(a + 4, -50.f), mem.wf32(a + 8, 40.f + float(i));
+        for (uint32_t k = 12; k < sm::kPointSize; ++k)
+            buf[a - kPoints + k] = uint8_t(i * 7 + k);
+        buf[a - kPoints + 0x2C] = type, buf[a - kPoints + 0x2D] = uint8_t(type + 10);
+    };
+    auto pos = [&](uint32_t i) {
+        const uint32_t a = kPoints + sm::kPointSize * i;
+        return std::array<float, 3>{mem.f32(a), mem.f32(a + 4), mem.f32(a + 8)};
+    };
+    auto tailOf = [&](uint32_t i, uint32_t src) {   // bytes 12..63 of point i equal those of point src
+        return std::equal(buf.begin() + sm::kPointSize * i + 12, buf.begin() + sm::kPointSize * (i + 1),
+                          buf.begin() + sm::kPointSize * src + 12);
+    };
+    auto from = [](uint32_t i) { return std::array<float, 3>{100.f * float(i), -50.f, 40.f + float(i)}; };
+    {
+        for (uint32_t i = 0; i < 3; ++i)
+            put(i, uint8_t(i + 1));
+        const std::vector<uint8_t> stock(buf.begin(), buf.begin() + 3 * sm::kPointSize);
+        const std::vector<sm::PowerUpEdit> adds = {
+            powerUp(1, from(1), {500.f, 600.f, 70.f}),
+            powerUp(1, {100.005f, -50.f, 41.f}, {-1.5f, 2.5f, 3.5f}),   // the same index again, within 0.01 of the disc place
+            powerUp(0, {0.f, -50.f, 41.f}, {9.f, 9.f, 9.f}),            // z off by 1: refused
+            powerUp(2, from(2), {7.f, 8.f, 9.f}),
+            powerUp(3, from(3), {9.f, 9.f, 9.f}),                       // past the stock points: refused
+        };
+        uint32_t count = 0;
+        const sm::PowerUpResult r = sm::appendPowerUps(mem, kPoints, 3, adds, count);
+        for (const std::string &l : r.log)
+            std::printf("  %s\n", l.c_str());
+        CHECK(count == 6 && r.moved == 3 && r.refused == 2 && r.log.size() == 2);
+        CHECK(tailOf(3, 1) && tailOf(4, 1) && tailOf(5, 2) && buf[sm::kPointSize * 5 + 0x2C] == 3);
+        CHECK((pos(3) == std::array<float, 3>{500.f, 600.f, 70.f}) && (pos(4) == std::array<float, 3>{-1.5f, 2.5f, 3.5f}) &&
+              (pos(5) == std::array<float, 3>{7.f, 8.f, 9.f}));
+        CHECK(std::equal(stock.begin(), stock.end(), buf.begin()));   // the stock points are untouched
+        CHECK(std::all_of(buf.begin() + 6 * sm::kPointSize, buf.end(), [](uint8_t b) { return b == 0; }));
+        if (r.log.size() == 2)
+            CHECK(r.log[0].find("added power-up 0: is at 0.0 -50.0 40.0") == 0 &&
+                  r.log[1].find("added power-up 3: the stage has 3 power-up places") == 0);
+    }
+    {
+        std::fill(buf.begin(), buf.end(), uint8_t(0));
+        for (uint32_t i = 0; i < 255; ++i)
+            put(i, 1);
+        uint32_t count = 0;
+        const sm::PowerUpResult r = sm::appendPowerUps(mem, kPoints, 255, {powerUp(4, from(4), {1.f, 2.f, 3.f}),
+                                                                            powerUp(5, from(5), {1.f, 2.f, 3.f})}, count);
+        CHECK(count == 256 && r.moved == 1 && r.refused == 1 && tailOf(255, 4));
+        CHECK(r.log.size() == 2 && r.log[0].find("added power-up 5: ") == 0 && r.log[0].find("256 points") != std::string::npos);
+        CHECK(r.log.size() == 2 && r.log[1].find("the game creates 100 at most") != std::string::npos);
+    }
+    {
+        std::fill(buf.begin(), buf.end(), uint8_t(0));
+        for (uint32_t i = 0; i < 98; ++i)
+            put(i, 2);
+        uint32_t count = 0;
+        const sm::PowerUpResult r = sm::appendPowerUps(mem, kPoints, 98, {powerUp(0, from(0), {1.f, 2.f, 3.f}),
+                                                                           powerUp(1, from(1), {1.f, 2.f, 3.f}),
+                                                                           powerUp(2, from(2), {1.f, 2.f, 3.f})}, count);
+        CHECK(count == 101 && r.moved == 3 && r.refused == 0);
+        CHECK(r.log.size() == 1 && r.log[0] == "added 3 power-ups (101 places: the game creates 100 at most)");
+        // two short of 100 and one added: no note
+        uint32_t c2 = 0;
+        CHECK(sm::appendPowerUps(mem, kPoints, 98, {powerUp(0, from(0), {1.f, 2.f, 3.f})}, c2).log.empty() && c2 == 99);
+    }
+    {
+        // no additions: nothing written, the count stays; a broken count past 256: everything refused, nothing written
+        const std::vector<uint8_t> before = buf;
+        uint32_t count = 0;
+        CHECK(sm::appendPowerUps(mem, kPoints, 98, {}, count).moved == 0 && count == 98 && buf == before);
+        const sm::PowerUpResult r = sm::appendPowerUps(mem, kPoints, sm::kMaxPoints + 1, {powerUp(0, from(0), {1.f, 2.f, 3.f})}, count);
+        CHECK(r.moved == 0 && r.refused == 1 && count == sm::kMaxPoints + 1 && buf == before);
+    }
+    {
+        // 0.011 off "from" on one axis: refused (the guard is 0.01), nothing written
+        std::fill(buf.begin(), buf.end(), uint8_t(0));
+        for (uint32_t i = 0; i < 3; ++i)
+            put(i, 1);
+        const std::vector<uint8_t> before = buf;
+        uint32_t count = 0;
+        const sm::PowerUpResult r = sm::appendPowerUps(mem, kPoints, 3, {powerUp(1, {100.f, -50.011f, 41.f}, {1.f, 2.f, 3.f})}, count);
+        CHECK(r.moved == 0 && r.refused == 1 && count == 3 && buf == before);
+        CHECK(r.log.size() == 1 && r.log[0].find("added power-up 1: is at 100.0 -50.0 41.0") == 0);
+    }
+    {
+        // 99 stock and one added: exactly 100 places, the game creates them all: no note
+        std::fill(buf.begin(), buf.end(), uint8_t(0));
+        for (uint32_t i = 0; i < 99; ++i)
+            put(i, 2);
+        uint32_t count = 0;
+        const sm::PowerUpResult r = sm::appendPowerUps(mem, kPoints, 99, {powerUp(7, from(7), {1.f, 2.f, 3.f})}, count);
+        CHECK(count == 100 && r.moved == 1 && r.refused == 0 && r.log.empty() && tailOf(99, 7));
+    }
+    {
+        // the new point's place is outside the memory given (a Mem of 4 points): refused, nothing written
+        std::vector<uint8_t> small(4 * sm::kPointSize);
+        sm::Mem m4;
+        m4.r.push_back({kPoints, small.data(), uint32_t(small.size())});
+        for (uint32_t i = 0; i < 4; ++i)
+            m4.wf32(kPoints + sm::kPointSize * i, 100.f * float(i)), m4.wf32(kPoints + sm::kPointSize * i + 4, -50.f),
+                m4.wf32(kPoints + sm::kPointSize * i + 8, 40.f + float(i));
+        const std::vector<uint8_t> before = small;
+        uint32_t count = 0;
+        const sm::PowerUpResult r = sm::appendPowerUps(m4, kPoints, 4, {powerUp(1, from(1), {1.f, 2.f, 3.f})}, count);
+        CHECK(r.moved == 0 && r.refused == 1 && count == 4 && small == before);
+        CHECK(r.log.size() == 1 && r.log[0].find("added power-up 1: its new point (4) is outside memory") == 0);
+    }
+}
+
+// The exportPoints hook's order in one call: the additions first (their "from" is the disc place), then step 1's moves, which
+// only reach the stock points; a second call on points that already hold the additions appends nothing
+TEST(stagemap_point_edits_order)
+{
+    constexpr uint32_t kPoints = 0x2AF0C0;
+    std::vector<uint8_t> buf(sm::kMaxPoints * sm::kPointSize);
+    sm::Mem mem;
+    mem.r.push_back({kPoints, buf.data(), uint32_t(buf.size())});
+    auto pos = [&](uint32_t i) {
+        const uint32_t a = kPoints + sm::kPointSize * i;
+        return std::array<float, 3>{mem.f32(a), mem.f32(a + 4), mem.f32(a + 8)};
+    };
+    auto load = [&]() {   // loadPoints: 3 stock points at their disc places
+        std::fill(buf.begin(), buf.end(), uint8_t(0));
+        for (uint32_t i = 0; i < 3; ++i)
+        {
+            const uint32_t a = kPoints + sm::kPointSize * i;
+            mem.wf32(a, 100.f * float(i)), mem.wf32(a + 4, -50.f), mem.wf32(a + 8, 40.f + float(i));
+            buf[a - kPoints + 0x2C] = uint8_t(i + 1);
+        }
+    };
+    const std::array<float, 3> disc1{100.f, -50.f, 41.f};
+    {
+        // (a) a move of index 3 (== the stock count, though an addition makes 4 points): refused, the added point stays
+        load();
+        uint32_t count = 0;
+        const sm::PointEditsResult r = sm::applyPointEdits(mem, kPoints, 3, 3, {powerUp(1, disc1, {5.f, 6.f, 7.f})},
+                                                           {powerUp(3, {5.f, 6.f, 7.f}, {9.f, 9.f, 9.f})}, count);
+        CHECK(count == 4 && r.added.moved == 1 && r.moved.moved == 0 && r.moved.refused == 1);
+        CHECK((pos(3) == std::array<float, 3>{5.f, 6.f, 7.f}));
+        CHECK(r.moved.log.size() == 1 && r.moved.log[0].find("power-up 3: the stage has 3 power-up places") == 0);
+    }
+    {
+        // (b) index 1 both added (at its disc place) and moved: the copy keeps the disc place, the original moves
+        load();
+        uint32_t count = 0;
+        const std::vector<sm::PowerUpEdit> adds{powerUp(1, disc1, disc1)}, moves{powerUp(1, disc1, {500.f, 600.f, 70.f})};
+        sm::PointEditsResult r = sm::applyPointEdits(mem, kPoints, 3, 3, adds, moves, count);
+        CHECK(count == 4 && r.added.moved == 1 && r.added.refused == 0 && r.moved.moved == 1 && r.moved.refused == 0);
+        CHECK(pos(3) == disc1 && (pos(1) == std::array<float, 3>{500.f, 600.f, 70.f}) && buf[sm::kPointSize * 3 + 0x2C] == 2);
+        // (c) a second exportPoints with no new loadPoints: the points already hold the addition (4 of them, stock 3): nothing
+        // appended, the moves still reach the stock points only, the bytes stay
+        const std::vector<uint8_t> once = buf;
+        count = 0;
+        r = sm::applyPointEdits(mem, kPoints, 4, 3, adds, {moves[0], powerUp(3, disc1, {1.f, 1.f, 1.f})}, count);
+        CHECK(count == 4 && r.added.moved == 0 && r.added.refused == 0 && r.added.log.empty());
+        CHECK(r.moved.moved == 1 && r.moved.refused == 1 && buf == once);
+        // a fresh loadPoints (3 points at the disc places again): the same edits give the same bytes
+        load();
+        r = sm::applyPointEdits(mem, kPoints, 3, 3, adds, moves, count);
+        CHECK(count == 4 && buf == once);
+    }
+}
+
 // The coverage rule on the same cases as tools/stage_map.py selftest: a box past both X edges, a negative start, one fully
 // outside, and one ending exactly on a cell line (floor-inclusive takes the next cell).
 TEST(stagemap_covered)
@@ -1186,6 +1679,12 @@ TEST(stagemap_reserve_alloc)
     CHECK(r.alloc(8) == 0x1010 && r.next == 0x1020);
     CHECK(r.alloc(0x11) == 0x1020 && r.next == 0x1040);
     CHECK(r.alloc(1) == 0 && r.next == 0x1040);
+}
+
+TEST(stagemap_reserve_layout)
+{
+    CHECK(sm::kReserve == 0x3BFF000u && sm::kReserveSize == 0x400000u);
+    CHECK(sm::kReserve + sm::kReserveSize == 0x4000000u - 0x1000u);   // right under the top-of-RAM slots (wotm_split4.inc: -0x1000)
 }
 
 TEST(stagemap_walk)
@@ -1497,26 +1996,9 @@ TEST(stagemap_turn_turns_hat_offsets)
     {
         Img im;
         uint32_t t, t2, g, h1, h2, h3;
-        uint32_t act(uint16_t type, uint32_t size)
-        {
-            const uint32_t a = im.alloc(size);
-            im.w32(a, type);
-            return a;
-        }
-        uint32_t hat(float r, float x, float y, float z)
-        {
-            const uint32_t a = act(sm::kActHatPickup, 0x18);
-            im.wf(a + 8, r), im.wf(a + 0xC, x), im.wf(a + 0x10, y), im.wf(a + 0x14, z);
-            return a;
-        }
-        uint32_t destructible(const std::vector<std::pair<uint32_t, uint32_t>> &states)   // (child, actions)
-        {
-            const uint32_t d = im.node(31, 0xC + 12 * uint32_t(states.size()));
-            im.w16(d + 0xA, uint16_t(states.size()));
-            for (size_t i = 0; i < states.size(); ++i)
-                im.w32(d + 0xC + 12 * uint32_t(i), states[i].first), im.w32(d + 0x10 + 12 * uint32_t(i), states[i].second);
-            return d;
-        }
+        uint32_t act(uint16_t type, uint32_t size) { return im.act(type, size); }
+        uint32_t hat(float r, float x, float y, float z) { return im.hat(r, x, y, z); }
+        uint32_t destructible(const std::vector<std::pair<uint32_t, uint32_t>> &states) { return im.destructible(states); }
         Hats()
         {
             h1 = hat(400, 10, 0, 5), h2 = hat(300, 3, 4, 0), h3 = hat(200, 7, 0, 0);
@@ -1586,7 +2068,1125 @@ TEST(stagemap_same_bits_on_every_machine)
         h = (h ^ byte) * 0x100000001B3ull;
     std::printf("  stagemap digest %016llx\n", static_cast<unsigned long long>(h));
     CHECK(r.applied == 3 && s.im.gridProblems(s.g) == 0);
-    CHECK(h == 0x035d31e0eff6d986ull);
+    // 0x035d31e0eff6d986 with the 1 MB reserve at 0x3EFF000; the 4 MB reserve (0x3BFF000) changes only the 5 reserve pointers the
+    // edits write (each 0x300000 lower), no float bit
+    CHECK(h == 0x7ebbfd393eca9736ull);
+}
+
+// The same for copies: a step 1 move, turned and plain copies of a world piece (one past the grid's edge, so the clamp's bits are
+// in it too), a turned copy of a ROTATE piece and a turned pickup copy, image and reserve hashed
+TEST(stagemap_copy_same_bits_on_every_machine)
+{
+    CopyStage s;
+    // a ROTATE piece under oldLast; its rows are written as exact constants (cos 0.6, sin 0.8), not from the host's sin/cos
+    const uint32_t rB = s.im.rotate({s.im.stillObject()}, 0, 200, 600, 0);
+    s.im.wf(rB + 0x10, 0.6f), s.im.wf(rB + 0x14, 0.8f), s.im.wf(rB + 0x20, -0.8f), s.im.wf(rB + 0x24, 0.6f);
+    s.im.w32(s.oldLast + 0x20, rB);
+    sm::Map map;
+    map.edits = {moveTo(s.off(s.tE), 650.5f, 150.25f, 0.f, 30.f)};
+    map.copies = {copyAt(s.off(s.tD), 590.5f, 410.25f, 3.f, 45.f), copyAt(s.off(s.tD), 395.5f, 610.25f, 0.f, 15.f),
+                  copyAt(s.off(s.tD), 100.f, 700.f, 0.f, 0.f), copyAt(s.off(s.tP), 650.f, 120.f, 10.f, 90.f),
+                  copyAt(s.off(s.tD), 797.25f, 795.5f, 0.f, 30.f), copyAt(s.off(rB), 210.5f, 590.25f, 2.f, 22.5f)};
+    sm::Reserve res = s.im.reserve();
+    const sm::Result r = s.run(map, res);
+    uint64_t h = sm::fnv1a(s.im.img.data(), s.im.img.size());
+    for (uint8_t byte : s.im.res)
+        h = (h ^ byte) * 0x100000001B3ull;
+    std::printf("  stagemap copy digest %016llx\n", static_cast<unsigned long long>(h));
+    for (const std::string &l : r.log)
+        std::printf("  %s\n", l.c_str());
+    CHECK(r.applied == 1 && r.copied == 6 && r.copyRefused == 0 && s.im.gridProblems(s.g) == 0);
+    CHECK(logHas(r, "copy " + hexOff(s.off(s.tD)) + " (edit 6): kept inside the collision grid's edge, at "));
+    // the ROTATE's copy is a ROTATE at its place with turned rows (wotm_stagemap.cpp's ROTATE root branch)
+    uint32_t rc = 0;
+    for (const sm::CopyInfo &c : r.copies)
+        if (c.source == rB)
+            rc = c.root;
+    CHECK(rc && s.im.r32(rc) == s.im.r32(rB) && s.im.rf(rc + 0x40) == 210.5f && s.im.rf(rc + 0x44) == 590.25f &&
+          s.im.rf(rc + 0x48) == 2.f && s.im.rf(rc + 0x10) != 0.6f && s.im.rf(rc + 0x18) == s.im.rf(rB + 0x18));
+    // measured on Windows, MSVC x64; the Mac (clang, arm64) must print the same. 0x946f58d8ff7f329e before the ROTATE copy
+    CHECK(h == 0xe6ad18f1f1b154feull);
+}
+
+TEST(stagemap_copy_set)
+{
+    CopyStage s;
+    const sm::CopySet c = s.copySet(s.tD);
+    CHECK(c.why == "");
+        // preorder; the OBJECTs and the POLY_COLL are shared
+    CHECK(c.nodes == std::vector<uint32_t>({s.tD, s.i1, s.d1, s.g0, s.sw, s.em, s.i2, s.d2}));
+    CHECK(c.bytes == aligned(0x24) + aligned(0x10) + aligned(0x24) + aligned(0x2C) + aligned(0x14) + aligned(0xB0) + aligned(0x10)
+                         + aligned(0x18));
+    CHECK(c.interactives == 2 && c.destructibles == 2 && c.pickups == 0 && c.optionGroup == 0);
+    const sm::CopySet p = s.copySet(s.tP);
+    CHECK(p.why == "" && p.nodes == std::vector<uint32_t>({s.tP, s.gP, s.swP}));
+    CHECK(p.interactives == 1 && p.destructibles == 0 && p.pickups == 1);
+    CHECK(has(s.copySet(s.g0).why, "not a piece"));
+
+    const sm::Mem m = s.im.mem();
+    CHECK(sm::nodeSize(m, s.tD) == 0x24 && sm::nodeSize(m, s.d1) == 0x24 && sm::nodeSize(m, s.sw) == 0x14);
+    CHECK(sm::nodeSize(m, s.em) == 0xB0 && sm::nodeSize(m, s.i1) == 0x10 && sm::nodeSize(m, s.g0) == 0x2C);
+    CHECK(sm::nodeSize(m, s.obj0) == 0 && sm::nodeSize(m, s.pc) == 0);   // shared kinds are never copied
+    const uint32_t ad = s.im.node(sm::kOpActionData, 0x10);
+    CHECK(sm::nodeSize(m, ad) == 0);
+    CHECK(sm::nodeSize(m, s.im.node(sm::kOpScriptAction, 0x60)) == 0x60);
+    const uint32_t lod = s.im.lod(s.obj0, 0, 0, 0, 10), ctl = s.im.node(sm::kOpControl, 0x28);
+    *s.im.at(ctl + 0xC) = 2;   // numVolumes 2: bspNodes[] +0x20
+    CHECK(sm::nodeSize(m, lod) == 0x30 && sm::nodeSize(m, ctl) == 0x28);
+    s.im.w32(lod + 4, 16);     // a LOD of 16 levels is past what slots() reads
+    CHECK(sm::nodeSize(m, lod) == 0);
+    CHECK(sm::dominoActions(m, s.d1) == std::vector<uint32_t>({s.dom, s.domOut}));
+    CHECK(sm::dominoActions(m, s.tD).empty());
+}
+
+TEST(stagemap_copy_limits_refuse)
+{
+    // a child count past what slots() reads (4096) makes nodeSize 0 (the piece is refused), not a truncated copy
+    {
+        Img im(0x20000);
+        const sm::Mem m = im.mem();
+        const uint32_t t = im.node(sm::kOpTranslate, 0x1C + 4 * 4097), r = im.node(sm::kOpRotate, 0x50 + 4 * 4097),
+                       sc = im.node(sm::kOpScale, 0x2C + 4 * 4097), gr = im.node(sm::kOpGroup, 0x20 + 4 * 4097),
+                       d = im.node(sm::kOpDestructible, 0xC + 12 * 4097);
+        im.w32(t + 8, 4097), im.w32(r + 8, 4097), im.w32(sc + 8, 4097), im.w16(gr + 8, 4097), im.w16(d + 0xA, 4097);
+        CHECK(sm::nodeSize(m, t) == 0 && sm::nodeSize(m, r) == 0 && sm::nodeSize(m, sc) == 0);
+        CHECK(sm::nodeSize(m, gr) == 0 && sm::nodeSize(m, d) == 0);
+        im.w32(t + 8, 4096), im.w16(gr + 8, 4096);
+        CHECK(sm::nodeSize(m, t) == 0x1C + 4 * 4096 && sm::nodeSize(m, gr) == 0x20 + 4 * 4096);
+    }
+    // action trees past 20 levels or 256 actions in a group refuse the piece instead of being read in part
+    {
+        CopyStage s;   // a chain of ACT_TRANSFORMs 22 deep under a1
+        uint32_t next = s.hat1;
+        for (int i = 0; i < 21; ++i)
+        {
+            const uint32_t xf = s.im.act(sm::kActTransform, 0x50);
+            s.im.w32(xf + 8, next);
+            next = xf;
+        }
+        s.im.w32(s.a1 + 0xC, next);
+        CHECK(has(s.copySet(s.tD).why, "action tree"));
+    }
+    {
+        CopyStage s;   // 20 levels are read whole: fine
+        uint32_t next = s.hat1;
+        for (int i = 0; i < 19; ++i)
+        {
+            const uint32_t xf = s.im.act(sm::kActTransform, 0x50);
+            s.im.w32(xf + 8, next);
+            next = xf;
+        }
+        s.im.w32(s.a1 + 0xC, next);
+        CHECK(s.copySet(s.tD).why == "");
+    }
+    {
+        CopyStage s;   // an ACT_GROUP of 257 actions
+        const uint32_t big = s.im.act(sm::kActGroup, 0xC + 4 * 257);
+        s.im.w32(big + 8, 257);
+        s.im.w32(s.a1 + 0xC, big);
+        CHECK(has(s.copySet(s.tD).why, "action tree"));
+        s.im.w32(big + 8, 256);
+        CHECK(s.copySet(s.tD).why == "");
+    }
+}
+
+TEST(stagemap_copy_refusals)
+{
+    auto why = [](const std::function<void(CopyStage &)> &change) {
+        CopyStage s;
+        change(s);
+        return s.copySet(s.tD).why;
+    };
+    auto setId = [](CopyStage &s, uint32_t n, uint32_t id1) { s.im.w32(n, (s.im.r32(n) & 0x3FFFFu) | id1 << 18); };
+    // special ids on a node traversal hands to dbProcInteractive
+    CHECK(has(why([&](CopyStage &s) { setId(s, s.g0, 0x2134); }), "special id 0x2134"));
+    CHECK(has(why([&](CopyStage &s) { setId(s, s.g0, 0x20); }), "special id 0x20"));
+    // INTERACTIVE_STATE and DESTRUCTIBLE: only the fixed id1 tables
+    CHECK(has(why([&](CopyStage &s) { setId(s, s.i1, 0x27AE); }), "fixed id1 table"));
+    CHECK(has(why([&](CopyStage &s) { setId(s, s.i2, 0x2715); }), "fixed id1 table"));
+    CHECK(why([&](CopyStage &s) { setId(s, s.i1, 0x2134); }) == "");   // any other id on a 39 goes to AddDestruct only
+    {
+        CopyStage s;   // a refusal carries no partial copy set or counts
+        setId(s, s.i2, 0x2715);
+        const sm::CopySet c = s.copySet(s.tD);
+        CHECK(c.why != "" && c.nodes.empty() && c.bytes == 0 && c.interactives == 0 && c.destructibles == 0);
+    }
+    CHECK(has(why([&](CopyStage &s) { setId(s, s.em, 0x1D4C); }), "locator"));
+    // animated
+    CHECK(has(why([&](CopyStage &s) { s.im.w32(s.g0 + 0x24, s.im.holder(sm::kOpAnimXform, 4, 0xCC, {s.pc})); }), "animated"));
+    CHECK(has(why([&](CopyStage &s) { s.im.w32(s.a1 + 0xC, s.im.act(sm::kActAnim, 0x10)); }), "animated"));
+    CHECK(has(why([&](CopyStage &s) { s.im.w32(s.a1 + 0xC, s.im.act(sm::kActRunScript, 0x10)); }), "script action"));
+    CHECK(has(why([&](CopyStage &s) { s.im.w32(s.a1 + 0xC, s.im.act(sm::kActCinema, 0x10)); }), "script action"));
+    // a CHAR_INSTANCE above (amendment A1): refused only when an OBJECT of the piece reads an animation channel
+    auto underChar = [&](CopyStage &s) { s.im.w32(s.mid + 0x20, s.im.holder(sm::kOpCharInstance, 0x28, 0x2C, {s.tD})); };
+    CHECK(why(underChar) == "");
+    CHECK(has(why([&](CopyStage &s) { underChar(s), s.im.w16(s.obj0 + 0x30, 0); }), "animated"));
+    CHECK(has(why([&](CopyStage &s) { underChar(s), s.im.w16(s.obj2 + 0x3C, 3); }), "animated"));
+        // a channel without a CHAR_INSTANCE above: the copy is no worse than the original
+    CHECK(why([&](CopyStage &s) { s.im.w16(s.obj0 + 0x30, 0); }) == "");
+    // an ACTION_DATA between the root and a per-instance node would be in the copy set
+    CHECK(has(why([&](CopyStage &s) {
+              const uint32_t ad = s.im.node(sm::kOpActionData, 0x10);
+              s.im.w32(ad + 4, s.i1);
+              s.im.w32(s.tD + 0x1C, ad);
+          }), "ACTION_DATA"));
+    // a GROUP over a SWITCH held twice inside the piece: first by g0 (so it is copied), then by `plain` (not copied). The copy's
+    // `plain` would still reach the original SWITCH and share its state: refused.
+    CHECK(has(why([&](CopyStage &s) {
+              const uint32_t gs = s.im.group({s.im.switchNode({s.im.stillObject()})});
+              s.im.w32(s.g0 + 0x24, gs);                                        // g0 = {sw, gs, em}
+              s.im.w32(s.d1 + 0x18, s.im.group({gs, s.im.stillObject()}));      // state 1 = plain {gs, OBJECT}
+          }), "shared node inside"));
+    CHECK(why([&](CopyStage &s) {   // `plain` reached first: then both holders (plain, d1) are copied and map to one gs'
+              const uint32_t gs = s.im.group({s.im.switchNode({s.im.stillObject()})});
+              s.im.w32(s.g0 + 0x24, s.im.group({gs, s.im.stillObject()}));      // g0 = {sw, plain, em}
+              s.im.w32(s.d1 + 0x18, gs);                                        // state 1 = gs
+          }) == "");
+    CHECK(why([&](CopyStage &s) { s.im.w32(s.d1 + 0x18, s.obj0); }) == "");   // a shared OBJECT held twice is fine
+    // the other animation kinds: SKEL_BONE and ANIM_SCALE in the piece, a SKEL_BONE above it; an ANIM_SCALE above transforms
+    // it, so the source is not a piece at all
+    CHECK(has(why([&](CopyStage &s) { s.im.w32(s.g0 + 0x24, s.im.holder(sm::kOpSkelBone, 4, 0xC, {s.pc})); }), "animated"));
+    CHECK(has(why([&](CopyStage &s) { s.im.w32(s.g0 + 0x24, s.im.holder(sm::kOpAnimScale, 4, 0x60, {s.pc})); }), "animated"));
+    CHECK(has(why([&](CopyStage &s) { s.im.w32(s.mid + 0x20, s.im.holder(sm::kOpSkelBone, 4, 0xC, {s.tD})); }), "animated"));
+    CHECK(has(why([&](CopyStage &s) { s.im.w32(s.mid + 0x20, s.im.holder(sm::kOpAnimScale, 4, 0x60, {s.tD})); }), "not a piece"));
+    // lost context (amendment A3): part of a destructible's state, mode-masked GROUP above
+    CHECK(has(why([&](CopyStage &s) { s.im.w32(s.mid + 0x20, s.im.istate(s.im.destructible({{s.tD, 0}}))); }),
+              "in a destructible's state"));
+    CHECK(has(why([&](CopyStage &s) { s.im.w16(s.mid + 0xA, 0x21); }), "mode-masked"));
+    CHECK(has(why([&](CopyStage &s) { s.im.w16(s.mid + 0xA, 0x81); }), "mode-masked"));
+    CHECK(has(why([&](CopyStage &s) { s.im.w16(s.mid + 0xA, 0x11); }), "mode-masked"));   // 0x10: modes 2, 4, 5
+    CHECK(why([&](CopyStage &s) { s.im.w16(s.mid + 0xA, 0x4F); }) == "");                 // other low bits are not masks
+    {
+        CopyStage s;   // a GROUP above with collision-option flags: copyable, named for the log
+        s.im.w16(s.mid + 0xA, 0x0102);
+        const sm::CopySet c = s.copySet(s.tD);
+        CHECK(c.why == "" && c.optionGroup == s.mid);
+    }
+    // fine: a destructible-range id1 on an OBJECT, a pickup id on a GROUP
+    {
+        CopyStage s;
+        setId(s, s.obj0, 0x1500);
+        const sm::CopySet c = s.copySet(s.tD);
+        CHECK(c.why == "" && c.destructibles == 3 && c.interactives == 2);
+    }
+    {
+        CopyStage s;
+        setId(s, s.g0, 0x12C5);
+        const sm::CopySet c = s.copySet(s.tD);
+        CHECK(c.why == "" && c.interactives == 3 && c.pickups == 1);
+    }
+    // a pickup id1 on a node that is not a GROUP: still per-instance (Pickup::init writes into it). A SWITCH is copied (CANYON1
+    // has two); an OBJECT cannot be, so the piece is refused rather than two pickups sharing one node
+    {
+        CopyStage s;
+        setId(s, s.sw, 0x12C3);
+        const sm::CopySet c = s.copySet(s.tD);
+        CHECK(c.why == "" && c.interactives == 3 && c.pickups == 1);
+        CHECK(std::find(c.nodes.begin(), c.nodes.end(), s.sw) != c.nodes.end());
+    }
+    {
+        CopyStage s;
+        setId(s, s.obj2, 0x12C3);
+        CHECK(has(s.copySet(s.tD).why, "kind 0 (OBJECT)"));
+    }
+}
+
+TEST(stagemap_stage_counts)
+{
+    CopyStage s;
+    {
+        const sm::Mem m = s.im.mem();
+        const sm::StageCounts c = sm::stageCounts(m, sm::parents(m));
+        CHECK(c.interactives == 4 && c.destructibles == 3 && c.pickups == 1);   // i1, i2, iE + gP; d1, d2, dE; gP
+    }
+    s.im.w32(s.tE, (s.im.r32(s.tE) & ~63u) | sm::kOpNull);   // a NULL ends its branch
+    const sm::Mem m = s.im.mem();
+    const sm::StageCounts c = sm::stageCounts(m, sm::parents(m));
+    CHECK(c.interactives == 3 && c.destructibles == 2 && c.pickups == 1);
+}
+
+TEST(stagemap_counts_follow_paths)
+{
+    // the game registers a node once per path dbsTraverse takes to it, so a node held twice counts twice
+    {
+        CopyStage s;
+        s.im.w32(s.oldLast + 0x20, s.iE);   // iE (and dE under it) held by tE and by oldLast
+        const sm::Mem m = s.im.mem();
+        const sm::StageCounts c = sm::stageCounts(m, sm::parents(m));
+        CHECK(c.interactives == 5 && c.destructibles == 4 && c.pickups == 1);
+    }
+    {
+        CopyStage s;   // inside a piece: an OBJECT with a destructible id1 under sw and under d1's state 1
+        s.im.w32(s.obj0, 0x1500u << 18);
+        s.im.w32(s.d1 + 0x18, s.obj0);
+        const sm::CopySet c = s.copySet(s.tD);
+        CHECK(c.why == "" && c.destructibles == 4 && c.interactives == 2);
+        const sm::Mem m = s.im.mem();
+        CHECK(sm::stageCounts(m, sm::parents(m)).destructibles == 5);
+    }
+}
+
+TEST(stagemap_copy_build)
+{
+    {
+        CopyStage s;   // one copy of tD at (500, 500, 0): a wrapper G in the world root's last slot = {oldLast, tD'}
+        s.im.w32(s.world + 4, 0x1234);   // a GS ctx: the wrapper hands the root's on
+        const std::vector<uint8_t> before = s.im.img;
+        const std::map<uint32_t, std::vector<uint32_t>> sets{{s.tD, s.copySet(s.tD).nodes}};
+        sm::Map map;
+        map.copies.push_back(copyAt(s.off(s.tD), 500, 500, 0));
+        sm::Reserve res = s.im.reserve();
+        const sm::Result r = s.run(map, res);
+        CHECK(r.copied == 1 && r.copyRefused == 0 && r.applied == 0 && r.refused == 0);
+        const uint32_t G = s.im.r32(s.world + 0x28);
+        CHECK(s.inReserve(G) && G < res.next);
+        CHECK(s.im.r32(G) == sm::kOpGroup && s.im.r32(G + 4) == 0x1234 && s.im.r16(G + 8) == 2 && s.im.r16(G + 0xA) == 3);
+        CHECK(s.im.r32(G + 0x20) == s.oldLast);
+        const uint32_t root = s.im.r32(G + 0x24);
+        CHECK(s.inReserve(root) && s.im.r32(root) == s.im.r32(s.tD));
+        CHECK(s.im.rf(root + 0x10) == 500.f && s.im.rf(root + 0x14) == 500.f && s.im.rf(root + 0x18) == 0.f);
+        // follow the copy: its per-instance nodes are in the reserve, its geometry is the image's
+        const uint32_t i1c = s.im.r32(root + 0x1C), i2c = s.im.r32(root + 0x20), d1c = s.im.r32(i1c + 0xC),
+                       g0c = s.im.r32(d1c + 0xC), swc = s.im.r32(g0c + 0x20), emc = s.im.r32(g0c + 0x28),
+                       d2c = s.im.r32(i2c + 0xC);
+        const std::vector<uint32_t> copies{root, i1c, d1c, g0c, swc, emc, i2c, d2c};
+        bool inRes = true;
+        for (uint32_t c : copies)
+            inRes = inRes && s.inReserve(c);
+        CHECK(inRes && std::set<uint32_t>(copies.begin(), copies.end()).size() == 8);
+        CHECK(s.im.r32(g0c + 0x24) == s.pc && s.im.r32(swc + 0xC) == s.obj0 && s.im.r32(swc + 0x10) == s.obj1 &&
+              s.im.r32(d1c + 0x18) == s.obj2 && s.im.r32(d2c + 0xC) == s.im.r32(s.d2 + 0xC));
+        const std::map<uint32_t, uint32_t> to{{s.tD, root}, {s.i1, i1c}, {s.d1, d1c}, {s.g0, g0c}, {s.sw, swc}, {s.em, emc},
+                                              {s.i2, i2c}, {s.d2, d2c}};
+        CHECK(copiedBytes(s.im, s.tD, root, 0x10, to) && s.im.r32(root + 0x1C) == i1c && s.im.r32(root + 0x20) == i2c);
+        // d1's state 0 actions (+0x10) hold an in-piece domino: the copy has its own tree there (stagemap_copy_actions)
+        CHECK(copiedBytes(s.im, s.d1, d1c, 0x10, to) && s.inReserve(s.im.r32(d1c + 0x10)) &&
+              std::memcmp(s.im.at(d1c + 0x14), s.im.at(s.d1 + 0x14), 0x10) == 0);
+        CHECK(copiedBytes(s.im, s.i1, i1c, 0x10, to) &&
+              copiedBytes(s.im, s.g0, g0c, 0x2C, to) && copiedBytes(s.im, s.sw, swc, 0x14, to) &&
+              copiedBytes(s.im, s.em, emc, 0xB0, to) && copiedBytes(s.im, s.i2, i2c, 0x10, to) && copiedBytes(s.im, s.d2, d2c, 0x18, to));
+        CHECK(copiesStandAlone(s.im, r, sets));
+        // the image: only the world root's last slot, its sphere fields and the grid's cell heads changed (the copy's list
+        // node is in the reserve: no step 1 remove left any in the pool)
+        std::vector<uint8_t> after = s.im.img;
+        const uint32_t w = s.world - sm::kBase, gh = s.g + 0x20 - sm::kBase;
+        std::copy(before.begin() + w + 0xC, before.begin() + w + 0x20, after.begin() + w + 0xC);
+        std::copy(before.begin() + w + 0x28, before.begin() + w + 0x2C, after.begin() + w + 0x28);
+        std::copy(before.begin() + gh, before.begin() + gh + 4 * 16, after.begin() + gh);
+        CHECK(after == before);
+        CHECK(r.copies.size() == 1);
+        if (r.copies.size() == 1)
+        {
+            const sm::CopyInfo &c = r.copies[0];
+            CHECK(c.source == s.tD && c.root == root && c.istate == i1c && c.destructible == d1c && c.sourceIstate == s.i1);
+        }
+        // G's centre is the world root's (its radius: the next block); the world root's 600 already covers the copy
+        CHECK(s.im.rf(G + 0x10) == 400.f && s.im.rf(G + 0x14) == 400.f && s.im.rf(G + 0x18) == 0.f);
+        CHECK(s.im.rf(s.world + 0x1C) == 600.f && s.im.rf(s.world + 0xC) == 360000.f);
+    }
+    // G's radius covers each child, whichever is farther: oldLast (a GROUP at (0, 0, 0), 565.7 from the centre) with radius
+    // 200 or 5, and the copy (g0's sphere is local to tD: g0' at (800, 800) r20, 565.7 + 20 from the centre)
+    for (const float oldR : {200.f, 5.f})
+    {
+        CopyStage s;
+        s.im.sphere(s.oldLast, 0, 0, 0, oldR);
+        sm::Map map;
+        map.copies.push_back(copyAt(s.off(s.tD), 500, 500, 0));
+        const sm::Result r = s.run(map);
+        const uint32_t G = s.im.r32(s.world + 0x28);
+        const double d = std::sqrt(400.0 * 400.0 * 2.0), oldNeed = d + oldR, copyNeed = d + 20.0;
+        const float rad = s.im.rf(G + 0x1C);
+        CHECK(r.copied == 1 && double(rad) >= oldNeed && double(rad) >= copyNeed);
+        CHECK(near(rad, float(std::max(oldNeed, copyNeed))) && s.im.rf(G + 0xC) == rad * rad);
+    }
+    {
+        CopyStage s;   // two copies: one wrapper per apply, numKids 3, each copy its own nodes
+        const std::map<uint32_t, std::vector<uint32_t>> sets{{s.tD, s.copySet(s.tD).nodes}};
+        sm::Map map;
+        map.copies = {copyAt(s.off(s.tD), 500, 500, 0), copyAt(s.off(s.tD), 100, 500, 0)};
+        const sm::Result r = s.run(map);
+        const uint32_t G = s.im.r32(s.world + 0x28);
+        CHECK(r.copied == 2 && s.im.r16(G + 8) == 3 && s.im.r32(G + 0x20) == s.oldLast);
+        const uint32_t c1 = s.im.r32(G + 0x24), c2 = s.im.r32(G + 0x28);
+        CHECK(s.inReserve(c1) && s.inReserve(c2) && c1 != c2 && s.im.r32(c1 + 0x1C) != s.im.r32(c2 + 0x1C));
+        CHECK(s.im.rf(c2 + 0x10) == 100.f && s.im.rf(c2 + 0x14) == 500.f);
+        CHECK(r.copies.size() == 2 && copiesStandAlone(s.im, r, sets));
+    }
+    {
+        CopyStage s;   // turned 90: the TRANSLATE's copy is a ROTATE
+        sm::Map map;
+        map.copies.push_back(copyAt(s.off(s.tD), 500, 500, 0, 90));
+        const sm::Result r = s.run(map);
+        const uint32_t root = s.im.r32(s.im.r32(s.world + 0x28) + 0x24);
+        CHECK(r.copied == 1 && s.inReserve(root));
+        CHECK(s.im.r32(root) == ((s.im.r32(s.tD) & ~63u) | sm::kOpRotate) && s.im.r32(root + 8) == 2 && s.im.r32(root + 0xC) == 0);
+        const float want[16] = {0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1, 0, 500, 500, 0, 1};
+        bool ok = true;
+        for (uint32_t k = 0; k < 16; ++k)
+            ok = ok && s.im.rf(root + 0x10 + 4 * k) == want[k];
+        CHECK(ok);
+        const uint32_t i1c = s.im.r32(root + 0x50), i2c = s.im.r32(root + 0x54);
+        CHECK(s.inReserve(i1c) && s.inReserve(i2c) && s.im.r32(i1c) == s.im.r32(s.i1) && s.inReserve(s.im.r32(i1c + 0xC)));
+    }
+    {
+        CopyStage s;   // a TRANSLATE with action data cannot be turned into a ROTATE (step 1's rule)
+        s.im.w32(s.tD + 0xC, s.a1);
+        const std::vector<uint8_t> before = s.im.img;
+        sm::Map map;
+        map.copies.push_back(copyAt(s.off(s.tD), 500, 500, 0, 90));
+        const sm::Result r = s.run(map);
+        CHECK(r.copied == 0 && r.copyRefused == 1 && logHas(r, "action data") && s.im.img == before);
+    }
+    {
+        CopyStage s;   // a ROTATE source at 30 degrees: unturned it keeps its rows, turned 90 they are 120 degrees
+        const uint32_t rB = s.im.rotate({s.im.stillObject()}, 30, 200, 600, 0);
+        s.im.w32(s.oldLast + 0x20, rB);
+        sm::Map map;
+        map.copies = {copyAt(s.off(rB), 100, 700, 0), copyAt(s.off(rB), 100, 700, 0, 90)};
+        const sm::Result r = s.run(map);
+        const uint32_t G = s.im.r32(s.world + 0x28), c0 = s.im.r32(G + 0x24), c1 = s.im.r32(G + 0x28);
+        CHECK(r.copied == 2 && s.im.r32(G + 0x20) == s.oldLast && (s.im.r32(c0) & 63) == sm::kOpRotate);
+        bool same = true;
+        for (uint32_t k = 0; k < 12; ++k)
+            same = same && s.im.r32(c0 + 0x10 + 4 * k) == s.im.r32(rB + 0x10 + 4 * k);
+        CHECK(same && s.im.rf(c0 + 0x40) == 100.f && s.im.rf(c0 + 0x44) == 700.f && s.im.rf(c0 + 0x4C) == 1.f);
+        CHECK(s.im.r32(c0 + 0x50) == s.im.r32(rB + 0x50));   // its only child is a shared OBJECT
+        const M4 want = rotZ(120.f);
+        bool ok = true;
+        for (int i = 0; i < 3; ++i)
+            for (int j = 0; j < 4; ++j)
+                ok = ok && near(s.im.rf(c1 + 0x10 + 16 * uint32_t(i) + 4 * uint32_t(j)), want.m[i][j], 1e-5f);
+        CHECK(ok && s.im.rf(c1 + 0x40) == 100.f && s.im.rf(c1 + 0x44) == 700.f);
+    }
+    {
+        CopyStage s;   // a level pickup: its wrapper goes in the pickup root's last slot, the world root is untouched
+        s.im.w32(s.proot + 4, 0x55);
+        const std::map<uint32_t, std::vector<uint32_t>> sets{{s.tP, s.copySet(s.tP).nodes}, {s.tD, s.copySet(s.tD).nodes}};
+        sm::Map map;
+        map.copies = {copyAt(s.off(s.tP), 600, 600, 10), copyAt(s.off(s.tD), 500, 500, 0)};
+        const sm::Result r = s.run(map);
+        CHECK(r.copied == 2);
+        const uint32_t W = s.im.r32(s.proot + 0x20);
+        CHECK(s.inReserve(W) && s.im.r32(W) == sm::kOpGroup && s.im.r32(W + 4) == 0x55 && s.im.r16(W + 8) == 2 &&
+              s.im.r16(W + 0xA) == s.im.r16(s.proot + 0xA));
+        CHECK(s.im.r32(W + 0x20) == s.holder);
+        const uint32_t tPc = s.im.r32(W + 0x24), gPc = s.im.r32(tPc + 0x1C), swPc = s.im.r32(gPc + 0x20);
+        CHECK(s.inReserve(tPc) && s.inReserve(gPc) && s.inReserve(swPc) && s.im.r32(gPc) == s.im.r32(s.gP));
+        CHECK(s.im.rf(tPc + 0x10) == 600.f && s.im.rf(tPc + 0x14) == 600.f && s.im.rf(tPc + 0x18) == 10.f);
+        CHECK(s.im.r32(swPc + 0xC) == s.im.r32(s.swP + 0xC));
+        const uint32_t G = s.im.r32(s.world + 0x28);   // the world copy has its own wrapper
+        CHECK(G != W && s.inReserve(G) && s.im.r16(G + 8) == 2 && s.im.r32(G + 0x20) == s.oldLast);
+        CHECK(copiesStandAlone(s.im, r, sets));
+        CHECK(r.copies.size() == 2 && r.copies[0].istate == 0 && r.copies[0].destructible == 0 && r.copies[0].root == tPc);
+    }
+    {
+        CopyStage s;   // a copy outside the world root's sphere widens it, centre kept
+        s.im.sphere(s.world, 400, 400, 0, 100);
+        sm::Map map;
+        map.copies.push_back(copyAt(s.off(s.tD), 500, 500, 0));
+        const sm::Result r = s.run(map);
+        // g0's sphere (300, 300, 0) is local to tD, so g0' is at (800, 800) r20 in the world
+        const double want = std::sqrt(400.0 * 400.0 * 2.0) + 20.0;
+        const float rad = s.im.rf(s.world + 0x1C);
+        CHECK(r.copied == 1 && double(rad) >= want && near(rad, float(want)) && s.im.rf(s.world + 0xC) == rad * rad);
+        CHECK(s.im.rf(s.world + 0x10) == 400.f && s.im.rf(s.world + 0x14) == 400.f && s.im.rf(s.world + 0x18) == 0.f);
+    }
+    {
+        CopyStage s;   // a source that step 1 removes: its copy is built from the disc state
+        const std::map<uint32_t, std::vector<uint32_t>> sets{{s.tD, s.copySet(s.tD).nodes}};
+        sm::Map map;
+        map.edits.push_back(removal(s.off(s.tD)));
+        map.copies.push_back(copyAt(s.off(s.tD), 500, 500, 0));
+        const sm::Result r = s.run(map);
+        const uint32_t root = s.im.r32(s.im.r32(s.world + 0x28) + 0x24);
+        CHECK(r.applied == 1 && r.copied == 1 && (s.im.r32(s.tD) & 63) == sm::kOpNull);
+        CHECK((s.im.r32(root) & 63) == sm::kOpTranslate && s.im.rf(root + 0x10) == 500.f && s.im.r32(root + 8) == 2);
+        CHECK(s.inReserve(s.im.r32(root + 0x1C)) && s.inReserve(s.im.r32(root + 0x20)) && copiesStandAlone(s.im, r, sets));
+    }
+    {
+        CopyStage s;   // a source that step 1 moves and turns: the copy is the disc TRANSLATE, at the copy's place
+        const std::map<uint32_t, std::vector<uint32_t>> sets{{s.tD, s.copySet(s.tD).nodes}};
+        sm::Map map;
+        map.edits.push_back(moveTo(s.off(s.tD), 100, 500, 0, 90));
+        map.copies.push_back(copyAt(s.off(s.tD), 500, 500, 0));
+        const sm::Result r = s.run(map);
+        const uint32_t root = s.im.r32(s.im.r32(s.world + 0x28) + 0x24), moved = s.im.r32(s.mid + 0x20);
+        CHECK(r.applied == 1 && r.copied == 1 && (s.im.r32(moved) & 63) == sm::kOpRotate);
+        CHECK((s.im.r32(root) & 63) == sm::kOpTranslate && s.im.rf(root + 0x10) == 500.f && s.im.rf(root + 0x14) == 500.f);
+        CHECK(s.im.r32(root + 8) == 2 && s.inReserve(s.im.r32(root + 0x1C)) && s.im.r32(root + 0x1C) != s.i1);
+        CHECK(copiesStandAlone(s.im, r, sets));
+    }
+    {
+        CopyStage s;   // a node with two copied holders (copySet allows it): both copies of the holders hold one copy of it
+        const uint32_t gs = s.im.group({s.im.switchNode({s.im.stillObject()})});
+        const uint32_t plain = s.im.group({gs, s.im.stillObject()});
+        s.im.w32(s.g0 + 0x24, plain);   // g0 = {sw, plain, em}
+        s.im.w32(s.d1 + 0x18, gs);      // state 1 = gs
+        const sm::CopySet cs = s.copySet(s.tD);
+        CHECK(cs.why == "");
+        const std::map<uint32_t, std::vector<uint32_t>> sets{{s.tD, cs.nodes}};
+        sm::Map map;
+        map.copies.push_back(copyAt(s.off(s.tD), 500, 500, 0));
+        const sm::Result r = s.run(map);
+        const uint32_t root = s.im.r32(s.im.r32(s.world + 0x28) + 0x24), d1c = s.im.r32(s.im.r32(root + 0x1C) + 0xC);
+        const uint32_t g0c = s.im.r32(d1c + 0xC), plainc = s.im.r32(g0c + 0x24), gsc = s.im.r32(d1c + 0x18);
+        CHECK(r.copied == 1 && s.inReserve(plainc) && s.inReserve(gsc) && gsc != gs && s.im.r32(plainc + 0x20) == gsc);
+        CHECK(copiesStandAlone(s.im, r, sets));
+    }
+    // amendment A2: the wrapper takes the root's last slot as it is after step 1. Here the pickup root's last (only) child is
+    // the pickup piece tP itself; step 1 turns it (its slot gets a reserve ROTATE) or removes it (NULL)
+    for (int turnIt = 0; turnIt < 2; ++turnIt)
+    {
+        CopyStage s;
+        s.im.w32(s.proot + 0x20, s.tP);   // proot = {tP}
+        const std::map<uint32_t, std::vector<uint32_t>> sets{{s.tP, s.copySet(s.tP).nodes}};
+        sm::Map map;
+        map.edits.push_back(turnIt ? turnBy(s.off(s.tP), 90) : removal(s.off(s.tP)));
+        map.copies.push_back(copyAt(s.off(s.tP), 600, 600, 10));
+        const sm::Result r = s.run(map);
+        const uint32_t W = s.im.r32(s.proot + 0x20), live = s.im.r32(W + 0x20), copy = s.im.r32(W + 0x24);
+        CHECK(r.applied == 1 && r.copied == 1 && s.inReserve(W) && s.im.r16(W + 8) == 2);
+        if (turnIt)
+            CHECK(live != s.tP && s.inReserve(live) && (s.im.r32(live) & 63) == sm::kOpRotate && s.im.r32(live + 0x50) == s.gP);
+        else
+            CHECK(live == s.tP && (s.im.r32(s.tP) & 63) == sm::kOpNull);
+        CHECK(copy != live && (s.im.r32(copy) & 63) == sm::kOpTranslate && s.im.rf(copy + 0x10) == 600.f && s.inReserve(s.im.r32(copy + 0x1C)));
+        CHECK(copiesStandAlone(s.im, r, sets));
+    }
+    {
+        CopyStage s;   // CopyInfo pairs the first DESTRUCTIBLE with its INTERACTIVE_STATE, not the first one in preorder
+        const uint32_t iX = s.im.istate(s.im.stillObject());
+        s.im.w32(s.tD + 0x1C, s.im.group({iX, s.i1}));   // tD = {GROUP {iX, i1}, i2}: iX comes first and holds no DESTRUCTIBLE
+        CHECK(s.copySet(s.tD).why == "");
+        sm::Map map;
+        map.copies.push_back(copyAt(s.off(s.tD), 500, 500, 0));
+        const sm::Result r = s.run(map);
+        CHECK(r.copies.size() == 1);
+        if (r.copies.size() == 1)
+        {
+            const sm::CopyInfo &c = r.copies[0];
+            CHECK(c.sourceIstate == s.i1 && s.inReserve(c.istate) && s.im.r32(c.istate + 0xC) == c.destructible && s.inReserve(c.destructible));
+        }
+    }
+}
+
+TEST(stagemap_copy_actions)
+{
+    // d1's states: 0 -> a1 = {hat1, dom (-> i2, state 1), domOut (-> iE)}, 1 -> hat1. The copy's destructible d1' (d1 + 0xC is
+    // its state 0 child g0, + 0x10 its actions, + 0x1C state 1's actions)
+    auto rootOf = [](CopyStage &s, size_t k) { return s.im.r32(s.im.r32(s.world + 0x28) + 0x24 + 4 * uint32_t(k)); };
+    auto destOf = [](CopyStage &s, uint32_t root) {
+        const uint32_t first = (s.im.r32(root) & 63) == sm::kOpRotate ? 0x50 : 0x1C;
+        return s.im.r32(s.im.r32(root + first) + 0xC);   // root -> i1' -> d1'
+    };
+    {
+        CopyStage s;   // unturned: the group holding the in-piece domino is private, the hat and the outside domino shared
+        const std::vector<uint8_t> a1Before(s.im.img.begin() + (s.a1 - sm::kBase), s.im.img.begin() + (s.a1 - sm::kBase) + 0x18);
+        sm::Map map;
+        map.copies.push_back(copyAt(s.off(s.tD), 500, 500, 0));
+        const sm::Result r = s.run(map);
+        CHECK(r.copied == 1);
+        const uint32_t root = rootOf(s, 0), d1c = destOf(s, root), i2c = s.im.r32(root + 0x20);
+        CHECK(s.inReserve(d1c) && d1c != s.d1 && s.inReserve(i2c));
+        const uint32_t a1c = s.im.r32(d1c + 0x10);
+        CHECK(s.inReserve(a1c) && a1c != s.a1 && s.im.r16(a1c) == sm::kActGroup && s.im.r32(a1c + 8) == 3);
+        const uint32_t domc = s.im.r32(a1c + 0x10);
+        CHECK(s.im.r32(a1c + 0xC) == s.hat1 && s.im.r32(a1c + 0x14) == s.domOut);
+        CHECK(s.inReserve(domc) && s.im.r16(domc) == sm::kActDomino && s.im.r32(domc + 8) == 1 && s.im.r32(domc + 0xC) == i2c);
+        CHECK(s.im.r32(d1c + 0x1C) == s.hat1);   // no domino under state 1: shared
+        CHECK(logHas(r, "copy " + hexOff(s.off(s.tD)) + ": 1 domino actions point outside it"));
+        CHECK(std::equal(a1Before.begin(), a1Before.end(), s.im.img.begin() + (s.a1 - sm::kBase)));
+        CHECK(s.im.r32(s.dom + 0xC) == s.i2 && s.im.r32(s.d1 + 0x10) == s.a1);
+    }
+    {
+        CopyStage s;   // turned 90, twice: each copy has its own turned hat, reached from both states (one memo per copy)
+        sm::Map map;
+        map.copies = {copyAt(s.off(s.tD), 500, 500, 0, 90), copyAt(s.off(s.tD), 100, 500, 0, 90)};
+        const sm::Result r = s.run(map);
+        CHECK(r.copied == 2);
+        std::vector<uint32_t> hats;
+        for (size_t k = 0; k < 2; ++k)
+        {
+            const uint32_t root = rootOf(s, k), d1c = destOf(s, root), i2c = s.im.r32(root + 0x54);
+            const uint32_t a1c = s.im.r32(d1c + 0x10), hatc = s.im.r32(a1c + 0xC), domc = s.im.r32(a1c + 0x10);
+            CHECK(s.inReserve(a1c) && s.inReserve(hatc) && hatc != s.hat1 && s.im.r32(d1c + 0x1C) == hatc);
+            CHECK(s.im.r16(hatc) == sm::kActHatPickup && s.im.rf(hatc + 8) == 300.f);
+            CHECK(s.im.rf(hatc + 0xC) == 0.f && s.im.rf(hatc + 0x10) == 10.f && s.im.rf(hatc + 0x14) == 5.f);
+            CHECK(s.inReserve(domc) && s.im.r32(domc + 0xC) == i2c && s.im.r32(a1c + 0x14) == s.domOut);
+            hats.push_back(hatc);
+        }
+        CHECK(hats.size() == 2 && hats[0] != hats[1]);
+        CHECK(s.im.rf(s.hat1 + 0xC) == 10.f && s.im.rf(s.hat1 + 0x10) == 0.f && s.im.rf(s.hat1 + 0x14) == 5.f);
+        int noted = 0;
+        for (const std::string &l : r.log)
+            noted += has(l, "domino actions point outside it");
+        CHECK(noted == 1);   // once per source
+    }
+    {
+        CopyStage s;   // the hat offset turns with the same bits as a step 1 turn (45 degrees)
+        sm::Map map;
+        map.copies.push_back(copyAt(s.off(s.tD), 500, 500, 0, 45));
+        const sm::Result r = s.run(map);
+        CopyStage t;
+        t.run([&] { sm::Map m2; m2.edits.push_back(turnBy(t.off(t.tD), 45)); return m2; }());
+        const uint32_t hatc = s.im.r32(s.im.r32(destOf(s, rootOf(s, 0)) + 0x10) + 0xC);
+        CHECK(r.copied == 1 && s.im.r32(hatc + 0xC) == t.im.r32(t.hat1 + 0xC) && s.im.r32(hatc + 0x10) == t.im.r32(t.hat1 + 0x10));
+    }
+    {
+        CopyStage s;   // a cycle (an ACT_GROUP holding an ACT_TRANSFORM that points back at it) ends, each action copied once
+        const uint32_t grp = s.im.act(sm::kActGroup, 0x18), xf = s.im.act(sm::kActTransform, 0x50), hat = s.im.hat(100, 1, 2, 3);
+        s.im.w32(grp + 8, 3), s.im.w32(grp + 0xC, xf), s.im.w32(grp + 0x10, hat), s.im.w32(grp + 0x14, grp);
+        s.im.w32(xf + 8, grp);
+        s.im.w32(s.d1 + 0x1C, xf);
+        CHECK(s.copySet(s.tD).why == "");
+        sm::Map map;
+        map.copies.push_back(copyAt(s.off(s.tD), 500, 500, 0, 90));
+        const sm::Result r = s.run(map);
+        CHECK(r.copied == 1);
+        const uint32_t d1c = destOf(s, rootOf(s, 0)), xfc = s.im.r32(d1c + 0x1C), grpc = s.im.r32(xfc + 8);
+        CHECK(s.inReserve(xfc) && s.inReserve(grpc) && s.im.r16(xfc) == sm::kActTransform && s.im.r16(grpc) == sm::kActGroup);
+        CHECK(s.im.r32(grpc + 0xC) == xfc && s.im.r32(grpc + 0x14) == grpc);
+        const uint32_t hatc = s.im.r32(grpc + 0x10);
+        CHECK(s.inReserve(hatc) && s.im.rf(hatc + 0xC) == -2.f && s.im.rf(hatc + 0x10) == 1.f && s.im.rf(hatc + 0x14) == 3.f);
+        CHECK(std::memcmp(s.im.at(xfc + 0xC), s.im.at(xf + 0xC), 0x50 - 0xC) == 0);   // the TRANSFORM's matrix copied whole
+        CHECK(s.im.r32(grp + 0xC) == xf && s.im.r32(xf + 8) == grp && s.im.rf(hat + 0xC) == 1.f);
+    }
+    {
+        CopyStage s;   // a domino aimed at a node inside the piece that is not copied (an OBJECT with id2 set): kept, logged
+        s.im.w32(s.obj0, s.im.r32(s.obj0) | 5u << 7);
+        const uint32_t domIn = s.im.domino(s.obj0, 0), grp = s.im.actGroup({s.hat1, domIn});
+        s.im.w32(s.d1 + 0x1C, grp);
+        sm::Map map;
+        map.copies.push_back(copyAt(s.off(s.tD), 500, 500, 0, 90));
+        const sm::Result r = s.run(map);
+        CHECK(r.copied == 1);
+        const uint32_t grpc = s.im.r32(destOf(s, rootOf(s, 0)) + 0x1C);
+        CHECK(s.inReserve(grpc) && s.inReserve(s.im.r32(grpc + 0xC)) && s.im.r32(grpc + 0x10) == domIn);
+        CHECK(logHas(r, "copy " + hexOff(s.off(s.tD)) + ": domino action " + hexOff(s.off(domIn)) + " targets " +
+                            hexOff(s.off(s.obj0)) + " inside it, not copied"));
+    }
+    {
+        CopyStage s;   // atomic: no room for the last action of the copy: refused, nothing written, its reserve given back
+        sm::Map map;
+        map.copies.push_back(copyAt(s.off(s.tD), 500, 500, 0, 90));
+        uint32_t actionsEnd = 0;   // where the copy's actions (a1', hat1', dom') end in a reserve with room for everything
+        {
+            CopyStage t;
+            sm::Reserve full = t.im.reserve();
+            CHECK(t.run(map, full).copied == 1);
+            const uint32_t a1c = t.im.r32(destOf(t, rootOf(t, 0)) + 0x10);
+            const uint32_t hatc = t.im.r32(a1c + 0xC), domc = t.im.r32(a1c + 0x10);
+            actionsEnd = std::max({a1c + aligned(0x18), hatc + aligned(0x18), domc + aligned(0x10)});
+            CHECK(t.inReserve(a1c) && t.inReserve(hatc) && t.inReserve(domc) && actionsEnd <= full.next);
+        }
+        const std::vector<uint8_t> img = s.im.img, resBytes = s.im.res;
+        sm::Reserve res{sm::kReserve, actionsEnd - 16};
+        const sm::Result r = s.run(map, res);
+        CHECK(r.copied == 0 && r.copyRefused == 1 && logHas(r, "the reserve is full (no room for its actions)"));
+        CHECK(s.im.img == img && s.im.res == resBytes && res.next == sm::kReserve + aligned(0x20 + 4 * 2));
+    }
+    {
+        CopyStage s;   // step 1 turns tD (its hat in the live image turns); an unturned copy keeps the disc's hat bits
+        const std::vector<uint8_t> hatDisc(s.im.at(s.hat1), s.im.at(s.hat1) + 0x18);
+        sm::Map map;
+        map.edits.push_back(turnBy(s.off(s.tD), 90));
+        map.copies.push_back(copyAt(s.off(s.tD), 500, 500, 0));
+        const sm::Result r = s.run(map);
+        CHECK(r.applied == 1 && r.copied == 1);
+        CHECK(s.im.rf(s.hat1 + 0xC) == 0.f && s.im.rf(s.hat1 + 0x10) == 10.f);   // step 1's turn
+        const uint32_t d1c = destOf(s, rootOf(s, 0)), hatc = s.im.r32(s.im.r32(d1c + 0x10) + 0xC);
+        CHECK(s.inReserve(hatc) && s.im.r32(d1c + 0x1C) == hatc && std::memcmp(s.im.at(hatc), hatDisc.data(), 0x18) == 0);
+    }
+    {
+        CopyStage s;   // step 1 turns tD 90; a copy turned 45 turns the disc offset (10, 0) by 45, not the live (0, 10)
+        sm::Map map;
+        map.edits.push_back(turnBy(s.off(s.tD), 90));
+        map.copies.push_back(copyAt(s.off(s.tD), 500, 500, 0, 45));
+        const sm::Result r = s.run(map);
+        CopyStage t;
+        t.run([&] { sm::Map m2; m2.edits.push_back(turnBy(t.off(t.tD), 45)); return m2; }());
+        const uint32_t hatc = s.im.r32(s.im.r32(destOf(s, rootOf(s, 0)) + 0x10) + 0xC);
+        CHECK(r.copied == 1 && s.im.r32(hatc + 0xC) == t.im.r32(t.hat1 + 0xC) && s.im.r32(hatc + 0x10) == t.im.r32(t.hat1 + 0x10));
+    }
+    {
+        CopyStage s;   // one subtree holding the in-piece domino, shared by two states of d1 and by d2: copied once
+        const uint32_t grp = s.im.actGroup({s.dom});
+        s.im.w32(s.d1 + 0x1C, grp);    // d1 state 1
+        s.im.w32(s.d2 + 0x10, grp);    // d2 state 0
+        CHECK(s.copySet(s.tD).why == "");
+        sm::Map map;
+        map.copies.push_back(copyAt(s.off(s.tD), 500, 500, 0));
+        const sm::Result r = s.run(map);
+        CHECK(r.copied == 1);
+        const uint32_t root = rootOf(s, 0), d1c = destOf(s, root), i2c = s.im.r32(root + 0x20), d2c = s.im.r32(i2c + 0xC);
+        const uint32_t a1c = s.im.r32(d1c + 0x10), grpc = s.im.r32(d1c + 0x1C), domc = s.im.r32(a1c + 0x10);
+        CHECK(s.inReserve(grpc) && grpc != grp && s.im.r32(d2c + 0x10) == grpc && s.im.r32(grpc + 8) == 1);
+        CHECK(s.inReserve(domc) && s.im.r32(grpc + 0xC) == domc && s.im.r32(domc + 0xC) == i2c);   // one dom' for all
+        CHECK(s.im.r32(a1c + 0xC) == s.hat1 && s.im.r32(s.d2 + 0x10) == grp && s.im.r32(grp + 0xC) == s.dom);
+    }
+    {
+        CopyStage s;   // an ACT_TRANSFORM on the way to the in-piece domino (no cycle): private, its matrix copied whole
+        const uint32_t xf = s.im.act(sm::kActTransform, 0x50);
+        for (uint32_t k = 0xC; k < 0x50; k += 4)
+            s.im.wf(xf + k, float(k));
+        s.im.w32(xf + 8, s.dom);
+        s.im.w32(s.d1 + 0x1C, xf);
+        sm::Map map;
+        map.copies.push_back(copyAt(s.off(s.tD), 500, 500, 0));
+        const sm::Result r = s.run(map);
+        CHECK(r.copied == 1);
+        const uint32_t root = rootOf(s, 0), d1c = destOf(s, root), i2c = s.im.r32(root + 0x20);
+        const uint32_t xfc = s.im.r32(d1c + 0x1C), domc = s.im.r32(s.im.r32(d1c + 0x10) + 0x10);
+        CHECK(s.inReserve(xfc) && s.im.r16(xfc) == sm::kActTransform && s.im.r32(xfc + 8) == domc && s.im.r32(domc + 0xC) == i2c);
+        CHECK(std::memcmp(s.im.at(xfc + 0xC), s.im.at(xf + 0xC), 0x50 - 0xC) == 0 && s.im.r32(xf + 8) == s.dom);
+    }
+}
+
+namespace
+{
+    // The paths listed in grid g other than `known`, in the order the cells first list them
+    std::vector<uint32_t> otherPaths(Img &im, uint32_t g, const std::set<uint32_t> &known)
+    {
+        std::vector<uint32_t> out;
+        for (int i = 0; i < im.cols(g) * im.rows(g); ++i)
+            for (uint32_t ln = im.r32(g + 0x20 + 4 * uint32_t(i)); ln; ln = im.r32(ln))
+            {
+                const uint32_t p = im.r32(ln + 4);
+                if (!known.count(p) && std::find(out.begin(), out.end(), p) == out.end())
+                    out.push_back(p);
+            }
+        return out;
+    }
+    std::vector<uint32_t> pathList(Img &im, uint32_t p)
+    {
+        std::vector<uint32_t> out;
+        for (uint32_t i = 0; i < im.r32(p + 0x1C) && i < 64; ++i)
+            out.push_back(im.r32(p + 0x24 + 4 * i));
+        return out;
+    }
+    // index of the first log line that starts with `what` (-1: none)
+    int logLine(const sm::Result &r, const std::string &what)
+    {
+        for (size_t i = 0; i < r.log.size(); ++i)
+            if (r.log[i].rfind(what, 0) == 0)
+                return int(i);
+        return -1;
+    }
+    std::string kb(uint32_t bytes) { return std::to_string((bytes + 512) / 1024); }
+    sm::StageCounts stockCounts(CopyStage &s)
+    {
+        const sm::Mem m = s.im.mem();
+        return sm::stageCounts(m, sm::parents(m));
+    }
+}
+
+TEST(stagemap_debris_pickup_bytes)
+{
+    // Pickup.cpp:1098-1160 (object, then the 0xC list node), each 16-aligned
+    CHECK(sm::debrisPickupBytes(0) == 0 && sm::debrisPickupBytes(0x138D - 0x1388) == 0);
+    CHECK(sm::debrisPickupBytes(1) == 0x180);                  // a plain Pickup
+    CHECK(sm::debrisPickupBytes(0x1395 - 0x1388) == 0x4D0);   // rigid
+    CHECK(sm::debrisPickupBytes(0x139E - 0x1388) == 0x4D0);
+    CHECK(sm::debrisPickupBytes(0x13A2 - 0x1388) == 0x280);   // car
+    CHECK(sm::debrisPickupBytes(0x1393 - 0x1388) == 0x310);   // helicopter
+    CHECK(sm::debrisPickupBytes(0x13A3 - 0x1388) == 0x260);   // subway
+    CHECK(sm::debrisPickupBytes(0x13A0 - 0x1388) == 0x1E0);   // turret
+    CHECK(sm::debrisPickupBytes(31) == 0x180);
+    for (uint32_t t = 1; t < 32; ++t)
+        CHECK(sm::debrisPickupBytes(t) <= 0x4D0 && sm::debrisPickupBytes(t) % 16 == 0);
+    // a level pickup node: createPickup takes the type from its id1 (Pickup.cpp:1094-1095)
+    CHECK(sm::levelPickupBytes(0x12C1) == 0x180 && sm::levelPickupBytes(0x1387) == 0x180);   // ids below 0x1388: a Pickup
+    CHECK(sm::levelPickupBytes(0x1395) == 0x4D0 && sm::levelPickupBytes(0x13A1) == 0x240 && sm::levelPickupBytes(0x138D) == 0);
+    CHECK(sm::levelPickupBytes(0x1388) == 0x180);   // createPickup's default case: a Pickup, not the table's "no pickup"
+    for (uint32_t id = sm::kPickupFirst; id <= sm::kPickupLast; ++id)
+        CHECK(sm::levelPickupBytes(id) <= 0x4D0 && sm::levelPickupBytes(id) % 16 == 0);
+}
+
+// Amendment A4: debris chunks with a pickup type count against the Interactives cap and the pickup memory, in the copy set and in
+// the stage's own counts
+TEST(stagemap_copy_debris_pickups)
+{
+    // d1's state 0 actions a1 get a debris action with three chunks: a rigid pickup, none, a plain pickup
+    auto withDebris = [](CopyStage &s) {
+        const uint32_t deb = s.im.debris({0x1395 - 0x1388, 0, 1});
+        s.im.w32(s.a1 + 0x14, deb);   // a1 = {hat1, dom, deb}; the outside domino is dropped
+        return deb;
+    };
+    const uint64_t perCopy = 0x4D0 + 0x180;
+    {
+        CopyStage s;
+        const uint32_t deb = withDebris(s);
+        sm::CopySet c = s.copySet(s.tD);
+        CHECK(c.why == "" && c.debrisPickups == 2 && c.debrisBytes == perCopy && c.interactives == 2 && c.pickups == 0);
+        sm::StageCounts st = stockCounts(s);
+        CHECK(st.debrisPickups == 2 && st.debrisBytes == perCopy && st.interactives == 4 && st.pickups == 1);
+        // reached from state 1 too (it fires again when d1 enters state 1): counted per state
+        s.im.w32(s.d1 + 0x1C, s.im.actGroup({s.hat1, deb}));
+        c = s.copySet(s.tD);
+        CHECK(c.debrisPickups == 4 && c.debrisBytes == 2 * perCopy);
+        // dE (outside tD) gets the same action: the stage counts it, tD's copy set does not
+        s.im.w32(s.dE + 0x10, deb);
+        CHECK(s.copySet(s.tD).debrisPickups == 4 && stockCounts(s).debrisPickups == 6);
+        // more than 32 chunks: Debris::Activate uses the first 32
+        CopyStage t;
+        std::vector<uint32_t> many(40, 1);
+        t.im.w32(t.d2 + 0x10, t.im.debris(many));
+        CHECK(t.copySet(t.tD).debrisPickups == 32 && stockCounts(t).debrisPickups == 32);
+    }
+    {
+        // Interactives: 1 + 8 + 4 + the stage's 2 debris pickups = 15; each copy of tD adds 2 + 2
+        CopyStage s;
+        withDebris(s);
+        sm::Limits lim;
+        lim.interactives = 15 + 4 + 3;
+        sm::Map map;
+        map.copies = {copyAt(s.off(s.tD), 500, 500, 0), copyAt(s.off(s.tD), 100, 500, 0)};
+        sm::Reserve res = s.im.reserve();
+        const sm::Result r = sm::apply(s.im.mem(), 0x8000, map, res, lim);
+        CHECK(r.copied == 1 && r.copyRefused == 1 && r.interactives == 15 + 4);
+        CHECK(logLine(r, "copy " + hexOff(s.off(s.tD)) + " x1 refused: the Interactives table would pass its cap (22; each copy "
+                         "adds 4, 2 of them debris pickups)") >= 0);
+        CHECK(r.pickupBytes == sm::levelPickupBytes(0x12C1) + 2 * perCopy);
+    }
+    {
+        // pickup memory: the stage's level pickup and debris, plus one copy's debris
+        CopyStage s;
+        withDebris(s);
+        sm::Limits lim;
+        lim.pickupRoom = uint32_t(sm::levelPickupBytes(0x12C1) + 2 * perCopy);
+        sm::Map map;
+        map.copies = {copyAt(s.off(s.tD), 500, 500, 0), copyAt(s.off(s.tD), 100, 500, 0)};
+        sm::Reserve res = s.im.reserve();
+        const sm::Result r = sm::apply(s.im.mem(), 0x8000, map, res, lim);
+        CHECK(r.copied == 1 && r.copyRefused == 1 && r.pickupBytes == lim.pickupRoom);
+        CHECK(logLine(r, "copy " + hexOff(s.off(s.tD)) + " x1 refused: not enough pickup memory (") >= 0);
+    }
+}
+
+TEST(stagemap_copy_paths)
+{
+    {
+        CopyStage s;   // decision 2: the copy's path is [world, G, tD', i1', d1', g0', pc]; its box is pD's moved by (200, 200, 0)
+        s.im.w32(s.pD + 0x18, 0x77), s.im.w32(s.pD + 0x20, 0x1234);   // traceId and flags: copied
+        const std::vector<std::pair<int, uint32_t>> pDBefore = s.im.listing(s.g, s.pD);
+        const std::map<uint32_t, std::vector<uint32_t>> sets{{s.tD, s.copySet(s.tD).nodes}};
+        sm::Map map;
+        map.copies.push_back(copyAt(s.off(s.tD), 500, 500, 0));
+        sm::Reserve res = s.im.reserve();
+        const sm::Result r = s.run(map, res);
+        CHECK(r.copied == 1 && r.relinked == 0 && r.fromReserve == 0);
+        const std::vector<uint32_t> np = otherPaths(s.im, s.g, {s.pD, s.pE});
+        CHECK(np.size() == 1);
+        if (np.size() == 1)
+        {
+            const uint32_t p = np[0], G = s.im.r32(s.world + 0x28), root = s.im.r32(G + 0x24), i1c = s.im.r32(root + 0x1C),
+                           d1c = s.im.r32(i1c + 0xC), g0c = s.im.r32(d1c + 0xC);
+            CHECK(s.inReserve(p) && p + aligned(0x24 + 4 * 7) <= res.next);
+            CHECK(pathList(s.im, p) == std::vector<uint32_t>({s.world, G, root, i1c, d1c, g0c, s.pc}));
+            CHECK(s.im.rf(p) == 490.f && s.im.rf(p + 4) == 490.f && s.im.rf(p + 8) == 0.f);
+            CHECK(s.im.rf(p + 0xC) == 520.f && s.im.rf(p + 0x10) == 510.f && s.im.rf(p + 0x14) == 40.f);
+            CHECK(s.im.r32(p + 0x18) == 0x77 && s.im.r32(p + 0x20) == 0x1234);
+            CHECK(s.im.cellsOf(s.g, p) == std::vector<int>({10}) && s.inReserve(s.im.listing(s.g, p)[0].second));
+        }
+        CHECK(s.im.gridProblems(s.g) == 0 && s.im.listing(s.g, s.pD) == pDBefore);
+        CHECK(copiesStandAlone(s.im, r, sets));
+    }
+    {
+        CopyStage s;   // turned 90: the box is the bounds of the turned corners; the path goes through the ROTATE
+        sm::Map map;
+        map.copies.push_back(copyAt(s.off(s.tD), 500, 500, 0, 90));
+        const sm::Result r = s.run(map);
+        const std::vector<uint32_t> np = otherPaths(s.im, s.g, {s.pD, s.pE});
+        CHECK(r.copied == 1 && np.size() == 1);
+        if (np.size() == 1)
+        {
+            const uint32_t p = np[0], G = s.im.r32(s.world + 0x28), root = s.im.r32(G + 0x24);
+            CHECK((s.im.r32(root) & 63) == sm::kOpRotate && pathList(s.im, p).size() == 7 && pathList(s.im, p)[2] == root &&
+                  pathList(s.im, p)[3] == s.im.r32(root + 0x50));
+            // pD relative to tD: (-10, -10, 0)..(20, 10, 40); turned 90: x in -10..10, y in -10..20
+            CHECK(s.im.rf(p) == 490.f && s.im.rf(p + 4) == 490.f && s.im.rf(p + 8) == 0.f);
+            CHECK(s.im.rf(p + 0xC) == 510.f && s.im.rf(p + 0x10) == 520.f && s.im.rf(p + 0x14) == 40.f);
+        }
+        CHECK(s.im.gridProblems(s.g) == 0);
+    }
+    {
+        CopyStage s;   // a source with no paths (the pickup tP) adds none
+        sm::Map map;
+        map.copies.push_back(copyAt(s.off(s.tP), 600, 600, 10));
+        const sm::Result r = s.run(map);
+        CHECK(r.copied == 1 && otherPaths(s.im, s.g, {s.pD, s.pE}).empty() && s.im.gridProblems(s.g) == 0);
+    }
+    {
+        CopyStage s;   // decision 10: after a step 1 remove of tE, the copy takes tE's freed list node first
+        const std::vector<std::pair<int, uint32_t>> freed = s.im.listing(s.g, s.pE);
+        sm::Map map;
+        map.edits.push_back(removal(s.off(s.tE)));
+        map.copies.push_back(copyAt(s.off(s.tD), 500, 500, 0));
+        const sm::Result r = s.run(map);
+        const std::vector<uint32_t> np = otherPaths(s.im, s.g, {s.pD});
+        CHECK(r.applied == 1 && r.copied == 1 && freed.size() == 1 && np.size() == 1);
+        if (np.size() == 1 && freed.size() == 1)
+            CHECK(s.im.listing(s.g, np[0]) == decltype(freed)({{10, freed[0].second}}));
+        CHECK(s.im.listing(s.g, s.pE).empty() && s.im.gridProblems(s.g) == 0);
+    }
+    {
+        CopyStage s;   // two copies across two cells each: every one listed where its box is
+        sm::Map map;
+        map.copies = {copyAt(s.off(s.tD), 600, 500, 0), copyAt(s.off(s.tD), 390, 610, 0, 45)};
+        const sm::Result r = s.run(map);
+        CHECK(r.copied == 2 && otherPaths(s.im, s.g, {s.pD, s.pE}).size() == 2 && s.im.gridProblems(s.g) == 0);
+    }
+}
+
+TEST(stagemap_copy_caps)
+{
+    const uint32_t size = 0x8000;
+    {
+        CopyStage s;   // Interactives: 1 + 8 + the stage's (13 here) + 2 per copy of tD; three copies under stock + 3
+        const sm::StageCounts st = stockCounts(s);
+        const int base = 1 + sm::kMonsterSlots + st.interactives;
+        CHECK(base == 13);
+        sm::Limits lim;
+        lim.interactives = base + 3;
+        sm::Map map;
+        map.copies = {copyAt(s.off(s.tD), 500, 500, 0), copyAt(s.off(s.tD), 100, 500, 0), copyAt(s.off(s.tD), 500, 100, 0)};
+        sm::Reserve res = s.im.reserve();
+        const sm::Result r = sm::apply(s.im.mem(), size, map, res, lim);
+        CHECK(r.copied == 1 && r.copyRefused == 2);
+        CHECK(logLine(r, "copy " + hexOff(s.off(s.tD)) + " x2 refused: the Interactives table would pass its cap (") >= 0);
+        CHECK(r.interactives == base + 2 && r.destructibles == st.destructibles + 2 && r.pickupBytes == uint32_t(st.pickupBytes));
+    }
+    {
+        CopyStage s;   // reaching the cap exactly is fine
+        sm::Limits lim;
+        lim.interactives = 13 + 4;
+        sm::Map map;
+        map.copies = {copyAt(s.off(s.tD), 500, 500, 0), copyAt(s.off(s.tD), 100, 500, 0)};
+        sm::Reserve res = s.im.reserve();
+        const sm::Result r = sm::apply(s.im.mem(), size, map, res, lim);
+        CHECK(r.copied == 2 && r.copyRefused == 0 && r.interactives == 17);
+    }
+    {
+        CopyStage s;   // Destructibles: the stage's 3 + 2 per copy
+        const sm::StageCounts st = stockCounts(s);
+        sm::Limits lim;
+        lim.destructibles = st.destructibles + 3;
+        sm::Map map;
+        map.copies = {copyAt(s.off(s.tD), 500, 500, 0), copyAt(s.off(s.tD), 100, 500, 0), copyAt(s.off(s.tD), 500, 100, 0)};
+        sm::Reserve res = s.im.reserve();
+        const sm::Result r = sm::apply(s.im.mem(), size, map, res, lim);
+        CHECK(r.copied == 1 && r.copyRefused == 2);
+        CHECK(logLine(r, "copy " + hexOff(s.off(s.tD)) + " x2 refused: the Destructibles table would pass its cap (") >= 0);
+        CHECK(r.destructibles == st.destructibles + 2 && r.interactives == 13 + 2);
+    }
+    {
+        CopyStage s;   // pickup memory: room for the stage's pickup and one more; a copy with no pickup is not held back
+        const sm::StageCounts st = stockCounts(s);
+        sm::Limits lim;
+        lim.pickupRoom = uint32_t(st.pickupBytes) + sm::levelPickupBytes(0x12C1);
+        sm::Map map;
+        map.copies = {copyAt(s.off(s.tP), 600, 600, 10), copyAt(s.off(s.tP), 100, 600, 10), copyAt(s.off(s.tD), 500, 500, 0)};
+        sm::Reserve res = s.im.reserve();
+        const sm::Result r = sm::apply(s.im.mem(), size, map, res, lim);
+        CHECK(r.copied == 2 && r.copyRefused == 1);
+        CHECK(logLine(r, "copy " + hexOff(s.off(s.tP)) + " x1 refused: ") >= 0 && logHas(r, "pickup memory"));
+        CHECK(r.pickupBytes == uint32_t(st.pickupBytes) + sm::levelPickupBytes(0x12C1) && r.interactives == 13 + 1 + 2);
+    }
+    {
+        CopyStage s;   // a stage already past a cap still takes copies that add nothing to it
+        sm::Limits lim;
+        lim.pickupRoom = 0;
+        sm::Map map;
+        map.copies = {copyAt(s.off(s.tD), 500, 500, 0)};
+        sm::Reserve res = s.im.reserve();
+        CHECK(sm::apply(s.im.mem(), size, map, res, lim).copied == 1);
+    }
+}
+
+TEST(stagemap_copy_atomic)
+{
+    {
+        CopyStage s;   // room for the wrapper and half a copy: refused, nothing written, the reserve back where the wrapper left it
+        const uint32_t wrapper = aligned(0x20 + 4 * 2);
+        const std::vector<uint8_t> img = s.im.img, resBytes = s.im.res;
+        sm::Reserve res{sm::kReserve, sm::kReserve + wrapper + aligned(s.copySet(s.tD).bytes / 2)};
+        sm::Map map;
+        map.copies.push_back(copyAt(s.off(s.tD), 500, 500, 0));
+        const sm::Result r = s.run(map, res);
+        CHECK(r.copied == 0 && r.copyRefused == 1 && logHas(r, "the reserve is full"));
+        CHECK(res.next == sm::kReserve + wrapper && s.im.img == img && s.im.res == resBytes);
+    }
+    {
+        // after a step 1 remove of tE: a copy over two cells takes tE's freed list node for the first and a reserve node for the
+        // second. With no room for that one it is refused, and the freed node stays unused (the image is the remove's alone)
+        sm::Map map;
+        map.edits.push_back(removal(0));
+        map.copies.push_back(copyAt(0, 600, 500, 0));
+        uint32_t pathEnd = 0, freedNode = 0;
+        {
+            CopyStage t;
+            map.edits[0].node = t.off(t.tE), map.copies[0].node = t.off(t.tD);
+            freedNode = t.im.listing(t.g, t.pE)[0].second;
+            sm::Reserve full = t.im.reserve();
+            CHECK(t.run(map, full).copied == 1);
+            const std::vector<uint32_t> np = otherPaths(t.im, t.g, {t.pD});
+            CHECK(np.size() == 1);
+            if (np.size() == 1)
+            {
+                const auto ls = t.im.listing(t.g, np[0]);
+                CHECK(ls.size() == 2 && ls[0] == std::make_pair(10, freedNode) && ls[1].first == 11 && t.inReserve(ls[1].second));
+                pathEnd = np[0] + aligned(0x24 + 4 * 7);
+                CHECK(ls.size() == 2 && ls[1].second == pathEnd);   // the reserve node comes right after the path
+            }
+        }
+        CopyStage removed;   // the remove alone
+        {
+            sm::Map only;
+            only.edits.push_back(removal(removed.off(removed.tE)));
+            CHECK(removed.run(only).applied == 1);
+        }
+        CopyStage s;
+        sm::Reserve res{sm::kReserve, pathEnd};
+        const sm::Result r = s.run(map, res);
+        CHECK(r.applied == 1 && r.copied == 0 && r.copyRefused == 1 && logHas(r, "the reserve is full (no room for its collision grid nodes)"));
+        CHECK(s.im.img == removed.im.img && s.im.res == removed.im.res && res.next == sm::kReserve + aligned(0x20 + 4 * 2));
+        CHECK(s.im.gridProblems(s.g) == 0);
+    }
+    {
+        // the grid's lists and the pool are put back after a refusal that had already linked a list node: a copy of tD over
+        // cells 2 and 3 takes tE's freed node for cell 2, then finds no room for cell 3's. The next copy (tE at its own place,
+        // cell 3) gets that freed node, and the bytes are those of a map without the refused copy
+        auto mapWith = [](CopyStage &s, bool refusedFirst) {
+            sm::Map map;
+            map.edits.push_back(removal(s.off(s.tE)));
+            if (refusedFirst)
+                map.copies.push_back(copyAt(s.off(s.tD), 600, 100, 0));
+            map.copies.push_back(copyAt(s.off(s.tE), 700, 100, 0));
+            return map;
+        };
+        uint32_t pathEnd = 0;
+        {
+            CopyStage t;
+            sm::Map map;
+            map.edits.push_back(removal(t.off(t.tE)));
+            map.copies.push_back(copyAt(t.off(t.tD), 600, 100, 0));
+            sm::Reserve full = t.im.reserve();
+            CHECK(t.run(map, full).copied == 1);
+            const std::vector<uint32_t> np = otherPaths(t.im, t.g, {t.pD});
+            CHECK(np.size() == 1 && t.im.cellsOf(t.g, np[0]) == std::vector<int>({2, 3}));
+            if (np.size() == 1)
+                pathEnd = np[0] + aligned(0x24 + 4 * 7);
+        }
+        CopyStage s, t;
+        const uint32_t freedNode = s.im.listing(s.g, s.pE)[0].second;
+        sm::Reserve rs{sm::kReserve, pathEnd}, rt{sm::kReserve, pathEnd};
+        const sm::Result a = s.run(mapWith(s, true), rs), b = t.run(mapWith(t, false), rt);
+        CHECK(a.copied == 1 && a.copyRefused == 1 && logHas(a, "no room for its collision grid nodes") && b.copied == 1);
+        const std::vector<uint32_t> np = otherPaths(s.im, s.g, {s.pD});
+        CHECK(np.size() == 1 && s.im.listing(s.g, np[0]) == decltype(s.im.listing(s.g, 0))({{3, freedNode}}));
+        CHECK(s.im.gridProblems(s.g) == 0 && s.im.img == t.im.img && s.im.res == t.im.res && rs.next == rt.next);
+    }
+    {
+        // a copy refused half-way (the reserve runs out in its nodes) between two that apply leaves the same bytes as one refused
+        // before it took anything (a turned TRANSLATE with action data): the last copy gets the reserve the first left
+        sm::Map late, early;
+        CopyStage s, t;
+        s.im.w32(s.tD + 0xC, s.a1), t.im.w32(t.tD + 0xC, t.a1);
+        late.copies = {copyAt(s.off(s.tP), 600, 600, 10), copyAt(s.off(s.tD), 500, 500, 0), copyAt(s.off(s.tP), 100, 600, 10)};
+        early.copies = late.copies;
+        early.copies[1].turn = 90;
+        const uint32_t pickupCopy = aligned(0x20) + aligned(0x24) + aligned(0x10);   // tP, gP, swP
+        const uint32_t end = sm::kReserve + 2 * aligned(0x20 + 4 * 3) + 2 * pickupCopy;   // two wrappers (room for 2 and 1)
+        sm::Reserve rs{sm::kReserve, end}, rt{sm::kReserve, end};
+        const sm::Result a = s.run(late, rs), b = t.run(early, rt);
+        CHECK(a.copied == 2 && a.copyRefused == 1 && logHas(a, "the reserve is full (no room for its nodes)"));
+        CHECK(b.copied == 2 && b.copyRefused == 1 && logHas(b, "action data"));
+        CHECK(s.im.img == t.im.img && s.im.res == t.im.res && rs.next == rt.next && rs.next == end);
+    }
+}
+
+TEST(stagemap_copy_logs)
+{
+    {
+        // three copies of tD: the second past the grid's edge (clamped), the third refused by the Interactives cap
+        CopyStage s;
+        sm::Limits lim;
+        lim.interactives = 13 + 4;
+        sm::Map map;
+        map.copies = {copyAt(s.off(s.tD), 500, 500, 0), copyAt(s.off(s.tD), 790, 500, 0), copyAt(s.off(s.tD), 100, 500, 0)};
+        sm::Reserve res = s.im.reserve();
+        const sm::Result r = sm::apply(s.im.mem(), 0x8000, map, res, lim);
+        CHECK(r.copied == 2 && r.copyRefused == 1);
+        const std::string src = hexOff(s.off(s.tD));
+        const uint32_t copyBytes = res.next - (sm::kReserve + aligned(0x20 + 4 * 3));   // after the wrapper (room for 3)
+        const int clamp = logLine(r, "copy " + src + " (edit 2): kept inside the collision grid's edge, at 780.0 500.0 0.0");
+        const int copied = logLine(r, "copied " + src + " x2 (" + kb(copyBytes) + " KB, 2 grid nodes)");
+        const int refused = logLine(r, "copy " + src + " x1 refused: the Interactives table would pass its cap (");
+        CHECK(clamp >= 0 && copied > clamp && refused > copied);
+        CHECK(int(r.log.size()) == refused + 1);   // the refusals come last
+        CHECK(r.copySummary == "copies: 2 applied, 1 refused; reserve " + kb(res.next - sm::kReserve) +
+                                   " of 16 KB; interactives 17 of 17, destructibles 7 of 1400, pickup room 0 KB (no limit)");
+        for (const std::string &l : r.log)
+            std::printf("  %s\n", l.c_str());
+        std::printf("  %s\n", r.copySummary.c_str());
+    }
+    {
+        CopyStage s;   // the edit number counts the piece edits written before the copies (write()'s order)
+        sm::Map map;
+        map.edits.push_back(moveTo(s.off(s.tE), 600, 100, 0));
+        map.copies = {copyAt(s.off(s.tD), 500, 500, 0), copyAt(s.off(s.tD), 790, 500, 0)};
+        const sm::Result r = s.run(map);
+        CHECK(r.copied == 2 && logLine(r, "copy " + hexOff(s.off(s.tD)) + " (edit 3): kept inside") >= 0);
+        CHECK(r.applied == 1);   // copies are not counted as edits
+    }
+    {
+        CopyStage s;   // pickup room with a limit; refusals grouped per source and reason, in first-appearance order
+        sm::Limits lim;
+        lim.pickupRoom = sm::levelPickupBytes(0x12C1) * 2;
+        sm::Map map;
+        map.copies = {copyAt(s.off(s.tP), 600, 600, 10), copyAt(s.off(s.mid), 0, 0, 0), copyAt(s.off(s.tP), 100, 600, 10),
+                      copyAt(s.off(s.tP), 200, 600, 10), copyAt(s.off(s.mid), 0, 0, 0)};
+        sm::Reserve res = s.im.reserve();
+        const sm::Result r = sm::apply(s.im.mem(), 0x8000, map, res, lim);
+        CHECK(r.copied == 1 && r.copyRefused == 4);
+        const int notPiece = logLine(r, "copy " + hexOff(s.off(s.mid)) + " x2 refused: not a piece");
+        const int room = logLine(r, "copy " + hexOff(s.off(s.tP)) + " x2 refused: ");
+        CHECK(logLine(r, "copied " + hexOff(s.off(s.tP)) + " x1 (") >= 0 && notPiece >= 0 && room > notPiece);
+        CHECK(has(r.copySummary, "pickup room 1 of 1 KB"));   // 2 x 0x180 bytes (a plain Pickup), rounded
+    }
+    {
+        // a source under a CONTROL, a LOD, a SWITCH and a GROUP with collision-option flags: one line each, however many copies;
+        // the copies' paths drop them (decision 2)
+        CopyStage s;
+        const uint32_t sw2 = s.im.switchNode({s.mid}), l = s.im.lod(sw2, 300, 300, 0, 100), ctl = s.im.control(l, 0);
+        s.im.w32(s.world + 0x20, ctl);
+        s.im.w16(s.mid + 0xA, 0x0101);
+        const uint32_t pD2 = s.im.path(290, 290, 0, 320, 310, 40, {s.world, ctl, l, sw2, s.mid, s.tD, s.i1, s.d1, s.g0, s.pc});
+        for (const auto &c : s.im.listing(s.g, s.pD))
+            s.im.w32(c.second + 4, pD2);
+        CHECK(s.copySet(s.tD).why == "" && s.copySet(s.tD).optionGroup == s.mid);
+        sm::Map map;
+        map.copies = {copyAt(s.off(s.tD), 500, 500, 0), copyAt(s.off(s.tD), 100, 500, 0), copyAt(s.off(s.tD), 500, 100, 0, 90)};
+        const sm::Result r = s.run(map);
+        CHECK(r.copied == 3);
+        const std::string src = "copy " + hexOff(s.off(s.tD)) + ": ";
+        int lines[4] = {0, 0, 0, 0};
+        for (const std::string &line : r.log)
+        {
+            lines[0] += line == src + "CONTROL " + hexOff(s.off(ctl)) + " above it does not hang over its copies";
+            lines[1] += line == src + "LOD " + hexOff(s.off(l)) + " above it does not hang over its copies";
+            lines[2] += line == src + "SWITCH " + hexOff(s.off(sw2)) + " above it does not hang over its copies";
+            lines[3] += line.rfind(src + "GROUP " + hexOff(s.off(s.mid)) + " above it does not hang over its copies", 0) == 0;
+        }
+        CHECK(lines[0] == 1 && lines[1] == 1 && lines[2] == 1 && lines[3] == 1);
+        const std::vector<uint32_t> np = otherPaths(s.im, s.g, {pD2, s.pE});
+        CHECK(np.size() == 3 && s.im.gridProblems(s.g) == 0);
+        for (uint32_t p : np)
+        {
+            const std::vector<uint32_t> nodes = pathList(s.im, p);
+            CHECK(nodes.size() == 7 && nodes[0] == s.world && nodes[1] == s.im.r32(s.world + 0x28) && nodes.back() == s.pc);
+        }
+    }
 }
 
 namespace
@@ -1664,6 +3264,59 @@ namespace
             const float lo[3] = {m.f32(p), m.f32(p + 4), m.f32(p + 8)}, hi[3] = {m.f32(p + 0xC), m.f32(p + 0x10), m.f32(p + 0x14)};
             if (!m.ok(p, 0x24) || sm::covered(d, lo, hi) != kv.second)
                 problem("path " + hexOff(p) + ": listed cells differ from the cells its box covers");
+        }
+        return s;
+    }
+
+    // Each copy's collision path (the listed paths in the reserve) is [header root, its wrapper (in the root's last slot, a
+    // reserve GROUP with ids 0), a copy's root] then a chain of children down to the hull. A NULL on the way (as on the disc:
+    // AIRPORT, ISLAND and VEGAS have such paths) has no children to check: the game stops there (hdTraverse.cpp:179), for the
+    // source and its copies alike; it must be a NULL on the disc (`disc`: the image bytes before apply). Prints the first bad
+    // paths.
+    struct CopyPathScan { size_t paths = 0; int bad = 0, throughNull = 0; };
+    CopyPathScan scanCopyPaths(const sm::Mem &m, const sm::Result &r, const GridScan &scan, const std::vector<uint8_t> &disc,
+                               const std::string &stem)
+    {
+        CopyPathScan s;
+        const std::vector<uint32_t> rs = sm::roots(m);
+        std::set<uint32_t> copyRoots;
+        for (const sm::CopyInfo &c : r.copies)
+            copyRoots.insert(c.root);
+        for (const auto &kv : scan.listed)
+        {
+            const uint32_t p = kv.first;
+            if (p < sm::kReserve)
+                continue;
+            ++s.paths;
+            const uint32_t len = m.u32(p + 0x1C);
+            std::vector<uint32_t> nodes;
+            for (uint32_t i = 0; i < len && i < 256; ++i)
+                nodes.push_back(m.u32(p + 0x24 + 4 * i));
+            bool ok = nodes.size() >= 4 && std::find(rs.begin(), rs.end(), nodes[0]) != rs.end();
+            if (ok)
+            {
+                const std::vector<uint32_t> sl = sm::slots(m, nodes[0]);
+                ok = !sl.empty() && m.u32(sl.back()) == nodes[1] && nodes[1] >= sm::kReserve &&
+                     (m.u32(nodes[1]) & 63) == sm::kOpGroup && (m.u32(nodes[1]) >> 7) == 0 && copyRoots.count(nodes[2]);
+            }
+            for (size_t j = 1; ok && j + 1 < nodes.size(); ++j)
+            {
+                if ((m.u32(nodes[j]) & 63) == sm::kOpNull)
+                {
+                    ok = nodes[j] < sm::kReserve && (disc[nodes[j] - sm::kBase] & 63) == sm::kOpNull;   // NULL on the disc
+                    ++s.throughNull;
+                    break;
+                }
+                const std::vector<uint32_t> ks = sm::children(m, nodes[j]);
+                ok = std::find(ks.begin(), ks.end(), nodes[j + 1]) != ks.end();
+            }
+            if (!ok && s.bad++ < 5)
+            {
+                std::printf("  %s: copy path %s is not [root, wrapper, copy root, children...]:", stem.c_str(), hexOff(p).c_str());
+                for (uint32_t n : nodes)
+                    std::printf(" %s/%u", hexOff(n).c_str(), m.u32(n) & 63);
+                std::printf("\n");
+            }
         }
         return s;
     }
@@ -1846,6 +3499,620 @@ TEST(stagemap_stock_grid_rule)
         if (dumpDir && *dumpDir)
         {
             const std::string out = (std::filesystem::path(dumpDir) / (stem + ".edited.bin")).string();
+            CHECK(writeFile(out, im.img) && writeFile(out + ".reserve", im.res));
+            std::printf("  %s: wrote %s(.reserve)\n", stem.c_str(), out.c_str());
+        }
+    }
+}
+
+// Review focus 1, 2 and 4 on every stock stage (same WOTM_TEST_STAGE images; WOTM_TEST_STAGE_DUMP writes <stem>.copies.bin and
+// .reserve for python tools/stage_map.py check): a piece removed (its list nodes go to the pool), then up to three copyable
+// pieces with collision paths (a destructible, a TRANSLATE, a ROTATE: address order) each copied twice, three cells over and
+// turned 90 two cells the other way. Every copy applies, the grid rule holds, the listed paths are the stock ones minus the
+// removed piece's plus one per copied path, every per-instance node keeps one holder, the Interactives estimate is the
+// stage's plus the copies' (debris pickups included, amendment A4), the copies take the pool's list nodes before the
+// reserve's, and each copy path is [header root, wrapper, copy root] then a chain of children (to a disc NULL at most). Prints
+// each stage's own counts, debris pickups included.
+TEST(stagemap_stock_copies_grid_rule)
+{
+    const std::vector<std::string> stages = envList("WOTM_TEST_STAGE");
+    const char *dumpDir = std::getenv("WOTM_TEST_STAGE_DUMP");
+    if (stages.empty())
+    {
+        std::printf("  skip (WOTM_TEST_STAGE not set)\n");
+        return;
+    }
+    for (const std::string &file : stages)
+    {
+        const std::string stem = std::filesystem::path(file).stem().string();
+        std::vector<uint8_t> bytes;
+        CHECK(readFile(file, bytes) && bytes.size() > 8);
+        if (bytes.size() <= 8)
+            continue;
+        Img im(uint32_t(bytes.size()), sm::kReserveSize);
+        im.img = bytes;
+        const sm::Mem m = im.mem();
+        const std::map<uint32_t, uint32_t> par = sm::parents(m);
+        uint32_t g = 0;
+        for (const auto &kv : par)
+            if ((m.u32(kv.first) & 63) == sm::kOpGrid)
+                g = kv.first;
+        {
+            const sm::StageCounts sc = sm::stageCounts(m, par);   // amendment A4: the stage's own debris pickups
+            std::printf("  %s: stock interactives %d, destructibles %d, level pickups %d, debris pickups %d (%llu KB)\n", stem.c_str(),
+                        sc.interactives, sc.destructibles, sc.pickups, sc.debrisPickups,
+                        (unsigned long long)((sc.debrisBytes + 512) / 1024));
+        }
+        if (!g)
+            continue;
+        const GridScan stock = scanGrid(m, g);
+        std::map<uint32_t, std::set<uint32_t>> through;
+        for (const auto &kv : stock.listed)
+        {
+            const uint32_t k = std::min<uint32_t>(m.u32(kv.first + 0x1C), 256);
+            for (uint32_t i = 0; i < k; ++i)
+                through[m.u32(kv.first + 0x24 + 4 * i)].insert(kv.first);
+        }
+        std::map<uint32_t, int> holders;
+        for (const auto &kv : par)
+            for (uint32_t sl : sm::slots(m, kv.first))
+                if (const uint32_t k = m.u32(sl))
+                    ++holders[k];
+        auto destructible = [&](uint32_t n) {
+            for (uint32_t k : sm::subtree(m, n))
+                if ((m.u32(k) & 63) == sm::kOpDestructible)
+                    return true;
+            return false;
+        };
+        // sources: copyable pieces with paths, one held by its parent only; the removed piece: any other piece with paths
+        std::map<uint32_t, sm::CopySet> sets;
+        std::vector<uint32_t> sources;
+        uint32_t removed = 0;
+        const std::function<bool(uint32_t)> wants[3] = {
+            [&](uint32_t n) { return destructible(n); },
+            [&](uint32_t n) { return (m.u32(n) & 63) == sm::kOpTranslate; },
+            [&](uint32_t n) { return (m.u32(n) & 63) == sm::kOpRotate; }};
+        for (const auto &want : wants)
+            for (const auto &kv : par)
+            {
+                const uint32_t n = kv.first;
+                if (sets.count(n) || holders[n] != 1 || !through.count(n) || !sm::isPiece(m, par, n) || !want(n))
+                    continue;
+                sm::CopySet cs = sm::copySet(m, par, n);
+                if (!cs.why.empty())
+                    continue;
+                // a TRANSLATE with action data cannot be turned
+                if ((m.u32(n) & 63) == sm::kOpTranslate && m.u32(n + 0xC) != 0)
+                    continue;
+                sets[n] = std::move(cs);
+                sources.push_back(n);
+                break;
+            }
+        for (const auto &kv : par)
+            if (!sets.count(kv.first) && holders[kv.first] == 1 && through.count(kv.first) && sm::isPiece(m, par, kv.first))
+            {
+                bool feeds = false;   // a source's paths must not be the removed piece's
+                for (uint32_t s : sources)
+                    for (uint32_t p : through[s])
+                        feeds = feeds || through[kv.first].count(p);
+                if (!feeds)
+                {
+                    removed = kv.first;
+                    break;
+                }
+            }
+        if (sources.empty() || !removed)
+        {
+            std::printf("  %s: copies skipped (%zu copyable pieces with paths)\n", stem.c_str(), sources.size());
+            continue;
+        }
+        const float cell = m.f32(g + 8), minX = m.f32(g + 0xC), minY = m.f32(g + 0x10), maxX = m.f32(g + 0x14), maxY = m.f32(g + 0x18);
+        sm::Map map;
+        map.edits.push_back(removal(removed - sm::kBase));
+        std::map<uint32_t, std::vector<uint32_t>> setNodes;
+        int addInteractives = 0;
+        size_t addPaths = 0;
+        for (uint32_t n : sources)
+        {
+            const uint32_t at = (m.u32(n) & 63) == sm::kOpRotate ? 0x40 : 0x10;
+            const float px = m.f32(n + at), py = m.f32(n + at + 4), pz = m.f32(n + at + 8);
+            const float dx = (px < (minX + maxX) / 2 ? 3 : -3) * cell, dy = (py < (minY + maxY) / 2 ? 2 : -2) * cell;
+            map.copies.push_back(copyAt(n - sm::kBase, px + dx, py + dy, pz));
+            map.copies.push_back(copyAt(n - sm::kBase, px - dx / 3 * 2, py - dy, pz, 90));
+            setNodes[n] = sets[n].nodes;
+            addInteractives += 2 * (sets[n].interactives + sets[n].debrisPickups);   // amendment A4: debris pickups too
+            addPaths += 2 * through[n].size();
+        }
+        sm::StageCounts after;   // the stage's counts after the remove alone
+        {
+            Img only(uint32_t(bytes.size()), 0x10);
+            only.img = bytes;
+            sm::Map rm;
+            rm.edits = map.edits;
+            sm::Reserve r0 = only.reserve();
+            sm::apply(only.mem(), uint32_t(bytes.size()), rm, r0);
+            const sm::Mem om = only.mem();
+            after = sm::stageCounts(om, sm::parents(om));
+        }
+        sm::Reserve res = im.reserve();
+        const sm::Result r = sm::apply(m, uint32_t(bytes.size()), map, res);
+        for (const std::string &l : r.log)
+            std::printf("  %s: %s\n", stem.c_str(), l.c_str());
+        std::printf("  %s: %s\n", stem.c_str(), r.copySummary.c_str());
+        CHECK(r.applied == 1 && r.copied == int(map.copies.size()) && r.copyRefused == 0);
+        const GridScan scan = scanGrid(m, g);
+        CHECK(scan.problems == 0);
+        CHECK(scan.listed.size() == stock.listed.size() - through[removed].size() + addPaths);
+        CHECK(copiesStandAlone(im, r, setNodes));
+        {
+            const CopyPathScan cp = scanCopyPaths(m, r, scan, bytes, stem);
+            CHECK(cp.bad == 0 && cp.paths == addPaths);
+            std::printf("  %s: %zu copy paths [root, wrapper, copy root, children...] (%d through a disc NULL)\n", stem.c_str(),
+                        cp.paths, cp.throughNull);
+        }
+        CHECK(r.interactives == 1 + sm::kMonsterSlots + after.interactives + after.debrisPickups + addInteractives);
+        // the pool first: the copies' list nodes include every node the remove freed, or all of theirs are freed ones
+        const sm::Mem disc{{{sm::kBase, bytes.data(), uint32_t(bytes.size())}}};
+        const int cells = m.s16(g + 4) * m.s16(g + 6);
+        std::set<uint32_t> nowListed;
+        for (int i = 0; i < cells; ++i)
+            for (uint32_t ln = m.u32(g + 0x20 + 4 * uint32_t(i)); ln; ln = m.u32(ln))
+                nowListed.insert(ln);
+        int freed = 0, reused = 0;
+        for (int i = 0; i < cells; ++i)
+            for (uint32_t ln = disc.u32(g + 0x20 + 4 * uint32_t(i)); ln; ln = disc.u32(ln))
+                if (through[removed].count(disc.u32(ln + 4)))
+                    ++freed, reused += int(nowListed.count(ln));
+        const int copyNodes = scan.nodes - (stock.nodes - freed);
+        CHECK(reused == std::min(freed, copyNodes));
+        std::printf("  %s: removed %s, copied %zu sources x2; %d of %d freed list nodes reused; grid %zu paths, %d list nodes\n",
+                    stem.c_str(), hexOff(removed - sm::kBase).c_str(), sources.size(), reused, freed, scan.listed.size(), scan.nodes);
+        if (dumpDir && *dumpDir)
+        {
+            const std::string out = (std::filesystem::path(dumpDir) / (stem + ".copies.bin")).string();
+            CHECK(writeFile(out, im.img) && writeFile(out + ".reserve", im.res));
+        }
+    }
+}
+
+namespace
+{
+    // A copy refusal reason with its addresses blanked ("0x6e7a70" -> "0x.."), to count refusals by kind
+    std::string reasonKind(const std::string &why)
+    {
+        std::string out;
+        for (size_t i = 0; i < why.size(); ++i)
+        {
+            if (why.compare(i, 2, "0x") == 0 && (i == 0 || !std::isalnum(static_cast<unsigned char>(why[i - 1]))))
+            {
+                out += "0x..";
+                for (i += 2; i < why.size() && std::isxdigit(static_cast<unsigned char>(why[i])); ++i)
+                    ;
+                --i;
+            }
+            else
+                out += why[i];
+        }
+        return out;
+    }
+
+    // stage_map.py pieces' copy column at the end of a piece line: "copy B B iI dD pP" plus " debris N (M B)" with debris pickups,
+    // or "no copy (why)" (the reason may hold parentheses: up to the last ')'). False when the line has neither.
+    bool parseCopyColumn(const std::string &line, sm::CopySet &out)
+    {
+        const size_t no = line.find("  no copy (");
+        if (no != std::string::npos)
+        {
+            const size_t from = no + std::strlen("  no copy ("), to = line.rfind(')');
+            if (to == std::string::npos || to < from)
+                return false;
+            out.why = line.substr(from, to - from);
+            return !out.why.empty();
+        }
+        const size_t at = line.rfind("  copy ");
+        if (at == std::string::npos)
+            return false;
+        unsigned bytes = 0;
+        int used = 0;
+        if (std::sscanf(line.c_str() + at, "  copy %u B i%d d%d p%d%n", &bytes, &out.interactives, &out.destructibles, &out.pickups,
+                        &used) != 4)
+            return false;
+        out.bytes = bytes;
+        if (out.pickups)   // " (M B)": the level pickups' memory
+        {
+            unsigned long long pb = 0;
+            if (std::sscanf(line.c_str() + at + used, " (%llu B)", &pb) != 1)
+                return false;
+            out.pickupBytes = pb;
+        }
+        const size_t deb = line.find(" debris ", at);
+        if (deb != std::string::npos)
+        {
+            unsigned long long db = 0;
+            if (std::sscanf(line.c_str() + deb, " debris %d (%llu B)", &out.debrisPickups, &db) != 2)
+                return false;
+            out.debrisBytes = db;
+        }
+        return true;
+    }
+}
+
+// Copies on real stages (plan 2026-11-10-map-copy.md, Task 13; same WOTM_TEST_STAGE images and WOTM_TEST_PIECES files as
+// stagemap_stock_grid_rule; WOTM_TEST_STAGE_DUMP writes <stem>.copied.bin and .reserve for python tools/stage_map.py check).
+// Runs on CENTRAL, METRO, VEGAS and ISLAND, and on VOLCANO and UFO, whose pickup root's last child is itself a pickup piece
+// (amendment A2: the pickup wrapper holds a copy's source first).
+// 1. Every piece's copySet() against stage_map.py's copy column (reason text, bytes, counts, debris pickups).
+// 2. CENTRAL, METRO, VEGAS, ISLAND: three copyable destructible pieces with collision paths (address order; VEGAS prefers pieces
+//    whose dominoes target their own nodes, ISLAND pieces under a LOD), each copied twice (three cells over; elsewhere turned 90,
+//    15 and 90), and the first copyable level pickup once: 7 copies. VOLCANO, UFO: the pickup root's last child copied twice
+//    (three cells over; elsewhere turned 90) and the first other copyable pickup once: 3 copies.
+//    Every copy applies; the grid rule holds and the listed paths grew by the copies' paths, each [root, wrapper, copy root,
+//    children...]; one wrapper per root that got copies, holding the root's old last child first; every per-instance node keeps
+//    one holder and no reserve node (but a wrapper's first slot) holds a source's copied node; each copy's dominoes target its
+//    own nodes as its source's target the source's; the estimates are the stage's plus the copies'.
+TEST(stagemap_stock_copies)
+{
+    const std::vector<std::string> stages = envList("WOTM_TEST_STAGE"), pieceFiles = envList("WOTM_TEST_PIECES");
+    const char *dumpDir = std::getenv("WOTM_TEST_STAGE_DUMP");
+    if (stages.empty())
+    {
+        std::printf("  skip (WOTM_TEST_STAGE not set)\n");
+        return;
+    }
+    const std::set<std::string> buildings = {"CENTRAL", "METRO", "VEGAS", "ISLAND"}, pickupStages = {"VOLCANO", "UFO"};
+    for (size_t si = 0; si < stages.size(); ++si)
+    {
+        const std::string stem = std::filesystem::path(stages[si]).stem().string();
+        if (!buildings.count(stem) && !pickupStages.count(stem))
+        {
+            std::printf("  %s: skip (copies run on CENTRAL, METRO, VEGAS, ISLAND, VOLCANO and UFO)\n", stem.c_str());
+            continue;
+        }
+        std::vector<uint8_t> bytes;
+        CHECK(readFile(stages[si], bytes) && bytes.size() > 8);
+        if (bytes.size() <= 8)
+            continue;
+        Img im(uint32_t(bytes.size()), sm::kReserveSize);
+        im.img = bytes;
+        const sm::Mem m = im.mem();
+        const std::map<uint32_t, uint32_t> par = sm::parents(m);
+
+        // 1. copy verdicts, C++ against stage_map.py
+        std::map<uint32_t, sm::CopySet> sets;   // every piece (guest address)
+        for (const auto &kv : par)
+            if (sm::isPiece(m, par, kv.first))
+                sets[kv.first] = sm::copySet(m, par, kv.first);
+        int copyable = 0;
+        std::vector<std::string> kinds;   // refusal kinds, first appearance order
+        std::map<std::string, int> refusedBy;
+        for (const auto &kv : sets)
+        {
+            if (kv.second.why.empty())
+            {
+                ++copyable;
+                continue;
+            }
+            const std::string k = reasonKind(kv.second.why);
+            if (!refusedBy[k]++)
+                kinds.push_back(k);
+        }
+        if (si < pieceFiles.size())
+        {
+            std::ifstream f(pieceFiles[si]);
+            CHECK(bool(f));
+            std::set<uint32_t> seen;
+            int differ = 0;
+            std::string line;
+            while (std::getline(f, line))
+            {
+                if (line.rfind("0x", 0) != 0)
+                    continue;
+                const uint32_t n = uint32_t(std::strtoul(line.c_str(), nullptr, 16)) + sm::kBase;
+                seen.insert(n);
+                sm::CopySet py;
+                const bool parsed = parseCopyColumn(line, py);
+                const auto it = sets.find(n);
+                bool same = parsed && it != sets.end();
+                if (same)
+                {
+                    const sm::CopySet &cs = it->second;
+                    same = py.why == cs.why &&
+                           (!cs.why.empty() || (py.bytes == cs.bytes && py.interactives == cs.interactives &&
+                                                py.destructibles == cs.destructibles && py.pickups == cs.pickups &&
+                                                py.pickupBytes == cs.pickupBytes &&
+                                                py.debrisPickups == cs.debrisPickups && py.debrisBytes == cs.debrisBytes));
+                }
+                if (!same && differ++ < 10)
+                {
+                    std::printf("  %s: copy column differs: %s\n", stem.c_str(), line.c_str());
+                    if (it != sets.end())
+                        std::printf("    C++: %s (%u B i%d d%d p%d debris %d (%llu B))\n",
+                                    it->second.why.empty() ? "copy" : ("no copy: " + it->second.why).c_str(), it->second.bytes,
+                                    it->second.interactives, it->second.destructibles, it->second.pickups, it->second.debrisPickups,
+                                    (unsigned long long)it->second.debrisBytes);
+                }
+            }
+            // pieces the C++ finds that the file lacks (missing) and lines that are no C++ piece (extra)
+            std::vector<uint32_t> missing, extra;
+            for (const auto &kv : sets)
+                if (!seen.count(kv.first))
+                    missing.push_back(kv.first);
+            for (uint32_t n : seen)
+                if (!sets.count(n))
+                    extra.push_back(n);
+            auto first = [](const std::vector<uint32_t> &v) {
+                std::string s;
+                for (size_t i = 0; i < v.size() && i < 10; ++i)
+                    s += " " + hexOff(v[i] - sm::kBase);
+                return v.size() > 10 ? s + " ..." : s;
+            };
+            CHECK(differ == 0 && missing.empty() && extra.empty());
+            std::printf("  %s: copy column of %zu pieces compared with stage_map.py's: %d differ, %zu missing, %zu extra\n",
+                        stem.c_str(), seen.size(), differ, missing.size(), extra.size());
+            if (!missing.empty())
+                std::printf("    missing:%s\n", first(missing).c_str());
+            if (!extra.empty())
+                std::printf("    extra:%s\n", first(extra).c_str());
+        }
+        else
+        {
+            std::printf("  %s: no WOTM_TEST_PIECES entry (%zu for %zu stages): copy column not compared\n", stem.c_str(),
+                        pieceFiles.size(), stages.size());
+            CHECK(si < pieceFiles.size());   // WOTM_TEST_PIECES must list one file per WOTM_TEST_STAGE image
+        }
+        {
+            std::string by;
+            for (const std::string &k : kinds)
+                by += (by.empty() ? "" : "; ") + k + " x" + std::to_string(refusedBy[k]);
+            std::printf("  %s: %zu pieces, %d copyable, refused by reason: %s\n", stem.c_str(), sets.size(), copyable,
+                        by.empty() ? "none" : by.c_str());
+        }
+
+        // 2. a copy map
+        uint32_t g = 0;
+        for (const auto &kv : par)
+            if ((m.u32(kv.first) & 63) == sm::kOpGrid)
+                g = kv.first;
+        CHECK(g != 0);
+        if (!g)
+            continue;
+        const GridScan stock = scanGrid(m, g);
+        std::map<uint32_t, std::set<uint32_t>> through;
+        for (const auto &kv : stock.listed)
+        {
+            const uint32_t k = std::min<uint32_t>(m.u32(kv.first + 0x1C), 256);
+            for (uint32_t i = 0; i < k; ++i)
+                through[m.u32(kv.first + 0x24 + 4 * i)].insert(kv.first);
+        }
+        std::map<uint32_t, int> holders;
+        for (const auto &kv : par)
+            for (uint32_t sl : sm::slots(m, kv.first))
+                if (const uint32_t k = m.u32(sl))
+                    ++holders[k];
+        auto above = [&](uint32_t n, uint32_t op) {
+            for (uint32_t a = par.at(n); a; a = par.at(a))
+                if ((m.u32(a) & 63) == op)
+                    return true;
+            return false;
+        };
+        // dominoes of the destructibles under `root` whose target is under `root` too
+        auto ownDominoes = [&](uint32_t root) {
+            const std::vector<uint32_t> sub = sm::subtree(m, root);
+            const std::set<uint32_t> under(sub.begin(), sub.end());
+            int n = 0;
+            for (uint32_t k : sub)
+                if ((m.u32(k) & 63) == sm::kOpDestructible)
+                    for (uint32_t a : sm::dominoActions(m, k))
+                        n += int(under.count(m.u32(a + 0xC)));
+            return n;
+        };
+        auto topOf = [&](uint32_t n) {
+            while (par.at(n))
+                n = par.at(n);
+            return n;
+        };
+        // copyable, held by its parent only, and turnable (a TRANSLATE with action data cannot be turned)
+        auto eligible = [&](uint32_t n) {
+            return sets.at(n).why.empty() && holders[n] == 1 && !((m.u32(n) & 63) == sm::kOpTranslate && m.u32(n + 0xC) != 0);
+        };
+        std::vector<uint32_t> sources;   // in map order, each once
+        std::vector<std::pair<uint32_t, float>> placed;   // (source, turn) per copy; the first of each source three cells over
+        uint32_t lastPickup = 0;   // VOLCANO, UFO: the source that is its pickup root's last child
+        if (buildings.count(stem))
+        {
+            auto preferred = [&](uint32_t n) {
+                return stem == "VEGAS" ? ownDominoes(n) > 0 : stem == "ISLAND" ? above(n, sm::kOpLod) : false;
+            };
+            for (int pass = 0; pass < 2 && sources.size() < 3; ++pass)
+                for (const auto &kv : sets)
+                {
+                    const uint32_t n = kv.first;
+                    if (sources.size() == 3)
+                        break;
+                    if (std::find(sources.begin(), sources.end(), n) != sources.end() || !eligible(n) || !kv.second.destructibles ||
+                        !through.count(n) || (pass == 0 && !preferred(n)))
+                        continue;
+                    sources.push_back(n);
+                }
+            const float turns[3] = {90, 15, 90};
+            for (size_t i = 0; i < sources.size(); ++i)
+                placed.push_back({sources[i], 0.f}), placed.push_back({sources[i], turns[i]});
+            for (const auto &kv : sets)
+                if (eligible(kv.first) && kv.second.pickups > 0)
+                {
+                    sources.push_back(kv.first), placed.push_back({kv.first, 0.f});
+                    break;
+                }
+            CHECK(placed.size() == 7);
+            if (stem == "VEGAS")
+                CHECK(ownDominoes(sources[0]) > 0);   // VEGAS has copyable pieces whose dominoes stay inside them
+            if (stem == "ISLAND")
+                CHECK(above(sources[0], sm::kOpLod));   // and ISLAND pieces under a LOD
+        }
+        else
+        {
+            for (const auto &kv : sets)
+            {
+                const uint32_t n = kv.first;
+                if (eligible(n) && kv.second.pickups > 0)
+                {
+                    const std::vector<uint32_t> sl = sm::slots(m, topOf(n));
+                    if (!sl.empty() && m.u32(sl.back()) == n)
+                        lastPickup = n;
+                }
+            }
+            CHECK(lastPickup != 0);
+            if (!lastPickup)
+                continue;
+            sources.push_back(lastPickup), placed.push_back({lastPickup, 0.f}), placed.push_back({lastPickup, 90.f});
+            for (const auto &kv : sets)
+                if (kv.first != lastPickup && eligible(kv.first) && kv.second.pickups > 0)
+                {
+                    sources.push_back(kv.first), placed.push_back({kv.first, 0.f});
+                    break;
+                }
+            CHECK(placed.size() == 3);
+        }
+
+        const float cell = m.f32(g + 8), minX = m.f32(g + 0xC), minY = m.f32(g + 0x10), maxX = m.f32(g + 0x14), maxY = m.f32(g + 0x18);
+        sm::Map map;
+        std::map<uint32_t, std::vector<uint32_t>> setNodes;
+        std::set<uint32_t> sourceNodes;   // every source's copied nodes
+        std::map<uint32_t, int> srcDominoes;
+        int addInteractives = 0, addDestructibles = 0;
+        uint64_t addPickupBytes = 0;
+        size_t addPaths = 0;
+        std::set<uint32_t> firstDone;
+        for (const auto &pc : placed)
+        {
+            const uint32_t n = pc.first;
+            const sm::CopySet &cs = sets.at(n);
+            const uint32_t at = (m.u32(n) & 63) == sm::kOpRotate ? 0x40 : 0x10;
+            const float px = m.f32(n + at), py = m.f32(n + at + 4), pz = m.f32(n + at + 8);
+            const float dx = (px < (minX + maxX) / 2 ? 3 : -3) * cell, dy = (py < (minY + maxY) / 2 ? 2 : -2) * cell;
+            if (firstDone.insert(n).second)
+                map.copies.push_back(copyAt(n - sm::kBase, px + dx, py + dy, pz, pc.second));
+            else
+                map.copies.push_back(copyAt(n - sm::kBase, px - dx / 3 * 2, py - dy, pz, pc.second));
+            setNodes[n] = cs.nodes;
+            sourceNodes.insert(cs.nodes.begin(), cs.nodes.end());
+            srcDominoes[n] = ownDominoes(n);
+            addInteractives += cs.interactives + cs.debrisPickups;
+            addDestructibles += cs.destructibles;
+            addPickupBytes += cs.pickupBytes + cs.debrisBytes;
+            addPaths += through.count(n) ? through.at(n).size() : 0;
+        }
+        const sm::StageCounts sc = sm::stageCounts(m, par);
+        std::map<uint32_t, uint32_t> oldLast;   // each header root's last child, before
+        for (uint32_t rt : sm::roots(m))
+        {
+            const std::vector<uint32_t> sl = sm::slots(m, rt);
+            if (!sl.empty())
+                oldLast[rt] = m.u32(sl.back());
+        }
+        std::set<uint32_t> copiedTops;
+        for (uint32_t n : sources)
+            copiedTops.insert(topOf(n));
+
+        sm::Reserve res = im.reserve();
+        const uint32_t reserveStart = res.next;
+        const sm::Result r = sm::apply(m, uint32_t(bytes.size()), map, res);
+        for (const std::string &l : r.log)
+            std::printf("  %s: %s\n", stem.c_str(), l.c_str());
+        std::printf("  %s: %s\n", stem.c_str(), r.copySummary.c_str());
+        CHECK(r.applied == 0 && r.refused == 0 && r.copied == int(map.copies.size()) && r.copyRefused == 0 &&
+              r.copies.size() == map.copies.size());
+
+        const GridScan scan = scanGrid(m, g);
+        CHECK(scan.problems == 0);
+        CHECK(scan.listed.size() == stock.listed.size() + addPaths);
+        const CopyPathScan cp = scanCopyPaths(m, r, scan, bytes, stem);
+        CHECK(cp.bad == 0 && cp.paths == addPaths);
+        CHECK(copiesStandAlone(im, r, setNodes));
+
+        // the wrappers: one per root that got copies, in its last slot, holding the old last child first
+        const std::map<uint32_t, uint32_t> after = sm::parents(m);
+        std::set<uint32_t> wrappers;
+        for (uint32_t rt : sm::roots(m))
+        {
+            const std::vector<uint32_t> sl = sm::slots(m, rt);
+            const uint32_t w = sl.empty() ? 0 : m.u32(sl.back());
+            if (w < sm::kReserve)
+            {
+                CHECK(!copiedTops.count(rt));
+                continue;
+            }
+            wrappers.insert(w);
+            const std::vector<uint32_t> ws = sm::slots(m, w);
+            CHECK(copiedTops.count(rt) && (m.u32(w) & 63) == sm::kOpGroup && !ws.empty() && m.u32(ws[0]) == oldLast.at(rt));
+        }
+        CHECK(wrappers.size() == copiedTops.size());
+        bool underWrapper = true;
+        for (const sm::CopyInfo &c : r.copies)
+            underWrapper = underWrapper && after.count(c.root) && wrappers.count(after.at(c.root));
+        CHECK(underWrapper);
+        if (lastPickup)   // amendment A2: the source itself is the wrapper's first child now, held by it alone
+        {
+            int held = 0;
+            for (const auto &kv : after)
+                for (uint32_t sl : sm::slots(m, kv.first))
+                    held += int(m.u32(sl) == lastPickup);
+            CHECK(wrappers.count(after.at(lastPickup)) && held == 1);
+        }
+
+        // no reserve node holds a source's copied node (a wrapper's first slot holds the root's old last child)
+        int strays = 0;
+        for (const auto &kv : after)
+        {
+            if (kv.first < sm::kReserve)
+                continue;
+            const std::vector<uint32_t> sl = sm::slots(m, kv.first);
+            for (size_t i = wrappers.count(kv.first) ? 1 : 0; i < sl.size(); ++i)
+                if (sourceNodes.count(m.u32(sl[i])) && strays++ < 5)
+                    std::printf("  %s: reserve node %s holds source node %s\n", stem.c_str(), hexOff(kv.first).c_str(),
+                                hexOff(m.u32(sl[i]) - sm::kBase).c_str());
+        }
+        CHECK(strays == 0);
+
+        // each copy's dominoes: none targets its source's copied nodes, and as many target the copy's own nodes as the source's
+        // target the source's
+        int dominoBad = 0, ownCopied = 0;
+        for (const sm::CopyInfo &c : r.copies)
+        {
+            const std::vector<uint32_t> &orig = setNodes.at(c.source);
+            for (uint32_t k : sm::subtree(m, c.root))
+                if ((m.u32(k) & 63) == sm::kOpDestructible)
+                    for (uint32_t a : sm::dominoActions(m, k))
+                        dominoBad += int(std::find(orig.begin(), orig.end(), m.u32(a + 0xC)) != orig.end());
+            const int own = ownDominoes(c.root);
+            dominoBad += int(own != srcDominoes.at(c.source));
+            ownCopied += own;
+        }
+        CHECK(dominoBad == 0);
+        if (stem == "VEGAS")
+            CHECK(ownCopied > 0);
+        if (stem == "ISLAND")
+            CHECK(logHas(r, "does not hang over its copies"));
+        if (stem == "CENTRAL")
+            CHECK(logHas(r, "kept inside the collision grid's edge"));   // the grid-edge clamp stays covered
+
+        CHECK(r.interactives == 1 + sm::kMonsterSlots + sc.interactives + sc.debrisPickups + addInteractives);
+        CHECK(r.destructibles == sc.destructibles + addDestructibles);
+        CHECK(r.pickupBytes == sc.pickupBytes + sc.debrisBytes + addPickupBytes);
+        std::printf("  %s: %d copies of %zu sources (%s), %zu wrappers, %d own dominoes copied, reserve %u KB; grid %zu paths "
+                    "(+%zu), %d list nodes (+%d)\n",
+                    stem.c_str(), r.copied, sources.size(),
+                    [&] {
+                        std::string s;
+                        for (uint32_t n : sources)
+                            s += (s.empty() ? "" : " ") + hexOff(n - sm::kBase);
+                        return s;
+                    }().c_str(),
+                    wrappers.size(), ownCopied, (res.next - reserveStart + 512) / 1024, scan.listed.size(), addPaths, scan.nodes,
+                    scan.nodes - stock.nodes);
+        if (dumpDir && *dumpDir)
+        {
+            const std::string out = (std::filesystem::path(dumpDir) / (stem + ".copied.bin")).string();
             CHECK(writeFile(out, im.img) && writeFile(out + ".reserve", im.res));
             std::printf("  %s: wrote %s(.reserve)\n", stem.c_str(), out.c_str());
         }

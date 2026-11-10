@@ -757,6 +757,8 @@ namespace
                     g_wotmCheatWin = true;
                 }
             }
+            if (slot == 0)
+                wotm_stagemap::tick(rdram, ctx, runtime);   // WOTM_STAGE_BREAK (test only): breaks a map copy mid-fight
             if (slot == 0 && g_wotmCheatWin.exchange(false))
             {
                 const int32_t ais = static_cast<int32_t>(READ32(kGame + 0x1203E0));   // m_numAIs
@@ -1225,7 +1227,7 @@ namespace
         }
         if (end > kHighBase)
         {   // upper area: only the stage's NGP stays below (fileStatus.ngpAddr[0] to the end of the file, kept in the load log). The
-            // ceiling is the map creator's reserve (wotm_stagemap.inc, 1 MB under the top-of-RAM slots), not the end of RAM; without a
+            // ceiling is the map creator's reserve (wotm_stagemap.inc, 4 MB under the top-of-RAM slots), not the end of RAM; without a
             // map the reserve is unused, and only the top-of-RAM slots (the last 4 KB) are a real ceiling
             const double used = (end - kHighBase) / 1048576.0, left = (int64_t(wotm::stagemap::kReserve) - end) / 1048576.0;
             const bool map = !wotm_stagemap::active().empty();

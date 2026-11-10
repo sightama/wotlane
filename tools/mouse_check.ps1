@@ -49,7 +49,7 @@ public static class MouseInject {
 
 $inputs = Join-Path $runtime 'mouse_inputs.bin'
 $script = '18:6:up;20:1:square;22:1:cross;24:3:left;25:1:triangle;27:4:up@2;28:1:square@2;30:2:right@2;31:1:circle@2;33:5:down;34:1:square'
-$base = "WOTM_MATCH=$Match;WOTM_PLAYERS=2;WOTM_NOINPUT=1;WOTM_FIXEDSTEP=1;WOTM_SEED=1234;WOTM_AIVSAI=;WOTM_LOGICDELAY=;WOTM_INPUTDELAY=;WOTM_MOUSECAM="
+$base = "WOTM_MATCH=$Match;WOTM_PLAYERS=2;WOTM_NOINPUT=1;WOTM_FIXEDSTEP=1;WOTM_SEED=1234;WOTM_AIVSAI=;WOTM_LOGICDELAY=;WOTM_INPUTDELAY=;WOTM_MOUSECAM=;WOTM_BACKGROUND=0"   # its injector needs the game window in the foreground (the only check that takes the focus)
 $runs = @(
     @{ Name = 'A'; Pad = $script; Extra = "WOTM_INPUTREC=$inputs;WOTM_INPUTPLAY=" },
     @{ Name = 'B'; Pad = ''; Extra = "WOTM_INPUTREC=;WOTM_INPUTPLAY=$inputs" }

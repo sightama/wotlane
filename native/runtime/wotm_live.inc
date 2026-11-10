@@ -186,6 +186,14 @@ void wotmBoot(const char *fmt, ...)
     va_end(ap);
     for (size_t n = std::strlen(buf); n > 0 && (buf[n - 1] == '\n' || buf[n - 1] == '\r' || buf[n - 1] == ' '); --n)
         buf[n - 1] = '\0';   // the IOP printf comes with a line break
+    // WOTM_BACKGROUND=1 (set by the check scripts): the window opens without taking the focus. The runtime calls wotmBoot right
+    // before InitWindow, and raylib's SetConfigFlags adds to the flags already set (FLAG_WINDOW_RESIZABLE).
+    if (!IsWindowReady())
+    {
+        const char *bg = std::getenv("WOTM_BACKGROUND");
+        if (bg && bg[0] == '1')
+            SetConfigFlags(FLAG_WINDOW_UNFOCUSED);
+    }
     const double t = wotm_boot::now();
     {
         std::lock_guard<std::mutex> lk(wotm_boot::mx);

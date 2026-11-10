@@ -684,7 +684,10 @@ private:
         for (auto &[id, st] : byId) {
             stageNote("[stages] map " + id + " (\"" + st.map.name + "\", " + st.mod + "): base " + st.map.base + ", " +
                       std::to_string(st.map.edits.size()) + " edits" +
-                      (st.map.powerups.empty() ? std::string() : ", " + std::to_string(st.map.powerups.size()) + " power-up places"));
+                      (st.map.copies.empty() ? std::string() : ", " + std::to_string(st.map.copies.size()) + " copies") +
+                      (st.map.powerups.empty() ? std::string() : ", " + std::to_string(st.map.powerups.size()) + " power-up places") +
+                      (st.map.addPowerUps.empty() ? std::string()
+                                                  : ", " + std::to_string(st.map.addPowerUps.size()) + " new power-up places"));
             m_stages.push_back(st);
         }
     }
