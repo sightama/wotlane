@@ -17,6 +17,14 @@ and can be shared freely.
 4. Compare build ids in your chat: `python tools\build_id.py`. Everyone must print the same `wl-...` id. The server refuses players with
    a different build (different commit or runtime patch), because the simulation would drift apart.
 
+Friends who don't build get a package instead: on Windows `tools\package_friends.ps1` (checked by `tools\package_check.ps1`), on a Mac
+with Apple Silicon `sh tools/package_friends_mac.sh` (checked by `sh tools/package_check_mac.sh`). The Mac package is
+`War of the Monsters.app` (`tools/friends/mac/wotlane.sh` inside it, the game with its ffmpeg libraries bundled, `wotm_lobby` and the
+repo's mods) plus `README.txt`; it needs no Homebrew or Python. Its first run takes `SCUS_971.97` from the friend's own ISO (checked by
+SHA1) into `~/Library/Application Support/wotlane/`, then plain dialogs offer Host a game (shows and copies the 4-letter code), Join a
+game (type the code) and Play offline. The app is signed ad hoc only, so macOS asks once to allow it (Privacy & Security, Open Anyway;
+the README says how).
+
 ## 2. The host: run the server
 
 1. Build it once: `tools\build_net.bat` (it also runs the network tests). The program is `native\net\build\wotm_server.exe`.
