@@ -93,6 +93,24 @@ static class LobbyTest
                     Check(m != null && m.Code == code && m.Host == "Ana" && m.Names.Length == 2 && m.Names[1] == "Bia:1", "MEMBERS line");
                 }
             });
+            Run("change_monster_in_lobby", delegate
+            {
+                using (var a = new LobbyClient("127.0.0.1", port, "b1", 2000))
+                using (var b = new LobbyClient("127.0.0.1", port, "b1", 2000))
+                {
+                    string code = a.Create("Monstros", "Ana", 3, null, 2000);
+                    b.Join(code, "Bia", 1, null, 2000);
+                    LobbyClient.MemberInfo m = b.ChangeMonster(5, 2000);
+                    Check(LobbyClient.MemberMonster(m, "Bia") == 5 && LobbyClient.MemberMonster(m, "Ana") == 3, "Bia is now monster 5");
+                    Check(LobbyClient.MemberMonster(m, "Cid") == -1, "a name not in the lobby has no monster");
+                    bool refused = false;
+                    try { b.ChangeMonster(6, 2000); }
+                    catch (LobbyError e) { refused = e.Message.Contains("monster"); }
+                    Check(refused, "a monster the disc does not have is refused");
+                    Check(LobbyClient.FriendlyError("monster has no free costume in the lobby (all its costumes are taken)").StartsWith("Someone in this game already has that monster"),
+                          "costume clash in plain words");
+                }
+            });
             Run("error_becomes_exception", delegate
             {
                 using (var a = new LobbyClient("127.0.0.1", port, "b1", 2000))
@@ -206,6 +224,19 @@ static class LobbyTest
                     Check(!string.IsNullOrEmpty(why), "says what is missing: '" + bad + "'");
                 }
                 Check(LobbyClient.FormatInvite("203.0.113.7", 7777, "7txq") == "203.0.113.7:7777/7TXQ", "format");
+            });
+            Run("invite_only_where_it_works", delegate
+            {
+                string note;
+                var internet = new List<string> { "Internet: 203.0.113.7:7777", "Tailscale: 100.101.2.3:7777", "LAN: 192.168.2.10:7777" };
+                var noRouter = new List<string> { "Tailscale: 100.101.2.3:7777", "LAN: 192.168.2.10:7777" };
+                var lanOnly = new List<string> { "LAN: 192.168.2.10:7777" };
+                Check(ServerHost.InviteFor(internet, "ABCD", true, out note) == "203.0.113.7:7777/ABCD" && note.StartsWith("Send this invite"), "internet address once the router opened the port");
+                Check(ServerHost.InviteFor(noRouter, "ABCD", false, out note) == "" && note.Contains("router"), "no invite while the router is still asked");
+                Check(ServerHost.InviteFor(noRouter, "ABCD", true, out note) == "100.101.2.3:7777/ABCD" && note.Contains("Tailscale") && note.Contains("only"), "router refused: Tailscale, said plainly");
+                Check(ServerHost.InviteFor(lanOnly, "ABCD", true, out note) == "192.168.2.10:7777/ABCD" && note.Contains("same home network") && note.Contains("only"), "router refused: home network only, said plainly");
+                Check(ServerHost.InviteFor(new List<string>(), "ABCD", true, out note) == "" && note.Length > 0, "no address: no invite, a reason");
+                Check(ServerHost.InviteFor(internet, "", true, out note) == "", "no lobby code yet: no invite");
             });
             Run("friendly_status", delegate
             {

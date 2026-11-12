@@ -63,12 +63,15 @@ A master server keeps the list of public servers, so players can find them witho
 
 The launcher opens in **simple mode**: your name, your monster and three buttons.
 - **Host a game** runs the server on this PC (as Host on this PC below: UPnP, firewall prompt) and opens a lobby. It shows an
-  **invite**, `<address>:<port>/<CODE>` (for example `203.0.113.7:7777/7TXQ`), with **Copy invite**: the best address for a friend
-  (internet, then Tailscale, then LAN) and the lobby code in one line. The host picks the stage, wins to end and modifiers and
-  presses **Start match**.
+  **invite**, `<address>:<port>/<CODE>` (for example `203.0.113.7:7777/7TXQ`), with **Copy invite**: the lobby code and the internet
+  address once the router opened the port (UPnP). While the router is being asked there is no invite yet; if it refuses, the invite
+  uses the Tailscale or home-network address and the line at the bottom says it only works for friends there
+  (`ServerHost.InviteFor`). The host picks the stage, wins to end and modifiers and presses **Start match**.
 - **Join a game**: paste the invite and press **Join** (or Enter). Spaces, a space instead of the slash, a lower-case code, a missing
   port (7777) and a `wotm://` prefix are all accepted.
-- **Play offline**: a fight against the computer on this PC.
+- In the lobby every player can still change monster until the match starts (the lobby's `MONSTER` command); the players line shows
+  each one's monster, and a monster the lobby refuses (its costumes are taken) goes back to the one the server holds.
+- **Play offline**: a fight against the computer on this PC (off while in a lobby: Leave first).
 The line at the bottom says what is going on in plain words (server errors are translated: can't reach the host, version or files
 differ, invite no longer open, game already started, name taken, game full). **Advanced** opens the full window described below
 (public server list, password, master server, AI opponents, cheats, diagnostics); **Simple** goes back. The launcher remembers the mode.

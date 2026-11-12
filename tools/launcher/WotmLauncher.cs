@@ -511,6 +511,7 @@ class Launcher : Form
     string hostedPublic = "";   // "<master> <name>" the hosted server announces to, "" when private
     List<string> hostedLines = new List<string>();
     string hostedRouter = "";
+    bool hostedRouterChecked;   // the UPnP attempt returned, or the server is not this launcher's (no attempt)
     readonly Timer netTimer = new Timer { Interval = 200 };
     readonly List<LobbyClient.LobbyInfo> netLobbies = new List<LobbyClient.LobbyInfo>();
     LobbyClient lobby;
@@ -599,6 +600,7 @@ class Launcher : Form
         netStart.Click += delegate { NetStart(); };
         netWins.ValueChanged += delegate { if (lobbyOwner) NetSend("SET wins=" + (int)netWins.Value); };
         matchLevel.SelectedIndexChanged += delegate { if (lobbyOwner) NetSend("SET stage=" + LevelIds[matchLevel.SelectedIndex]); };
+        matchPlayer.SelectedIndexChanged += delegate { NetMonsterChanged(); };
         leave.Click += delegate { NetSend("LEAVE"); };
         host.Click += delegate { NetHost(); };
         netBrowse.Click += delegate { NetBrowse(); };
@@ -702,6 +704,27 @@ class Launcher : Form
         NetSend("JOIN " + code + " " + name + " " + monster + NetPassword());
     }
 
+    // in a lobby, a new pick in the monster box goes to the server (MONSTER); the server's MEMBERS line, or its ERROR, sets the box back
+    // to what the match will really use (ShowServerMonster)
+    bool showingServerMonster;
+    void NetMonsterChanged()
+    {
+        if (showingServerMonster || lobbyMembers == null) return;
+        int k = matchPlayer.SelectedIndex;
+        if (k < 0 || k >= MonsterIds.Length) { netInfo.Text = "Online needs a monster from the disc (not Random or a mod monster)."; ShowServerMonster(); return; }
+        NetSend("MONSTER " + MonsterIds[k]);
+    }
+
+    void ShowServerMonster()
+    {
+        int k = Array.IndexOf(MonsterIds, LobbyClient.MemberMonster(lobbyMembers, LobbyClient.CleanName(netName.Text)));
+        if (k < 0 || k == matchPlayer.SelectedIndex) return;
+        showingServerMonster = syncingSimple = true;
+        matchPlayer.SelectedIndex = k;
+        if (k < simpleMonster.Items.Count) simpleMonster.SelectedIndex = k;
+        showingServerMonster = syncingSimple = false;
+    }
+
     // the owner's stage, wins and modifiers for the lobby
     string NetSetLine()
     {
@@ -742,6 +765,7 @@ class Launcher : Form
             hostedPublic = hosted.Owned ? wantPublic : "";
             hostedRouter = hosted.Owned ? "Router: trying to open port " + port + " (UPnP)..." : "A server was already running on port " + port + ": using it" +
                 (netPublic.Checked ? " (it isn't listed publicly by this launcher)." : ".");
+            hostedRouterChecked = !hosted.Owned;
             if (hosted.Owned) MapRouterPort(hosted);
         }
         if (lobby != null && lobby.Host != "127.0.0.1") { lobby.Dispose(); lobby = null; }
@@ -762,6 +786,7 @@ class Launcher : Form
                 BeginInvoke((MethodInvoker)delegate
                 {
                     if (hosted != h) return;
+                    hostedRouterChecked = true;
                     if (external != null)
                     {
                         hostedLines = ServerHost.ShareLines(ServerHost.LocalAddresses(), external, h.Port);
@@ -889,9 +914,10 @@ class Launcher : Form
                 // a joiner plays the host's modifiers (shown in the lobby line), so its own boxes do not apply in the lobby
                 foreach (CheckBox c in modBoxes) c.Enabled = lobbyOwner;
                 if (lobbyOwner && !wasOwner) NetSend(NetSetLine());   // the lobby shows the new host's settings before Start match
+                ShowServerMonster();
                 ShowLobby();
             }
-            else if (l.StartsWith("ERROR ")) netInfo.Text = "Server: " + l.Substring(6);
+            else if (l.StartsWith("ERROR ")) { netInfo.Text = "Server: " + l.Substring(6); ShowServerMonster(); }
             else if (l.StartsWith("MATCH ")) PlayOnline(LobbyClient.MatchEnv(LobbyClient.KeyValues(l), lobbyHost));
         }
         if (lobby.Closed)
@@ -1083,7 +1109,7 @@ class Launcher : Form
         if (simpleRoot == null) return;
         LobbyClient.MemberInfo m = lobbyMembers;
         simpleLobby.Visible = m != null;
-        simpleHost.Enabled = simpleJoin.Enabled = m == null;   // in a lobby: Leave first
+        simpleHost.Enabled = simpleJoin.Enabled = simpleOffline.Enabled = m == null;   // in a lobby: Leave first
         if (m != null) simpleJoinRow.Visible = false;
         string info = netInfo.Text;
         if (m == null)
@@ -1094,19 +1120,27 @@ class Launcher : Form
             else SimpleSay("Pick your monster, then host a game or join a friend's.", DimColor);
             return;
         }
-        string invite = SimpleInvite();
+        string inviteNote;
+        string invite = SimpleInvite(out inviteNote);
         simpleInviteRow.Visible = lobbyOwner && invite.Length > 0;
         simpleInviteOut.Text = invite;
         simpleHostSettings.Visible = lobbyOwner;
         simpleSettings.Visible = !lobbyOwner;
         simpleSettings.Text = netSettings.Length > 0 ? "Stage " + StageName(netSettings) : "";
         var names = new List<string>();
-        foreach (string n in m.Names) { string who = n.Split(':')[0]; names.Add(who == m.Host ? who + " (host)" : who); }
+        foreach (string n in m.Names)
+        {
+            string who = n.Split(':')[0];
+            int k = Array.IndexOf(MonsterIds, LobbyClient.MemberMonster(m, who));
+            names.Add(who + (k >= 0 ? " (" + MonsterNames[k] + ")" : "") + (who == m.Host ? " (host)" : ""));
+        }
         simplePlayers.Text = "Players: " + string.Join(", ", names.ToArray());
         simpleStart.Visible = lobbyOwner;
         for (int i = 0; i < simpleMods.Length; ++i) simpleMods[i].Enabled = modBoxes[i].Enabled;
         if (info.StartsWith("Server: ")) SimpleSay(LobbyClient.FriendlyError(info.Substring(8)), BadColor);
         else if (info.StartsWith("Match")) SimpleSay(info, info.StartsWith("Match running") ? OkColor : WaitColor);
+        else if (lobbyOwner && hosted != null && m.Names.Length < 2 && !inviteNote.StartsWith("Send this invite"))
+            SimpleSay(inviteNote, invite.Length > 0 || !hostedRouterChecked ? WaitColor : BadColor);   // the invite is missing or limited: say why first
         else if (lobbyOwner) SimpleSay(m.Names.Length < 2 ? "Send the invite to your friends. Press Start match when everyone is in." : "Everyone in? Press Start match.",
                                        m.Names.Length < 2 ? WaitColor : OkColor);
         else SimpleSay("You're in. Waiting for " + m.Host + " to start the match...", OkColor);
@@ -1122,19 +1156,12 @@ class Launcher : Form
         return (k >= 0 ? LevelNames[k] : id.ToString()) + (comma > 0 ? rest.Substring(comma) : "");
     }
 
-    // the best address for a friend (ServerHost.ShareLines order: internet, Tailscale, LAN) with the lobby code
-    string SimpleInvite()
+    // the invite for friends and who it works for (ServerHost.InviteFor): an internet address only once the router opened the port
+    string SimpleInvite(out string note)
     {
-        if (hosted == null || lobbyCode.Length != 4) return "";
-        foreach (string l in hostedLines)
-        {
-            int sp = l.LastIndexOf(' ');
-            string addr = sp >= 0 ? l.Substring(sp + 1) : l, host;
-            int port;
-            LobbyClient.SplitAddress(addr, LobbyClient.DefaultPort, out host, out port);
-            if (host.Length > 0) return LobbyClient.FormatInvite(host, port, lobbyCode);
-        }
-        return "";
+        note = "";
+        if (hosted == null) return "";
+        return ServerHost.InviteFor(hostedLines, lobbyCode, hostedRouterChecked, out note);
     }
 
     LobbyClient.MemberInfo lobbyMembers;

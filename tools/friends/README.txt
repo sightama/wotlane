@@ -23,6 +23,7 @@ Join a friend's game
 2. Type your name and pick your monster.
 3. Press "Join a game", paste the invite your friend sent you (it looks like 203.0.113.7:7777/ABCD) and press Join.
 4. Wait for your friend to press Start match: the game opens by itself. When the match ends, you're back in the lobby.
+   You can change your monster while you wait: the list of players shows what everyone plays.
 
 
 Host a game
@@ -32,8 +33,9 @@ Host a game
 3. Press "Copy invite" and send it to your friends. Keep the launcher open while you play.
 4. Pick the stage, the wins to end the match (0 = endless) and any modifiers. Press "Start match" when everyone is in.
 If friends can't reach you: your router has to let port 7777 through (TCP and UDP). The launcher asks the router to open it by
-itself; if that doesn't work, forward port 7777 to your PC in the router's settings, or everyone installs Tailscale
-(tailscale.com, free) and the host sends the invite from the Tailscale address.
+itself; if that doesn't work, the launcher says so under the invite, which then only works on your home network (or Tailscale).
+Then forward port 7777 to your PC in the router's settings, or everyone installs Tailscale (tailscale.com, free) and the host
+sends the invite again.
 
 
 Play alone

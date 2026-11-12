@@ -137,6 +137,19 @@ class LobbyClient : IDisposable
         return new MemberInfo { Code = w[1], Host = w[2], Names = w[3] == "-" ? new string[0] : w[3].Split(',') };
     }
 
+    // the monster the server holds for `name` in a MEMBERS line, -1 if the name is not in it
+    public static int MemberMonster(MemberInfo m, string name)
+    {
+        if (m == null) return -1;
+        foreach (string n in m.Names)
+        {
+            int colon = n.LastIndexOf(':');
+            int monster;
+            if (colon > 0 && n.Substring(0, colon) == name && int.TryParse(n.Substring(colon + 1), out monster)) return monster;
+        }
+        return -1;
+    }
+
     // the lobby's stage, wins and modifiers (SETTINGS <code> stage=<n> wins=<n> mods=<list>), the latest that arrived through Create,
     // Join, Set or SetMods
     public Dictionary<string, string> Settings = new Dictionary<string, string>();
@@ -177,6 +190,13 @@ class LobbyClient : IDisposable
         Send("SET mods=" + mods);
         Settings = KeyValues(Expect("SETTINGS", timeoutMs));
         return Settings;
+    }
+
+    // any member, while the lobby waits: plays `monster` in the next match; returns the MEMBERS line the server sends to everyone
+    public MemberInfo ChangeMonster(int monster, int timeoutMs)
+    {
+        Send("MONSTER " + monster);
+        return ParseMembers(Expect("MEMBERS", timeoutMs));
     }
 
     // the gameplay modifiers (native/net/wotm_modifiers.hpp): lobby names in canonical order, and what the launcher shows
@@ -332,6 +352,7 @@ class LobbyClient : IDisposable
         if (e.Contains("in a match")) return "That game has already started. Wait for it to end, then press Join again.";
         if (e.Contains("name already taken")) return "Someone in that game already uses your name. Change Your name and press Join again.";
         if (e.Contains("lobby is full")) return "That game is full.";
+        if (e.Contains("costume")) return "Someone in this game already has that monster. Pick another one.";
         return "Problem: " + err;
     }
 

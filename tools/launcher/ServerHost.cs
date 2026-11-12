@@ -110,6 +110,38 @@ class ServerHost : IDisposable
         return lines.Distinct().ToList();
     }
 
+    // The invite for the host to send (<host>:<port>/<CODE>) and a plain sentence saying who it works for; "" while there is nothing that
+    // works yet. lines: ShareLines. routerChecked: the UPnP attempt has returned (or this launcher does not own the server). An internet
+    // address only exists once the router opened the port; without it the invite says it only works on Tailscale or the home network.
+    public static string InviteFor(List<string> lines, string code, bool routerChecked, out string note)
+    {
+        note = "";
+        if (code == null || code.Length != 4) return "";
+        string internet = ShareAddress(lines, "Internet"), tailscale = ShareAddress(lines, "Tailscale"), lan = ShareAddress(lines, "LAN");
+        if (internet != null) { note = "Send this invite to your friends."; return InviteAt(internet, code); }
+        if (!routerChecked) { note = "Asking your router to open the port for friends on the internet..."; return ""; }
+        const string refused = "Your router didn't open the port for friends on the internet (README.txt, \"If friends can't reach you\"), so this invite ";
+        if (tailscale != null) { note = refused + "only works for friends on your Tailscale network."; return InviteAt(tailscale, code); }
+        if (lan != null) { note = refused + "only works for friends on the same home network as you."; return InviteAt(lan, code); }
+        note = "This PC has no network address friends could use.";
+        return "";
+    }
+
+    // "<kind>: <host>:<port>" from ShareLines, the address part; null if there is no line of that kind
+    static string ShareAddress(List<string> lines, string kind)
+    {
+        foreach (string l in lines)
+            if (l.StartsWith(kind + ": ")) return l.Substring(kind.Length + 2);
+        return null;
+    }
+    static string InviteAt(string address, string code)
+    {
+        string host;
+        int port;
+        LobbyClient.SplitAddress(address, LobbyClient.DefaultPort, out host, out port);
+        return LobbyClient.FormatInvite(host, port, code);
+    }
+
     // Tailscale from any adapter; the others only from adapters with a gateway (the WSL/Hyper-V one has none, useless to a friend)
     public static List<IPAddress> LocalAddresses()
     {
