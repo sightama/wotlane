@@ -224,6 +224,13 @@ static class LobbyTest
                     Check(!string.IsNullOrEmpty(why), "says what is missing: '" + bad + "'");
                 }
                 Check(LobbyClient.FormatInvite("203.0.113.7", 7777, "7txq") == "203.0.113.7:7777/7TXQ", "format");
+                // the shared game server: the invite is just the code, and a bare code joins there
+                string dh;
+                int dp;
+                LobbyClient.SplitAddress(LobbyClient.DefaultServer, LobbyClient.DefaultPort, out dh, out dp);
+                Check(parse(" 7txq ") == dh + "|" + dp + "|7TXQ", "a bare code is a lobby on the default server");
+                Check(parse("wotm://7TXQ") == dh + "|" + dp + "|7TXQ", "bare code with wotm://");
+                Check(LobbyClient.FormatInvite(dh, dp, "7txq") == "7TXQ", "an invite to the default server is just the code");
             });
             Run("invite_only_where_it_works", delegate
             {

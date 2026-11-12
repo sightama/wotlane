@@ -62,13 +62,14 @@ A master server keeps the list of public servers, so players can find them witho
 ## 3. Everyone: join and play
 
 The launcher opens in **simple mode**: your name, your monster and three buttons.
-- **Host a game** runs the server on this PC (as Host on this PC below: UPnP, firewall prompt) and opens a lobby. It shows an
-  **invite**, `<address>:<port>/<CODE>` (for example `203.0.113.7:7777/7TXQ`), with **Copy invite**: the lobby code and the internet
-  address once the router opened the port (UPnP). While the router is being asked there is no invite yet; if it refuses, the invite
-  uses the Tailscale or home-network address and the line at the bottom says it only works for friends there
-  (`ServerHost.InviteFor`). The host picks the stage, wins to end and modifiers and presses **Start match**.
-- **Join a game**: paste the invite and press **Join** (or Enter). Spaces, a space instead of the slash, a lower-case code, a missing
-  port (7777) and a `wotm://` prefix are all accepted.
+- **Host a game** opens a lobby on the shared game server (`LobbyClient.DefaultServer`, `35.185.58.174:7777`, always on) and
+  shows its 4-letter **code** with **Copy code**; nothing to open on the router. The host picks the stage, wins to end and modifiers
+  and presses **Start match**. Hosting on this PC instead is **Host on this PC** in Advanced mode (below); its invite is
+  `<address>:<port>/<CODE>`, shown only once the router opened the port (UPnP), otherwise with a line saying it only works on
+  Tailscale or the home network (`ServerHost.InviteFor`).
+- **Join a game**: type the code and press **Join** (or Enter). A bare code is a lobby on the shared server; `<address>:<port>/<CODE>`
+  joins another server. Spaces, a space instead of the slash, a lower-case code, a missing port (7777) and a `wotm://` prefix are
+  all accepted. From a Mac or Linux terminal: `sh tools/play_online.sh --host` prints the code, `--join <CODE>` joins it.
 - In the lobby every player can still change monster until the match starts (the lobby's `MONSTER` command); the players line shows
   each one's monster, and a monster the lobby refuses (its costumes are taken) goes back to the one the server holds.
 - **Play offline**: a fight against the computer on this PC (off while in a lobby: Leave first).

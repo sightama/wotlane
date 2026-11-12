@@ -525,7 +525,7 @@ class Launcher : Form
         var inner = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, Dock = DockStyle.Fill, WrapContents = false };
         gb.Controls.Add(inner);
         string v;
-        netServer.Text = saved.TryGetValue(":NetServer", out v) && v.Length > 0 ? v : "127.0.0.1:7777";
+        netServer.Text = saved.TryGetValue(":NetServer", out v) && v.Length > 0 ? v : LobbyClient.DefaultServer;
         tips.SetToolTip(netServer, "host:port of a wotm_server (your own with 'Host on this PC', a friend's public IP, or a VPN address). " +
             "The host forwards this port, TCP and UDP, on the router.");
         inner.Controls.Add(Row("Server", netServer));
@@ -943,7 +943,7 @@ class Launcher : Form
                     simpleJoin = new Button { Text = "Join a game", Size = new Size(140, 42) },
                     simpleOffline = new Button { Text = "Play offline", Size = new Size(140, 42) },
                     simpleJoinGo = new Button { Text = "Join", AutoSize = true },
-                    simpleCopy = new Button { Text = "Copy invite", AutoSize = true },
+                    simpleCopy = new Button { Text = "Copy code", AutoSize = true },
                     simpleStart = new Button { Text = "Start match", Size = new Size(160, 38) },
                     simpleLeave = new Button { Text = "Leave", AutoSize = true };
     readonly Label simplePlayers = new Label { AutoSize = true, MaximumSize = new Size(440, 0) },
@@ -975,17 +975,17 @@ class Launcher : Form
         foreach (object o in matchLevel.Items) simpleStage.Items.Add(o);
         p.Controls.Add(Line(Caption("Your name"), simpleName, Caption("   Monster"), simpleMonster));
         p.Controls.Add(Line(simpleHost, simpleJoin, simpleOffline));
-        tips.SetToolTip(simpleHost, "Runs the game server on this PC and opens a lobby. Send the invite to your friends.");
-        tips.SetToolTip(simpleJoin, "Paste the invite a friend sent you (it looks like 203.0.113.7:7777/ABCD).");
+        tips.SetToolTip(simpleHost, "Opens a game on the shared server and gives you its 4-letter code. Send the code to your friends.");
+        tips.SetToolTip(simpleJoin, "Type the 4-letter code a friend sent you.");
         tips.SetToolTip(simpleOffline, "Plays on this PC only, against the computer.");
 
-        simpleJoinRow = Line(Caption("Invite"), simpleInviteIn, simpleJoinGo);
+        simpleJoinRow = Line(Caption("Code"), simpleInviteIn, simpleJoinGo);
         simpleJoinRow.Visible = false;
         p.Controls.Add(simpleJoinRow);
 
         simpleLobby = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, WrapContents = false, Visible = false,
                                             Margin = new Padding(0, 10, 0, 0) };
-        simpleInviteRow = Line(Caption("Invite"), simpleInviteOut, simpleCopy);
+        simpleInviteRow = Line(Caption("Code"), simpleInviteOut, simpleCopy);
         simpleLobby.Controls.Add(simpleInviteRow);
         for (int i = 0; i < simpleMods.Length; ++i) simpleMods[i] = new DarkCheckBox { Text = LobbyClient.ModifierLabels[i], AutoSize = true };
         var mods = Line(Caption("Modifiers"));
@@ -1020,7 +1020,7 @@ class Launcher : Form
         simpleCopy.Click += delegate
         {
             if (simpleInviteOut.Text.Length == 0) return;
-            try { Clipboard.SetText(simpleInviteOut.Text); SimpleSay("Invite copied: paste it to your friends.", OkColor); } catch (Exception) { }
+            try { Clipboard.SetText(simpleInviteOut.Text); SimpleSay("Code copied: send it to your friends.", OkColor); } catch (Exception) { }
         };
         simpleStart.Click += delegate { NetStart(); };
         simpleLeave.Click += delegate { NetSend("LEAVE"); };
@@ -1079,7 +1079,22 @@ class Launcher : Form
         simpleJoinRow.Visible = false;
         netLobbyName.Text = name + "_game";
         netPassword.Text = "";
-        NetHost();
+        UseServer(LobbyClient.DefaultServer);   // the shared game server: nothing to open on the router, the invite is the code
+        SimpleSay("Making your game on the server...", WaitColor);
+        NetCreate();
+    }
+
+    // talk to `server` from now on; leaves a lobby on another server first (a public list pick, or this PC's own)
+    void UseServer(string server)
+    {
+        if (lobby != null && netServer.Text.Trim() != server)
+        {
+            if (lobbyCode.Length > 0) NetSend("LEAVE");
+            lobby.Dispose();
+            lobby = null;
+            NetNotInLobby();
+        }
+        netServer.Text = server;
     }
 
     void SimpleJoin()
@@ -1090,16 +1105,9 @@ class Launcher : Form
         if (LobbyClient.CleanName(simpleName.Text).Length == 0) { SimpleSay("Type your name first (letters, digits, _ or -).", BadColor); simpleName.Focus(); return; }
         simpleInviteIn.Text = LobbyClient.FormatInvite(host, port, code);
         string server = host + ":" + port;
-        if (lobby != null && netServer.Text.Trim() != server)
-        {   // another server (a public list pick, or this PC's own): the invite's wins
-            if (lobbyCode.Length > 0) NetSend("LEAVE");
-            lobby.Dispose();
-            lobby = null;
-            NetNotInLobby();
-        }
-        netServer.Text = server;
+        UseServer(server);   // the invite's server wins
         netPassword.Text = "";
-        SimpleSay("Joining " + server + "...", WaitColor);
+        SimpleSay("Joining game " + code + "...", WaitColor);
         NetJoin(code);
     }
 
@@ -1141,7 +1149,7 @@ class Launcher : Form
         else if (info.StartsWith("Match")) SimpleSay(info, info.StartsWith("Match running") ? OkColor : WaitColor);
         else if (lobbyOwner && hosted != null && m.Names.Length < 2 && !inviteNote.StartsWith("Send this invite"))
             SimpleSay(inviteNote, invite.Length > 0 || !hostedRouterChecked ? WaitColor : BadColor);   // the invite is missing or limited: say why first
-        else if (lobbyOwner) SimpleSay(m.Names.Length < 2 ? "Send the invite to your friends. Press Start match when everyone is in." : "Everyone in? Press Start match.",
+        else if (lobbyOwner) SimpleSay(m.Names.Length < 2 ? "Send the code to your friends. Press Start match when everyone is in." : "Everyone in? Press Start match.",
                                        m.Names.Length < 2 ? WaitColor : OkColor);
         else SimpleSay("You're in. Waiting for " + m.Host + " to start the match...", OkColor);
     }
@@ -1160,8 +1168,10 @@ class Launcher : Form
     string SimpleInvite(out string note)
     {
         note = "";
-        if (hosted == null) return "";
-        return ServerHost.InviteFor(hostedLines, lobbyCode, hostedRouterChecked, out note);
+        if (lobby == null || lobbyCode.Length != 4) return "";
+        if (hosted != null && lobby.Host == "127.0.0.1") return ServerHost.InviteFor(hostedLines, lobbyCode, hostedRouterChecked, out note);
+        note = "Send this invite to your friends.";   // a lobby on a reachable server (the shared one: just the code)
+        return LobbyClient.FormatInvite(lobby.Host, lobby.Port, lobbyCode);
     }
 
     LobbyClient.MemberInfo lobbyMembers;

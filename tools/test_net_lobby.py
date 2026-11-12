@@ -16,6 +16,17 @@ REPO = Path(__file__).resolve().parent.parent
 SERVER = REPO / 'native' / 'net' / 'build' / ('wotm_server.exe' if sys.platform == 'win32' else 'wotm_server')
 
 
+class ServerAddressTest(unittest.TestCase):
+    # no --server: the always-on game server everyone shares (the launcher's LobbyClient.DefaultServer)
+    def test_default_server_when_none_is_given(self):
+        host, port = net_lobby.server_address(None)
+        self.assertEqual(f'{host}:{port}', net_lobby.DEFAULT_SERVER)
+
+    def test_port_defaults_to_7777(self):
+        self.assertEqual(net_lobby.server_address('203.0.113.7'), ('203.0.113.7', 7777))
+        self.assertEqual(net_lobby.server_address('203.0.113.7:7000'), ('203.0.113.7', 7000))
+
+
 class LobbyTest(unittest.TestCase):
     port = 7861
 

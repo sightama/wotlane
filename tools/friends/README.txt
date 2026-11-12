@@ -21,7 +21,7 @@ Join a friend's game
 --------------------
 1. Open "War of the Monsters online" on your desktop.
 2. Type your name and pick your monster.
-3. Press "Join a game", paste the invite your friend sent you (it looks like 203.0.113.7:7777/ABCD) and press Join.
+3. Press "Join a game", type the 4-letter code your friend sent you and press Join.
 4. Wait for your friend to press Start match: the game opens by itself. When the match ends, you're back in the lobby.
    You can change your monster while you wait: the list of players shows what everyone plays.
 
@@ -29,13 +29,9 @@ Join a friend's game
 Host a game
 -----------
 1. Open "War of the Monsters online", type your name, pick your monster.
-2. Press "Host a game". If Windows asks whether wotm_server may use the network, press Allow.
-3. Press "Copy invite" and send it to your friends. Keep the launcher open while you play.
+2. Press "Host a game". The launcher makes your game on the shared online server and shows a 4-letter code.
+3. Press "Copy code" and send it to your friends. Nothing to set up on your router.
 4. Pick the stage, the wins to end the match (0 = endless) and any modifiers. Press "Start match" when everyone is in.
-If friends can't reach you: your router has to let port 7777 through (TCP and UDP). The launcher asks the router to open it by
-itself; if that doesn't work, the launcher says so under the invite, which then only works on your home network (or Tailscale).
-Then forward port 7777 to your PC in the router's settings, or everyone installs Tailscale (tailscale.com, free) and the host
-sends the invite again.
 
 
 Play alone
@@ -46,7 +42,7 @@ Press "Play offline".
 If something goes wrong
 -----------------------
 The launcher says what's wrong in plain words at the bottom. The usual ones:
-- "Can't reach the host": check the invite; the host's launcher must be open and hosting.
+- "Can't reach the host": check your internet connection and the code; ask the host for a new code.
 - "Your game version doesn't match the host's": everyone needs the same package (compare BUILD.txt).
 - "Your game files or mods differ from the host's": use the package as it came (don't change the mods folder).
 Anything else: send the host runtime\live.err.log (the host also has wotm_server.log next to the launcher).

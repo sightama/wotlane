@@ -314,9 +314,17 @@ class LobbyClient : IDisposable
 
     // ---- invites: "<host>:<port>/<CODE>", everything a friend needs to join (the Mac launcher reads and writes the same text) ----
     public const int DefaultPort = 7777;
+    // the always-on game server everyone shares (GCP; tools/net_lobby.py DEFAULT_SERVER): Host a game makes its lobby there, so the
+    // invite is just the lobby code and nobody opens a port
+    public const string DefaultServer = "35.185.58.174:7777";
 
+    // just the code for a lobby on the default server, "<host>:<port>/<CODE>" for any other
     public static string FormatInvite(string host, int port, string code)
     {
+        string dh;
+        int dp;
+        SplitAddress(DefaultServer, DefaultPort, out dh, out dp);
+        if (host == dh && port == dp) return code.ToUpperInvariant();
         return host + ":" + port + "/" + code.ToUpperInvariant();
     }
 
@@ -329,9 +337,9 @@ class LobbyClient : IDisposable
         string s = (text ?? "").Trim();
         if (s.StartsWith("wotm://", StringComparison.OrdinalIgnoreCase)) s = s.Substring(7);
         int cut = s.LastIndexOfAny(new[] { '/', ' ' });
-        if (cut < 0) { why = "An invite looks like 203.0.113.7:7777/ABCD: the address, a slash and the 4-letter code."; return false; }
-        string addr = s.Substring(0, cut).Trim(), c = s.Substring(cut + 1).Trim().ToUpperInvariant();
-        if (c.Length != 4 || !Array.TrueForAll(c.ToCharArray(), char.IsLetterOrDigit)) { why = "The code at the end of the invite must be 4 letters or digits."; return false; }
+        // a bare code: a lobby on the default server
+        string addr = cut < 0 ? DefaultServer : s.Substring(0, cut).Trim(), c = s.Substring(cut + 1).Trim().ToUpperInvariant();
+        if (c.Length != 4 || !Array.TrueForAll(c.ToCharArray(), char.IsLetterOrDigit)) { why = "An invite is the 4-letter code your friend sent (or address/CODE for another server)."; return false; }
         int colon = addr.LastIndexOf(':');
         string h = colon >= 0 ? addr.Substring(0, colon) : addr;
         int p = DefaultPort;
