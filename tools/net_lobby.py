@@ -4,6 +4,7 @@
 """Usage:
   python tools/net_lobby.py --browse <master>[:7778]
       lists the public servers (those started with wotm_server --announce): name, address, open lobbies, players and ping
+  (--server <host>:<port> is optional everywhere below: without it the shared game server is used)
   python tools/net_lobby.py --server <host>:<port> --list
   python tools/net_lobby.py --server <host>:<port> --create <lobby> --name Ana --monster 3 [--password <password>]
                             [--stage <stage>] [--wins <wins>] [--start-with <players>]
@@ -24,6 +25,7 @@ from pathlib import Path
 
 PROTOCOL = 4   # native/net/wotm_net_proto.hpp kProtocol
 MASTER_PORT = 7778   # wotm_server --master (proto::kDefaultMasterPort)
+DEFAULT_SERVER = '35.185.58.174:7777'   # the always-on game server everyone shares (tools/launcher LobbyClient.DefaultServer)
 REPO = Path(__file__).resolve().parent.parent
 
 
@@ -230,9 +232,15 @@ def default_build():
     return f.read_text().strip() if f.exists() else 'sem-buildid'
 
 
+def server_address(arg):
+    """(host, port) of --server, the default server when it is not given; the port defaults to 7777."""
+    host, _, port = (arg or DEFAULT_SERVER).rpartition(':')
+    return (host, int(port)) if host else ((arg or DEFAULT_SERVER), 7777)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--server', help='host:port of the wotm_server')
+    ap.add_argument('--server', help=f'host:port of the wotm_server (default: the shared game server, {DEFAULT_SERVER})')
     ap.add_argument('--browse', metavar='MASTER', help='host[:port] of a master server: list the public servers')
     ap.add_argument('--build', default=None)
     ap.add_argument('--list', action='store_true')
@@ -263,11 +271,7 @@ def main():
         if not rows:
             print('no public servers right now', file=sys.stderr)
         return 0
-    if not a.server:
-        ap.error('--server <host>:<port> (or --browse <master>)')
-    host, _, port = a.server.rpartition(':')
-    if not host:
-        host, port = a.server, '7777'
+    host, port = server_address(a.server)
     build = a.build or default_build()
     try:
         if a.list:

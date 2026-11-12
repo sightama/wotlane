@@ -22,7 +22,7 @@ and can be shared freely.
 1. Build it once: `tools\build_net.bat` (it also runs the network tests). The program is `native\net\build\wotm_server.exe`.
 2. Start it, one of:
    - **From the launcher (player as host):** section **Online**, press **Host on this PC**. The launcher runs the server hidden (it
-     writes `wotm_server.log` next to the launcher and stops when you close the launcher, so keep the launcher open while you play),
+     writes `wotm_server.log` next to the launcher and stops when you close the launcher, so keep the launcher open while you play; Play, the offline game, minimizes the launcher instead of closing it while you host, and brings it back when the game closes),
      hosts a lobby on it and shows a box to copy to your friends: the addresses they can type as Server and the lobby code. It also
      asks your router to open the port (UPnP, TCP and UDP; closed again when the launcher closes). If the router refuses, the box says
      so and which local address to forward the port to. To list it publicly, type the **Master server** address and tick **List
@@ -60,6 +60,24 @@ A master server keeps the list of public servers, so players can find them witho
   to the **Master server** field.
 
 ## 3. Everyone: join and play
+
+The launcher opens in **simple mode**: your name, your monster and three buttons.
+- **Host a game** opens a lobby on the shared game server (`LobbyClient.DefaultServer`, `35.185.58.174:7777`, always on) and
+  shows its 4-letter **code** with **Copy code**; nothing to open on the router. The host picks the stage, wins to end and modifiers
+  and presses **Start match**. Hosting on this PC instead is **Host on this PC** in Advanced mode (below); its invite is
+  `<address>:<port>/<CODE>`, shown only once the router opened the port (UPnP), otherwise with a line saying it only works on
+  Tailscale or the home network (`ServerHost.InviteFor`).
+- **Join a game**: type the code and press **Join** (or Enter). A bare code is a lobby on the shared server; `<address>:<port>/<CODE>`
+  joins another server. Spaces, a space instead of the slash, a lower-case code, a missing port (7777) and a `wotm://` prefix are
+  all accepted. From a Mac or Linux terminal: `sh tools/play_online.sh --host` prints the code, `--join <CODE>` joins it.
+- In the lobby every player can still change monster until the match starts (the lobby's `MONSTER` command); the players line shows
+  each one's monster, and a monster the lobby refuses (its costumes are taken) goes back to the one the server holds.
+- **Play offline**: a fight against the computer on this PC (off while in a lobby: Leave first).
+The line at the bottom says what is going on in plain words (server errors are translated: can't reach the host, version or files
+differ, invite no longer open, game already started, name taken, game full). **Advanced** opens the full window described below
+(public server list, password, master server, AI opponents, cheats, diagnostics); **Simple** goes back. The launcher remembers the mode.
+
+Advanced mode:
 
 1. Open the launcher (`tools\launcher\build.bat` builds `WotM_Launcher.exe` in the repo root).
 2. In **Match**, pick **Your monster**. The host also picks the **Stage**.
@@ -133,5 +151,7 @@ to the console) and starts once that many players are in; `--code <code> --name 
   or a different set of mods in `mods\`. Use the same launcher checkboxes in the Mods group and copy the same mod folders (folders whose
   name starts with `_` are off and do not count).
 - "no answer from the server": the server is not running, the port is not forwarded (TCP and UDP), or a firewall blocks it.
+  `native/net/build/wotm_net_probe <host>[:7777]` (built with the server) checks a server from any PC without the game: two clients
+  form a lobby over TCP and play a short match over UDP; it says which step fails.
 - Test everything on one PC: `powershell -File tools\net_check.ps1` starts a server and two games and checks that both stay identical;
   `powershell -File tools\net_checks.ps1` runs the online checks (per-PC settings, mouse, photo mode, pause, wins target, mods).

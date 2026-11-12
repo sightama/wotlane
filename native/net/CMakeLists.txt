@@ -31,3 +31,6 @@ target_link_libraries(wotm_net_test PRIVATE wotm_net)
 
 add_executable(wotm_server wotm_server.cpp)
 target_link_libraries(wotm_server PRIVATE wotm_net)
+
+add_executable(wotm_net_probe wotm_net_probe.cpp)
+target_link_libraries(wotm_net_probe PRIVATE wotm_net)

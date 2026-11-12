@@ -671,6 +671,41 @@ namespace
         CHECK(readUntil(b, "ERROR").find("costume") != std::string::npos);
     }
 
+    // MONSTER <monster>: a member changes monster while the lobby waits (#14); everyone gets the new MEMBERS line and the match uses it.
+    // Same checks as JOIN, against the other members only; refused outside a lobby and while its match runs
+    TEST(lobby_member_changes_monster_before_the_match)
+    {
+        ServerConfig cfg = testConfig();
+        RunningServer rs(cfg);
+        LineSocket a, b, c;
+        hello(a, cfg.port);
+        hello(b, cfg.port);
+        hello(c, cfg.port);
+        c.sendLine("MONSTER 3");
+        CHECK(readUntil(c, "ERROR") == "ERROR join a lobby first");
+        const std::string code = createLobby(a, "Lobby", "Ana", 14);
+        CHECK(code.size() == 4u);
+        b.sendLine("JOIN " + code + " Bia 1");
+        CHECK(readUntil(b, "JOINED") == "JOINED " + code);
+        CHECK(readUntil(a, "MEMBERS " + code + " Ana Ana:14,") == "MEMBERS " + code + " Ana Ana:14,Bia:1");
+
+        b.sendLine("MONSTER 5");
+        CHECK(readUntil(a, "MEMBERS " + code + " Ana Ana:14,Bia:5") == "MEMBERS " + code + " Ana Ana:14,Bia:5");
+        CHECK(readUntil(b, "MEMBERS " + code + " Ana Ana:14,Bia:5") == "MEMBERS " + code + " Ana Ana:14,Bia:5");
+        b.sendLine("MONSTER 6");
+        CHECK(readUntil(b, "ERROR").find("monster") != std::string::npos);
+        b.sendLine("MONSTER 14");   // the jelly has one costume and Ana has it
+        CHECK(readUntil(b, "ERROR").find("costume") != std::string::npos);
+        a.sendLine("MONSTER 14");   // keeping your own monster is not a clash with yourself
+        CHECK(readUntil(a, "MEMBERS " + code + " Ana Ana:14,Bia:5") == "MEMBERS " + code + " Ana Ana:14,Bia:5");
+
+        a.sendLine("START");
+        const auto match = p::keyValues(p::words(readUntil(b, "MATCH")));
+        CHECK(match.count("monsters") && match.at("monsters") == "14,5");
+        b.sendLine("MONSTER 3");
+        CHECK(readUntil(b, "ERROR").find("match") != std::string::npos);
+    }
+
     // two match clients exchange frames of input and see the same timeline
     void exchange(MatchClient &a, MatchClient &b, uint32_t frames)
     {
