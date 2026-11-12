@@ -8,6 +8,7 @@
 #include "wotm_net_server.hpp"
 #include "wotm_net_socket.hpp"
 #include "wotm_net_ws.hpp"
+#include "wotm_net_wslink.hpp"
 
 #include <atomic>
 #include <cctype>
@@ -1077,6 +1078,135 @@ namespace
         Frame f;
         CHECK(p.next(f) == FrameParser::Result::Ok && f.opcode == kPing && f.payload == bytesOf("12345678"));
         CHECK(p.next(f) == FrameParser::Result::Ok && f.opcode == kClose && f.payload.empty());
+    }
+
+    // a server with its WebSocket listener on (the browser version's lobby and match, behind the web server's proxy)
+    ServerConfig wsTestConfig()
+    {
+        ServerConfig c = testConfig();
+        c.wsPort = freePort();
+        return c;
+    }
+
+    std::string wsUrl(const ServerConfig &c, const std::string &path) { return "ws://127.0.0.1:" + std::to_string(c.wsPort) + path; }
+
+    // a browser in the lobby: the same lines as TCP, one per text frame
+    TEST(ws_lobby_member_joins_a_tcp_members_lobby)
+    {
+        ServerConfig cfg = wsTestConfig();
+        RunningServer rs(cfg);
+        CHECK(rs.ok);
+        LineSocket a;
+        CHECK(hello(a, cfg.port) == "WELCOME 0");
+        const std::string code = createLobby(a, "Lobby", "Ana", 3);
+        CHECK(code.size() == 4u);
+        wotm_net::WsLink b;
+        std::string err;
+        CHECK(b.connect(wsUrl(cfg, "/lobby"), 2000, err));
+        b.sendLine("HELLO " + std::to_string(p::kProtocol) + " b1");
+        CHECK(readUntil(b, "WELCOME") == "WELCOME 1");
+        b.sendLine("JOIN " + code + " Bia 1");
+        CHECK(readUntil(b, "JOINED") == "JOINED " + code);
+        CHECK(readUntil(a, "MEMBERS " + code + " Ana Ana:3,") == "MEMBERS " + code + " Ana Ana:3,Bia:1");
+        a.sendLine("START");
+        const auto mb = p::keyValues(p::words(readUntil(b, "MATCH")));
+        CHECK(mb.count("you") && mb.at("you") == "1");
+    }
+
+    TEST(ws_match_clients_share_every_frame_of_input)
+    {
+        ServerConfig cfg = wsTestConfig();
+        RunningServer rs(cfg);
+        auto ms = formMatch(cfg.port, {"Ana", "Bia"}, {3, 1});
+        ClientConfig ca = clientFor(cfg.port, *ms[0]), cb = clientFor(cfg.port, *ms[1]);
+        ca.host = cb.host = wsUrl(cfg, "/match");
+        MatchClient a, b;
+        std::string err;
+        CHECK(a.start(ca, err) && b.start(cb, err));
+        CHECK(a.waitStarted(5000) && b.waitStarted(5000));
+        CHECK(a.localPlayer() == 0 && b.localPlayer() == 1 && a.delay() == b.delay());
+        exchange(a, b, 300);
+        CHECK(a.status() == Status::Running && b.status() == Status::Running);
+    }
+
+    // a browser and a native client in the same match: the server relays between ENet and WebSocket
+    TEST(ws_match_mixes_enet_and_websocket_clients)
+    {
+        ServerConfig cfg = wsTestConfig();
+        RunningServer rs(cfg);
+        auto ms = formMatch(cfg.port, {"Ana", "Bia"}, {3, 1});
+        ClientConfig ca = clientFor(cfg.port, *ms[0]), cb = clientFor(cfg.port, *ms[1]);
+        cb.host = wsUrl(cfg, "/match");
+        MatchClient a, b;
+        std::string err;
+        CHECK(a.start(ca, err) && b.start(cb, err));
+        CHECK(a.waitStarted(5000) && b.waitStarted(5000));
+        exchange(a, b, 300);
+    }
+
+    // a malformed frame (unmasked, from a client) closes that connection only; the server and its other clients carry on
+    TEST(ws_bad_frame_closes_only_that_client)
+    {
+        ServerConfig cfg = wsTestConfig();
+        RunningServer rs(cfg);
+        LineSocket raw;
+        CHECK(raw.connect("127.0.0.1", cfg.wsPort, 2000));
+        const std::string req = wotm_net::ws::handshakeRequest("127.0.0.1", "/lobby", "dGhlIHNhbXBsZSBub25jZQ==");
+        raw.sendBytes(req.data(), req.size());
+        const std::vector<uint8_t> bad = wotm_net::ws::encode(wotm_net::ws::kText, reinterpret_cast<const uint8_t *>("LIST"), 4, false);
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        raw.sendBytes(bad.data(), bad.size());
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        bool closed = false;
+        while (!closed && std::chrono::steady_clock::now() < until)
+        {
+            closed = !raw.pump();
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        CHECK(closed);
+        wotm_net::WsLink good;
+        std::string err;
+        CHECK(good.connect(wsUrl(cfg, "/lobby"), 2000, err));
+        good.sendLine("HELLO " + std::to_string(p::kProtocol) + " b1");
+        CHECK(readUntil(good, "WELCOME") == "WELCOME 0");
+    }
+
+    TEST(ws_unknown_path_is_refused)
+    {
+        ServerConfig cfg = wsTestConfig();
+        RunningServer rs(cfg);
+        wotm_net::WsLink w;
+        std::string err;
+        const bool connected = w.connect(wsUrl(cfg, "/other"), 2000, err);
+        bool alive = connected;
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (alive && std::chrono::steady_clock::now() < until)
+        {
+            alive = w.pump();
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        CHECK(!alive);
+    }
+
+    TEST(ws_match_client_is_lost_when_the_server_stops)
+    {
+        ServerConfig cfg = wsTestConfig();
+        auto rs = std::make_unique<RunningServer>(cfg);
+        auto ms = formMatch(cfg.port, {"Ana", "Bia"}, {3, 1});
+        ClientConfig ca = clientFor(cfg.port, *ms[0]);
+        ca.host = wsUrl(cfg, "/match");
+        MatchClient a;
+        std::string err;
+        CHECK(a.start(ca, err));
+        const auto joined = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (a.status() == Status::Connecting && std::chrono::steady_clock::now() < joined)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        CHECK(a.status() == Status::Waiting);
+        rs.reset();
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        while (a.status() != Status::Lost && std::chrono::steady_clock::now() < until)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        CHECK(a.status() == Status::Lost);
     }
 }
 
