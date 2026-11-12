@@ -17,6 +17,8 @@ namespace wotm_net::proto
     constexpr int kMaxPlayers = 8;   // 4 in the game's player slots and 4 in AI slots driven by the network (wotm_multi.inc)
     constexpr uint16_t kDefaultPort = 7777;
     constexpr uint16_t kDefaultMasterPort = 7778;   // the master server (list of public servers, wotm_net_master.hpp)
+    constexpr const char *kDefaultServer = "35.185.58.174:7777";   // the always-on shared game server (tools/net_lobby.py DEFAULT_SERVER,
+                                                                   // tools/launcher LobbyClient.DefaultServer)
     constexpr size_t kMaxRun = 64;   // input frames per message (lockstep never leaves more than the delay pending)
 
     // ENet channels: reliable control (join, start, drop, hash, desync) and unacknowledged inputs (each packet resends whatever the
@@ -372,7 +374,7 @@ namespace wotm_net::proto
     // during the match and, when the match ends (everyone has left it: QUIT closes the game), it goes back to waiting with the same
     // members. An empty lobby closes.
     // client: HELLO <protocol> <build> | LIST | CREATE <lobby> <name> <monster> [password] | JOIN <code> <name> <monster> [password] |
-    //         SET [stage=<stage>] [wins=<wins>] | START | LEAVE
+    //         SET [stage=<stage>] [wins=<wins>] | MONSTER <monster> (any member, while the lobby waits) | START | LEAVE
     // server: WELCOME <open lobbies> | LOBBY <code> <waiting|playing> <n>/<max> <open|locked> <lobby> <owner> <names,...|-> |
     //         END | CREATED <code> | JOINED <code> | LEFT <code> | SETTINGS <code> stage=<stage> wins=<wins> |
     //         MEMBERS <code> <owner> <name:monster,...> | MATCH <key=value>... | ERROR <text>

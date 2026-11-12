@@ -2,6 +2,7 @@
 // ABOUTME: on localhost. Exits with 0 if everything passes; each failure prints the file, line and expression.
 #include "wotm_lockstep.hpp"
 #include "wotm_monsters.hpp"
+#include "wotm_lobby_client.hpp"
 #include "wotm_net_client.hpp"
 #include "wotm_net_master.hpp"
 #include "wotm_net_proto.hpp"
@@ -288,6 +289,8 @@ namespace
     // ---- real server and client on localhost ----
     using wotm_net::ClientConfig;
     using wotm_net::LineSocket;
+    using wotm_net::LobbyClient;
+    using wotm_net::matchEnv;
     using wotm_net::MatchClient;
     using wotm_net::Server;
     using wotm_net::ServerConfig;
@@ -671,6 +674,74 @@ namespace
         CHECK(code.size() == 4u);
         b.sendLine("JOIN " + code + " Bia 13");
         CHECK(readUntil(b, "ERROR").find("costume") != std::string::npos);
+    }
+
+    // MONSTER <monster>: a member changes monster while the lobby waits (#14); everyone gets the new MEMBERS line and the match uses it.
+    // Same checks as JOIN, against the other members only; refused outside a lobby and while its match runs
+    TEST(lobby_member_changes_monster_before_the_match)
+    {
+        ServerConfig cfg = testConfig();
+        RunningServer rs(cfg);
+        LineSocket a, b, c;
+        hello(a, cfg.port);
+        hello(b, cfg.port);
+        hello(c, cfg.port);
+        c.sendLine("MONSTER 3");
+        CHECK(readUntil(c, "ERROR") == "ERROR join a lobby first");
+        const std::string code = createLobby(a, "Lobby", "Ana", 14);
+        CHECK(code.size() == 4u);
+        b.sendLine("JOIN " + code + " Bia 1");
+        CHECK(readUntil(b, "JOINED") == "JOINED " + code);
+        CHECK(readUntil(a, "MEMBERS " + code + " Ana Ana:14,") == "MEMBERS " + code + " Ana Ana:14,Bia:1");
+
+        b.sendLine("MONSTER 5");
+        CHECK(readUntil(a, "MEMBERS " + code + " Ana Ana:14,Bia:5") == "MEMBERS " + code + " Ana Ana:14,Bia:5");
+        CHECK(readUntil(b, "MEMBERS " + code + " Ana Ana:14,Bia:5") == "MEMBERS " + code + " Ana Ana:14,Bia:5");
+        b.sendLine("MONSTER 6");
+        CHECK(readUntil(b, "ERROR").find("monster") != std::string::npos);
+        b.sendLine("MONSTER 14");   // the jelly has one costume and Ana has it
+        CHECK(readUntil(b, "ERROR").find("costume") != std::string::npos);
+        a.sendLine("MONSTER 14");   // keeping your own monster is not a clash with yourself
+        CHECK(readUntil(a, "MEMBERS " + code + " Ana Ana:14,Bia:5") == "MEMBERS " + code + " Ana Ana:14,Bia:5");
+
+        a.sendLine("START");
+        const auto match = p::keyValues(p::words(readUntil(b, "MATCH")));
+        CHECK(match.count("monsters") && match.at("monsters") == "14,5");
+        b.sendLine("MONSTER 3");
+        CHECK(readUntil(b, "ERROR").find("match") != std::string::npos);
+    }
+
+    // the lobby client the game and wotm_lobby use (as tools/net_lobby.py): the owner creates, sets the stage and wins, waits for the
+    // second player and starts; the other joins by code; both get the MATCH and its game environment
+    TEST(lobby_client_creates_joins_and_gets_the_match_environment)
+    {
+        ServerConfig cfg = testConfig();
+        RunningServer rs(cfg);
+        LobbyClient a, b;
+        std::string err;
+        CHECK(a.connect("127.0.0.1", cfg.port, "b1", err));
+        const std::string code = a.create("Sala", "Ana", 3, "", err);
+        CHECK(code.size() == 4u);
+        CHECK(a.set(9, 2, "turbo", err));
+        CHECK(b.connect("127.0.0.1", cfg.port, "b1", err));
+        CHECK(b.join(code, "Bia", 1, "", err));
+        CHECK(a.waitMembers(2, err, 5000));
+        CHECK(a.start(err));
+        std::map<std::string, std::string> ma, mb;
+        CHECK(a.waitMatch(ma, err, 5000) && b.waitMatch(mb, err, 5000));
+        const auto env = matchEnv(mb, "127.0.0.1");
+        std::map<std::string, std::string> e(env.begin(), env.end());
+        CHECK(e["WOTM_NET"] == "127.0.0.1:" + std::to_string(cfg.port));
+        CHECK(e["WOTM_MATCH"] == "3,1,9");
+        CHECK(e["WOTM_PLAYERS"] == "2" && e["WOTM_LOCALPLAYER"] == "2" && e["WOTM_NETNAME"] == "Bia");
+        CHECK(e["WOTM_KILLTARGET"] == "2" && e["WOTM_MODIFIERS"] == "turbo");
+        CHECK(!e["WOTM_NETTOKEN"].empty() && e["WOTM_NETTOKEN"] != matchEnv(ma, "127.0.0.1")[1].second);
+
+        LobbyClient c;
+        CHECK(c.connect("127.0.0.1", cfg.port, "b1", err));
+        CHECK(!c.join("QQQQ", "Cid", 1, "", err) && err.find("no such lobby") != std::string::npos);
+        LobbyClient old;
+        CHECK(!old.connect("127.0.0.1", cfg.port, "b1", err, p::kProtocol - 1) && err.find("protocol") != std::string::npos);
     }
 
     // two match clients exchange frames of input and see the same timeline
