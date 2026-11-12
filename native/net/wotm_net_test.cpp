@@ -7,6 +7,7 @@
 #include "wotm_net_proto.hpp"
 #include "wotm_net_server.hpp"
 #include "wotm_net_socket.hpp"
+#include "wotm_net_ws.hpp"
 
 #include <atomic>
 #include <cctype>
@@ -964,6 +965,118 @@ namespace
         CHECK(a.desyncFrame() == 60u);
         CHECK(a.message() == "desync: state differs on frame 60: Ana vs Bia; blocks 5 (0x00a0000), 131 (0x1060000)");
         CHECK(!a.waitFrame(a.delay(), 200));   // desynced: no new frame runs
+    }
+
+    // ---- WebSocket (the browser version's transport) ----
+
+    std::vector<uint8_t> bytesOf(const std::string &s) { return std::vector<uint8_t>(s.begin(), s.end()); }
+
+    TEST(ws_accept_key_matches_rfc_example)
+    {
+        CHECK(wotm_net::ws::acceptKey("dGhlIHNhbXBsZSBub25jZQ==") == "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
+    }
+
+    TEST(ws_handshake_parses_path_and_key)
+    {
+        const std::string req = "GET /match HTTP/1.1\r\nHost: example\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+                                "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n";
+        const auto h = wotm_net::ws::parseHandshake(req);
+        CHECK(h.has_value());
+        CHECK(h && h->path == "/match");
+        CHECK(h && h->key == "dGhlIHNhbXBsZSBub25jZQ==");
+        CHECK(!wotm_net::ws::parseHandshake("GET / HTTP/1.1\r\nHost: example\r\n\r\n").has_value());   // not an upgrade
+        CHECK(!wotm_net::ws::parseHandshake("POST /match HTTP/1.1\r\nUpgrade: websocket\r\nSec-WebSocket-Key: x\r\n\r\n").has_value());
+        // a proxy (Caddy) may send the header names in another case
+        const auto lower = wotm_net::ws::parseHandshake("GET /lobby HTTP/1.1\r\nupgrade: WebSocket\r\nsec-websocket-key: abc\r\n\r\n");
+        CHECK(lower && lower->path == "/lobby" && lower->key == "abc");
+    }
+
+    TEST(ws_frame_roundtrip_masked)
+    {
+        using namespace wotm_net::ws;
+        const std::vector<uint8_t> payload = bytesOf("hello lockstep");
+        const std::vector<uint8_t> wire = encode(kBinary, payload.data(), payload.size(), true);
+        FrameParser p(true);
+        p.feed(wire.data(), wire.size());
+        Frame f;
+        CHECK(p.next(f) == FrameParser::Result::Ok);
+        CHECK(f.opcode == kBinary && f.payload == payload);
+        CHECK(p.next(f) == FrameParser::Result::NeedMore);
+    }
+
+    TEST(ws_frame_sizes_use_the_long_length_forms)
+    {
+        using namespace wotm_net::ws;
+        for (size_t n : {size_t(125), size_t(126), size_t(300), size_t(65535)})
+        {
+            const std::vector<uint8_t> payload(n, 0x5A);
+            const std::vector<uint8_t> wire = encode(kBinary, payload.data(), payload.size(), false);
+            FrameParser p(false);   // a client reads the server's unmasked frames
+            p.feed(wire.data(), wire.size());
+            Frame f;
+            CHECK(p.next(f) == FrameParser::Result::Ok && f.payload.size() == n);
+        }
+    }
+
+    TEST(ws_frame_split_across_feeds)
+    {
+        using namespace wotm_net::ws;
+        const std::vector<uint8_t> wire = encode(kText, reinterpret_cast<const uint8_t *>("LIST"), 4, true);
+        FrameParser p(true);
+        Frame f;
+        for (size_t i = 0; i + 1 < wire.size(); ++i)
+        {
+            p.feed(&wire[i], 1);
+            CHECK(p.next(f) == FrameParser::Result::NeedMore);
+        }
+        p.feed(&wire.back(), 1);
+        CHECK(p.next(f) == FrameParser::Result::Ok && f.opcode == kText && f.payload == bytesOf("LIST"));
+    }
+
+    TEST(ws_fragmented_message_is_joined)
+    {
+        using namespace wotm_net::ws;
+        std::vector<uint8_t> wire = encode(kText, reinterpret_cast<const uint8_t *>("HEL"), 3, true, false);
+        const std::vector<uint8_t> rest = encode(kContinuation, reinterpret_cast<const uint8_t *>("LO 4"), 4, true, true);
+        wire.insert(wire.end(), rest.begin(), rest.end());
+        FrameParser p(true);
+        p.feed(wire.data(), wire.size());
+        Frame f;
+        CHECK(p.next(f) == FrameParser::Result::Ok && f.opcode == kText && f.payload == bytesOf("HELLO 4"));
+    }
+
+    TEST(ws_rejects_unmasked_client_frame)
+    {
+        using namespace wotm_net::ws;
+        const std::vector<uint8_t> wire = encode(kText, reinterpret_cast<const uint8_t *>("LIST"), 4, false);
+        FrameParser p(true);   // the server requires masked frames (RFC 6455 5.1)
+        p.feed(wire.data(), wire.size());
+        Frame f;
+        CHECK(p.next(f) == FrameParser::Result::Error);
+    }
+
+    TEST(ws_rejects_oversized_frame)
+    {
+        using namespace wotm_net::ws;
+        const std::vector<uint8_t> payload(kMaxMessage + 1, 1);
+        const std::vector<uint8_t> wire = encode(kBinary, payload.data(), payload.size(), true);
+        FrameParser p(true);
+        p.feed(wire.data(), 16);   // the header alone is enough to refuse it
+        Frame f;
+        CHECK(p.next(f) == FrameParser::Result::Error);
+    }
+
+    TEST(ws_ping_pong_and_close_opcodes)
+    {
+        using namespace wotm_net::ws;
+        std::vector<uint8_t> wire = encode(kPing, reinterpret_cast<const uint8_t *>("12345678"), 8, true);
+        const std::vector<uint8_t> close = encode(kClose, nullptr, 0, true);
+        wire.insert(wire.end(), close.begin(), close.end());
+        FrameParser p(true);
+        p.feed(wire.data(), wire.size());
+        Frame f;
+        CHECK(p.next(f) == FrameParser::Result::Ok && f.opcode == kPing && f.payload == bytesOf("12345678"));
+        CHECK(p.next(f) == FrameParser::Result::Ok && f.opcode == kClose && f.payload.empty());
     }
 }
 
