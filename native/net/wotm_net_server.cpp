@@ -595,7 +595,7 @@ namespace wotm_net
                 break;
             auto &v = m->hashes[h.frame];
             v.resize(m->slots.size());
-            v[static_cast<size_t>(si)] = h.hash;
+            v[static_cast<size_t>(si)] = Match::SlotHash{h.hash, std::move(h.blocks)};
             checkHashes(*m);
             break;
         }
@@ -794,9 +794,10 @@ namespace wotm_net
             auto &v = it->second;
             v.resize(m.slots.size());
             bool complete = true;
-            std::optional<uint64_t> first;
+            const Match::SlotHash *first = nullptr;
             std::string firstName;
             std::vector<std::string> differ;
+            std::vector<size_t> blocks;   // 128 KB blocks whose hash differs from the first player's, in any differing player
             for (size_t i = 0; i < v.size(); ++i)
             {
                 if (m.slots[i].gone || m.inputs.dropped(static_cast<int>(i), frame))
@@ -807,9 +808,14 @@ namespace wotm_net
                     break;
                 }
                 if (!first)
-                    first = v[i], firstName = m.slots[i].name;
-                else if (*v[i] != *first)
+                    first = &*v[i], firstName = m.slots[i].name;
+                else if (v[i]->hash != first->hash)
+                {
                     differ.push_back(m.slots[i].name);
+                    for (size_t k = 0; k < v[i]->blocks.size() && k < first->blocks.size(); ++k)
+                        if (v[i]->blocks[k] != first->blocks[k] && std::find(blocks.begin(), blocks.end(), k) == blocks.end())
+                            blocks.push_back(k);
+                }
             }
             if (!complete)
             {
@@ -819,8 +825,25 @@ namespace wotm_net
             if (!differ.empty() && !m.desynced)
             {
                 m.desynced = true;
+                std::sort(blocks.begin(), blocks.end());
                 std::string detail = "state differs on frame " + std::to_string(frame) + ": " + firstName + " vs " + join(differ, ",");
-                log("lobby %s: DESYNC %s", lobbies_[static_cast<size_t>(m.lobby)].code.c_str(), detail.c_str());
+                // the differing 128 KB blocks (index and guest address: python tools/statediff.py --blocks <list> names the symbols);
+                // the players see the first few, the server log all of them
+                std::string shown, all;
+                for (size_t k = 0; k < blocks.size(); ++k)
+                {
+                    char b[48];
+                    std::snprintf(b, sizeof b, "%zu (0x%07zx)", blocks[k], blocks[k] * (32u * 1024u * 1024u / 256u));
+                    all += (k ? ", " : "") + std::string(b);
+                    if (k < 4)
+                        shown += (k ? ", " : "") + std::string(b);
+                    else if (k == 4)
+                        shown += " +" + std::to_string(blocks.size() - 4) + " more";
+                }
+                log("lobby %s: DESYNC %s%s%s", lobbies_[static_cast<size_t>(m.lobby)].code.c_str(), detail.c_str(), blocks.empty() ? "" : "; blocks ",
+                    all.c_str());
+                if (!blocks.empty())
+                    detail += "; blocks " + shown;
                 for (Slot &s : m.slots)
                     if (s.peer && !s.gone)
                         send(s.peer, proto::kControl, proto::encode(proto::Desync{frame, detail}), true);

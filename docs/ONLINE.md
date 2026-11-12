@@ -102,10 +102,13 @@ to the console) and starts once that many players are in; `--code <code> --name 
   does nothing online.
 - Everyone plays with the game's default options (difficulty, volumes, controller layout): local saves are neither read nor written
   online, because they live in game memory and would make the PCs drift apart.
-- Gameplay settings are fixed online: classic camera (no modern orbit camera, no mouse camera), the game's own lock-on (no lock-on
-  toggle), close-up camera on, default sensitivity. Your own settings are kept and come back offline. Video settings (resolution,
-  render scale, interpolation, enemy bars, damage numbers, button prompts) stay yours. Mouse clicks in menus, photo mode and switching
-  targets with the keyboard are off online (they come from your PC only and would make the PCs drift apart).
+- Your camera is yours online: the modern camera with the mouse or a controller's right stick, with your own sensitivity, inversion
+  and recenter choice (CAMERA tab, set before the match). They travel with your input, so every PC turns your camera the same way.
+  Players 5 to 8 use the classic camera.
+- Two gameplay settings are fixed online: the game's own lock-on (no lock-on toggle) and the close-up camera on. Your own settings are
+  kept and come back offline. Video settings (resolution, render scale, interpolation, enemy bars, damage numbers, button prompts) stay
+  yours. Mouse clicks in menus, photo mode and switching targets with the keyboard are off online (they come from your PC only and
+  would make the PCs drift apart).
 - Mods: everyone needs the same active mods (same files, same contents). Otherwise the server refuses the join with
   "game configuration differs from the others".
 - Debug keys that change the game or pause it are off: F1 (cheats), F5 (free camera), F6/F7/F8 (pause, step, photo).
@@ -119,8 +122,9 @@ to the console) and starts once that many players are in; `--code <code> --name 
 - 12 players are not possible: the game has exactly 8 controller inputs, the level loader has room for 12 monster files and no more,
   and the per-pair monster checks grow with the square of the count.
 - If a player leaves, their monster stands still for the rest of the match (same frame on every PC).
-- If the server sees two PCs with different game state ("desync"), the match stops on every PC with a message. Please report it with
-  everyone's `runtime\live.err.log`.
+- If the server sees two PCs with different game state ("desync"), the match stops on every PC with a message that names the memory
+  blocks that differ. Please report it with the message and everyone's `runtime\live.err.log` (each one has that PC's block hashes
+  of the moment, so two logs are enough to name what diverged).
 
 ## Troubleshooting
 

@@ -85,7 +85,8 @@ namespace wotm_net
             bool started = false, desynced = false;
             uint32_t delay = 0;
             InputTimeline inputs{0, 0};
-            std::map<uint32_t, std::vector<std::optional<uint64_t>>> hashes;
+            struct SlotHash { uint64_t hash = 0; std::vector<uint64_t> blocks; };   // blocks: the 256 block hashes, when sent
+            std::map<uint32_t, std::vector<std::optional<SlotHash>>> hashes;
             Clock::time_point created{}, allJoined{};
             bool allJoinedSet = false;
         };

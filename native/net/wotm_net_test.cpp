@@ -165,7 +165,7 @@ namespace
             r.states.push_back(i < 10 ? pressed(0x4000) : PadState{});
         m.runs.push_back(r);
         const std::vector<uint8_t> bytes = p::encode(m);
-        CHECK(bytes.size() == 6u + 6u + 20u + 2u * 6u);   // headers, 1 byte per state, 6 per new state (only 2 change)
+        CHECK(bytes.size() == 6u + 6u + 20u + 2u * 12u);   // headers, 1 byte per state, 12 per new state (only 2 change)
         p::Inputs back;
         CHECK(p::decode(bytes, back));
         CHECK(back.ackOwn == 41u && back.runs.size() == 1u);
@@ -184,6 +184,45 @@ namespace
         CHECK(back.acks == m.acks && back.own.player == 1 && back.own.first == 9u && back.own.states == m.own.states);
     }
 
+    // the modern camera's mouse motion is part of the player's input (every PC turns that player's camera by the same amount)
+    TEST(proto_mouse_motion_travels_with_the_input)
+    {
+        PadState moved;
+        moved.mouseX = -300;
+        moved.mouseY = 7;
+        CHECK(moved != PadState{});
+        PadState extreme = moved;
+        extreme.mouseX = 32767;
+        extreme.mouseY = -32768;
+        p::Input m;
+        m.own.player = 0;
+        m.own.first = 3;
+        m.own.states = {moved, moved, PadState{}, extreme};
+        p::Input back;
+        CHECK(p::decode(p::encode(m), back));
+        CHECK(back.own.states == m.own.states);
+        CHECK(back.own.states[0].mouseX == -300 && back.own.states[0].mouseY == 7);
+        CHECK(back.own.states[3].mouseX == 32767 && back.own.states[3].mouseY == -32768);
+    }
+
+    // the sender's packed camera settings (wotm_camsettings.hpp) travel too: every PC scales that player's camera with them
+    TEST(proto_camera_settings_travel_with_the_input)
+    {
+        PadState withCam;
+        withCam.cam = 0x00A7u;
+        CHECK(withCam != PadState{});   // a settings change alone is a new state
+        PadState all = withCam;
+        all.cam = 0xFFFFu;
+        p::Input m;
+        m.own.player = 1;
+        m.own.first = 0;
+        m.own.states = {withCam, withCam, all, PadState{}};
+        p::Input back;
+        CHECK(p::decode(p::encode(m), back));
+        CHECK(back.own.states == m.own.states);
+        CHECK(back.own.states[0].cam == 0x00A7u && back.own.states[2].cam == 0xFFFFu && back.own.states[3].cam == 0u);
+    }
+
     TEST(proto_control_messages_roundtrip)
     {
         p::Welcome w{3, 4};
@@ -196,7 +235,9 @@ namespace
         CHECK(p::decode(p::encode(s), sb) && sb.delay == 4u && sb.names == s.names);
         p::Hash h{120, 0x1122334455667788ull};
         p::Hash hb;
-        CHECK(p::decode(p::encode(h), hb) && hb.frame == 120u && hb.hash == h.hash);
+        CHECK(p::decode(p::encode(h), hb) && hb.frame == 120u && hb.hash == h.hash && hb.blocks.empty());
+        h.blocks = {1, 2, 0xffffffffffffffffull};
+        CHECK(p::decode(p::encode(h), hb) && hb.frame == 120u && hb.hash == h.hash && hb.blocks == h.blocks);
         p::Drop d{1, 77};
         p::Drop db;
         CHECK(p::decode(p::encode(d), db) && db.player == 1 && db.frame == 77u);
@@ -545,7 +586,7 @@ namespace
         RunningServer rs(cfg);
         LineSocket old;
         CHECK(old.connect("127.0.0.1", cfg.port, 2000));
-        old.sendLine("HELLO 1 b1");
+        old.sendLine("HELLO 2 b1");   // protocol 2: pad states without mouse motion
         CHECK(readUntil(old, "ERROR").find("protocol") != std::string::npos);
 
         LineSocket a, b, c, d;
@@ -911,13 +952,17 @@ namespace
         CHECK(a.waitStarted(5000) && b.waitStarted(5000));
         a.sendHash(30, 111);
         b.sendHash(30, 111);
-        a.sendHash(60, 222);
-        b.sendHash(60, 223);
+        // the block hashes that went with the total: the server names the blocks that differ (index and guest address)
+        std::vector<uint64_t> blocksA(256, 7), blocksB(256, 7);
+        blocksB[5] = 8, blocksB[131] = 9;
+        a.sendHash(60, 222, blocksA);
+        b.sendHash(60, 223, blocksB);
         const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(3);
         while ((a.status() != Status::Desynced || b.status() != Status::Desynced) && std::chrono::steady_clock::now() < until)
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         CHECK(a.status() == Status::Desynced && b.status() == Status::Desynced);
         CHECK(a.desyncFrame() == 60u);
+        CHECK(a.message() == "desync: state differs on frame 60: Ana vs Bia; blocks 5 (0x00a0000), 131 (0x1060000)");
         CHECK(!a.waitFrame(a.delay(), 200));   // desynced: no new frame runs
     }
 }

@@ -22,7 +22,7 @@ import sys
 import time
 from pathlib import Path
 
-PROTOCOL = 2
+PROTOCOL = 4   # native/net/wotm_net_proto.hpp kProtocol
 MASTER_PORT = 7778   # wotm_server --master (proto::kDefaultMasterPort)
 REPO = Path(__file__).resolve().parent.parent
 
