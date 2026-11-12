@@ -21,6 +21,9 @@ class ServerHost : IDisposable
 
     public bool Owned { get { return proc != null; } }
     public bool Running { get { return proc != null ? !proc.HasExited : PortOpen(Port, 500); } }
+    // Play (offline) closes the launcher, except while this launcher runs the server: closing it would stop the server, and the lobby,
+    // for every friend in it (#23). A server it only found running (not owned) outlives the launcher anyway.
+    public static bool KeepsLauncherOpen(ServerHost hosted) { return hosted != null && hosted.Owned && hosted.Running; }
 
     ServerHost(int port, Process p, StreamWriter w)
     {

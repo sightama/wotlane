@@ -22,7 +22,7 @@ and can be shared freely.
 1. Build it once: `tools\build_net.bat` (it also runs the network tests). The program is `native\net\build\wotm_server.exe`.
 2. Start it, one of:
    - **From the launcher (player as host):** section **Online**, press **Host on this PC**. The launcher runs the server hidden (it
-     writes `wotm_server.log` next to the launcher and stops when you close the launcher, so keep the launcher open while you play),
+     writes `wotm_server.log` next to the launcher and stops when you close the launcher, so keep the launcher open while you play; Play, the offline game, minimizes the launcher instead of closing it while you host, and brings it back when the game closes),
      hosts a lobby on it and shows a box to copy to your friends: the addresses they can type as Server and the lobby code. It also
      asks your router to open the port (UPnP, TCP and UDP; closed again when the launcher closes). If the router refuses, the box says
      so and which local address to forward the port to. To list it publicly, type the **Master server** address and tick **List
