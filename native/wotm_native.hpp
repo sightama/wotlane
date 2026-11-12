@@ -7,6 +7,7 @@
 // Game conventions (PS2): row vectors (p' = p * M), world is Z-up, float32 little-endian.
 #pragma once
 #include "wotm_syms.h"   // wotm::sym / wotm::fn: ELF addresses by name (tools/native_syms.py --gen)
+#include "wotm_glsl.hpp"   // the shaders below are GLSL 330; the browser build needs GLSL ES
 
 #include <algorithm>
 #include <array>
@@ -3233,7 +3234,7 @@ public:
                 // As > 1 in regular blending: 1st pass has no effect (alpha 0); 2nd pass Cs - Cd (1 - 1/As)
                 "  finalColor = fragPm > 0.5 ? vec4(c * as, 1.0) : fragMode > 3.5 ? vec4(c, 1.0 - 1.0 / as)\n"
                 "             : fragMode > 2.5 ? vec4(c, as > 1.0 ? 0.0 : as) : vec4(c, fragMode > 0.5 ? as * 0.5 : t.a); }\n";
-            alphaShader_ = LoadShaderFromMemory(vs, fs);
+            alphaShader_ = LoadShaderFromMemory(wotm_glsl::forTarget(vs, WOTM_GLSL_ES).c_str(), wotm_glsl::forTarget(fs, WOTM_GLSL_ES).c_str());
             fogLoc_[0] = GetShaderLocation(alphaShader_, "fogEye");
             fogLoc_[1] = GetShaderLocation(alphaShader_, "fogRow3");
             fogLoc_[2] = GetShaderLocation(alphaShader_, "fogParams");
@@ -4007,7 +4008,7 @@ public:
                 "in vec2 fragTexCoord; in vec4 fragColor;\n"
                 "uniform sampler2D texture0; uniform vec4 colDiffuse; out vec4 finalColor;\n"
                 "void main() { vec4 t = texture(texture0, fragTexCoord) * fragColor * colDiffuse; finalColor = vec4(min(t.rgb * 2.0, 1.0), t.a); }\n";
-            textShader_ = LoadShaderFromMemory(nullptr, fs);
+            textShader_ = LoadShaderFromMemory(nullptr, wotm_glsl::forTarget(fs, WOTM_GLSL_ES).c_str());
         }
         const GsScreenRect gr = gsScreenRect(rw, rh);
         const float sx = gr.w / 640.f, sy = gr.h / 224.f;

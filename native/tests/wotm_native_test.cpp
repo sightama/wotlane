@@ -5,6 +5,7 @@
 #include "wotm_mods.hpp"
 #include "wotm_detmath.hpp"
 #include "wotm_freecam.h"
+#include "wotm_glsl.hpp"
 #include "wotm_trig_goldens.hpp"
 #include "net/wotm_modifiers.hpp"
 #include "net/wotm_camsettings.hpp"
@@ -527,6 +528,39 @@ TEST(freecam_axes_use_deterministic_trig)
             bad += bitsOf(got[k]) != bitsOf(want[k]);
     }
     CHECK(bad == 0);
+}
+
+TEST(glsl_desktop_source_unchanged)
+{
+    const std::string src = "#version 330\nin vec2 uv;\nvoid main() {}\n";
+    CHECK(wotm_glsl::forTarget(src, false) == src);
+}
+
+TEST(glsl_es_rewrites_version_and_adds_precision)
+{
+    CHECK(wotm_glsl::forTarget("#version 330\nin vec2 uv;\nvoid main() {}\n", true) ==
+          "#version 300 es\nprecision highp float;\nprecision highp int;\nprecision highp sampler2D;\nin vec2 uv;\nvoid main() {}\n");
+}
+
+TEST(glsl_es_leaves_source_without_version_alone)
+{
+    const std::string src = "in vec2 uv;\nvoid main() {}\n";
+    CHECK(wotm_glsl::forTarget(src, true) == src);
+}
+
+TEST(card_root_defaults_to_mc0_next_to_the_elf)
+{
+    CHECK(wotm::settings::cardRoot({}, "/game", nullptr) == std::filesystem::path("/game/mc0"));
+}
+
+TEST(card_root_keeps_the_runtime_card_folder)
+{
+    CHECK(wotm::settings::cardRoot("/cards/mc0", "/game", "") == std::filesystem::path("/cards/mc0"));
+}
+
+TEST(card_root_follows_the_save_folder)
+{
+    CHECK(wotm::settings::cardRoot("/cards/mc0", "/disc", "/save") == std::filesystem::path("/save/mc0"));
 }
 
 int main()

@@ -1081,7 +1081,7 @@ private:
                 "  else if (mode > 0.5) finalColor = vec4(c.rgb * c.a, 0.0);\n"
                 "  else finalColor = vec4(c.rgb * c.a, c.a);\n"
                 "}\n";
-            shader_ = LoadShaderFromMemory(nullptr, fs);
+            shader_ = LoadShaderFromMemory(nullptr, wotm_glsl::forTarget(fs, WOTM_GLSL_ES).c_str());
             locMode_ = GetShaderLocation(shader_, "mode");
             locAref_ = GetShaderLocation(shader_, "aref");
             locGain_ = GetShaderLocation(shader_, "gain");

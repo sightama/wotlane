@@ -447,6 +447,17 @@ inline int applyEnv()
 // Already at static initialization: whatever doesn't go through load (replay --vu1cmp, without the hooks) gets the environment, as before
 inline const int g_envAtStart = applyEnv();
 
+// Card 1's folder (mc0); save.json and settings.ini sit in its parent. `saveDir` (WOTM_SAVEDIR, the browser version's /save) wins;
+// otherwise the runtime's card folder, or mc0 next to the ELF. Shared by wotm_save.inc and the settings load in wotm_overrides.cpp.
+inline std::filesystem::path cardRoot(const std::filesystem::path &mcRoot, const std::filesystem::path &elfDirectory, const char *saveDir)
+{
+    if (saveDir && *saveDir)
+        return (std::filesystem::path(saveDir) / "mc0").lexically_normal();
+    if (!mcRoot.empty())
+        return mcRoot.lexically_normal();
+    return ((!elfDirectory.empty() ? elfDirectory : std::filesystem::current_path()) / "mc0").lexically_normal();
+}
+
 // Once, when the hooks are installed (before the first frame). `dir` = save.json's folder.
 inline void load(const std::filesystem::path &dir)
 {

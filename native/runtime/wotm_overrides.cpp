@@ -2548,10 +2548,7 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
     }
     {   // player options (wotm_settings.hpp): settings.ini next to save.json (the same folder wotm_save::initPaths finds)
         const PS2Runtime::IoPaths &io = PS2Runtime::getIoPaths();
-        std::filesystem::path root = io.mcRoot;
-        if (root.empty())
-            root = !io.elfDirectory.empty() ? io.elfDirectory / "mc0" : std::filesystem::current_path() / "mc0";
-        wotm::settings::load(root.lexically_normal().parent_path());
+        wotm::settings::load(wotm::settings::cardRoot(io.mcRoot, io.elfDirectory, std::getenv("WOTM_SAVEDIR")).parent_path());
     }
     wotm_save::install(runtime);
     if ((g_origEmitMatrices = runtime.lookupFunction(kEmitMatrices)))   // emitter that teleports (8 monsters with Agamo)
