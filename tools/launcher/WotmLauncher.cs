@@ -950,7 +950,7 @@ class Launcher : Form
         p.Controls.Add(Line(Caption("Your name"), simpleName, Caption("   Monster"), simpleMonster));
         p.Controls.Add(Line(simpleHost, simpleJoin, simpleOffline));
         tips.SetToolTip(simpleHost, "Runs the game server on this PC and opens a lobby. Send the invite to your friends.");
-        tips.SetToolTip(simpleJoin, "Paste the invite a friend sent you (it looks like 99.38.90.23:7777/ABCD).");
+        tips.SetToolTip(simpleJoin, "Paste the invite a friend sent you (it looks like 203.0.113.7:7777/ABCD).");
         tips.SetToolTip(simpleOffline, "Plays on this PC only, against the computer.");
 
         simpleJoinRow = Line(Caption("Invite"), simpleInviteIn, simpleJoinGo);

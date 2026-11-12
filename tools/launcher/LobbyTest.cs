@@ -190,19 +190,19 @@ static class LobbyTest
                 string host, code, why = null;
                 int invitePort;
                 Func<string, string> parse = s => LobbyClient.ParseInvite(s, out host, out invitePort, out code, out why) ? host + "|" + invitePort + "|" + code : null;
-                Check(parse("99.38.90.23:7777/7TXQ") == "99.38.90.23|7777|7TXQ", "canonical");
-                Check(parse("99.38.90.23:7777 7TXQ") == "99.38.90.23|7777|7TXQ", "space instead of slash");
-                Check(parse("  99.38.90.23:7777/7txq  ") == "99.38.90.23|7777|7TXQ", "spaces and lower case");
-                Check(parse("99.38.90.23/7TXQ") == "99.38.90.23|7777|7TXQ", "default port");
-                Check(parse("wotm://99.38.90.23:7777/7TXQ") == "99.38.90.23|7777|7TXQ", "wotm:// prefix");
+                Check(parse("203.0.113.7:7777/7TXQ") == "203.0.113.7|7777|7TXQ", "canonical");
+                Check(parse("203.0.113.7:7777 7TXQ") == "203.0.113.7|7777|7TXQ", "space instead of slash");
+                Check(parse("  203.0.113.7:7777/7txq  ") == "203.0.113.7|7777|7TXQ", "spaces and lower case");
+                Check(parse("203.0.113.7/7TXQ") == "203.0.113.7|7777|7TXQ", "default port");
+                Check(parse("wotm://203.0.113.7:7777/7TXQ") == "203.0.113.7|7777|7TXQ", "wotm:// prefix");
                 Check(parse("myhost.example.org:7000/ABCD") == "myhost.example.org|7000|ABCD", "host name");
-                foreach (string bad in new[] { "", "7TX", "99.38.90.23:7777", ":7777/ABCD", "99.38.90.23:0/ABCD", "99.38.90.23:70000/ABCD",
-                                               "99.38.90.23:7777/AB-D", "99.38.90.23:7777/ABCDE" })
+                foreach (string bad in new[] { "", "7TX", "203.0.113.7:7777", ":7777/ABCD", "203.0.113.7:0/ABCD", "203.0.113.7:70000/ABCD",
+                                               "203.0.113.7:7777/AB-D", "203.0.113.7:7777/ABCDE" })
                 {
                     Check(parse(bad) == null, "not an invite: '" + bad + "'");
                     Check(!string.IsNullOrEmpty(why), "says what is missing: '" + bad + "'");
                 }
-                Check(LobbyClient.FormatInvite("99.38.90.23", 7777, "7txq") == "99.38.90.23:7777/7TXQ", "format");
+                Check(LobbyClient.FormatInvite("203.0.113.7", 7777, "7txq") == "203.0.113.7:7777/7TXQ", "format");
             });
             Run("friendly_status", delegate
             {

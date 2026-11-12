@@ -299,7 +299,7 @@ class LobbyClient : IDisposable
         string s = (text ?? "").Trim();
         if (s.StartsWith("wotm://", StringComparison.OrdinalIgnoreCase)) s = s.Substring(7);
         int cut = s.LastIndexOfAny(new[] { '/', ' ' });
-        if (cut < 0) { why = "An invite looks like 99.38.90.23:7777/ABCD: the address, a slash and the 4-letter code."; return false; }
+        if (cut < 0) { why = "An invite looks like 203.0.113.7:7777/ABCD: the address, a slash and the 4-letter code."; return false; }
         string addr = s.Substring(0, cut).Trim(), c = s.Substring(cut + 1).Trim().ToUpperInvariant();
         if (c.Length != 4 || !Array.TrueForAll(c.ToCharArray(), char.IsLetterOrDigit)) { why = "The code at the end of the invite must be 4 letters or digits."; return false; }
         int colon = addr.LastIndexOf(':');

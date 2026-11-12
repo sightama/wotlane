@@ -63,7 +63,7 @@ A master server keeps the list of public servers, so players can find them witho
 
 The launcher opens in **simple mode**: your name, your monster and three buttons.
 - **Host a game** runs the server on this PC (as Host on this PC below: UPnP, firewall prompt) and opens a lobby. It shows an
-  **invite**, `<address>:<port>/<CODE>` (for example `99.38.90.23:7777/7TXQ`), with **Copy invite**: the best address for a friend
+  **invite**, `<address>:<port>/<CODE>` (for example `203.0.113.7:7777/7TXQ`), with **Copy invite**: the best address for a friend
   (internet, then Tailscale, then LAN) and the lobby code in one line. The host picks the stage, wins to end and modifiers and
   presses **Start match**.
 - **Join a game**: paste the invite and press **Join** (or Enter). Spaces, a space instead of the slash, a lower-case code, a missing

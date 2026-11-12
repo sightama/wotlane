@@ -21,7 +21,7 @@ Join a friend's game
 --------------------
 1. Open "War of the Monsters online" on your desktop.
 2. Type your name and pick your monster.
-3. Press "Join a game", paste the invite your friend sent you (it looks like 99.38.90.23:7777/ABCD) and press Join.
+3. Press "Join a game", paste the invite your friend sent you (it looks like 203.0.113.7:7777/ABCD) and press Join.
 4. Wait for your friend to press Start match: the game opens by itself. When the match ends, you're back in the lobby.
 
 
