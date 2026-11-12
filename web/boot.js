@@ -33,10 +33,15 @@
     WOTM_NOFLARE: '1',
     WOTM_SAVEDIR: '/save',
   };
-  // runtime and game variables from the address (?WOTM_MATCH=5,1,9...), for tests and direct matches
-  for (const [key, value] of new URLSearchParams(location.search))
-    if (/^(WOTM|PS2X)_[A-Z0-9_]+$/.test(key)) env[key] = value;
-  Object.assign(env, window.wotmMatchEnv || {});
+  // a few harmless switches from the address, for tests and direct matches (?WOTM_MATCH=5,1,9&WOTM_AIVSAI=1). Nothing that names a
+  // file, a server or a cheat: a link someone sends must not be able to point the game elsewhere. The fixed values above always win.
+  const fromAddress = ['WOTM_MATCH', 'WOTM_AIVSAI', 'PS2X_STATS'];
+  const params = new URLSearchParams(location.search);
+  const allowed = {};
+  for (const key of fromAddress)
+    if (params.has(key)) allowed[key] = params.get(key);
+  const fixed = { ...env };
+  Object.assign(env, allowed, window.wotmMatchEnv || {}, fixed);
 
   window.Module = {
     canvas,
