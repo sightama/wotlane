@@ -150,5 +150,7 @@ to the console) and starts once that many players are in; `--code <code> --name 
   or a different set of mods in `mods\`. Use the same launcher checkboxes in the Mods group and copy the same mod folders (folders whose
   name starts with `_` are off and do not count).
 - "no answer from the server": the server is not running, the port is not forwarded (TCP and UDP), or a firewall blocks it.
+  `native/net/build/wotm_net_probe <host>[:7777]` (built with the server) checks a server from any PC without the game: two clients
+  form a lobby over TCP and play a short match over UDP; it says which step fails.
 - Test everything on one PC: `powershell -File tools\net_check.ps1` starts a server and two games and checks that both stay identical;
   `powershell -File tools\net_checks.ps1` runs the online checks (per-PC settings, mouse, photo mode, pause, wins target, mods).
