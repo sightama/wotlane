@@ -109,9 +109,11 @@ namespace wotm_net
         void createLobby(int c, const std::vector<std::string> &w);
         void joinLobby(int c, const std::vector<std::string> &w);
         void setLobby(int c, const std::vector<std::string> &w);
+        void changeMonster(int c, const std::vector<std::string> &w);
         // joins lobby li (already validated): member, owner if first, JOINED, SETTINGS and MEMBERS
         void addMember(int c, int li, const std::string &name, int monster);
-        bool monsterFits(const Lobby &l, int monster, std::string &err) const;
+        // `except`: a member left out of the costume check (the one changing monster)
+        bool monsterFits(const Lobby &l, int monster, std::string &err, int except = -1) const;
         void leaveLobby(int c);
         bool closeIfEmpty(int lobby);
         void sendMembers(int lobby);

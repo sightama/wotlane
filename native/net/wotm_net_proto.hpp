@@ -372,7 +372,7 @@ namespace wotm_net::proto
     // during the match and, when the match ends (everyone has left it: QUIT closes the game), it goes back to waiting with the same
     // members. An empty lobby closes.
     // client: HELLO <protocol> <build> | LIST | CREATE <lobby> <name> <monster> [password] | JOIN <code> <name> <monster> [password] |
-    //         SET [stage=<stage>] [wins=<wins>] | START | LEAVE
+    //         SET [stage=<stage>] [wins=<wins>] | MONSTER <monster> (any member, while the lobby waits) | START | LEAVE
     // server: WELCOME <open lobbies> | LOBBY <code> <waiting|playing> <n>/<max> <open|locked> <lobby> <owner> <names,...|-> |
     //         END | CREATED <code> | JOINED <code> | LEFT <code> | SETTINGS <code> stage=<stage> wins=<wins> |
     //         MEMBERS <code> <owner> <name:monster,...> | MATCH <key=value>... | ERROR <text>

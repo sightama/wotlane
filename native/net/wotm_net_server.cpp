@@ -265,6 +265,8 @@ namespace wotm_net
             joinLobby(ci, w);
         else if (cmd == "SET")
             setLobby(ci, w);
+        else if (cmd == "MONSTER" && w.size() >= 2)
+            changeMonster(ci, w);
         else if (cmd == "LEAVE")
         {
             const std::string code = c.lobby >= 0 ? lobbies_[static_cast<size_t>(c.lobby)].code : "";
@@ -286,7 +288,7 @@ namespace wotm_net
 
     // the monster exists on the disc and still has a free costume given the other members' (costumes as the match hands them out:
     // wotm_monsters::fits)
-    bool Server::monsterFits(const Lobby &l, int monster, std::string &err) const
+    bool Server::monsterFits(const Lobby &l, int monster, std::string &err, int except) const
     {
         if (wotm_monsters::costumes(monster) == 0)
         {
@@ -295,7 +297,7 @@ namespace wotm_net
         }
         int list[wotm_monsters::kMaxList], n = 0;
         for (int m : l.members)
-            if (n < wotm_monsters::kMaxList - 1)
+            if (m != except && n < wotm_monsters::kMaxList - 1)
                 list[n++] = conns_[static_cast<size_t>(m)]->monster;
         list[n++] = monster;
         if (!wotm_monsters::fits(list, nullptr, n))
@@ -409,6 +411,24 @@ namespace wotm_net
         if (auto it = kv.find("wins"); it != kv.end())
             l.wins = std::clamp(std::atoi(it->second.c_str()), 0, proto::kMaxWins);
         sendSettings(c.lobby);
+    }
+
+    // MONSTER <monster>: any member, while the lobby waits; the same checks as JOIN, against the other members (#14)
+    void Server::changeMonster(int ci, const std::vector<std::string> &w)
+    {
+        Conn &c = *conns_[static_cast<size_t>(ci)];
+        if (c.lobby < 0)
+            return void(c.socket.sendLine("ERROR join a lobby first"));
+        const Lobby &l = lobbies_[static_cast<size_t>(c.lobby)];
+        if (l.match)
+            return void(c.socket.sendLine("ERROR lobby is in a match; change monster after it ends"));
+        const int monster = std::atoi(w[1].c_str());
+        std::string err;
+        if (!monsterFits(l, monster, err, ci))
+            return void(c.socket.sendLine("ERROR " + err));
+        c.monster = monster;
+        log("lobby %s: %s changed monster to %d", l.code.c_str(), c.name.c_str(), monster);
+        sendMembers(c.lobby);
     }
 
     void Server::leaveLobby(int ci)
