@@ -157,6 +157,7 @@ class LobbyClient : IDisposable
     // Creates a lobby (the creator is its owner) and joins it; returns the code
     public string Create(string lobby, string name, int monster, string password, int timeoutMs)
     {
+        Name = CleanName(name);   // as the server stores it
         Send("CREATE " + lobby + " " + name + " " + monster + (string.IsNullOrEmpty(password) ? "" : " " + password));
         string code = Expect("CREATED", timeoutMs).Split(' ')[1];
         Joined(timeoutMs);
@@ -165,6 +166,7 @@ class LobbyClient : IDisposable
 
     public void Join(string code, string name, int monster, string password, int timeoutMs)
     {
+        Name = CleanName(name);   // as the server stores it
         Send("JOIN " + code + " " + name + " " + monster + (string.IsNullOrEmpty(password) ? "" : " " + password));
         Joined(timeoutMs);
     }
@@ -193,11 +195,19 @@ class LobbyClient : IDisposable
     }
 
     // any member, while the lobby waits: plays `monster` in the next match; returns the MEMBERS line the server sends to everyone
+    // (earlier MEMBERS lines may still be queued, so it waits for the one that shows this member with the new monster)
     public MemberInfo ChangeMonster(int monster, int timeoutMs)
     {
         Send("MONSTER " + monster);
-        return ParseMembers(Expect("MEMBERS", timeoutMs));
+        while (true)
+        {
+            MemberInfo m = ParseMembers(Expect("MEMBERS", timeoutMs));
+            if (MemberMonster(m, Name) == monster) return m;
+        }
     }
+
+    // this client's name in its lobby (Create or Join)
+    public string Name { get; private set; }
 
     // the gameplay modifiers (native/net/wotm_modifiers.hpp): lobby names in canonical order, and what the launcher shows
     public static readonly string[] ModifierNames = { "jump", "fast", "turbo" };
