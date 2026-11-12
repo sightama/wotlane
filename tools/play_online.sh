@@ -81,7 +81,7 @@ else
     done
     lan=$(ipconfig getifaddr en0 2>/dev/null || hostname -I 2>/dev/null | cut -d' ' -f1 || echo 127.0.0.1)
     echo "Invite (same network): $lan:$port/$code"
-    echo "Over the internet, friends use your public IP instead, with port $port forwarded to $lan (docs/en/ONLINE.md)."
+    echo "Over the internet, friends use your public IP instead, with port $port forwarded to $lan (docs/ONLINE.md)."
     if [ "$bot" -eq 1 ]; then
         python3 "$repo/tools/net_lobby.py" --server "$server" --code "$code" --name Bot --monster 2 >"$work/bot_env.txt"
         mkdir -p "$work/bot"
