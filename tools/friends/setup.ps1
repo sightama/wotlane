@@ -1,6 +1,6 @@
 # ABOUTME: Setup for the wotlane friends package (tools\package_friends.ps1): finds the friend's own ISO, copies its SCUS_971.97 to
-# ABOUTME: runtime\discroot, points run_live.ps1 at the ISO and writes .wotm_recomp_dir. Run by Setup.bat; safe to run again.
-param([string]$Iso = '', [switch]$NoPause)
+# ABOUTME: runtime\discroot, points run_live.ps1 at the ISO, adds a desktop shortcut and opens the launcher. Run by Setup.bat; rerunnable.
+param([string]$Iso = '', [switch]$NoPause, [string]$ShortcutDir = [Environment]::GetFolderPath('Desktop'))
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
 $elfSha1 = '1ed7f8457436a9170d8f85386e267369c7fcdd4f'   # SCUS_971.97 from the NTSC-U disc (SCUS-97197)
@@ -40,7 +40,17 @@ try {
     $template = Get-Content (Join-Path $root 'runtime\run_live.template.ps1') -Raw
     Set-Content (Join-Path $root 'runtime\run_live.ps1') $template.Replace('@ISO@', $Iso.Replace("'", "''")) -Encoding utf8 -NoNewline
     Set-Content (Join-Path $root '.wotm_recomp_dir') (Join-Path $root 'runtime') -Encoding ascii
-    Done 0 'Setup done. Open WotM_Launcher.exe (see README.txt for playing online).'
+
+    # a shortcut on the desktop (-ShortcutDir: elsewhere, for tests), then the launcher opens by itself
+    $launcher = Join-Path $root 'WotM_Launcher.exe'
+    if ($ShortcutDir -and (Test-Path -LiteralPath $ShortcutDir)) {
+        $lnk = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $ShortcutDir 'War of the Monsters online.lnk'))
+        $lnk.TargetPath = $launcher
+        $lnk.WorkingDirectory = $root
+        $lnk.Save()
+    }
+    if (-not $NoPause) { Start-Process -FilePath $launcher -WorkingDirectory $root }
+    Done 0 'Setup done. The launcher opens now; next time use "War of the Monsters online" on your desktop.'
 } catch {
     Done 1 "Setup failed: $($_.Exception.Message)"
 }

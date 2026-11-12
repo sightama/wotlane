@@ -185,6 +185,41 @@ static class LobbyTest
                 LobbyClient.SplitAddress(" 192.168.2.243:9000 ", LobbyClient.MasterPort, out h, out mp);
                 Check(h == "192.168.2.243" && mp == 9000, "explicit port");
             });
+            Run("invite", delegate
+            {
+                string host, code, why = null;
+                int invitePort;
+                Func<string, string> parse = s => LobbyClient.ParseInvite(s, out host, out invitePort, out code, out why) ? host + "|" + invitePort + "|" + code : null;
+                Check(parse("99.38.90.23:7777/7TXQ") == "99.38.90.23|7777|7TXQ", "canonical");
+                Check(parse("99.38.90.23:7777 7TXQ") == "99.38.90.23|7777|7TXQ", "space instead of slash");
+                Check(parse("  99.38.90.23:7777/7txq  ") == "99.38.90.23|7777|7TXQ", "spaces and lower case");
+                Check(parse("99.38.90.23/7TXQ") == "99.38.90.23|7777|7TXQ", "default port");
+                Check(parse("wotm://99.38.90.23:7777/7TXQ") == "99.38.90.23|7777|7TXQ", "wotm:// prefix");
+                Check(parse("myhost.example.org:7000/ABCD") == "myhost.example.org|7000|ABCD", "host name");
+                foreach (string bad in new[] { "", "7TX", "99.38.90.23:7777", ":7777/ABCD", "99.38.90.23:0/ABCD", "99.38.90.23:70000/ABCD",
+                                               "99.38.90.23:7777/AB-D", "99.38.90.23:7777/ABCDE" })
+                {
+                    Check(parse(bad) == null, "not an invite: '" + bad + "'");
+                    Check(!string.IsNullOrEmpty(why), "says what is missing: '" + bad + "'");
+                }
+                Check(LobbyClient.FormatInvite("99.38.90.23", 7777, "7txq") == "99.38.90.23:7777/7TXQ", "format");
+            });
+            Run("friendly_status", delegate
+            {
+                // the texts as LobbyClient and wotm_server produce them
+                Func<string, string, bool> says = (err, start) => LobbyClient.FriendlyError(err).StartsWith(start);
+                Check(says("no answer from 1.2.3.4:7777 (is wotm_server running? is the TCP port open?)", "Can't reach the host"), "unreachable");
+                Check(says("the server closed the connection", "Can't reach the host"), "closed");
+                Check(says("different protocol (the server speaks 3; update wotlane)", "Your game version"), "protocol");
+                Check(says("build differs from the lobby's (wl-1); everyone needs the same wotlane", "Your game version"), "build");
+                Check(says("rejected by the server: game configuration differs from the others (a vs b)", "Your game files"), "config");
+                Check(says("no such lobby (check the code)", "That invite is no longer open"), "no lobby");
+                Check(says("wrong password (the lobby has a password)", "This game needs a password"), "password");
+                Check(says("lobby is in a match; wait for it to end", "That game has already started"), "in a match");
+                Check(says("name already taken in the lobby", "Someone in that game already uses your name"), "name taken");
+                Check(says("lobby is full", "That game is full"), "full");
+                Check(LobbyClient.FriendlyError("unknown command: X") == "Problem: unknown command: X", "anything else stays readable");
+            });
             Run("modifier_list", delegate
             {
                 Check(LobbyClient.ModifierList(false, false, false) == "", "none");

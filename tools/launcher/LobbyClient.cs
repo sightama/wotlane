@@ -282,6 +282,59 @@ class LobbyClient : IDisposable
         if (colon <= 0 || !int.TryParse(s.Substring(colon + 1), out port) || port <= 0 || port > 65535) port = defaultPort;
     }
 
+    // ---- invites: "<host>:<port>/<CODE>", everything a friend needs to join (the Mac launcher reads and writes the same text) ----
+    public const int DefaultPort = 7777;
+
+    public static string FormatInvite(string host, int port, string code)
+    {
+        return host + ":" + port + "/" + code.ToUpperInvariant();
+    }
+
+    // Forgiving: surrounding spaces, a space instead of the slash, lower-case code, no port (7777), an optional "wotm://" prefix.
+    // false with `why` saying what is wrong
+    public static bool ParseInvite(string text, out string host, out int port, out string code, out string why)
+    {
+        host = code = why = null;
+        port = 0;
+        string s = (text ?? "").Trim();
+        if (s.StartsWith("wotm://", StringComparison.OrdinalIgnoreCase)) s = s.Substring(7);
+        int cut = s.LastIndexOfAny(new[] { '/', ' ' });
+        if (cut < 0) { why = "An invite looks like 99.38.90.23:7777/ABCD: the address, a slash and the 4-letter code."; return false; }
+        string addr = s.Substring(0, cut).Trim(), c = s.Substring(cut + 1).Trim().ToUpperInvariant();
+        if (c.Length != 4 || !Array.TrueForAll(c.ToCharArray(), char.IsLetterOrDigit)) { why = "The code at the end of the invite must be 4 letters or digits."; return false; }
+        int colon = addr.LastIndexOf(':');
+        string h = colon >= 0 ? addr.Substring(0, colon) : addr;
+        int p = DefaultPort;
+        if (colon >= 0 && (!int.TryParse(addr.Substring(colon + 1), out p) || p <= 0 || p > 65535))
+        {
+            why = "The port in the invite (after the colon) must be a number from 1 to 65535.";
+            return false;
+        }
+        if (h.Length == 0 || h.Contains(" ")) { why = "The invite has no host address before the port."; return false; }
+        host = h;
+        port = p;
+        code = c;
+        return true;
+    }
+
+    // A lobby or match error (LobbyClient, wotm_server, the game's [net] stopped line) in words a player understands
+    public static string FriendlyError(string err)
+    {
+        string e = (err ?? "").ToLowerInvariant();
+        if (e.Contains("no answer") || e.Contains("closed the connection"))
+            return "Can't reach the host. Check the invite, or ask the host to check that the game is hosting.";
+        if (e.Contains("protocol") || e.Contains("build differs") || e.Contains("another version"))
+            return "Your game version doesn't match the host's. Both of you need the same package (see BUILD.txt).";
+        if (e.Contains("configuration differs"))
+            return "Your game files or mods differ from the host's. Use the package as it came.";
+        if (e.Contains("no such lobby")) return "That invite is no longer open. Ask the host for a new one.";
+        if (e.Contains("password")) return "This game needs a password (Advanced mode).";
+        if (e.Contains("in a match")) return "That game has already started. Wait for it to end, then press Join again.";
+        if (e.Contains("name already taken")) return "Someone in that game already uses your name. Change Your name and press Join again.";
+        if (e.Contains("lobby is full")) return "That game is full.";
+        return "Problem: " + err;
+    }
+
     // the master's list (SERVERS ... END), each server pinged from here in parallel; LobbyError when the master doesn't answer
     public static List<ServerInfo> Browse(string master, int timeoutMs)
     {
