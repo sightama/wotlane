@@ -122,8 +122,9 @@ to the console) and starts once that many players are in; `--code <code> --name 
 - 12 players are not possible: the game has exactly 8 controller inputs, the level loader has room for 12 monster files and no more,
   and the per-pair monster checks grow with the square of the count.
 - If a player leaves, their monster stands still for the rest of the match (same frame on every PC).
-- If the server sees two PCs with different game state ("desync"), the match stops on every PC with a message. Please report it with
-  everyone's `runtime\live.err.log`.
+- If the server sees two PCs with different game state ("desync"), the match stops on every PC with a message that names the memory
+  blocks that differ. Please report it with the message and everyone's `runtime\live.err.log` (each one has that PC's block hashes
+  of the moment, so two logs are enough to name what diverged).
 
 ## Troubleshooting
 

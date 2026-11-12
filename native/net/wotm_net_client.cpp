@@ -345,10 +345,10 @@ namespace wotm_net
         return out;
     }
 
-    void MatchClient::sendHash(uint32_t frame, uint64_t hash)
+    void MatchClient::sendHash(uint32_t frame, uint64_t hash, std::vector<uint64_t> blocks)
     {
         std::lock_guard<std::mutex> lk(mu_);
-        hashQueue_.push_back({frame, hash});
+        hashQueue_.push_back({frame, hash, std::move(blocks)});
     }
 
     bool MatchClient::waitAcked(int ms)
