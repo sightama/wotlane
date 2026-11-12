@@ -51,7 +51,8 @@ def load_symbols():
 
 
 RESERVED = {"errno", "stdin", "stdout", "stderr", "assert", "EOF", "NULL", "min", "max", "near", "far", "pascal", "cdecl", "environ",
-            "alloca", "unlink", "getpid", "isatty", "fileno", "strdup", "stricmp", "strnicmp", "putenv", "tzname", "timezone", "daylight"}
+            "alloca", "unlink", "getpid", "isatty", "fileno", "strdup", "stricmp", "strnicmp", "putenv", "tzname", "timezone", "daylight",
+            "isnanf", "isinff"}
 
 
 def ident(name):

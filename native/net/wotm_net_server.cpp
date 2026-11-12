@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
 
 namespace wotm_net
 {
