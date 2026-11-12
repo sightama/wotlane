@@ -155,3 +155,6 @@ to the console) and starts once that many players are in; `--code <code> --name 
   form a lobby over TCP and play a short match over UDP; it says which step fails.
 - Test everything on one PC: `powershell -File tools\net_check.ps1` starts a server and two games and checks that both stay identical;
   `powershell -File tools\net_checks.ps1` runs the online checks (per-PC settings, mouse, photo mode, pause, wins target, mods).
+  On macOS and Linux (and on Windows too) the same checks are `python3 tools/net_check.py` and `python3 tools/net_checks.py [--only
+  <name>]`, with `tools/live_check.py` and `tools/determinism_check.py` for the single-game ones; their shared part is
+  `tools/gamecheck.py` (tested by `tools/test_gamecheck.py`).
