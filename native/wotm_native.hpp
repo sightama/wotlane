@@ -32,6 +32,7 @@
 #include "wotm_gs.hpp"
 #include "wotm_interp.hpp"   // M4, GameCamera and frame interpolation (no raylib, tested in native/tests)
 #include "wotm_mods.hpp"   // .RTX palettes: mods/ wins over the disc (loadResources)
+#include "wotm_disc.hpp"   // disc files from the extracted root or the ISO (readDisc)
 #include "wotm_texmods.hpp"   // mod textures as PNG (textureId, residentTexture)
 
 namespace wotm {
@@ -922,12 +923,13 @@ public:
     struct ImgSrc { std::string stem; uint32_t texId; };
     std::unordered_map<uint32_t, ImgSrc> rtxImgSrc_;   // rtxImg key -> file and disc texId
     std::string discRoot_;                              // root of the extracted disc, with the slash (loadResources)
+    std::string isoPath;   // the game's ISO (PS2X_CD_IMAGE): files the extracted root doesn't have come from it (readDisc)
     std::map<std::string, std::map<uint32_t, uint32_t>> texPackets_;   // FILE -> packet offset in the .TEX -> disc texId
 
-    // Disc path ("MON/LIZARD0.RTX"): the mods/ file (wotm_mods.hpp) if there is one, otherwise the root's
-    std::string discPath(const std::string &rel) const {
-        std::string p = mods::Registry::get().hostPath(rel);
-        return p.empty() ? discRoot_ + mods::Registry::get().aliasOf(rel) : p;   // mod costume: the base costume's file
+    // Disc file ("MON/LIZARD0.RTX"): the mods/ file if there is one, otherwise the extracted disc under the root, otherwise the game's
+    // ISO (wotm::disc::readFile; a mod costume reads its base costume's file)
+    bool readDisc(const std::string &rel, std::vector<uint8_t> &out) const {
+        return disc::readFile(discRoot_.empty() ? std::string(".") : discRoot_, isoPath, rel, out);
     }
 
     // Mod PNG in place of the object's texture (global texInfo texId + TEX0). Resident ones (T8H/4HL/4HH): by DBP, like
@@ -969,7 +971,8 @@ public:
                 if (pk == texPackets_.end()) {
                     std::vector<uint8_t> d;
                     for (const char *dir : {"LVL/", "MON/", "SHELL/", ""}) {
-                        d = texmods::readUnzipped(discPath(*dir ? dir + file : stem + "/" + file));
+                        if (readDisc(*dir ? dir + file : stem + "/" + file, d)) d = texmods::unzipped(std::move(d));
+                        else d.clear();
                         if (!d.empty()) break;
                     }
                     pk = texPackets_.emplace(file, texmods::packetIds(d)).first;
@@ -1018,19 +1021,21 @@ public:
             if (const char *d = std::getenv("WOTM_DISC")) root = d;
         std::string sep = root.empty() || root.back() == '/' || root.back() == '\\' ? "" : "/";
         discRoot_ = root + sep;
-        auto path = [&](const std::string &rel) { return discPath(rel); };
+        auto rtx = [&](const std::string &rel, uint32_t base, bool append = false, uint32_t resBase = 0) {
+            std::vector<uint8_t> raw;
+            return readDisc(rel, raw) && loadRtxData(std::move(raw), rel, base, append, resBase);
+        };
         rtxPal.clear(); rtxImg.clear(); rtxImgSrc_.clear();
         const uint32_t base0 = ram.u32(addr::tempVramTexAddr) >> 6;
-        bool lvl = loadRtx(path("LVL/" + names[0] + ".RTX").c_str(), base0);
+        bool lvl = rtx("LVL/" + names[0] + ".RTX", base0);
         // The menu (SHELL) lives in SHELL/SHELL.RTX, not in LVL/.
-        if (!lvl) lvl = loadRtx(path(names[0] + "/" + names[0] + ".RTX").c_str(), base0);
-        if (!lvl) lvl = loadRtx(path("SHELL/" + names[0] + ".RTX").c_str(), base0);   // LOAD, UI, SHELL2, PRESHELL
+        if (!lvl) lvl = rtx(names[0] + "/" + names[0] + ".RTX", base0);
+        if (!lvl) lvl = rtx("SHELL/" + names[0] + ".RTX", base0);   // LOAD, UI, SHELL2, PRESHELL
         if (log) *log = names[0] + (lvl ? "" : " (not found)");
         for (int i = 1; i < n; ++i) {
             if (names[size_t(i)].empty()) continue;
-            // the previous file's maxTexAddr and maxResAddr; the PNGs by the name the game loaded
-            const bool ok = loadRtx(path("MON/" + names[size_t(i)] + ".RTX").c_str(), ram.u16(fs + 0x14C + 2 * (i - 1)), true,
-                                    ram.u16(fs + 0x168 + 2 * (i - 1)), names[size_t(i)].c_str());
+            const bool ok = rtx("MON/" + names[size_t(i)] + ".RTX", ram.u16(fs + 0x14C + 2 * (i - 1)), true,
+                                ram.u16(fs + 0x168 + 2 * (i - 1)));   // the previous file's maxTexAddr and maxResAddr
             if (log) *log += " " + names[size_t(i)] + (ok ? "" : "(?)");
         }
         invalidate();
@@ -1039,14 +1044,8 @@ public:
     }
 
     // base: added to the palettes' DBP (file base); resBase: added to the resident images' DBP (0 for the stage and the menu; for a monster,
-    // the previous file's fileStatus.maxResAddr, as in texmResRelocate). name: the file the game loaded, when path is another one (a mod
-    // costume reads its base costume's file: LIZARD4's resident images still take LIZARD4's PNGs, the HUD portrait among them).
-    bool loadRtx(const char *path, uint32_t base, bool append = false, uint32_t resBase = 0, const char *name = nullptr) {
-        if (!append) { rtxPal.clear(); rtxImg.clear(); rtxImgSrc_.clear(); }
-        std::string stem = name ? name : path;   // "LIZARD0": name for mod resident images (texmods, <file>_rtx_t<id>.png)
-        stem = stem.substr(stem.find_last_of("/\\") + 1);
-        stem = stem.substr(0, stem.find('.'));
-        for (char &c : stem) c = char(std::toupper(static_cast<unsigned char>(c)));
+    // the previous file's fileStatus.maxResAddr, as in texmResRelocate).
+    bool loadRtx(const char *path, uint32_t base, bool append = false, uint32_t resBase = 0) {
         std::vector<uint8_t> raw;
         if (FILE *f = std::fopen(path, "rb")) {
             std::fseek(f, 0, SEEK_END);
@@ -1055,6 +1054,16 @@ public:
             if (std::fread(raw.data(), 1, raw.size(), f) != raw.size()) raw.clear();
             std::fclose(f);
         }
+        return loadRtxData(std::move(raw), path, base, append, resBase);
+    }
+
+    // The .RTX file's contents; `name` (path or disc name) gives the stem for mod resident images
+    bool loadRtxData(std::vector<uint8_t> raw, const std::string &name, uint32_t base, bool append = false, uint32_t resBase = 0) {
+        if (!append) { rtxPal.clear(); rtxImg.clear(); rtxImgSrc_.clear(); }
+        std::string stem = name;   // "LIZARD0": name for mod resident images (texmods, <file>_rtx_t<id>.png)
+        stem = stem.substr(stem.find_last_of("/\\") + 1);
+        stem = stem.substr(0, stem.find('.'));
+        for (char &c : stem) c = char(std::toupper(static_cast<unsigned char>(c)));
         if (raw.size() < 34) return false;
         std::vector<uint8_t> data;
         static const uint8_t kMagic[4] = {'I', 'E', 3, 4};
@@ -3328,7 +3337,7 @@ public:
         rlDisableDepthTest();   // button icons and HUD on top of everything (z near 0: the depth test hides them under the floor)
         const bool sprites2d = !wire && g_buttonIconFn && (!g_buttonIconsOn || g_buttonIconsOn());
         if (!sprites2d) drawList(ram, overlay, wire, -1, true);
-        drawList(ram, hud, wire, -1);   // HUD last, in traversal order
+        drawHudAtEdges(ram, wire);   // HUD last, in traversal order
         rlDrawRenderBatchActive();
         rlEnableDepthTest();
         if (useShader) EndShaderMode();
@@ -3477,6 +3486,32 @@ public:
     // pass: -1 everything; 0 only opaque/cutout; 1 only the alpha OT (inAlphaOT; alphaBin, LIFO tie-break); 2 everything outside the OT, in
     // traversal order (batches only between consecutive items with the same texture and the same state)
     // fadeByNode: multiplies alpha by the float at +0x4C of the object (button fade: screenSetButtonAlpha writes `targetAlpha` there)
+    // The HUD (portrait, health and energy bars) at the window's edges: the game places it in front of the camera for a 4:3 picture,
+    // so in a wider window it sits inside. Each element moves out by the extra width, the ones left of center to the left edge and the
+    // others to the right. Drawing only: the game's state is untouched, so every PC of a network match stays identical whatever its
+    // window. A 4:3 or narrower view (split-screen halves) draws as the game placed it.
+    void drawHudAtEdges(const Ram &ram, bool wire) {
+        const Matrix proj = rlGetMatrixProjection(), mv = rlGetMatrixModelview();
+        const float half43 = proj.m5 != 0.f ? proj.m0 * (4.f / 3.f) / proj.m5 : 1.f;   // half-width of the 4:3 picture, in NDC
+        if (half43 >= 0.999f || hud.empty()) { drawList(ram, hud, wire, -1); return; }
+        std::vector<DrawItem> sides[2];
+        for (const DrawItem &it : hud) {
+            const float *t = it.m.m[3];
+            sides[mv.m0 * t[0] + mv.m4 * t[1] + mv.m8 * t[2] + mv.m12 > 0.f ? 1 : 0].push_back(it);   // camera-space x
+        }
+        for (int side = 0; side < 2; ++side) {
+            if (sides[side].empty()) continue;
+            const float dx = (side ? 1.f : -1.f) * (1.f - half43);
+            Matrix shifted = proj;   // NDC x + dx: clip x gains dx * clip w (row 0 += dx * row 3)
+            shifted.m0 += dx * proj.m3, shifted.m4 += dx * proj.m7, shifted.m8 += dx * proj.m11, shifted.m12 += dx * proj.m15;
+            rlDrawRenderBatchActive();
+            rlSetMatrixProjection(shifted);
+            drawList(ram, sides[side], wire, -1);
+            rlDrawRenderBatchActive();
+        }
+        rlSetMatrixProjection(proj);
+    }
+
     void drawList(const Ram &ram, const std::vector<DrawItem> &list, bool wire, int pass = -1, bool fadeByNode = false) {
         rlDisableBackfaceCulling();
         {   // diagnostics: WOTM_CMP=1 compares, per triangle, the edges of two skinned items with the same mesh (e.g. player vs enemy)

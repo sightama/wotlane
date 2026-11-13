@@ -100,10 +100,10 @@ inline void applyDifficulty(uint8_t *rdram, uint32_t addr)
 // game text (the tex0 of the last frame with text is the menu's until the first pause, and the windows came out empty)
 inline std::atomic<uint64_t> g_fontTex0{0};
 
-// Skip the fight intro (SKIP INTRO line in the panel): rtMain(first) arms g_introMs; the Monster::updateCinema hook
-// (wotm_training.inc) takes the START path
+// Skip the fight intro (SKIP INTRO line in the training panel; always in a direct WOTM_MATCH fight, which network matches are):
+// rtMain(first) arms g_introArmed; the Monster::updateCinema hook (wotm_training.inc) takes the START path
 inline std::atomic<bool> g_skipIntro{true};
-inline std::atomic<int64_t> g_introMs{-1};
+inline std::atomic<bool> g_introArmed{false};
 
 // Training windows (panel, inputs, spheres and boxes) only while the fight is running: rtMain turns them on (wotm_overrides.cpp), "yes" in ARE YOU
 // SURE (QUIT or RESET POSITIONS, wotm_pausemenu.inc) turns them off immediately, and the pause (displayDialog called recently) hides them

@@ -10,7 +10,7 @@
 #   -Drop <s>: closes the last player after s seconds and checks that the others carry on (that player turns neutral from the agreed frame).
 #   -ExtraEnv "A=1;B=2": extra variables for all players (the same for everyone, otherwise the server rejects the configuration).
 #   -PlayerEnv "2:A=1;B=2|||3:C=1": variables for player N only (what differs on just one PC: mouse, this PC's options).
-#   -Expect "re1|||re2": regexes that must appear in every player's log. -Reject: ones that must not appear in any.
+#   -Expect "re1|||re2": regexes that must appear in every player's log ("2:re": in player 2's only). -Reject: ones that must not appear in any.
 #   -ExpectRefused "<regex>": the server must reject the match with this reason (configuration, build) and nobody may start.
 #   Logs and hashes go to <runtime>\net\ (servidor.log, jogador<N>.err.log, jogador<N>.hash). Exits with 0 if everything matches.
 param(
@@ -18,6 +18,7 @@ param(
     [string]$Monsters = '3,1,2,5,4,7,8,9',   # one per player, up to 8 (valid ones: native/net/wotm_monsters.hpp)
     [string]$Stage = '1',
     [int]$Wins = 0,
+    [string]$Modifiers = '',   # gameplay modifiers the lobby owner sets (comma list: jump, fast, turbo)
     [int]$Secs = 70,
     [int]$Port = 7811,
     [string]$Exe = '',
@@ -33,7 +34,8 @@ $repo = Split-Path $PSScriptRoot -Parent
 $runtime = if ($env:WOTM_RECOMP_DIR) { $env:WOTM_RECOMP_DIR } elseif (Test-Path "$repo\.wotm_recomp_dir") { (Get-Content "$repo\.wotm_recomp_dir" -TotalCount 1).Trim() } else { '' }
 if (-not $runtime -or -not (Test-Path "$runtime\run_live.ps1")) { throw "Runtime folder not found: run run_live.bat once or set WOTM_RECOMP_DIR." }
 $server = Join-Path $repo 'native\net\build\wotm_server.exe'
-if (-not (Test-Path $server)) { & cmd /c "`"$repo\tools\build_net.bat`" notest" | Out-Null }
+$serverStale = (Test-Path $server) -and ((Get-ChildItem "$repo\native\net\*.cpp", "$repo\native\net\*.hpp" | Measure-Object LastWriteTime -Maximum).Maximum -gt (Get-Item $server).LastWriteTime)
+if (-not (Test-Path $server) -or $serverStale) { & cmd /c "`"$repo\tools\build_net.bat`" notest" | Out-Null }
 if (-not (Test-Path $server)) { throw "wotm_server.exe did not build (tools\build_net.bat)" }
 $exes = @(if ($Exe) { $Exe -split ',' } else { Join-Path $runtime 'build_dev\ps2xRuntime\wotm.exe' })
 $disc = Join-Path $runtime 'discroot'
@@ -63,7 +65,7 @@ try {
     $names = (1..$Players | ForEach-Object { "J$_" }) -join ','
     $mons = ($Monsters -split ',')[0..($Players - 1)] -join ','
     $map = if ($Stage -match '^\d+$') { '' } else { $Stage }
-    & python (Join-Path $PSScriptRoot 'net_lobby.py') --server "127.0.0.1:$Port" --group $names --monsters $mons --stage $(if ($map) { 1 } else { $Stage }) --wins $Wins --env-dir $out
+    & python (Join-Path $PSScriptRoot 'net_lobby.py') --server "127.0.0.1:$Port" --group $names --monsters $mons --stage $(if ($map) { 1 } else { $Stage }) --wins $Wins @(if ($Modifiers) { '--mods', $Modifiers }) --env-dir $out
     if ($LASTEXITCODE -ne 0) { throw 'the lobby did not form the match (tools\net_lobby.py)' }
     if ($map) {   # the stage field of WOTM_MATCH (its last one) becomes the map id
         for ($i = 1; $i -le $Players; $i++) {
@@ -161,6 +163,7 @@ for ($i = 1; $i -le $Players; $i++) {
         if ($log -match $re) { Fail "player ${i}: found $($Matches[0])" }
     }
     foreach ($re in ($Expect -split '\|\|\|' | Where-Object { $_ })) {
+        if ($re -match '^(\d+):(.*)$') { if ([int]$Matches[1] -ne $i) { continue }; $re = $Matches[2] }
         if ($log -notmatch $re) { Fail "player ${i}: missing $re" }
     }
 }

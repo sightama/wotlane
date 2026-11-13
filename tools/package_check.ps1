@@ -32,8 +32,12 @@ foreach ($m in Get-ChildItem (Join-Path $repo 'mods') -Directory | Where-Object 
 $try = Join-Path $env:TEMP 'wotlane_pacote_teste'
 if (Test-Path $try) { Remove-Item $try -Recurse -Force }
 Copy-Item $pkg $try -Recurse
-& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $try 'setup.ps1') -Iso $Iso -NoPause | Out-Host
+Check (-not (Test-Path (Join-Path $pkg 'WotM_Launcher.ini'))) 'no launcher settings: a friend starts in the simple mode'
+Check (-not (Select-String -Path (Join-Path $pkg 'README.txt') -Pattern 'diferente|servidor|configuracao' -Quiet)) 'README in English'
+& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $try 'setup.ps1') -Iso $Iso -NoPause -ShortcutDir $try | Out-Host
 Check ($LASTEXITCODE -eq 0) 'setup exited with 0'
+$lnk = Join-Path $try 'War of the Monsters online.lnk'
+Check ((Test-Path $lnk) -and (New-Object -ComObject WScript.Shell).CreateShortcut($lnk).TargetPath -eq (Join-Path $try 'WotM_Launcher.exe')) 'shortcut to the launcher'
 $elf = Join-Path $try 'runtime\discroot\SCUS_971.97'
 Check ((Test-Path $elf) -and (Get-FileHash $elf -Algorithm SHA1).Hash -eq '1ED7F8457436A9170D8F85386E267369C7FCDD4F') 'ELF extracted from the ISO'
 Check ((Get-Content (Join-Path $try 'runtime\run_live.ps1') -Raw).Contains("'$($Iso.Replace("'", "''"))'")) 'run_live.ps1 points at the ISO'

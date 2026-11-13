@@ -17,12 +17,20 @@ and can be shared freely.
 4. Compare build ids in your chat: `python tools\build_id.py`. Everyone must print the same `wl-...` id. The server refuses players with
    a different build (different commit or runtime patch), because the simulation would drift apart.
 
+Friends who don't build get a package instead: on Windows `tools\package_friends.ps1` (checked by `tools\package_check.ps1`), on a Mac
+with Apple Silicon `sh tools/package_friends_mac.sh` (checked by `sh tools/package_check_mac.sh`). The Mac package is
+`War of the Monsters.app` (`tools/friends/mac/wotlane.sh` inside it, the game with its ffmpeg libraries bundled, `wotm_lobby` and the
+repo's mods) plus `README.txt`; it needs no Homebrew or Python. Its first run takes `SCUS_971.97` from the friend's own ISO (checked by
+SHA1) into `~/Library/Application Support/wotlane/`, then plain dialogs offer Host a game (shows and copies the 4-letter code), Join a
+game (type the code) and Play offline. The app is signed ad hoc only, so macOS asks once to allow it (Privacy & Security, Open Anyway;
+the README says how).
+
 ## 2. The host: run the server
 
 1. Build it once: `tools\build_net.bat` (it also runs the network tests). The program is `native\net\build\wotm_server.exe`.
 2. Start it, one of:
    - **From the launcher (player as host):** section **Online**, press **Host on this PC**. The launcher runs the server hidden (it
-     writes `wotm_server.log` next to the launcher and stops when you close the launcher, so keep the launcher open while you play),
+     writes `wotm_server.log` next to the launcher and stops when you close the launcher, so keep the launcher open while you play; Play, the offline game, minimizes the launcher instead of closing it while you host, and brings it back when the game closes),
      hosts a lobby on it and shows a box to copy to your friends: the addresses they can type as Server and the lobby code. It also
      asks your router to open the port (UPnP, TCP and UDP; closed again when the launcher closes). If the router refuses, the box says
      so and which local address to forward the port to. To list it publicly, type the **Master server** address and tick **List
@@ -60,6 +68,24 @@ A master server keeps the list of public servers, so players can find them witho
   to the **Master server** field.
 
 ## 3. Everyone: join and play
+
+The launcher opens in **simple mode**: your name, your monster and three buttons.
+- **Host a game** opens a lobby on the shared game server (`LobbyClient.DefaultServer`, `35.185.58.174:7777`, always on) and
+  shows its 4-letter **code** with **Copy code**; nothing to open on the router. The host picks the stage, wins to end and modifiers
+  and presses **Start match**. Hosting on this PC instead is **Host on this PC** in Advanced mode (below); its invite is
+  `<address>:<port>/<CODE>`, shown only once the router opened the port (UPnP), otherwise with a line saying it only works on
+  Tailscale or the home network (`ServerHost.InviteFor`).
+- **Join a game**: type the code and press **Join** (or Enter). A bare code is a lobby on the shared server; `<address>:<port>/<CODE>`
+  joins another server. Spaces, a space instead of the slash, a lower-case code, a missing port (7777) and a `wotm://` prefix are
+  all accepted. From a Mac or Linux terminal: `sh tools/play_online.sh --host` prints the code, `--join <CODE>` joins it.
+- In the lobby every player can still change monster until the match starts (the lobby's `MONSTER` command); the players line shows
+  each one's monster, and a monster the lobby refuses (its costumes are taken) goes back to the one the server holds.
+- **Play offline**: a fight against the computer on this PC (off while in a lobby: Leave first).
+The line at the bottom says what is going on in plain words (server errors are translated: can't reach the host, version or files
+differ, invite no longer open, game already started, name taken, game full). **Advanced** opens the full window described below
+(public server list, password, master server, AI opponents, cheats, diagnostics); **Simple** goes back. The launcher remembers the mode.
+
+Advanced mode:
 
 1. Open the launcher (`tools\launcher\build.bat` builds `WotM_Launcher.exe` in the repo root).
 2. In **Match**, pick **Your monster**. The host also picks the **Stage**.
@@ -102,10 +128,13 @@ to the console) and starts once that many players are in; `--code <code> --name 
   does nothing online.
 - Everyone plays with the game's default options (difficulty, volumes, controller layout): local saves are neither read nor written
   online, because they live in game memory and would make the PCs drift apart.
-- Gameplay settings are fixed online: classic camera (no modern orbit camera, no mouse camera), the game's own lock-on (no lock-on
-  toggle), close-up camera on, default sensitivity. Your own settings are kept and come back offline. Video settings (resolution,
-  render scale, interpolation, enemy bars, damage numbers, button prompts) stay yours. Mouse clicks in menus, photo mode and switching
-  targets with the keyboard are off online (they come from your PC only and would make the PCs drift apart).
+- Your camera is yours online: the modern camera with the mouse or a controller's right stick, with your own sensitivity, inversion
+  and recenter choice (CAMERA tab, set before the match). They travel with your input, so every PC turns your camera the same way.
+  Players 5 to 8 use the classic camera.
+- Two gameplay settings are fixed online: the game's own lock-on (no lock-on toggle) and the close-up camera on. Your own settings are
+  kept and come back offline. Video settings (resolution, render scale, interpolation, enemy bars, damage numbers, button prompts) stay
+  yours. Mouse clicks in menus, photo mode and switching targets with the keyboard are off online (they come from your PC only and
+  would make the PCs drift apart).
 - Mods: everyone needs the same active mods (same files, same contents). Otherwise the server refuses the join with
   "game configuration differs from the others".
 - Debug keys that change the game or pause it are off: F1 (cheats), F5 (free camera), F6/F7/F8 (pause, step, photo).
@@ -119,8 +148,9 @@ to the console) and starts once that many players are in; `--code <code> --name 
 - 12 players are not possible: the game has exactly 8 controller inputs, the level loader has room for 12 monster files and no more,
   and the per-pair monster checks grow with the square of the count.
 - If a player leaves, their monster stands still for the rest of the match (same frame on every PC).
-- If the server sees two PCs with different game state ("desync"), the match stops on every PC with a message. Please report it with
-  everyone's `runtime\live.err.log`.
+- If the server sees two PCs with different game state ("desync"), the match stops on every PC with a message that names the memory
+  blocks that differ. Please report it with the message and everyone's `runtime\live.err.log` (each one has that PC's block hashes
+  of the moment, so two logs are enough to name what diverged).
 
 ## Troubleshooting
 
@@ -129,5 +159,10 @@ to the console) and starts once that many players are in; `--code <code> --name 
   or a different set of mods in `mods\`. Use the same launcher checkboxes in the Mods group and copy the same mod folders (folders whose
   name starts with `_` are off and do not count).
 - "no answer from the server": the server is not running, the port is not forwarded (TCP and UDP), or a firewall blocks it.
+  `native/net/build/wotm_net_probe <host>[:7777]` (built with the server) checks a server from any PC without the game: two clients
+  form a lobby over TCP and play a short match over UDP; it says which step fails.
 - Test everything on one PC: `powershell -File tools\net_check.ps1` starts a server and two games and checks that both stay identical;
   `powershell -File tools\net_checks.ps1` runs the online checks (per-PC settings, mouse, photo mode, pause, wins target, mods).
+  On macOS and Linux (and on Windows too) the same checks are `python3 tools/net_check.py` and `python3 tools/net_checks.py [--only
+  <name>]`, with `tools/live_check.py` and `tools/determinism_check.py` for the single-game ones; their shared part is
+  `tools/gamecheck.py` (tested by `tools/test_gamecheck.py`).

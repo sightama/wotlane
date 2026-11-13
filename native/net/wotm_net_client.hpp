@@ -67,7 +67,8 @@ namespace wotm_net
         PadState input(int player, uint32_t frame) const;
         // players with no input for the frame (for the "Waiting for ..." message)
         std::vector<int> missing(uint32_t frame) const;
-        void sendHash(uint32_t frame, uint64_t hash);
+        // state hash of the frame, with the 256 block hashes it came from (optional: the server then names the differing blocks)
+        void sendHash(uint32_t frame, uint64_t hash, std::vector<uint64_t> blocks = {});
         // waits for the server to acknowledge every local input already sent
         bool waitAcked(int ms);
         uint32_t dropFrame(int player) const;   // 0xFFFFFFFF if not dropped
