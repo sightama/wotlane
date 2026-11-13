@@ -32,6 +32,8 @@
 #include <thread>
 
 #include "net/wotm_lockstep.hpp"     // input timeline for deterministic mode and the netcode (wotm_sync.inc)
+#include "net/wotm_inputfile.hpp"    // input recordings, WOTM_INPUTREC/WOTM_INPUTPLAY (wotm_sync.inc)
+#include "net/wotm_camsettings.hpp"  // each player's camera settings in their input (wotm_sync.inc packs, wotm_orbit.inc applies)
 #include "net/wotm_monsters.hpp"     // monsters and costumes present on the disc (WOTM_MATCH)
 #include "net/wotm_net_client.hpp"   // network match client (wotm_sync.inc)
 #include "wotm_netstatus.h"          // on-screen network message and disabled debug keys (wotm_live.inc)
@@ -1260,7 +1262,7 @@ namespace
             wotm_training::g_inFight = true;   // also the return from RESET POSITIONS (rtMain(0))
             if (GPR_U32(ctx, 4))
             {
-                wotm_training::g_introMs = wotm_training::nowMs();   // this fight's intro can be skipped (wotm_training.inc)
+                wotm_training::g_introArmed = true;   // this fight's intro can be skipped (wotm_training.inc)
                 g_damageNewFight = true;
             }
         }
