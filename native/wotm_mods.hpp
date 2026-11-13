@@ -6,7 +6,8 @@
 // fake sectors beyond the end of any DVD (kFirstLsn), which the hooks (runtime/wotm_mods.inc) and the native sound reader
 // serve from here. The native layer (wotm_disc.hpp: movies, icon, photos and the save list's monster) looks things up here by name.
 // Host only: doesn't depend on the runtime. The scan runs once, before boot (scan); after that only addSkin (the character
-// creator's save) adds a skin, under m_lock, and never changes the files or their sectors.
+// creator's save) adds a skin, under m_lock, and never changes the files or their sectors. Saved maps (stages/, the map creator)
+// are listed here too; their edits are applied by the runtime (wotm_stagemap.hpp).
 #pragma once
 #include <algorithm>
 #include <atomic>
@@ -23,6 +24,7 @@
 #include <vector>
 
 #include "wotm_json.hpp"
+#include "wotm_stagemap.hpp"
 
 namespace wotm::mods {
 
@@ -93,6 +95,14 @@ struct Skin {
     std::string mod;
     std::filesystem::path dir;
 };
+// Saved map (mods/<mod>/stages/<id>/stage.json; spec docs/superpowers/specs/2026-11-09-map-creator-design.md, "Saved map"):
+// map.id is the folder name, map.dir the folder. The baseHash is checked against the loaded image at load, not here.
+struct Stage {
+    stagemap::Map map;
+    std::filesystem::path photo;   // photo.png in the folder (the stage-select picture); empty if there's none
+    std::string mod;
+};
+
 // A skin's PNG: only applies to its own costume's file (stem "LIZARD4"), never to the base costume
 struct SkinPng { std::string stem; std::filesystem::path host; std::string mod, rel; };
 
@@ -175,6 +185,7 @@ public:
                 if (rel.empty() || ec) continue;
                 if (rel.rfind("SKINS/", 0) == 0) continue;   // skins/<id>/: new costumes (scanSkins), don't override the disc
                 if (rel.rfind("MONSTERS/", 0) == 0) continue;   // monsters/<id>/: custom monsters (scanCustoms)
+                if (rel.rfind("STAGES/", 0) == 0) continue;   // stages/<id>/: saved maps (scanStages)
                 if (size > kMaxSize) { std::fprintf(stderr, "[mods] %s/%s ignored: larger than 256 MB\n", m_mods.back().c_str(), rel.c_str()); continue; }
                 File &f = m_files[rel];
                 if (!f.mod.empty()) std::fprintf(stderr, "[mods] %s: %s beats %s\n", rel.c_str(), m_mods.back().c_str(), f.mod.c_str());
@@ -186,6 +197,7 @@ public:
         }
         scanCustoms(mods);   // before the skins: a skin can belong to a custom
         scanSkins(mods);
+        scanStages(mods);
         // Sector ranges in name order (stable across runs), with one spare sector between files
         uint32_t next = kFirstLsn;
         for (auto &[rel, f] : m_files) {
@@ -294,6 +306,23 @@ public:
         return old;
     }
 
+    // ---- saved maps (map creator) ----
+    // A copy, sorted by id (every PC lists them in the same order)
+    std::vector<Stage> stages() const {
+        std::lock_guard<std::mutex> lk(m_lock);
+        return m_stages;
+    }
+    // The [stages] log lines of the scan (also on stderr): what was listed and what was skipped, with the reason
+    std::vector<std::string> stageLog() const {
+        std::lock_guard<std::mutex> lk(m_lock);
+        return m_stageLog;
+    }
+    // Map folder name rule (the same as the map creator's ids): starts with a letter, then a-z, 0-9 and _, up to 16
+    static bool validStageId(const std::string &id) {
+        return !id.empty() && id.size() <= 16 && id[0] >= 'a' && id[0] <= 'z' &&
+               id.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789_") == std::string::npos;
+    }
+
     // ---- custom monsters ----
     const std::vector<Custom> &customs() const { return m_customs; }
     const Custom *custom(const std::string &id) const {
@@ -339,8 +368,10 @@ private:
     std::vector<Skin> m_skins;
     std::vector<SkinPng> m_skinPngs;
     std::vector<Custom> m_customs;
+    std::vector<Stage> m_stages;   // sorted by id
+    std::vector<std::string> m_stageLog;
     std::atomic<bool> m_ready{false};
-    mutable std::mutex m_lock;   // m_alias, m_skins and m_skinPngs after the scan (addSkin); m_files and the rest are fixed by then
+    mutable std::mutex m_lock;   // m_alias, m_skins, m_skinPngs, m_stages and m_stageLog after the scan; m_files and the rest are fixed by then
 
     static std::string lower(std::string s) {
         for (char &c : s) c = char(std::tolower(static_cast<unsigned char>(c)));
@@ -597,6 +628,64 @@ private:
             std::fprintf(stderr, "[mods] custom monster %s (\"%s\", %s): base %s costume %d%s%s\n", c.id.c_str(), c.name.c_str(), c.mod.c_str(),
                          c.typeName.c_str(), c.costume, c.cameraFrom.empty() ? "" : ", camera from ", c.cameraFrom.c_str());
             m_customs.push_back(c);
+        }
+    }
+    void stageNote(const std::string &line) {
+        std::fprintf(stderr, "%s\n", line.c_str());
+        m_stageLog.push_back(line);
+    }
+    // mods/<mod>/stages/<id>/stage.json (+ photo.png): the map creator's saved maps. The id is the folder name (lowercase); the
+    // same id in two mods: the first one in mod order wins (unlike files and customs: a map's id is what WOTM_MATCH and the save
+    // carry, and the one already listed keeps it). The files never override the disc (scan skips STAGES/).
+    void scanStages(const std::vector<std::filesystem::path> &mods) {
+        namespace fs = std::filesystem;
+        std::error_code ec;
+        std::map<std::string, Stage> byId;
+        std::lock_guard<std::mutex> lk(m_lock);
+        for (const fs::path &m : mods) {
+            const fs::path dir = child(m, "stages");
+            if (dir.empty() || !fs::is_directory(dir, ec)) continue;
+            std::vector<fs::path> subs;
+            for (const auto &e : fs::directory_iterator(dir, ec))
+                if (e.is_directory(ec)) subs.push_back(e.path());
+            // by lowercase folder name (the id), then by the name as written: the same order on every file system
+            std::sort(subs.begin(), subs.end(), [](const fs::path &a, const fs::path &b) {
+                const std::string na = a.filename().string(), nb = b.filename().string(), la = lower(na), lb = lower(nb);
+                return la != lb ? la < lb : na < nb;
+            });
+            const std::string mod = m.filename().string();
+            for (const fs::path &s : subs) {
+                const std::string where = mod + "/stages/" + s.filename().string();
+                const std::string id = lower(s.filename().string());
+                if (!validStageId(id)) {
+                    stageNote("[stages] " + where + " ignored: the folder name must start with a letter, then a-z, 0-9 and _ (up to 16)");
+                    continue;
+                }
+                const fs::path js = child(s, "stage.json");
+                std::string text;
+                if (!js.empty()) {
+                    std::ifstream in(js, std::ios::binary);
+                    text.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+                }
+                Stage st;
+                std::string why;
+                if (js.empty() || !stagemap::parse(text, st.map, why)) {
+                    stageNote("[stages] " + where + " ignored: " + (js.empty() ? std::string("no stage.json") : "stage.json: " + why));
+                    continue;
+                }
+                st.map.id = id;
+                st.map.dir = s.string();
+                st.mod = mod;
+                if (const fs::path ph = child(s, "photo.png"); !ph.empty() && fs::is_regular_file(ph, ec)) st.photo = ph;
+                if (const auto [it, added] = byId.emplace(id, st); !added)
+                    stageNote("[stages] map " + id + ": " + it->second.mod + " beats " + mod);
+            }
+        }
+        for (auto &[id, st] : byId) {
+            stageNote("[stages] map " + id + " (\"" + st.map.name + "\", " + st.mod + "): base " + st.map.base + ", " +
+                      std::to_string(st.map.edits.size()) + " edits" +
+                      (st.map.powerups.empty() ? std::string() : ", " + std::to_string(st.map.powerups.size()) + " power-up places"));
+            m_stages.push_back(st);
         }
     }
     // MonsterLongNames (prefix of the .CHR in RST/ and of the files in MON/, lowercase), index = type

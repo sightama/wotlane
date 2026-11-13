@@ -266,6 +266,128 @@ base `final`), both with `"ai": true` and the `cerebulon` narrator. The first ph
 Example: the select screen of screen 6 (1 player against CPU), CUSTOM → GOLIATH PRIME, the CPU refused in the slot,
 a fight in Midtown Park with camera, sound and name. Photo: `docs/screenshots/2026-10-23/2026-10-23_selecao_casa_custom_goliath.png`.
 
+## Stages (maps)
+
+A map is a stock stage with some of its pieces moved, turned or removed. It is a folder in `mods/<mod>/stages/<id>/` and holds no
+disc data: only the list of edits, applied to the disc's stage when it loads (`native/wotm_stagemap.hpp`,
+`native/runtime/wotm_stagemap.inc`; design: `docs/superpowers/specs/2026-11-09-map-creator-design.md`, issue #10).
+
+```
+mods/my_mod/
+  stages/
+    downtown/            the map's id: the folder name (lowercase; a letter, then a-z, 0-9 and _, up to 16)
+      stage.json         the edits
+      photo.png          optional: the stage select picture (2:1); without it, the base stage's picture
+```
+
+`stage.json`:
+
+```json
+{
+  "name": "DOWNTOWN MESS",
+  "base": "CENTRAL",
+  "baseHash": "c71c34ca37a35711",
+  "edits": [
+    { "node": "0x165a70", "move": [-185.7, 475.8, 0.0], "turn": 90 },
+    { "node": "0x18a410", "remove": true }
+  ]
+}
+```
+
+- `name`: what the stage select shows, 1 to 17 of `A-Z`, `0-9`, space and `-`.
+- `base`: the stock stage, by its file name in `LVL/` (`CENTRAL`, `TOKYO`, `UFO`...).
+- `baseHash`: 16 hex digits, FNV-1a 64 of the inflated base `.NGP`. A disc (or a mod that replaces `LVL/<STAGE>.NGP`) whose stage
+  does not match refuses the map instead of patching the wrong bytes: `[stages] <id>: base CENTRAL does not match this disc`.
+- `edits` (at most 4096), one per piece (`node`: the piece's offset in the inflated image, a multiple of 4; the first edit of a
+  node counts):
+  - `move`: the piece's new world position `[x, y, z]` (absolute, world units; z is up). Its collision goes with it: the loader
+    relinks the stage's collision grid to the new place, so the building is solid where it now stands and not where it stood.
+  - `turn`: degrees about the vertical axis, added to the piece's own rotation, about its own position. With or without `move`
+    (`stage_map.py make`: `--turn 0x..=degrees`, or a fourth number in `--move`).
+  - `remove: true` (alone): the piece is gone, drawing and collision.
+- A power-up edit in the same list, `{ "powerup": 4, "from": [776.9985, 600.7072, 630.1727], "at": [-88.081, 634.123, 630.173] }`:
+  `powerup` is the index into the stage's power-up places (`PTS/<STAGE>.PUP`, 0 to 255), `from` its place on the disc and `at`
+  its new place (absolute; z is the height it hovers at). The runtime moves the place before the game creates the power-ups
+  (`PowerUpTool::exportPoints`) and logs `[stages] <id>: moved N power-ups`. An index past the stage's count or a place that
+  is not at `from` (within 0.01) is refused with a log line, and the rest of the map applies; two edits of the same index make
+  the file invalid. A power-up edit applies even when the loader refuses its piece's edit, as a rider's does.
+- Unknown keys in an edit are refused; the scan logs why a folder was skipped (`[stages] my_mod/stages/x ignored: ...`).
+
+**What a piece is.** A building, prop, destructible or level pickup with its own position in the stage: the nearest `TRANSLATE` or
+`ROTATE` above it, with no other transform above that. Ground and terrain, pedestrians and animated parts (vehicles, moving
+props) are not pieces. `CENTRAL` (Midtown Park) has 317: 202 in the world (55 of them with collision, all destructible) and
+115 level pickups. The full rule is in `tools/stage_map.py`'s docstring.
+
+**Making one with `tools/stage_map.py`** (until the in-game editor; reads the extracted disc in `disc/`, or `--disc`):
+
+```
+python tools/stage_map.py pieces disc/LVL/CENTRAL.NGP          # one line per piece: node, kind, position, collision paths, riders, power-ups, destructible
+  0x18a410  TRANSLATE  pos 1044.6 448.2 -0.8  paths 5  riders 4  power-ups 5,15  destructible
+python tools/stage_map.py make --base CENTRAL --id downtown --name "DOWNTOWN MESS" --out mods/my_mod/stages --move "0x165a70=-185.7,475.8,0,90" --remove 0x18a410
+                                                               # writes mods/my_mod/stages/downtown/stage.json with the baseHash
+python tools/stage_map.py check disc/LVL/*.NGP                 # the collision grid rule on stock stages or on a WOTM_STAGE_DUMP
+python tools/stage_map.py ram ram_2400.bin --monster 0:140:156 # monsters, pickups and power-ups in a fight's RAM (PS2X_DUMP_RAM)
+```
+
+`--move` is `node=x,y,z[,turn]`, `--turn` is `node=degrees` (a `--turn` and a `--move` of the same node make one edit); all
+three can repeat. `python tools/stage_map.py inflate disc/LVL/CENTRAL.NGP central.bin` writes the inflated image (the native
+test's `WOTM_TEST_STAGE`). `make` refuses a node that is not a piece of the base stage.
+
+**Riders.** A car or a crate on a roof is its own piece (a level pickup), not part of the building, so `make` adds what stands
+on an edited piece's roof as edits of its own and prints each one (`  rider 0x5cbce0 (pickup type 1) follows 0x18a410`): a
+removed building removes its riders, a moved one moves them by the same amount, and a turned one turns them about its own
+position (each rider is moved around it and turned by the same degrees). A rider is a piece whose origin (a pickup: its
+position; a world piece: the bottom of its lowest object) lies inside, seen from above, one of the edited piece's solid
+collision boxes at most 700 units wide, at a height from 20 under that box's top to 25 above it. That includes things on a
+building's plaza or base pad when its box is low. One rider on two pieces goes to the one whose box top is nearest (then the
+lower node). A rider you remove or move yourself keeps your edit (`make` says so); a rider you only turn still goes with its
+piece and turns by your turn plus the piece's. A move that would take the piece's collision past the grid's edge is shifted
+back inside as the loader does, and `make` writes that place and carries the riders there (with a note). A turn the loader
+will refuse (a `TRANSLATE` that carries action data) carries nothing. `--no-riders` turns the rule off. `pieces` shows
+`riders N` per piece. On the 19 stock stages, 164 pieces carry 408 riders (CENTRAL: 31 carry 66, all pickups).
+
+**Power-ups on a piece.** Power-ups (health, stamina, special) are not pieces: they come from `PTS/<STAGE>.PUP`. `make` reads
+the base's `.PUP` from the disc folder and adds a power-up edit (above) for each power-up place on an edited piece, printed as
+`  power-up 4 follows 0x165a70, to -88.1 634.1 630.2`. A power-up hovers for good at its place's height, up to about 95 above
+what is under it, so the rule is the riders' with a height from 20 under the box top to 100 above it. A moved or turned piece
+carries them like its riders (the same place, turn and grid-edge shift); a removed one drops them to the ground under it at
+the same X and Y, keeping their hover height (at least 0). The ground is the highest top of the collision boxes the map
+leaves under them, at most 10 above the bottom of the box that carried them (or of the piece's lower tier that box stands
+on), and no lower than where the piece stood on a hillside; with none, the piece's own lowest box there, no lower than a
+flat ground slab. Not the roof's own box, which is often a thin slab, nor the piece's foundation. `--no-riders` turns this
+off too; a stage with no `.PUP` gets none. `pieces` lists the power-up indices per piece (`power-ups 5,15`). On the stock stages 160 of 472 power-up places
+are on 110 pieces (CENTRAL: 29 of 35, on 24 pieces; the other 6 are on open ground).
+To find a piece, take the position from `pieces` and look at it with the free camera (`WOTM_FREECAM=<s>@<x>,<y>,<z>,<heading>,<pitch>`,
+`NATIVO.md`, "Diagnostics").
+
+**How it loads.**
+- **Stage select:** after RANDOM, the first 6 maps (by id, across all enabled mods) take the slots 18 to 23 with their name and
+  photo, when their base stage is in that screen's list and unlocked (`NATIVO.md`, "Stage selection"). RANDOM never draws a map.
+  Confirming a map loads its base stage (its music, stage code, spawn points) and applies the edits; the log says
+  `[stages] <id>: applied N edits, M grid nodes relinked (K from reserve)`.
+- **Direct match:** `WOTM_MATCH=3,1,downtown` (the map id in the stage field).
+- **Same id in two mods:** the first one in mod order wins (`[stages] map <id>: <mod> beats <mod>`).
+- **Online:** every PC needs the same mods folder. The map's files are part of the mod digest in the config hash, so a PC without
+  the map (or with another version of it) is refused (`game configuration differs`). Today a map is picked online through
+  `WOTM_MATCH`; picking one in the launcher's lobby is a follow-up.
+
+**Known limits.**
+- Only move, turn and remove: no duplicate or add, no ground or terrain edits.
+- CPU routes (`PTS/<STAGE>.AIP`) are not updated: CPUs that hit a moved building climb it or steer around it.
+- Spawn points (`PTS/<STAGE>.SPT`) stay where the disc puts them. Power-up places follow their piece only through `make`'s
+  power-up edits (above); one not on an edited piece's box stays.
+- Trigger zones stay where the disc puts them, except 3-MILE's 13 that hang under pieces, which follow them.
+- Only riders (above) go with an edited piece, and only one level (a rider's own riders stay). Anything else on it, or a
+  stage made by hand without `make`, floats or stays where the disc puts it. A turn also turns the drop offsets of the
+  piece's destructible "hat" actions (what makes rooftop pickups fall when the building breaks), so they still fall.
+- A `CONTROL` above a moved piece (the see-through "ghost" building switch: UFO, SANFRAN, ISLAND and others) keeps its volumes
+  where the disc puts them, so the switch to the ghost version happens around the old place; the loader logs it.
+- A `LOD` above a moved piece keeps its sphere (the loader only widens the culling spheres of the groups above), so the
+  piece's level of detail switches by the distance to the old place; the loader logs it (`LOD <node> above it no longer covers it`).
+- Water and kill zones were only researched (water is a height per stage plus the surface of collision polygons, which move with
+  their hull); no live check covers them.
+- Six maps listed at once in the stage select.
+
 ## Stage select photos
 `mods/<mod>/levelpics/<name>.png` replaces the photo of the stages that `SHELL.TEX` does not have (`training`, `lakepowell`, `tokyodeathmatch`) and
 that of the RANDOM entry (`random`; without it, a mosaic of the game's photos). 2:1 aspect ratio, any resolution. It takes precedence over the repo's

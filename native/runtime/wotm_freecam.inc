@@ -33,18 +33,33 @@ static View update(const wotm::GameCamera &gc)
 {
     View v;
     bool on = g_wotmFreeCam.load(std::memory_order_relaxed);
-    // Keyboardless test (WOTM_FREECAM=<s>): turns on s seconds after the first stage is on screen, rises and turns by itself for 10 s, then turns off
+    // Keyboardless test (WOTM_FREECAM=<s>): turns on s seconds after the first stage is on screen, rises and turns by itself for 10 s, then turns off.
+    // WOTM_FREECAM=<s>@<x>,<y>,<z>,<heading>,<pitch> (degrees; heading 0 = +Y, 90 = +X): turns on at that pose s seconds after and stays
+    // there (screenshots of a given spot with WOTM_SHOTS, e.g. a map creator edit).
     static const double autoAt = std::getenv("WOTM_FREECAM") ? std::atof(std::getenv("WOTM_FREECAM")) : -1.0;
+    static float fixedPose[5] = {};
+    static const bool fixed = [] {
+        const char *e = std::getenv("WOTM_FREECAM");
+        const char *at = e ? std::strchr(e, '@') : nullptr;
+        if (!at)
+            return false;
+        if (std::sscanf(at + 1, "%f,%f,%f,%f,%f", &fixedPose[0], &fixedPose[1], &fixedPose[2], &fixedPose[3], &fixedPose[4]) == 5)
+            return true;
+        std::fprintf(stderr, "[freecam] WOTM_FREECAM pose \"%s\" not understood (expected @x,y,z,heading,pitch): moving test instead\n", at);
+        return false;
+    }();
     static double firstT = -1.0;
     if (firstT < 0.0) firstT = GetTime();
     const double autoT = autoAt >= 0.0 ? GetTime() - firstT - autoAt : -1.0;
     static int autoStage = 0;   // 0 waiting, 1 moving, 2 done
     bool toggle = IsKeyPressed(KEY_F5) && !wotmPhotoActive() && !wotm_netstatus::g_active;   // the free camera writes to game RAM: not during a network match
-    if (autoAt >= 0.0 && ((autoStage == 0 && autoT >= 0.0) || (autoStage == 1 && autoT >= 10.0)))
+    // Like F5: never during a network match (the free camera writes to game RAM).
+    if (autoAt >= 0.0 && !wotm_netstatus::g_active && ((autoStage == 0 && autoT >= 0.0) || (autoStage == 1 && autoT >= 10.0 && !fixed)))
     {
         toggle = on == (autoStage == 1);
-        std::fprintf(stderr, "[freecam] automatic test: %s (t=%.1f s)\n", autoStage == 0 ? "on" : "off", GetTime() - firstT);
-        ++autoStage;
+        std::fprintf(stderr, "[freecam] automatic test: %s (t=%.1f s)%s\n", autoStage == 0 ? "on" : "off", GetTime() - firstT,
+                     fixed && autoStage == 0 ? ", fixed pose" : "");
+        autoStage += fixed ? 2 : 1;   // fixed pose: 2, stays on and still
     }
     if (toggle)
     {
@@ -56,6 +71,12 @@ static View update(const wotm::GameCamera &gc)
             for (int i = 0; i < 3; ++i) p.pos[i] = gc.pos[i];
             p.heading = std::atan2(gc.fwd[0], gc.fwd[1]);   // mathfRotationFromVector
             p.pitch = std::atan2(gc.fwd[2], std::sqrt(gc.fwd[0] * gc.fwd[0] + gc.fwd[1] * gc.fwd[1]));
+            if (fixed && autoStage == 2)
+            {
+                for (int i = 0; i < 3; ++i) p.pos[i] = fixedPose[i];
+                p.heading = fixedPose[3] * 0.017453293f;
+                p.pitch = fixedPose[4] * 0.017453293f;
+            }
             g_wotmFreeCamPad = false;
         }
         g_wotmFreeCam = on;
