@@ -17,7 +17,7 @@ class LobbyError : Exception
 // read with ReadLine (tests, request/response) or drain it with Poll (the launcher, from a UI Timer).
 class LobbyClient : IDisposable
 {
-    public const int Protocol = 2;
+    public const int Protocol = 4;   // native/net/wotm_net_proto.hpp kProtocol
     public readonly string Host;
     public readonly int Port;
     public int Lobbies { get; private set; }
@@ -137,6 +137,19 @@ class LobbyClient : IDisposable
         return new MemberInfo { Code = w[1], Host = w[2], Names = w[3] == "-" ? new string[0] : w[3].Split(',') };
     }
 
+    // the monster the server holds for `name` in a MEMBERS line, -1 if the name is not in it
+    public static int MemberMonster(MemberInfo m, string name)
+    {
+        if (m == null) return -1;
+        foreach (string n in m.Names)
+        {
+            int colon = n.LastIndexOf(':');
+            int monster;
+            if (colon > 0 && n.Substring(0, colon) == name && int.TryParse(n.Substring(colon + 1), out monster)) return monster;
+        }
+        return -1;
+    }
+
     // the lobby's stage, wins and modifiers (SETTINGS <code> stage=<n> wins=<n> mods=<list>), the latest that arrived through Create,
     // Join, Set or SetMods
     public Dictionary<string, string> Settings = new Dictionary<string, string>();
@@ -144,6 +157,7 @@ class LobbyClient : IDisposable
     // Creates a lobby (the creator is its owner) and joins it; returns the code
     public string Create(string lobby, string name, int monster, string password, int timeoutMs)
     {
+        Name = CleanName(name);   // as the server stores it
         Send("CREATE " + lobby + " " + name + " " + monster + (string.IsNullOrEmpty(password) ? "" : " " + password));
         string code = Expect("CREATED", timeoutMs).Split(' ')[1];
         Joined(timeoutMs);
@@ -152,6 +166,7 @@ class LobbyClient : IDisposable
 
     public void Join(string code, string name, int monster, string password, int timeoutMs)
     {
+        Name = CleanName(name);   // as the server stores it
         Send("JOIN " + code + " " + name + " " + monster + (string.IsNullOrEmpty(password) ? "" : " " + password));
         Joined(timeoutMs);
     }
@@ -178,6 +193,21 @@ class LobbyClient : IDisposable
         Settings = KeyValues(Expect("SETTINGS", timeoutMs));
         return Settings;
     }
+
+    // any member, while the lobby waits: plays `monster` in the next match; returns the MEMBERS line the server sends to everyone
+    // (earlier MEMBERS lines may still be queued, so it waits for the one that shows this member with the new monster)
+    public MemberInfo ChangeMonster(int monster, int timeoutMs)
+    {
+        Send("MONSTER " + monster);
+        while (true)
+        {
+            MemberInfo m = ParseMembers(Expect("MEMBERS", timeoutMs));
+            if (MemberMonster(m, Name) == monster) return m;
+        }
+    }
+
+    // this client's name in its lobby (Create or Join)
+    public string Name { get; private set; }
 
     // the gameplay modifiers (native/net/wotm_modifiers.hpp): lobby names in canonical order, and what the launcher shows
     public static readonly string[] ModifierNames = { "jump", "fast", "turbo" };
@@ -280,6 +310,68 @@ class LobbyClient : IDisposable
         int colon = s.LastIndexOf(':');
         host = colon > 0 ? s.Substring(0, colon) : s;
         if (colon <= 0 || !int.TryParse(s.Substring(colon + 1), out port) || port <= 0 || port > 65535) port = defaultPort;
+    }
+
+    // ---- invites: "<host>:<port>/<CODE>", everything a friend needs to join (the Mac launcher reads and writes the same text) ----
+    public const int DefaultPort = 7777;
+    // the always-on game server everyone shares (GCP; tools/net_lobby.py DEFAULT_SERVER): Host a game makes its lobby there, so the
+    // invite is just the lobby code and nobody opens a port
+    public const string DefaultServer = "35.185.58.174:7777";
+
+    // just the code for a lobby on the default server, "<host>:<port>/<CODE>" for any other
+    public static string FormatInvite(string host, int port, string code)
+    {
+        string dh;
+        int dp;
+        SplitAddress(DefaultServer, DefaultPort, out dh, out dp);
+        if (host == dh && port == dp) return code.ToUpperInvariant();
+        return host + ":" + port + "/" + code.ToUpperInvariant();
+    }
+
+    // Forgiving: surrounding spaces, a space instead of the slash, lower-case code, no port (7777), an optional "wotm://" prefix.
+    // false with `why` saying what is wrong
+    public static bool ParseInvite(string text, out string host, out int port, out string code, out string why)
+    {
+        host = code = why = null;
+        port = 0;
+        string s = (text ?? "").Trim();
+        if (s.StartsWith("wotm://", StringComparison.OrdinalIgnoreCase)) s = s.Substring(7);
+        int cut = s.LastIndexOfAny(new[] { '/', ' ' });
+        // a bare code: a lobby on the default server
+        string addr = cut < 0 ? DefaultServer : s.Substring(0, cut).Trim(), c = s.Substring(cut + 1).Trim().ToUpperInvariant();
+        if (c.Length != 4 || !Array.TrueForAll(c.ToCharArray(), char.IsLetterOrDigit)) { why = "An invite is the 4-letter code your friend sent (or address/CODE for another server)."; return false; }
+        int colon = addr.LastIndexOf(':');
+        string h = colon >= 0 ? addr.Substring(0, colon) : addr;
+        int p = DefaultPort;
+        if (colon >= 0 && (!int.TryParse(addr.Substring(colon + 1), out p) || p <= 0 || p > 65535))
+        {
+            why = "The port in the invite (after the colon) must be a number from 1 to 65535.";
+            return false;
+        }
+        if (h.Length == 0 || h.Contains(" ")) { why = "The invite has no host address before the port."; return false; }
+        host = h;
+        port = p;
+        code = c;
+        return true;
+    }
+
+    // A lobby or match error (LobbyClient, wotm_server, the game's [net] stopped line) in words a player understands
+    public static string FriendlyError(string err)
+    {
+        string e = (err ?? "").ToLowerInvariant();
+        if (e.Contains("no answer") || e.Contains("closed the connection"))
+            return "Can't reach the host. Check the invite, or ask the host to check that the game is hosting.";
+        if (e.Contains("protocol") || e.Contains("build differs") || e.Contains("another version"))
+            return "Your game version doesn't match the host's. Both of you need the same package (see BUILD.txt).";
+        if (e.Contains("configuration differs"))
+            return "Your game files or mods differ from the host's. Use the package as it came.";
+        if (e.Contains("no such lobby")) return "That invite is no longer open. Ask the host for a new one.";
+        if (e.Contains("password")) return "This game needs a password (Advanced mode).";
+        if (e.Contains("in a match")) return "That game has already started. Wait for it to end, then press Join again.";
+        if (e.Contains("name already taken")) return "Someone in that game already uses your name. Change Your name and press Join again.";
+        if (e.Contains("lobby is full")) return "That game is full.";
+        if (e.Contains("costume")) return "Someone in this game already has that monster. Pick another one.";
+        return "Problem: " + err;
     }
 
     // the master's list (SERVERS ... END), each server pinged from here in parallel; LobbyError when the master doesn't answer

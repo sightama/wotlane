@@ -1305,8 +1305,10 @@ namespace wotm_train
 
 
     // Skip the intro (635fd3c:docs/investigacoes/2026-10-24/treino_intro.md): the same path as START in Monster::updateCinema (movieAborted,
-    // fadeOutAndIn(4) and ActionDispatch::stopAllActiveActions through TaskManager::global), only during the intro: armed by the fight's
-    // rtMain(first) (g_introMs), valid for 10 s and disarmed on first use. RESET POSITIONS (rtMain(0)) doesn't arm it.
+    // fadeOutAndIn(4) and ActionDispatch::stopAllActiveActions through TaskManager::global), only during the intro. Training skips it with
+    // its SKIP INTRO line; a direct fight (WOTM_MATCH: the launcher's matches and every network match) always does, so in lockstep every
+    // PC takes the same path on the same frame. Armed by the fight's rtMain(first) (g_introArmed); the intro is the fight's first cinema,
+    // so the first updateCinema call either skips it or, with no movie playing, disarms. RESET POSITIONS (rtMain(0)) doesn't arm it.
     PS2Runtime::RecompiledFunction g_origCinema = nullptr;
     void callFn(uint8_t *rdram, R5900Context *ctx, PS2Runtime *rt, uint32_t fn, uint32_t a0, uint32_t a1, uint32_t a2)
     {
@@ -1324,21 +1326,24 @@ namespace wotm_train
     void cinemaUpdate(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         g_origCinema(rdram, ctx, runtime);
-        if (!g_on.load(std::memory_order_relaxed) || !g_skipIntro.load(std::memory_order_relaxed))
+        static const bool directFight = [] { const char *e = std::getenv("WOTM_MATCH"); return e && *e; }();
+        const bool training = g_on.load(std::memory_order_relaxed) && g_skipIntro.load(std::memory_order_relaxed);
+        if (!(training || directFight) || !g_introArmed.load(std::memory_order_relaxed))
             return;
-        const int64_t armed = g_introMs.load(std::memory_order_relaxed);
-        if (armed < 0 || nowMs() - armed > 10000)
+        if (!rd32(rdram, wotm::sym::moviePlaying) || rd32(rdram, wotm::sym::movieAborted))
+        {
+            g_introArmed = false;   // no intro playing: the next cinema (a victory) isn't this one
             return;
-        if (!rd32(rdram, wotm::sym::moviePlaying) || rd32(rdram, wotm::sym::movieAborted) || rd32(rdram, kGameObj + 0x120454u) ||
-            rd32(rdram, kGameObj + 0x120458u))
-            return;
-        g_introMs = -1;
+        }
+        if (rd32(rdram, kGameObj + 0x120454u) || rd32(rdram, kGameObj + 0x120458u))
+            return;   // the same guard as START: try again on the next intro frame
+        g_introArmed = false;
         const uint32_t one = 1;
         std::memcpy(rdram + wotm::sym::movieAborted, &one, 4);
         callFn(rdram, ctx, runtime, wotm::fn::fadeOutAndIn__7TheGamei, kGameObj, 4u, 0u);
         callFn(rdram, ctx, runtime, wotm::fn::add__11TaskManagerPFv_Uii, wotm::sym::x_11TaskManager_global,
                wotm::fn::stopAllActiveActions__14ActionDispatchv, 10u);
-        std::fprintf(stderr, "[training] intro skipped\n");
+        std::fprintf(stderr, "[intro] fight intro skipped%s\n", training ? " (training)" : "");
     }
 
     // Hud::update's "WINS n" (m_gameMode 2..6, training's versus): in training it counts nothing and the dummy's lands under the panel.
@@ -1408,7 +1413,14 @@ void wotmTrainingInstall(PS2Runtime &runtime)
 {
     using namespace wotm_train;
     if (const char *e = std::getenv("WOTM_TRAINING"); e && *e && *e != '0')
-        g_on = true;
+    {
+        // not in a network match: training is not in the configuration hash and changes the game state (the pause menu's rows, the
+        // refills, the dummy), so one PC with it set would desync everyone at its first pause
+        if (const char *net = std::getenv("WOTM_NET"); net && *net)
+            std::fprintf(stderr, "[training] WOTM_TRAINING ignored in a network match\n");
+        else
+            g_on = true;
+    }
     if (const char *e = std::getenv("WOTM_TRAINING_DUMMY"); e && *e)   // 0 stand still, 1 CPU, 2 always block, 3 block after the 1st hit, 4 jump
         g_dummy = std::clamp(std::atoi(e), 0, DCount - 1);
     if (const char *e = std::getenv("WOTM_TRAINING_HEALTH"); e && *e)  // dummy's health % on refill

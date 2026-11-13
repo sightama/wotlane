@@ -2,6 +2,7 @@
 // ABOUTME: on localhost. Exits with 0 if everything passes; each failure prints the file, line and expression.
 #include "wotm_lockstep.hpp"
 #include "wotm_monsters.hpp"
+#include "wotm_lobby_client.hpp"
 #include "wotm_net_client.hpp"
 #include "wotm_net_master.hpp"
 #include "wotm_net_proto.hpp"
@@ -165,7 +166,7 @@ namespace
             r.states.push_back(i < 10 ? pressed(0x4000) : PadState{});
         m.runs.push_back(r);
         const std::vector<uint8_t> bytes = p::encode(m);
-        CHECK(bytes.size() == 6u + 6u + 20u + 2u * 6u);   // headers, 1 byte per state, 6 per new state (only 2 change)
+        CHECK(bytes.size() == 6u + 6u + 20u + 2u * 12u);   // headers, 1 byte per state, 12 per new state (only 2 change)
         p::Inputs back;
         CHECK(p::decode(bytes, back));
         CHECK(back.ackOwn == 41u && back.runs.size() == 1u);
@@ -184,6 +185,45 @@ namespace
         CHECK(back.acks == m.acks && back.own.player == 1 && back.own.first == 9u && back.own.states == m.own.states);
     }
 
+    // the modern camera's mouse motion is part of the player's input (every PC turns that player's camera by the same amount)
+    TEST(proto_mouse_motion_travels_with_the_input)
+    {
+        PadState moved;
+        moved.mouseX = -300;
+        moved.mouseY = 7;
+        CHECK(moved != PadState{});
+        PadState extreme = moved;
+        extreme.mouseX = 32767;
+        extreme.mouseY = -32768;
+        p::Input m;
+        m.own.player = 0;
+        m.own.first = 3;
+        m.own.states = {moved, moved, PadState{}, extreme};
+        p::Input back;
+        CHECK(p::decode(p::encode(m), back));
+        CHECK(back.own.states == m.own.states);
+        CHECK(back.own.states[0].mouseX == -300 && back.own.states[0].mouseY == 7);
+        CHECK(back.own.states[3].mouseX == 32767 && back.own.states[3].mouseY == -32768);
+    }
+
+    // the sender's packed camera settings (wotm_camsettings.hpp) travel too: every PC scales that player's camera with them
+    TEST(proto_camera_settings_travel_with_the_input)
+    {
+        PadState withCam;
+        withCam.cam = 0x00A7u;
+        CHECK(withCam != PadState{});   // a settings change alone is a new state
+        PadState all = withCam;
+        all.cam = 0xFFFFu;
+        p::Input m;
+        m.own.player = 1;
+        m.own.first = 0;
+        m.own.states = {withCam, withCam, all, PadState{}};
+        p::Input back;
+        CHECK(p::decode(p::encode(m), back));
+        CHECK(back.own.states == m.own.states);
+        CHECK(back.own.states[0].cam == 0x00A7u && back.own.states[2].cam == 0xFFFFu && back.own.states[3].cam == 0u);
+    }
+
     TEST(proto_control_messages_roundtrip)
     {
         p::Welcome w{3, 4};
@@ -196,7 +236,9 @@ namespace
         CHECK(p::decode(p::encode(s), sb) && sb.delay == 4u && sb.names == s.names);
         p::Hash h{120, 0x1122334455667788ull};
         p::Hash hb;
-        CHECK(p::decode(p::encode(h), hb) && hb.frame == 120u && hb.hash == h.hash);
+        CHECK(p::decode(p::encode(h), hb) && hb.frame == 120u && hb.hash == h.hash && hb.blocks.empty());
+        h.blocks = {1, 2, 0xffffffffffffffffull};
+        CHECK(p::decode(p::encode(h), hb) && hb.frame == 120u && hb.hash == h.hash && hb.blocks == h.blocks);
         p::Drop d{1, 77};
         p::Drop db;
         CHECK(p::decode(p::encode(d), db) && db.player == 1 && db.frame == 77u);
@@ -245,6 +287,8 @@ namespace
     // ---- real server and client on localhost ----
     using wotm_net::ClientConfig;
     using wotm_net::LineSocket;
+    using wotm_net::LobbyClient;
+    using wotm_net::matchEnv;
     using wotm_net::MatchClient;
     using wotm_net::Server;
     using wotm_net::ServerConfig;
@@ -545,7 +589,7 @@ namespace
         RunningServer rs(cfg);
         LineSocket old;
         CHECK(old.connect("127.0.0.1", cfg.port, 2000));
-        old.sendLine("HELLO 1 b1");
+        old.sendLine("HELLO 2 b1");   // protocol 2: pad states without mouse motion
         CHECK(readUntil(old, "ERROR").find("protocol") != std::string::npos);
 
         LineSocket a, b, c, d;
@@ -628,6 +672,74 @@ namespace
         CHECK(code.size() == 4u);
         b.sendLine("JOIN " + code + " Bia 13");
         CHECK(readUntil(b, "ERROR").find("costume") != std::string::npos);
+    }
+
+    // MONSTER <monster>: a member changes monster while the lobby waits (#14); everyone gets the new MEMBERS line and the match uses it.
+    // Same checks as JOIN, against the other members only; refused outside a lobby and while its match runs
+    TEST(lobby_member_changes_monster_before_the_match)
+    {
+        ServerConfig cfg = testConfig();
+        RunningServer rs(cfg);
+        LineSocket a, b, c;
+        hello(a, cfg.port);
+        hello(b, cfg.port);
+        hello(c, cfg.port);
+        c.sendLine("MONSTER 3");
+        CHECK(readUntil(c, "ERROR") == "ERROR join a lobby first");
+        const std::string code = createLobby(a, "Lobby", "Ana", 14);
+        CHECK(code.size() == 4u);
+        b.sendLine("JOIN " + code + " Bia 1");
+        CHECK(readUntil(b, "JOINED") == "JOINED " + code);
+        CHECK(readUntil(a, "MEMBERS " + code + " Ana Ana:14,") == "MEMBERS " + code + " Ana Ana:14,Bia:1");
+
+        b.sendLine("MONSTER 5");
+        CHECK(readUntil(a, "MEMBERS " + code + " Ana Ana:14,Bia:5") == "MEMBERS " + code + " Ana Ana:14,Bia:5");
+        CHECK(readUntil(b, "MEMBERS " + code + " Ana Ana:14,Bia:5") == "MEMBERS " + code + " Ana Ana:14,Bia:5");
+        b.sendLine("MONSTER 6");
+        CHECK(readUntil(b, "ERROR").find("monster") != std::string::npos);
+        b.sendLine("MONSTER 14");   // the jelly has one costume and Ana has it
+        CHECK(readUntil(b, "ERROR").find("costume") != std::string::npos);
+        a.sendLine("MONSTER 14");   // keeping your own monster is not a clash with yourself
+        CHECK(readUntil(a, "MEMBERS " + code + " Ana Ana:14,Bia:5") == "MEMBERS " + code + " Ana Ana:14,Bia:5");
+
+        a.sendLine("START");
+        const auto match = p::keyValues(p::words(readUntil(b, "MATCH")));
+        CHECK(match.count("monsters") && match.at("monsters") == "14,5");
+        b.sendLine("MONSTER 3");
+        CHECK(readUntil(b, "ERROR").find("match") != std::string::npos);
+    }
+
+    // the lobby client the game and wotm_lobby use (as tools/net_lobby.py): the owner creates, sets the stage and wins, waits for the
+    // second player and starts; the other joins by code; both get the MATCH and its game environment
+    TEST(lobby_client_creates_joins_and_gets_the_match_environment)
+    {
+        ServerConfig cfg = testConfig();
+        RunningServer rs(cfg);
+        LobbyClient a, b;
+        std::string err;
+        CHECK(a.connect("127.0.0.1", cfg.port, "b1", err));
+        const std::string code = a.create("Sala", "Ana", 3, "", err);
+        CHECK(code.size() == 4u);
+        CHECK(a.set(9, 2, "turbo", err));
+        CHECK(b.connect("127.0.0.1", cfg.port, "b1", err));
+        CHECK(b.join(code, "Bia", 1, "", err));
+        CHECK(a.waitMembers(2, err, 5000));
+        CHECK(a.start(err));
+        std::map<std::string, std::string> ma, mb;
+        CHECK(a.waitMatch(ma, err, 5000) && b.waitMatch(mb, err, 5000));
+        const auto env = matchEnv(mb, "127.0.0.1");
+        std::map<std::string, std::string> e(env.begin(), env.end());
+        CHECK(e["WOTM_NET"] == "127.0.0.1:" + std::to_string(cfg.port));
+        CHECK(e["WOTM_MATCH"] == "3,1,9");
+        CHECK(e["WOTM_PLAYERS"] == "2" && e["WOTM_LOCALPLAYER"] == "2" && e["WOTM_NETNAME"] == "Bia");
+        CHECK(e["WOTM_KILLTARGET"] == "2" && e["WOTM_MODIFIERS"] == "turbo");
+        CHECK(!e["WOTM_NETTOKEN"].empty() && e["WOTM_NETTOKEN"] != matchEnv(ma, "127.0.0.1")[1].second);
+
+        LobbyClient c;
+        CHECK(c.connect("127.0.0.1", cfg.port, "b1", err));
+        CHECK(!c.join("QQQQ", "Cid", 1, "", err) && err.find("no such lobby") != std::string::npos);
+        LobbyClient old;
+        CHECK(!old.connect("127.0.0.1", cfg.port, "b1", err, p::kProtocol - 1) && err.find("protocol") != std::string::npos);
     }
 
     // two match clients exchange frames of input and see the same timeline
@@ -911,13 +1023,17 @@ namespace
         CHECK(a.waitStarted(5000) && b.waitStarted(5000));
         a.sendHash(30, 111);
         b.sendHash(30, 111);
-        a.sendHash(60, 222);
-        b.sendHash(60, 223);
+        // the block hashes that went with the total: the server names the blocks that differ (index and guest address)
+        std::vector<uint64_t> blocksA(256, 7), blocksB(256, 7);
+        blocksB[5] = 8, blocksB[131] = 9;
+        a.sendHash(60, 222, blocksA);
+        b.sendHash(60, 223, blocksB);
         const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(3);
         while ((a.status() != Status::Desynced || b.status() != Status::Desynced) && std::chrono::steady_clock::now() < until)
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         CHECK(a.status() == Status::Desynced && b.status() == Status::Desynced);
         CHECK(a.desyncFrame() == 60u);
+        CHECK(a.message() == "desync: state differs on frame 60: Ana vs Bia; blocks 5 (0x00a0000), 131 (0x1060000)");
         CHECK(!a.waitFrame(a.delay(), 200));   // desynced: no new frame runs
     }
 }

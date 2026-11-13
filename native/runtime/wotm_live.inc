@@ -1808,6 +1808,8 @@ static bool wotmDrawNative(const uint8_t *rdram)
             // level + monsters: names and palette bases come from fileStatus (idempotent; only reloads when they change)
             std::string log;
             wotm_live::g_stage = "loadResources";
+            if (S.scene.isoPath.empty())
+                S.scene.isoPath = PS2Runtime::getIoPaths().cdImage.string();   // the stage and monster .RTX files when no extracted disc has them
             S.rtxChosen = S.scene.loadResources(ram, "", &log);
             if (!log.empty() && log != S.rtxPath)
             {

@@ -15,6 +15,7 @@
 namespace wotm::mouse
 {
 inline std::atomic<int> g_kbPlayer{0};        // player (0..3) the keyboard feeds; -1 = none (window writes)
+inline std::atomic<int> g_netPlayer{0};       // network match: the player this PC drives (wotm_sync.inc writes it when the match starts)
 inline std::atomic<int64_t> g_wantUntil{0};   // monotonic-clock ms until which the cursor may stay captured (EE writes)
 inline std::atomic<bool> g_captured{false};   // cursor captured right now (window writes)
 inline std::atomic<int> g_wheel{0};          // wheel steps not used yet (+ up, - down; window adds, keyboard consumes)
