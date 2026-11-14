@@ -119,23 +119,7 @@ void wotmModsInstall(PS2Runtime &runtime, const std::string &elfPath)
         dir = e;
     }
     else
-    {
-        // mods/ with that exact name: Windows paths ignore case, so a "MODS" or "Mods" folder would also answer to "mods"; the
-        // folder must be named exactly mods (the disc folder's own MOD/, the IRXs, is another name and never matches)
-        auto modsIn = [](const fs::path &parent) {
-            std::error_code ec;
-            for (fs::directory_iterator it(parent, ec), end; !ec && it != end; it.increment(ec))
-                if (it->path().filename() == "mods" && it->is_directory(ec))
-                    return true;
-            return false;
-        };
-        dir = fs::path(elfPath).parent_path() / "mods";
-        // without it, the repo's (WOTM_REPO, which run_live.bat and the launcher pass): the mods shipped in the repo (Goliath Prime,
-        // Cerebulon) work without copying anything
-        const char *repo = std::getenv("WOTM_REPO");
-        if (!modsIn(fs::path(elfPath).parent_path()) && repo && *repo && modsIn(fs::path(repo)))
-            dir = fs::path(repo) / "mods";
-    }
+        dir = wotm::mods::defaultDir(fs::path(elfPath).parent_path(), std::getenv("WOTM_REPO"));
     const size_t n = Registry::get().scan(dir);
     // Hooks on whenever mods are on, even with an empty or missing folder: a skin the character creator saves in game
     // (Registry::addSkin) needs aliasOf in the search. With nothing registered both hooks are pure pass-throughs: aliasOf returns

@@ -80,6 +80,30 @@ struct Custom {
 };
 
 // Mod costume (mods/<mod>/skins/<folder>/skin.json)
+// The mods folder when WOTM_MODS is not set. mods/ next to the ELF, with that exact name: Windows paths ignore case, so a "MODS"
+// or "Mods" folder would also answer to "mods" (the disc's own MOD/, the IRXs, is another name and never matches); without one,
+// the repo's (WOTM_REPO, which run_live.bat and the launcher pass), so the mods shipped in the repo work without copying anything.
+// In the browser the ELF is on the read-only streamed disc: mods/ in the working folder instead (/save, the browser's private
+// file system, wotm_webfs.cpp), where the creators save and imports land, and which survives a reload.
+inline std::filesystem::path defaultDir(const std::filesystem::path &elfDir, const char *repo) {
+#ifdef __EMSCRIPTEN__
+    (void)elfDir, (void)repo;
+    return "mods";
+#else
+    namespace fs = std::filesystem;
+    auto modsIn = [](const fs::path &parent) {
+        std::error_code ec;
+        for (fs::directory_iterator it(parent, ec), end; !ec && it != end; it.increment(ec))
+            if (it->path().filename() == "mods" && it->is_directory(ec))
+                return true;
+        return false;
+    };
+    if (!modsIn(elfDir) && repo && *repo && modsIn(fs::path(repo)))
+        return fs::path(repo) / "mods";
+    return elfDir / "mods";
+#endif
+}
+
 struct Skin {
     int monster = 0;            // monster type
     std::string monsterName;    // "togera" (in a custom's skin, the custom's id)

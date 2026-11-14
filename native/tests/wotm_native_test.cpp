@@ -866,6 +866,27 @@ TEST(mods_skin_owner)
     fs::remove_all(root);
 }
 
+// The mods folder when WOTM_MODS is not set: mods/ next to the ELF, else the repo's; in the browser, mods/ in the game's working
+// folder (/save, the browser's private file system), so what the player makes or imports survives a reload
+TEST(mods_default_dir)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "wotm_test_modsdir";
+    fs::remove_all(root);
+    fs::create_directories(root / "game");
+    fs::create_directories(root / "repo" / "mods");
+    const std::string repo = (root / "repo").string();
+#ifdef __EMSCRIPTEN__
+    CHECK(wotm::mods::defaultDir(root / "game", repo.c_str()) == fs::path("mods"));
+#else
+    CHECK(wotm::mods::defaultDir(root / "game", repo.c_str()) == root / "repo" / "mods");   // none next to the ELF: the repo's
+    CHECK(wotm::mods::defaultDir(root / "game", nullptr) == root / "game" / "mods");        // no repo either: next to the ELF
+    fs::create_directories(root / "game" / "mods");
+    CHECK(wotm::mods::defaultDir(root / "game", repo.c_str()) == root / "game" / "mods");   // next to the ELF wins
+#endif
+    fs::remove_all(root);
+}
+
 TEST(mods_add_skin_after_scan)
 {
     namespace fs = std::filesystem;
