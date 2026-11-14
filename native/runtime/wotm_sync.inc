@@ -178,6 +178,17 @@ namespace wotm_sync
                 return;
             wotm_net::PadState s = sampleLocal(0);
             sampleMouse(s, index);   // the mouse is this PC's player's, like game pad 0
+            // personal pause (#16): with this player's own menu open (and until its buttons are released) the monster gets neutral
+            // input, the camera settings still travel; PAUSE MATCH FOR EVERYONE sends one frame of Start alone
+            bool start = false;
+            if (wotmPersonalPause(s.buttons, start))
+            {
+                const uint16_t cam = s.cam;
+                s = wotm_net::PadState{};
+                s.cam = cam;
+                if (start)
+                    s.buttons &= static_cast<uint16_t>(~wotm::personalpause::kStart);
+            }
             g_net->pushLocal(index + g_inputDelay, s);
             if (!g_loggedLocal && !idle(s))
             {
