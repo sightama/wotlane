@@ -849,6 +849,23 @@ TEST(creator_raw_alpha_round_trip)
     CHECK(!wotm::creator::applyRawAlpha(px, shortRaw) && (px[200] >> 24) == 200u);   // size mismatch: untouched
 }
 
+// The creator saves into mods/Creator: a skin of the same monster and id that another mod already registered would win again at
+// the next boot (the later mod in alphabetical order), so the creator asks who owns the id before writing anything
+TEST(mods_skin_owner)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "wotm_test_skinowner";
+    fs::remove_all(root);
+    fs::create_directories(root / "Other" / "skins" / "green");
+    { std::ofstream o(root / "Other" / "skins" / "green" / "skin.json"); o << wotm::creator::skinJson("togera", "green", "GREEN", 1); }
+    wotm::mods::Registry reg;
+    reg.scan(root);
+    CHECK(reg.skinOwner(3, "green") == "Other");   // Togera's green belongs to Other
+    CHECK(reg.skinOwner(3, "blue").empty());       // no such skin
+    CHECK(reg.skinOwner(1, "green").empty());      // the same id on another monster is another skin
+    fs::remove_all(root);
+}
+
 TEST(mods_add_skin_after_scan)
 {
     namespace fs = std::filesystem;

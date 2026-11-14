@@ -236,6 +236,13 @@ public:
             if (k.monster == monster && k.id == lower(id) && (owner.empty() || owner == k.monsterName)) return &k;
         return nullptr;
     }
+    // The mod that registered this monster's skin with this id ("" when there's none), by value
+    std::string skinOwner(int monster, const std::string &id) const {
+        std::lock_guard<std::mutex> lk(m_lock);
+        for (const Skin &k : m_skins)
+            if (k.monster == monster && k.id == lower(id)) return k.mod;
+        return {};
+    }
     // A custom monster's costumes: the one from monster.json and its skins, in that order
     std::vector<int> customCostumes(const Custom &c) const {
         std::vector<int> v{c.costume};

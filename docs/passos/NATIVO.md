@@ -280,7 +280,7 @@ Spec: `docs/superpowers/specs/2026-11-05-character-creator-design.md` (design hi
   save created it). After the renames, the folder's skin PNGs this save did not write and leftover temps are removed.
 - **Save: SAVE row messages:**
   - `OVERWRITE?` when the folder exists: the next X overwrites; moving off SAVE, changing a value or closing the panel cancels;
-  - `NAME IN USE` when the folder's `skin.json` names another monster (nothing written);
+  - `NAME IN USE` when the folder's `skin.json` names another monster, or another mod already has a skin of this monster with this id (it would win at the next boot); nothing written;
   - `MODS ARE OFF` with `WOTM_MODS=0`; `NO MODS FOLDER` when the mods folder is named `mods` but its parent has only a case variant
     (`MODS`, `Mods`), which Windows would write into and the boot (an entry named exactly `mods`) would not read: nothing written,
     log `[creator] no mods folder ("MODS" there answers to "mods"): <id> not saved; create mods/ next to the game`;
