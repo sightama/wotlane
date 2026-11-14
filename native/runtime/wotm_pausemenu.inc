@@ -61,6 +61,7 @@ static PS2Runtime::RecompiledFunction g_origOverlay = nullptr, g_origPrint = nul
                                       g_origExit = nullptr;
 static uint32_t g_overlayRa = 0, g_selRa = 0, g_dialogRa = 0;
 static bool g_inOverlay = false, g_selPending = false, g_inDialog = false;
+static bool g_inPause = false;   // the dialog that is up is the fight's pause (pauseLevelOverlay ran in it)
 static int g_selPrev = 0, g_selN = 0;
 // Inside the pause's checkInputForExit: what the X and Start reads returned (its "was Start" bool lives on the stack, in the scratchpad)
 static bool g_inExit = false, g_sawCross = false, g_sawStart = false;
@@ -100,6 +101,7 @@ static void overlayHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         g_overlayRa = GPR_U32(ctx, 31);
         g_inOverlay = true;
+        g_inPause = true;
         wotm_training::g_dialogMs = wotm_training::nowMs();   // every pause frame: the training windows disappear
         wotm::mouse::gameMenu();   // pause: the mouse does not go through the key map (wotm_pad.inc)
         if (wotm_mainmenu::pauseFrame(rdram, ctx, runtime))
@@ -206,6 +208,7 @@ static void dialogHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     if (g_inDialog && ctx->pc == g_dialogRa)
     {
         g_inDialog = false;
+        g_inPause = false;
         wotm_mainmenu::pauseDialogEnd();   // the pause panel (if it was left open) goes away with it
     }
 }
@@ -582,3 +585,5 @@ static void install(PS2Runtime &runtime)
                          "all players); mouse in the pause and in dialogs\n");
 }
 } // namespace wotm_pausemenu
+
+bool wotmInPauseMenu() { return wotm_pausemenu::g_inPause; }

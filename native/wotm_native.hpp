@@ -866,6 +866,7 @@ struct Snapshot {
     // show and showBlend carry that camera's view worldToScreenMat and eye over to the drawn one (Scene::aimFxRam)
     GameCamera fxCam;
     bool valid = false;
+    bool paused = false;   // taken in the fight's pause menu (wotm_pausemenu.inc), where the game runs only view 0
     // Split screen: views 1 to 3 of the same frame (collected at the exit of hier(v, 0)); views[v - 1] = nullptr: no view v
     std::shared_ptr<Snapshot> views[3];
     // Players 5..8 (WOTM_LOCALPLAYER=5..8): the game has no view or camera for them; the whole scene, collected without the game's view

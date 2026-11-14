@@ -1417,28 +1417,32 @@ static void labelLeft(std::vector<wotm::TextQuad> &quads, const wotm::Ram &ram, 
 // ------------------------------------------------------------------ panel (its own texture, over the whole big screen)
 constexpr int kPW = 1800, kPH = 1100;   // ~1.64:1, the big screen's proportions (204 x 124)
 
-// Tab row of the panel (drawing and mouse hover): between the L1 and R1 icons (14% to 86% of the width), names in the game font as
-// big as fits (up to 50) with equal gaps, centers in x
-static void tabLayout(float W, float x[kTabs], float &h)
+// Tab row of the panel (drawing and mouse hover): between the L1 and R1 icons (14% to 86% of the width), names in the font they are
+// drawn with (the game's, atlas `tex0`, or the fallback) as big as fits (up to 50) with equal gaps, centers in x
+static void tabLayout(uint64_t tex0, float W, float x[kTabs], float &h)
 {
     const float left = W * 0.14f, right = W * 0.86f, minGap = W * 0.025f;
-    size_t chars = 0;
-    for (const char *n : kTabNames)
-        chars += std::strlen(n);
+    auto namesWidth = [&](float hh) {
+        float w = 0.f;
+        for (const char *n : kTabNames)
+            w += textWidth(tex0, kPW, kPH, n, hh);
+        return w;
+    };
     h = 50.f;
-    while (h > 24.f && glyphAdvance(kPW, kPH, h) * float(chars) + minGap * float(kTabs - 1) > right - left)
+    while (h > 24.f && namesWidth(h) + minGap * float(kTabs - 1) > right - left)
         h -= 1.f;
-    const float adv = glyphAdvance(kPW, kPH, h), gap = (right - left - adv * float(chars)) / float(kTabs - 1);
+    const float gap = (right - left - namesWidth(h)) / float(kTabs - 1);
     float at = left;
     for (int t = 0; t < kTabs; ++t)
     {
-        const float w = adv * float(std::strlen(kTabNames[t]));
+        const float w = textWidth(tex0, kPW, kPH, kTabNames[t], h);
         x[t] = at + w * 0.5f;
         at += w + gap;
     }
 }
 
 static RenderTexture2D g_prt{};
+static uint64_t g_panelTex0 = 0;   // font atlas of the last panel drawn: panelHit lays the tabs out with the same font
 
 // Row measurements for a tab (drawing and mouse). On VIDEO the rows are shorter and tighter (all 9 fit without scrolling) and sit on
 // the left; on the right, the preview of the selected option (wotm_preview.hpp).
@@ -1534,7 +1538,8 @@ static void renderPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0,
     // tabs: L1  VIDEO  FEATURES  CAMERA  CONTROLS  R1
     const float tabY = lineH * 0.7f;
     float tabX[kTabs], tabH;
-    tabLayout(W, tabX, tabH);
+    g_panelTex0 = tex0;
+    tabLayout(tex0, W, tabX, tabH);
     if (noTabs(v))   // title only
         label(q, ram, tex0, v.personal ? "ONLY YOU ARE IN THIS MENU" : v.moves ? "MOVE LIST" : "TRAINING OPTIONS", W * 0.5f, tabY, tabH, kLit, kPW, kPH);
     for (int t = 0; t < kTabs && !noTabs(v); ++t)
@@ -1991,7 +1996,7 @@ static void panelHit(float u, float w, const View &v, Hover &hv)
     if (!noTabs(v) && std::fabs(Y - lineH * 0.7f) < lineH * 0.5f)
     {
         float tabX[kTabs], tabH;
-        tabLayout(W, tabX, tabH);
+        tabLayout(g_panelTex0, W, tabX, tabH);
         if (X < W * 0.14f) hv.part = HPrevTab;
         else if (X > W * 0.86f) hv.part = HNextTab;
         else

@@ -413,7 +413,7 @@ namespace wotm_net
             return void(c.link->sendLine("ERROR join a lobby first"));
         Lobby &l = lobbies_[static_cast<size_t>(c.lobby)];
         if (l.host != ci)
-            return void(c.link->sendLine("ERROR only the lobby owner can change the stage and wins"));
+            return void(c.link->sendLine("ERROR only the lobby owner can change the stage, wins and modifiers"));
         const std::map<std::string, std::string> kv = proto::keyValues(w);
         int mods = 0;
         if (auto it = kv.find("mods"); it != kv.end() && !wotm::modifiers::parse(it->second, mods))
