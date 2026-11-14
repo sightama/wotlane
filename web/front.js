@@ -116,6 +116,13 @@ async function sendSettings() {
 }
 
 function init() {
+  // a browser that can't run the game gets a plain message instead of a page that freezes
+  const problem = window.wotmSupportProblem();
+  if (problem) {
+    say(problem);
+    for (const id of ['single', 'host', 'join']) $(id).disabled = true;
+    return;
+  }
   if (window.wotmDirect) {
     front.hidden = true;
     buildId().then((b) => window.wotmStart(null, b));
