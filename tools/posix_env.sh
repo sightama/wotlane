@@ -30,3 +30,12 @@ runtime_dir() {
     elif [ -f "$REPO/.wotm_recomp_dir" ]; then tr -d '\r\n' <"$REPO/.wotm_recomp_dir"; printf '\n'
     else printf '%s\n' "$REPO/runtime"; fi
 }
+
+# use_emsdk <dir>: puts that Emscripten SDK on PATH. emsdk_env.sh finds its own folder through bash or zsh variables, which dash
+# (Linux's sh) doesn't have, so it is sourced from inside the SDK folder.
+use_emsdk() {
+    [ -f "$1/emsdk_env.sh" ] || return 1
+    _here=$(pwd)
+    cd "$1" && . ./emsdk_env.sh >/dev/null 2>&1
+    cd "$_here"
+}

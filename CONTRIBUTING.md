@@ -21,7 +21,7 @@ By contributing, you agree that your contribution is distributed under the proje
 2. One PR per TU or per small group of related functions.
 3. Before each commit: `sh tools/wsl/gate.sh` must end in `ROM OK`.
 4. **Don't commit** `config/status.csv`: it is generated (`tools/progress.py`) and causes conflicts in every PR. The owner regenerates it when merging the PR. Avoid `git commit -a`.
-5. Open the PR against `master`, filling in the template. There is no CI (it can't be built without the ROM), so the `gate.sh` output in the PR is the proof. Only the owner and `LostTwilightG` merge into `master`.
+5. Open the PR against `master`, filling in the template. CI (`.github/workflows/tests.yml`) builds and tests, on Linux and Windows, everything that needs no game files: the netcode, the native layer's unit tests, the tools' Python tests, the launcher and the browser build's own code (`sh tools/test_web.sh`). The decomp and the game can't be built there (they need the ROM), so the `gate.sh` output in the PR is the proof. Only the owner and `LostTwilightG` merge into `master`.
 6. Keep the branch up to date with `git rebase origin/master`.
 
 ## Using Claude Code

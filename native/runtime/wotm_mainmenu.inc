@@ -16,7 +16,7 @@
 // triangle (or O) closes it; CREATE on screen 2 opens the same panel with the creator's rows (no tabs) and its 3D preview.
 // With the panel open (and for 20 frames after closing) the game sees no input at all: the panel reads
 // the devices directly (wotm_padsel::readDevice), on the EE thread, inside the screenGetInput hook.
-// Panel: tabs VIDEO / FEATURES / CAMERA / MODIFIERS / CONTROLS (L1/R1), up/down pick the row, left/right/X
+// Panel: tabs VIDEO / AUDIO / FEATURES / CAMERA / MODIFIERS / CONTROLS (L1/R1), up/down pick the row, left/right/X
 // change the value, which takes effect immediately and is saved to settings.ini (wotm_settings.hpp; video is applied on the window
 // thread by wotm_live.inc's applyVideoSettings). Drawn into a texture of our own over the whole big screen (the visible band below the menu's banner).
 // CONTROLS tab (scrolls): separate keyboard, which map the list shows (keyboard or gamepads), one row per PS2 button (X waits for the
@@ -96,7 +96,10 @@ struct View
     bool moves = false;                   // pause: the move list (MOVE LIST), also without tabs
     bool creator = false;                 // screen 2: the character creator (CREATE) in place of the tabs
     wotm_creator::State creatorState;     // its state (the EE thread's copy; meaningful when creator)
+    bool personal = false;                // network match: this player's own menu (personal pause), also without tabs
 };
+// Title and rows with no tabs: the training panel, the move list, the personal pause's list and the character creator
+static bool noTabs(const View &v) { return v.training || v.moves || v.personal || v.creator; }
 static std::mutex g_m;
 static View g_view;
 // What is under the mouse (step 9; the window writes it every drawn frame, the screen hook reads it), protected by g_m
@@ -137,8 +140,8 @@ static int g_pauseSuppress = 0;
 // Each option is a wotm_settings.hpp key; changing it saves settings.ini and takes effect immediately (video on the window thread,
 // mods and keyboard the next time they are read).
 namespace st = wotm::settings;
-enum Tab { TabVideo, TabFeatures, TabCamera, TabModifiers, TabControls, kTabs };
-constexpr const char *kTabNames[kTabs] = {"VIDEO", "FEATURES", "CAMERA", "MODIFIERS", "CONTROLS"};
+enum Tab { TabVideo, TabAudio, TabFeatures, TabCamera, TabModifiers, TabControls, kTabs };
+constexpr const char *kTabNames[kTabs] = {"VIDEO", "AUDIO", "FEATURES", "CAMERA", "MODIFIERS", "CONTROLS"};
 constexpr int kMaxOpts = 9;
 struct Opt { st::Key key; const char *label; const char *hint; };
 struct TabDef { int n; Opt opt[kMaxOpts]; };
@@ -153,11 +156,14 @@ constexpr TabDef kTabDefs[kTabs] = {
       {st::Interp, "INTERPOLATE FRAMES", "SMOOTHER MOTION ABOVE 60 HZ OR WHEN THE GAME DROPS TO 30. MAY ADD DELAY"},
       {st::Msaa, "ANTI-ALIASING", "MSAA SMOOTHS THE JAGGED EDGES OF THE 3D MODELS"},
       {st::TexFilter, "TEXTURE FILTER", "KEEPS TEXTURES SHARP FAR AWAY AND AT STEEP ANGLES"}}},
-    {5,
+    {3,   // this PC only: what you hear, never the game (online too)
+     {{st::VolSfx, "EFFECTS VOLUME", "HITS, ROARS, CRASHES AND MENU SOUNDS. ONLY ON THIS COMPUTER"},
+      {st::VolMusic, "MUSIC VOLUME", "THE MUSIC OF THE MENUS AND THE LEVELS. ONLY ON THIS COMPUTER"},
+      {st::Announcer, "NARRATOR", "A VOICE CALLS OUT THE MONSTER AND THE LEVEL YOU PICK, OR THE MONSTER ROARS"}}},
+    {4,
      {{st::LockToggle, "LOCK-ON TOGGLE", "TAP R1 TO LOCK ON AND AGAIN TO LET GO. THE D-PAD PICKS ANOTHER TARGET"},
       {st::EnemyBars, "ENEMY BARS", "SHOWS THE HEALTH AND ENERGY OF EACH ENEMY ABOVE THEIR HEAD"},
       {st::DamagePop, "DAMAGE NUMBERS", "SHOWS HOW MUCH DAMAGE EACH HIT DOES"},
-      {st::Announcer, "NARRATOR", "A VOICE CALLS OUT THE MONSTER AND THE LEVEL YOU PICK, OR THE MONSTER ROARS"},
       {st::SkipIntro, "SKIP INTRO MOVIES", "GOES STRAIGHT TO THE TITLE SCREEN. CHANGES TAKE EFFECT ON NEXT BOOT"}}},
     {5,
      {{st::Camera, "CAMERA STYLE", "MODERN TURNS WITH THE RIGHT STICK. CLASSIC IS THE CAMERA OF THE ORIGINAL GAME"},
@@ -235,6 +241,19 @@ static bool g_pauseTraining = false;   // the open (or closing) panel is the tra
 static bool g_pauseMoves = false;
 static int g_moveSel = 0, g_moveTop = 0;
 constexpr int kMoveVis = 11;   // visible rows (the training layout)
+// Personal pause (network match, #16): Start opens this list for this player only, drawn like the pause panel; the match keeps
+// running and this PC sends neutral input meanwhile (wotm_personalpause.hpp decides what it sends). RECOMPILED OPTIONS opens the tabs
+// with the match-wide settings locked (#17); PAUSE MATCH FOR EVERYONE sends one Start into the match, which opens the game's shared
+// pause (RESTART, QUIT) on every PC.
+enum PersonalRow { PrContinue, PrOptions, PrPauseAll, kPersonalRows };
+constexpr TrainDef kPersonalDefs[kPersonalRows] = {
+    {"CONTINUE", "BACK TO THE FIGHT. THE MATCH NEVER STOPPED"},
+    {"RECOMPILED OPTIONS", "VOLUME, VIDEO, YOUR CAMERA AND CONTROLS. THE MATCH KEEPS GOING WHILE YOU CHANGE THEM"},
+    {"PAUSE MATCH FOR EVERYONE", "PAUSES EVERY PLAYER, WITH RESTART AND QUIT"},
+};
+static wotm::personalpause::Menu g_personal;
+static bool g_personalOptions = false;   // the tabs are open over the personal list
+static int g_personalSel = 0;
 static std::string moveLabel(const tr::Move &m)
 {
     const char *t = m.type >= 0 && m.type < tr::kPunchTypes ? tr::kMoveTypeNames[m.type] : "?";
@@ -404,6 +423,8 @@ static int choices(st::Key k, int out[16])
     case st::Display: for (int i = 0; i < 3; ++i) out[i] = i; return 3;
     case st::CamSens: for (int i = 0; i < 10; ++i) out[i] = i + 1; return 10;
     case st::Announcer: for (int i = 0; i < 3; ++i) out[i] = i; return 3;
+    case st::VolSfx:
+    case st::VolMusic: for (int i = 0; i <= 10; ++i) out[i] = i * 10; return 11;
     case st::Prompts:   // without PLAYSTATION: same as ORIGINAL (AUTO still uses it with a PlayStation gamepad)
     {
         int n = 0;
@@ -469,6 +490,8 @@ static void valueText(st::Key k, int v, char *buf, size_t sz)
     case st::MenuConfirm: std::snprintf(buf, sz, "%s", v ? "RIGHT BUTTON" : "BOTTOM BUTTON"); break;
     case st::Camera: std::snprintf(buf, sz, "%s", v ? "MODERN" : "CLASSIC"); break;
     case st::CamSens: std::snprintf(buf, sz, "%d", v); break;
+    case st::VolSfx:
+    case st::VolMusic: if (v > 0) std::snprintf(buf, sz, "%d", v); else std::snprintf(buf, sz, "OFF"); break;
     case st::Announcer:   // the narrator's voice (narrator/) or the chosen monster's cry
         std::snprintf(buf, sz, "%s", v == 2 ? "MONSTER CRY" : v ? "GODZILLA SAVE THE EARTH" : "OFF");
         break;
@@ -555,6 +578,10 @@ static void openPanel()
 constexpr uint32_t kShellBank = wotm::sym::gSoundBanks + 4u * 14u;
 static void panelSfx(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime, int id)
 {
+    // personal pause: silent. Through the game or native sound's panel bank, the sound engine's state (bank handles, free SRAM)
+    // would change on this PC only, and the game reads it: the PCs would desync
+    if (g_personal.state != wotm::personalpause::Menu::Closed)
+        return;
     if (g_where == InPause && !rd32(rdram, kShellBank))
     {
 #ifdef WOTM_HAVE_SND
@@ -845,6 +872,9 @@ static void publishPause()
     v.preview = g_showPreview;
     v.training = g_pauseTraining;
     v.moves = g_pauseMoves;
+    v.personal = g_personal.open() && !g_personalOptions;
+    if (v.personal)
+        v.opt = g_personalSel;
     if (v.training)
     {
         v.opt = g_trainSel;
@@ -901,6 +931,99 @@ static void pauseDialogEnd()
     g_pausePanel = 0.f;
     g_where = InMenu;
     publishPause();
+}
+// The personal list's frame: up/down pick the row (the mouse too), X acts, triangle or O (or Start) is CONTINUE
+static void personalListInput(bool startEdge)
+{
+    bool now[kPanelActs], e[kPanelActs];
+    readPanel(now);
+    for (int i = 0; i < kPanelActs; ++i)
+        e[i] = now[i] && !g_panelPrev[i];
+    std::copy(now, now + kPanelActs, g_panelPrev);
+    Hover hv;
+    {
+        std::lock_guard<std::mutex> lk(g_m);
+        hv = g_pauseHover;
+    }
+    static uint32_t s_seq = 0;
+    const uint32_t seq = wotm::mouse::g_moveSeq.load(std::memory_order_relaxed);
+    const bool moved = seq != s_seq;
+    s_seq = seq;
+    const bool click = wotm::mouse::takeClick(wotm::mouse::g_clickL);
+    e[PBack] |= wotm::mouse::takeClick(wotm::mouse::g_clickR) || startEdge;
+    if (hv.prow >= 0 && hv.prow < kPersonalRows && hv.prow != g_personalSel && (click || moved))
+    {
+        g_personalSel = hv.prow;
+        panelSfx(nullptr, nullptr, nullptr, 4);
+    }
+    e[POk] |= click && hv.prow >= 0;
+    if (e[PBack])
+    {
+        panelSfx(nullptr, nullptr, nullptr, 6);
+        wotm::personalpause::close(g_personal);
+    }
+    else if (e[PUp] || e[PDown])
+    {
+        g_personalSel = (g_personalSel + (e[PDown] ? 1 : kPersonalRows - 1)) % kPersonalRows;
+        panelSfx(nullptr, nullptr, nullptr, e[PDown] ? 4 : 2);
+    }
+    else if (e[POk])
+    {
+        panelSfx(nullptr, nullptr, nullptr, 8);
+        if (g_personalSel == PrContinue)
+            wotm::personalpause::close(g_personal);
+        else if (g_personalSel == PrOptions)
+        {
+            g_personalOptions = true;
+            readPanel(g_panelPrev);   // the X that opened it is still held
+        }
+        else
+        {
+            wotm::personalpause::pauseEveryone(g_personal);
+            std::fprintf(stderr, "[pause] personal menu: pause the match for everyone\n");
+        }
+    }
+}
+// Network match, every sampled frame (wotm_sync.inc, EE thread): runs the personal pause and says what this PC sends. Returns true when
+// the local input must be neutral; `start`: send Start alone (PAUSE MATCH FOR EVERYONE).
+static bool personalFrame(uint16_t buttons, bool &start)
+{
+    namespace pp = wotm::personalpause;
+    const bool wasOpen = g_personal.open(), startEdge = !(buttons & pp::kStart) && (g_personal.prev & pp::kStart);
+    // allowed while the fight runs and no game dialog (the shared pause, the end of the match) has been up in the last 200 ms
+    const bool allowed = !wotm_training::windowsHidden() && !g_pauseOpen;
+    const pp::Out o = pp::step(g_personal, buttons, allowed);
+    if (!wasOpen && g_personal.open())
+    {
+        g_where = InPause;
+        g_personalSel = 0;
+        g_personalOptions = false;
+        g_pauseTraining = g_pauseMoves = false;
+        g_showPreview = true;
+        readPanel(g_panelPrev);
+        wotm::mouse::takeClick(wotm::mouse::g_clickL);
+        std::fprintf(stderr, "[pause] personal menu opened (the match keeps running; this player's input is neutral)\n");
+        panelSfx(nullptr, nullptr, nullptr, 8);
+    }
+    else if (g_personal.open())
+    {
+        wotm_pad::markMenuFrame();
+        wotm::mouse::gameMenu();
+        if (!g_personalOptions)
+            personalListInput(startEdge);
+        else if (panelInput(nullptr, nullptr, nullptr))
+            g_personalOptions = false;   // back to the list
+    }
+    if (wasOpen && !g_personal.open())
+    {
+        g_personalOptions = false;
+        g_where = InMenu;
+        std::fprintf(stderr, "[pause] personal menu closed\n");
+    }
+    g_pausePanel = std::clamp(g_pausePanel + (g_personal.open() ? 0.1f : -0.1f), 0.f, 1.f);
+    publishPause();
+    start = o.start;
+    return o.neutral;
 }
 static PS2Runtime::RecompiledFunction g_origMain = nullptr, g_origModes1P = nullptr, g_origModes2P = nullptr, g_origTransition = nullptr,
                                       g_origGetInput = nullptr, g_origOptions = nullptr;
@@ -1355,28 +1478,32 @@ static void labelLeft(std::vector<wotm::TextQuad> &quads, const wotm::Ram &ram, 
 // ------------------------------------------------------------------ panel (its own texture, over the whole big screen)
 constexpr int kPW = 1800, kPH = 1100;   // ~1.64:1, the big screen's proportions (204 x 124)
 
-// Tab row of the panel (drawing and mouse hover): between the L1 and R1 icons (14% to 86% of the width), names in the game font as
-// big as fits (up to 50) with equal gaps, centers in x
-static void tabLayout(float W, float x[kTabs], float &h)
+// Tab row of the panel (drawing and mouse hover): between the L1 and R1 icons (14% to 86% of the width), names in the font they are
+// drawn with (the game's, atlas `tex0`, or the fallback) as big as fits (up to 50) with equal gaps, centers in x
+static void tabLayout(uint64_t tex0, float W, float x[kTabs], float &h)
 {
     const float left = W * 0.14f, right = W * 0.86f, minGap = W * 0.025f;
-    size_t chars = 0;
-    for (const char *n : kTabNames)
-        chars += std::strlen(n);
+    auto namesWidth = [&](float hh) {
+        float w = 0.f;
+        for (const char *n : kTabNames)
+            w += textWidth(tex0, kPW, kPH, n, hh);
+        return w;
+    };
     h = 50.f;
-    while (h > 24.f && glyphAdvance(kPW, kPH, h) * float(chars) + minGap * float(kTabs - 1) > right - left)
+    while (h > 24.f && namesWidth(h) + minGap * float(kTabs - 1) > right - left)
         h -= 1.f;
-    const float adv = glyphAdvance(kPW, kPH, h), gap = (right - left - adv * float(chars)) / float(kTabs - 1);
+    const float gap = (right - left - namesWidth(h)) / float(kTabs - 1);
     float at = left;
     for (int t = 0; t < kTabs; ++t)
     {
-        const float w = adv * float(std::strlen(kTabNames[t]));
+        const float w = textWidth(tex0, kPW, kPH, kTabNames[t], h);
         x[t] = at + w * 0.5f;
         at += w + gap;
     }
 }
 
 static RenderTexture2D g_prt{};
+static uint64_t g_panelTex0 = 0;   // font atlas of the last panel drawn: panelHit lays the tabs out with the same font
 
 // Row measurements for a tab (drawing and mouse). On VIDEO the rows are shorter and tighter (all 9 fit without scrolling) and sit on
 // the left; on the right, the preview of the selected option (wotm_preview.hpp).
@@ -1461,13 +1588,13 @@ static void renderPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0,
         SetTextureFilter(g_prt.texture, TEXTURE_FILTER_BILINEAR);
     }
     const float W = float(kPW), H = float(kPH), lineH = H / 8.9f;   // tabs, rule and kVisRows rows
-    const PanelLayout L = panelLayout(std::clamp(v.tab, 0, kTabs - 1), v.preview, v.training || v.moves, v.creator);
+    const PanelLayout L = panelLayout(std::clamp(v.tab, 0, kTabs - 1), v.preview, noTabs(v), v.creator);
     // preview of the selected option, into its own textures (before the panel's BeginTextureMode); the creator's monster likewise
     // (the creator keeps v.tab, but v.opt is its own row: no VIDEO preview)
     wotm::preview::Kind pk = wotm::preview::None;
     wotm::preview::Params pp;
     const bool creatorPic = v.creator && v.panel > 0.f && wotm_creator::renderPreview(v.creatorState, int(L.box.width), int(L.box.height));
-    if (L.preview && !v.creator && !v.training && !v.moves && v.panel > 0.f && v.opt >= 0 && v.opt < kTabDefs[TabVideo].n)
+    if (L.preview && !noTabs(v) && v.panel > 0.f && v.opt >= 0 && v.opt < kTabDefs[TabVideo].n)
     {
         pk = previewKind(kTabDefs[TabVideo].opt[v.opt].key);
         pp = previewParams(L.box, v.screen < 0 ? kPauseFrac : kTelaoFrac);
@@ -1483,10 +1610,11 @@ static void renderPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0,
     // tabs: L1  VIDEO  FEATURES  CAMERA  CONTROLS  R1
     const float tabY = lineH * 0.7f;
     float tabX[kTabs], tabH;
-    tabLayout(W, tabX, tabH);
-    if (v.training || v.moves || v.creator)   // training, move list and creator: title only
-        label(q, ram, tex0, v.creator ? "CREATE" : v.moves ? "MOVE LIST" : "TRAINING OPTIONS", W * 0.5f, tabY, tabH, kLit, kPW, kPH);
-    for (int t = 0; t < kTabs && !v.training && !v.moves && !v.creator; ++t)
+    g_panelTex0 = tex0;
+    tabLayout(tex0, W, tabX, tabH);
+    if (noTabs(v))   // title only
+        label(q, ram, tex0, v.creator ? "CREATE" : v.personal ? "ONLY YOU ARE IN THIS MENU" : v.moves ? "MOVE LIST" : "TRAINING OPTIONS", W * 0.5f, tabY, tabH, kLit, kPW, kPH);
+    for (int t = 0; t < kTabs && !noTabs(v); ++t)
     {
         const bool on = t == v.tab;
         label(q, ram, tex0, kTabNames[t], tabX[t], tabY, tabH, on ? kLit : kDim, kPW, kPH);
@@ -1505,7 +1633,7 @@ static void renderPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0,
         DrawRectangleRoundedLinesEx(Rectangle{cx - bw * 0.5f, tabY - bh * 0.5f, bw, bh}, 0.4f, 8, 3.f, gsToRgb(kDim));
         label(q, ram, tex0, s, cx, tabY, 42.f, kDim, kPW, kPH);
     };
-    if (!v.training && !v.moves && !v.creator)   // tabs only: training, move list and creator have none
+    if (!noTabs(v))
     {
         badge(st::BL1, W * 0.08f);
         badge(st::BR1, W * 0.92f);
@@ -1525,12 +1653,15 @@ static void renderPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0,
     auto optRow = [&](const Opt &o) {
         char buf[32];
         valueText(o.key, st::get(o.key), buf, sizeof buf);
-        if (lockedOpt(o.key, inPause))   // dimmed, no arrows
-            return PRow{o.label, buf, "CAN ONLY BE CHANGED IN THE MAIN MENU", false, KOpt, -1, true};
+        if (lockedOpt(o.key, inPause))   // dimmed, no arrows; online, the match-wide settings are the lobby's (#17)
+            return PRow{o.label, buf, st::forced(o.key) ? "SET IN THE LOBBY" : "CAN ONLY BE CHANGED IN THE MAIN MENU", false, KOpt, -1, true};
         return PRow{o.label, buf, o.hint, true, KOpt};
     };
     std::vector<std::string> moveHints;   // the MOVE LIST hints (PRow only keeps the pointer)
-    if (v.moves)
+    if (v.personal)
+        for (int i = 0; i < kPersonalRows; ++i)
+            rows[n++] = PRow{kPersonalDefs[i].label, "", kPersonalDefs[i].hint, false, KReset};
+    else if (v.moves)
     {
         tr::Shared &sh = tr::shared();
         std::lock_guard<std::mutex> lk(sh.m);
@@ -1759,7 +1890,9 @@ static void renderPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0,
     if (!tabs1.key) tabs1.key = "Q";   // L1/R1 without a key (layout 2): the panel changes tabs with Q/E (readPanel)
     if (!tabs2.key) tabs2.key = "E";
     const Icon ok = bind(st::BCross), back = bind(st::BTriangle), clear = bind(st::BSquare);
-    if (v.moves)
+    if (v.personal)
+        wotm_legend::post({{ok, {}, "SELECT"}, {back, {}, "CONTINUE"}}, la, bar);
+    else if (v.moves)
         wotm_legend::post({{ok, {}, "FAVORITE"}, {back, {}, "BACK"}}, la, bar);
     else if (v.creator)
     {
@@ -1997,10 +2130,10 @@ static void panelHit(float u, float w, const View &v, Hover &hv)
     if (u < 0.f || u > 1.f || w < 0.f || w > 1.f)
         return;
     const float W = float(kPW), H = float(kPH), lineH = H / 8.9f, X = u * W, Y = w * H;
-    if (!v.training && !v.moves && !v.creator && std::fabs(Y - lineH * 0.7f) < lineH * 0.5f)
+    if (!noTabs(v) && std::fabs(Y - lineH * 0.7f) < lineH * 0.5f)
     {
         float tabX[kTabs], tabH;
-        tabLayout(W, tabX, tabH);
+        tabLayout(g_panelTex0, W, tabX, tabH);
         if (X < W * 0.14f) hv.part = HPrevTab;
         else if (X > W * 0.86f) hv.part = HNextTab;
         else
@@ -2009,8 +2142,8 @@ static void panelHit(float u, float w, const View &v, Hover &hv)
         return;
     }
     const int tab = std::clamp(v.tab, 0, kTabs - 1);
-    const PanelLayout L = panelLayout(tab, v.preview, v.training || v.moves, v.creator);
-    const int n = v.creator ? int(wotm_creator::kRows) : v.moves ? std::max(1, moveRows()) : v.training ? int(kTrainRows) : tabRows(tab), first = std::clamp(v.top, 0, std::max(0, n - L.vis));
+    const PanelLayout L = panelLayout(tab, v.preview, noTabs(v), v.creator);
+    const int n = v.creator ? int(wotm_creator::kRows) : v.personal ? int(kPersonalRows) : v.moves ? std::max(1, moveRows()) : v.training ? int(kTrainRows) : tabRows(tab), first = std::clamp(v.top, 0, std::max(0, n - L.vis));
     const int i = int(std::floor((Y - L.y0) / L.step + 0.5f));
     if (i < 0 || i >= L.vis || first + i >= n || X < W * 0.03f || X > L.rowRight)
         return;
@@ -2160,3 +2293,4 @@ void wotmMainMenuInstall(PS2Runtime &runtime)
 }
 
 void wotmMainMenuLogoFrame(uint8_t *rdram) { wotm_mainmenu::logoFrame(rdram); }
+bool wotmPersonalPause(uint16_t buttons, bool &start) { return wotm_mainmenu::personalFrame(buttons, start); }

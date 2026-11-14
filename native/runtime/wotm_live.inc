@@ -265,6 +265,9 @@ static void wotmBootPresent(uint32_t eePc, uint64_t vsync)
 #if __has_include("wotm_native.hpp")
 #include "wotm_native.hpp"
 #include "wotm_msaa.hpp"   // frame MSAA (ANTI-ALIASING option)
+#include "wotm_windowfit.hpp"   // window size at start (fitWindow)
+#include "wotm_personalpause.hpp"   // network match: Start opens this player's own menu (wotm_mainmenu.inc)
+#include "wotm_pauseview.hpp"   // network match: the local view held behind the fight's pause menu
 #include "wotm_preview.hpp"   // previews for the VIDEO tab options (wotm_mainmenu.inc)
 #include "wotm_cheats.h"   // debug menu (F1)
 #include "wotm_netstatus.h"   // network match: on-screen message, debug keys off
@@ -464,25 +467,21 @@ static void initPresentRate()
     std::fprintf(stderr, "[native] present: %d Hz (monitor %d Hz), vsync %s (WOTM_HZ, WOTM_VSYNC)\n", eff, monHz, vsync ? "on" : "off");
 }
 
-// Window at the native frame size (renderHeight at the fixed aspect ratio, or 16:9), shrunk to fit in 90% of the monitor and centered.
-static void fitWindow(bool keepHeight = false)
+// Window: the largest one at the fixed aspect ratio (or 16:9) inside 90% of the monitor, centered (wotm_windowfit.hpp, #6). The render
+// resolution (Res) is its own setting, scaled on present, so it never resizes the window. WOTM_WINDOW=<lines> caps the height (checks).
+static void fitWindow()
 {
     const float a = fixedAspect() ? fixedAspect() : 16.f / 9.f;
-    const int res = wotm::settings::get(wotm::settings::Res);   // 0 (the window's): 720, or the current height (keepHeight)
-    float h = static_cast<float>(res > 0 ? res : keepHeight && GetScreenHeight() > 0 ? GetScreenHeight() : 720), w = h * a;
-    const int mon = GetCurrentMonitor();
-    const float mw = 0.9f * GetMonitorWidth(mon), mh = 0.9f * GetMonitorHeight(mon);
-    if (mw > 0.f && mh > 0.f)
-    {
-        const float k = std::min({1.f, mw / w, mh / h});
-        w *= k;
-        h *= k;
-    }
-    SetWindowSize(static_cast<int>(std::lround(w)), static_cast<int>(std::lround(h)));
-    if (mw > 0.f && mh > 0.f)
+    static const int cap = [] { const char *e = std::getenv("WOTM_WINDOW"); return e ? std::max(0, std::atoi(e)) : 0; }();
+    const int mon = GetCurrentMonitor(), mw = GetMonitorWidth(mon), mh = GetMonitorHeight(mon);
+    int w = 0, h = 0;
+    wotm::windowfit::size(a, mw, mh, w, h, cap);
+    SetWindowSize(w, h);
+    std::fprintf(stderr, "[native] window %dx%d (monitor %dx%d, WOTM_WINDOW to cap the height)\n", w, h, mw, mh);
+    if (mw > 0 && mh > 0)
     {
         const Vector2 p = GetMonitorPosition(mon);
-        SetWindowPosition(static_cast<int>(p.x + (mw / 0.9f - w) * 0.5f), static_cast<int>(p.y + (mh / 0.9f - h) * 0.5f));
+        SetWindowPosition(static_cast<int>(p.x) + (mw - w) / 2, static_cast<int>(p.y) + (mh - h) / 2);
     }
 }
 
@@ -644,8 +643,8 @@ static void applyVideoSettings()
     }
     if (now[Rate] != g_appliedVideo[Rate] || now[Vsync] != g_appliedVideo[Vsync])
         initPresentRate();
-    if (((now[Res] != g_appliedVideo[Res] && now[Res] > 0) || now[Aspect] != g_appliedVideo[Aspect]) && !inFullscreen())
-        fitWindow(true);
+    if (now[Aspect] != g_appliedVideo[Aspect] && !inFullscreen())
+        fitWindow();
     if (now[Res] != g_appliedVideo[Res] || now[Aspect] != g_appliedVideo[Aspect] || now[RenderScale] != g_appliedVideo[RenderScale])
         std::fprintf(stderr, "[settings] frame: %s lines x %d%% = %d, aspect %s\n", format(Res, now[Res]).c_str(), now[RenderScale], renderHeight(),
                      format(Aspect, now[Aspect]).c_str());
@@ -666,6 +665,7 @@ static void fullscreenKey()
         st::set(st::Display, inFullscreen() ? 0 : g_fullscreenKind);
     }
     applyVideoSettings();
+    wotmApplyAudioSettings();
     if (!g_localCollect)
         wotm_pad::mouseFrame();   // mouse for the modern camera (wotm_mouse.hpp)
 }
@@ -1339,6 +1339,7 @@ void wotmCaptureFadeStep(const uint8_t *rdram)
 }
 
 void wotmMainMenuLogoFrame(uint8_t *rdram);   // wotm_mainmenu.inc: big-screen logo only on "press start"
+bool wotmInPauseMenu();   // wotm_pausemenu.inc: the fight's pause dialog is up (EE thread)
 void wotmCaptureFrame(const uint8_t *rdram)
 {
     wotmMainMenuLogoFrame(const_cast<uint8_t *>(rdram));   // before collection: the frame already comes out without the logo
@@ -1492,6 +1493,7 @@ void wotmCaptureFrame(const uint8_t *rdram)
     sn.screenRects = std::move(rects);
     sn.screenPolys.insert(sn.screenPolys.end(), polys.begin(), polys.end());
     sn.anchors = std::move(anchors);
+    sn.paused = wotmInPauseMenu();
     wotm_trainview::capture(ram);   // training mode: this frame's body hulls and capsules and health
     sn.fields = ram.u32(wotm::addr::fieldsAtFrameStart);   // interpolation timestamp (Snapshot::fields/hostT)
     sn.hostT = wotm_live::hostNow();
@@ -2025,7 +2027,14 @@ static bool wotmDrawNative(const uint8_t *rdram)
         const int localView = wotm_live::localView();
         const bool chaseOk = localView >= 4 && S.snap.chase && S.snap.chase->valid && S.snap.chase->cam.ok;
         const bool ownView = localView > 0 && localView < 4 && viewOk[localView];
-        const wotm::Snapshot *own = chaseOk ? S.snap.chase.get() : ownView ? S.snap.views[localView - 1].get() : nullptr;
+        // in the fight's pause the game runs only view 0: behind the menu goes the local view from before the pause
+        // (wotm_pauseview.hpp); the free camera shows view 0 and leaves the held one alone
+        static wotm::pauseview::Held<wotm::Snapshot> s_pauseHeld;
+        wotm::Snapshot *viewOwn = nullptr;
+        if (!freeView.override)
+            viewOwn = wotm::pauseview::pick(s_pauseHeld, localView > 0 && localView < 4, S.snap.paused,
+                                            ownView ? S.snap.views[localView - 1] : std::shared_ptr<wotm::Snapshot>{});
+        const wotm::Snapshot *own = chaseOk ? S.snap.chase.get() : viewOwn;
         const wotm::Snapshot *ownPrev = chaseOk ? S.prev.chase.get() : ownView ? S.prev.views[localView - 1].get() : nullptr;
         const bool split = localView < 0 && (viewOk[1] || viewOk[2] || viewOk[3]);
         const bool quad = split && S.snap.vctx.h < 224.f;

@@ -8,13 +8,16 @@ set -eu
 
 usage() {
     cat <<EOF
-usage: sh tools/build_runtime.sh [build dir name]
+usage: sh tools/build_runtime.sh [build dir name [target...]]
   build dir name  folder inside the runtime folder (default: build_dev, configured by sh tools/setup_runtime.sh)
+  target          what to build (default: ps2EntryRunner wotm; the browser build, tools/build_web.sh, builds only wotm)
 Full compiler output goes to <runtime>/logs/<build>.log; on failure the first errors are printed.
 EOF
 }
 case ${1:-} in -h|--help) usage; exit 0 ;; esac
 build=${1:-build_dev}
+[ $# -gt 0 ] && shift
+targets=${*:-ps2EntryRunner wotm}
 rt=$(runtime_dir)
 bdir=$rt/$build
 [ -f "$bdir/build.ninja" ] || fail "$bdir isn't configured (run sh tools/setup_runtime.sh)"
@@ -42,7 +45,7 @@ python3 "$REPO/tools/embed_resources.py" "$REPO/native/wotm.rc" "$gen/wotm_resou
 
 log=$rt/logs/$build.log
 start=$(date +%s)
-if ! cmake --build "$bdir" --target ps2EntryRunner wotm >"$log" 2>&1; then
+if ! cmake --build "$bdir" --target $targets >"$log" 2>&1; then
     grep -m 40 -E 'error:|error [A-Z][0-9]+|undefined reference|Undefined symbols|ld: ' "$log" >&2 || tail -n 30 "$log" >&2
     fail "build failed after $(( $(date +%s) - start ))s; full log: $log"
 fi
@@ -50,4 +53,4 @@ fi
 if bid=$(python3 "$REPO/tools/build_id.py" --runtime "$rt" --build "$build" --write); then echo "build $bid"
 else echo "warning: build_id.py failed: no wotm.buildid (online matches will refuse this build)"; fi
 echo "built in $(( $(date +%s) - start ))s:"
-for exe in wotm ps2EntryRunner; do echo "  $bdir/ps2xRuntime/$exe"; done
+for exe in $targets; do echo "  $bdir/ps2xRuntime/$exe"; done
