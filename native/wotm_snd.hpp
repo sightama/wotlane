@@ -420,6 +420,16 @@ public:
         for (auto &[h, s] : sounds_) if (s->group == group) s->refreshVolume();
     }
     s32 masterVolume(int group) const { return group >= 0 && group < 32 ? master_[size_t(group)] : 0; }
+    // This PC's volume for group 0 (effects) or 1 (music), 0..100 %, on top of the game's master volume (AUDIO tab, WOTM_VOL_SFX /
+    // WOTM_VOL_MUSIC). The game never sees it (masterVolume stays the game's own), so it changes what you hear, not the game.
+    void setPlayerVolume(int group, int percent) {
+        if (group < 0 || group >= 2) return;
+        percent = std::clamp(percent, 0, 100);
+        if (player_[size_t(group)].exchange(percent) == percent) return;
+        std::lock_guard<std::mutex> g(m_);
+        for (auto &[h, s] : sounds_) if (s->group == group) s->refreshVolume();
+    }
+    int playerVolume(int group) const { return group >= 0 && group < 2 ? player_[size_t(group)].load() : 100; }
     void setMono(bool m) { std::lock_guard<std::mutex> g(m_); mono_ = m; }
     s32 sramFree() const {   // the SPU2's 2 MB minus what's "loaded" (informational only; the game prints it)
         size_t used = 0;
@@ -491,6 +501,7 @@ public:
         if (group >= 15) return v;
         v = std::min(v, 0x7ffe);
         v = v * master_[size_t(group)] / 0x400;
+        if (group < 2) v = v * playerVolume(group) / 100;
         const int sign = v < 0 ? -1 : 1;
         return v * v / 0x7ffe * sign;
     }
@@ -529,6 +540,7 @@ private:
     std::map<u32, std::unique_ptr<Sound>> sounds_;
     std::vector<std::shared_ptr<Voice>> voices_;
     std::array<s32, 32> master_{};
+    std::array<std::atomic<int>, 2> player_{{100, 100}};   // setPlayerVolume: this PC's effects and music percent
     bool mono_ = false;
     u32 nextHandle_ = 0, nextBank_ = 1, tick_ = 0, rng_ = 0x989u;
     int tickPhase_ = 0;
