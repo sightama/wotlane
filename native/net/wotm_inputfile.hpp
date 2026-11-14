@@ -1,5 +1,5 @@
-// ABOUTME: Input recording file (WOTM_INPUTREC writes it, WOTM_INPUTPLAY replays it): {frame, controller, pad state} records, with a
-// ABOUTME: versioned header; files without the header (pad state without mouse or camera settings) still load. No game dependency.
+// ABOUTME: Input recording file (WOTM_INPUTREC writes it, WOTM_INPUTPLAY replays it): {frame, controller, pad state} records after a
+// ABOUTME: versioned header with the fight's gameplay modifiers; older versions and headerless files still load. No game dependency.
 #pragma once
 
 #include "wotm_lockstep.hpp"
@@ -18,17 +18,19 @@ struct InputRecord
     PadState state;
 };
 
-// Version 2: "WOTMINP" + version byte, then 20-byte little-endian records {u32 index, u32 controller, u16 buttons, u8 rx, ry, lx, ly,
-// i16 mouseX, mouseY, u16 cam}. Without the header: 16-byte records {u32 index, u32 controller, u16 buttons, u8 rx, ry, lx, ly,
-// 2 bytes of padding}.
+// Version 3: "WOTMINP" + version byte + modifiers byte (the fight's gameplay modifiers, wotm::modifiers bits), then 20-byte
+// little-endian records {u32 index, u32 controller, u16 buttons, u8 rx, ry, lx, ly, i16 mouseX, mouseY, u16 cam}. Version 2: the same
+// without the modifiers byte. Without the header: 16-byte records {u32 index, u32 controller, u16 buttons, u8 rx, ry, lx, ly, 2 bytes
+// of padding}.
 inline constexpr char kInputMagic[7] = {'W', 'O', 'T', 'M', 'I', 'N', 'P'};
-inline constexpr uint8_t kInputVersion = 2;
+inline constexpr uint8_t kInputVersion = 3;
 inline constexpr size_t kInputRecordSize = 20, kHeaderlessRecordSize = 16;
 
-inline std::vector<uint8_t> encodeInputHeader()
+inline std::vector<uint8_t> encodeInputHeader(int modifiers)
 {
     std::vector<uint8_t> b(kInputMagic, kInputMagic + sizeof kInputMagic);
     b.push_back(kInputVersion);
+    b.push_back(static_cast<uint8_t>(modifiers));
     return b;
 }
 
@@ -45,19 +47,25 @@ inline std::vector<uint8_t> encodeInputRecord(const InputRecord &r)
     return b;
 }
 
-// Every whole record of the file (a truncated last record is ignored); false with `err` and no records on an unknown version
-inline bool readInputRecords(const std::vector<uint8_t> &bytes, std::vector<InputRecord> &out, std::string &err)
+// Every whole record of the file (a truncated last record is ignored) and its gameplay modifiers (-1 = not recorded: version 2 or no
+// header); false with `err` and no records on an unknown version
+inline bool readInputRecords(const std::vector<uint8_t> &bytes, std::vector<InputRecord> &out, int &modifiers, std::string &err)
 {
     out.clear();
     err.clear();
+    modifiers = -1;
     const bool versioned = bytes.size() >= sizeof kInputMagic + 1 && std::memcmp(bytes.data(), kInputMagic, sizeof kInputMagic) == 0;
-    if (versioned && bytes[sizeof kInputMagic] != kInputVersion)
+    const uint8_t version = versioned ? bytes[sizeof kInputMagic] : 0;
+    if (versioned && version != kInputVersion && version != 2)
     {
-        err = "input recording version " + std::to_string(bytes[sizeof kInputMagic]) + " is not supported (this build reads version " +
+        err = "input recording version " + std::to_string(version) + " is not supported (this build reads versions 2 and " +
               std::to_string(kInputVersion) + " and files without a header)";
         return false;
     }
-    const size_t start = versioned ? sizeof kInputMagic + 1 : 0, size = versioned ? kInputRecordSize : kHeaderlessRecordSize;
+    if (version == kInputVersion && bytes.size() > sizeof kInputMagic + 1)
+        modifiers = bytes[sizeof kInputMagic + 1];
+    const size_t start = !versioned ? 0 : version == kInputVersion ? sizeof kInputMagic + 2 : sizeof kInputMagic + 1;
+    const size_t size = versioned ? kInputRecordSize : kHeaderlessRecordSize;
     for (size_t at = start; at + size <= bytes.size(); at += size)
     {
         const uint8_t *p = bytes.data() + at;
