@@ -107,6 +107,7 @@ std::atomic<bool> g_wotmCheatWin{false};
 
 // Debug free camera (F5): the window (wotm_freecam.inc) moves the pose, the EE thread puts it into view 0's _cs (freeCamWrite).
 #include "wotm_freecam.h"
+#include "wotm_lockon.hpp"   // lock-on target cycling (lockCycleTarget): the pick, on wotm_detmath
 #include "wotm_mouse.hpp"   // mouse for the modern camera (wotm_orbit.inc consumes it, the window accumulates it)
 #include "wotm_detmath.hpp"   // trig with the same bits on every machine, for results that reach guest RAM (wotm_orbit.inc, lock-on)
 std::atomic<bool> g_wotmFreeCam{false};
@@ -1750,32 +1751,16 @@ namespace
         float me[3], tp[3], right[2], fwd[2];
         if (!cur || !targetPos(rdram, owner, me) || !lockCameraAxes(rdram, owner, right, fwd))
             return;
-        auto screenAngle = [&](const float p[3]) {
-            const float dx = p[0] - me[0], dy = p[1] - me[1];
-            return wotm::detmath::atan2f(dx * right[0] + dy * right[1], dx * fwd[0] + dy * fwd[1]);   // picks game state: same bits everywhere
-        };
-        const float curA = targetPos(rdram, cur, tp) ? screenAngle(tp) : 0.f;
-        uint32_t best = 0, wrap = 0;
-        float bestD = 1e9f, wrapA = 0.f;
+        const float curA = targetPos(rdram, cur, tp) ? wotm::lockon::screenAngle(me, tp, right, fwd) : 0.f;
+        wotm::lockon::Candidate cands[kMonsterSlots];
+        size_t n = 0;
         for (uint32_t i = 0; i < kMonsterSlots; ++i)
         {
             const uint32_t m = FAST_READ32(kGame + 0x120380 + 4 * i);   // m_monsters[i]
-            if (m == cur || !lockCandidate(rdram, m, owner, tp))
-                continue;
-            const float a = screenAngle(tp), d = (a - curA) * static_cast<float>(dir);
-            if (d > 0.f && d < bestD)
-            {
-                bestD = d;
-                best = m;
-            }
-            if (!wrap || a * -static_cast<float>(dir) > wrapA * -static_cast<float>(dir))
-            {
-                wrap = m;   // the farthest on the opposite side: the wraparound
-                wrapA = a;
-            }
+            if (m != cur && lockCandidate(rdram, m, owner, cands[n].pos))
+                cands[n++].id = m;
         }
-        if (!best)
-            best = wrap;
+        const uint32_t best = wotm::lockon::nextTarget(me, curA, cands, n, right, fwd, dir);
         if (!best)
             return;
         FAST_WRITE32(owner + kMonsterPinTarget, best);

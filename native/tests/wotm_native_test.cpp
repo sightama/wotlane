@@ -1,5 +1,5 @@
 // ABOUTME: Unit tests for the pure parts of the native layer (no game, no window): frame interpolation from wotm_interp.hpp (matrices,
-// ABOUTME: camera, cuts, projection), the settings profile for network matches and the mod digest. Build and run: tools\test_native.bat
+// ABOUTME: camera, cuts, projection), the settings profile for network matches, the mod digest and lock-on target cycling. Build and run: tools\test_native.bat
 #include "wotm_interp.hpp"
 #include "wotm_settings.hpp"
 #include "wotm_snd.hpp"
@@ -7,6 +7,7 @@
 #include "wotm_mods.hpp"
 #include "wotm_detmath.hpp"
 #include "wotm_freecam.h"
+#include "wotm_lockon.hpp"
 #include "wotm_trig_goldens.hpp"
 #include "net/wotm_modifiers.hpp"
 #include "net/wotm_camsettings.hpp"
@@ -583,6 +584,39 @@ TEST(freecam_axes_use_deterministic_trig)
             bad += bitsOf(got[k]) != bitsOf(want[k]);
     }
     CHECK(bad == 0);
+}
+
+// Lock-on target switching (Tab/R/wheel): the nearest to the right or left on screen, wrapping around at the end
+TEST(lockon_cycles_targets_on_screen)
+{
+    namespace lo = wotm::lockon;
+    const float me[3] = {0.f, 0.f, 0.f}, right[2] = {1.f, 0.f}, fwd[2] = {0.f, 1.f};   // camera looking down +Y
+    // ahead (1), ahead-right (2), right (3), ahead-left (4); 5 is behind the player, the farthest left on screen
+    const lo::Candidate all[] = {{1, {0.f, 10.f, 0.f}}, {2, {5.f, 10.f, 0.f}}, {3, {10.f, 0.f, 0.f}}, {4, {-5.f, 10.f, 0.f}}, {5, {-1.f, -10.f, 0.f}}};
+    auto next = [&](uint32_t cur, int dir) {
+        std::vector<lo::Candidate> others;
+        float curA = 0.f;
+        for (const lo::Candidate &c : all)
+            if (c.id == cur)
+                curA = lo::screenAngle(me, c.pos, right, fwd);
+            else
+                others.push_back(c);
+        return lo::nextTarget(me, curA, others.data(), others.size(), right, fwd, dir);
+    };
+    uint32_t t = 1;
+    const uint32_t rightward[] = {2, 3, 5, 4, 1};   // after 3 (right) wraps around to the farthest left
+    for (uint32_t want : rightward)
+        CHECK((t = next(t, 1)) == want);
+    const uint32_t leftward[] = {4, 5, 3, 2, 1};
+    for (uint32_t want : leftward)
+        CHECK((t = next(t, -1)) == want);
+    CHECK(lo::nextTarget(me, 0.f, nullptr, 0, right, fwd, 1) == 0);
+
+    // The pick is game state, so it must not depend on the machine's libm. P and Q have the same detmath angle (the earlier one, P,
+    // wins the tie); Apple's atan2f puts Q 1 ulp lower, which would pick Q on the Mac and P on Windows.
+    const lo::Candidate pq[] = {{0x10, {0x1.c81efp-1f, 0x1.00026cp+0f, 0.f}}, {0x20, {0x1.c81f1p-1f, 0x1.00027ep+0f, 0.f}}};
+    CHECK(bitsOf(lo::screenAngle(me, pq[0].pos, right, fwd)) == bitsOf(lo::screenAngle(me, pq[1].pos, right, fwd)));
+    CHECK(lo::nextTarget(me, 0.f, pq, 2, right, fwd, 1) == 0x10);
 }
 
 int main()
