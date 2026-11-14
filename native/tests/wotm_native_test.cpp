@@ -2,6 +2,8 @@
 // ABOUTME: camera, cuts, projection), the settings profile for network matches and the mod digest. Build and run: tools\test_native.bat
 #include "wotm_interp.hpp"
 #include "wotm_settings.hpp"
+#include "wotm_snd.hpp"
+#include "wotm_windowfit.hpp"
 #include "wotm_mods.hpp"
 #include "wotm_detmath.hpp"
 #include "wotm_freecam.h"
@@ -256,6 +258,60 @@ namespace
         CHECK(st::parse(st::Turbo, "1", v) && v == 1 && st::parse(st::Turbo, "0", v) && v == 0);
         CHECK(std::string(st::kEnv[st::SuperJump]) == "WOTM_SUPERJUMP" && std::string(st::kEnv[st::Turbo]) == "WOTM_TURBO");
         st::g_val[st::SuperJump].store(0), st::g_val[st::FastMonsters].store(0), st::g_val[st::Turbo].store(0);
+    }
+
+    // Effects and music volume (AUDIO tab, #7): per-PC percentages 0..100, default 100, from WOTM_VOL_SFX / WOTM_VOL_MUSIC or settings.ini;
+    // never forced by the network profile (they change what you hear, not the game)
+    TEST(volume_settings_are_per_pc_percentages)
+    {
+        namespace st = wotm::settings;
+        CHECK(std::string(st::kEnv[st::VolSfx]) == "WOTM_VOL_SFX" && std::string(st::kEnv[st::VolMusic]) == "WOTM_VOL_MUSIC");
+        CHECK(st::kDefault[st::VolSfx] == 100 && st::kDefault[st::VolMusic] == 100);
+        int v = -1;
+        CHECK(st::parse(st::VolSfx, "40", v) && v == 40);
+        CHECK(st::parse(st::VolMusic, "0", v) && v == 0);
+        CHECK(st::parse(st::VolMusic, "250", v) && v == 100);
+        CHECK(st::parse(st::VolSfx, "-5", v) && v == 0);
+        CHECK(!st::parse(st::VolSfx, "loud", v));
+        st::g_netProfile.store(true);
+        CHECK(!st::forced(st::VolSfx) && !st::forced(st::VolMusic));
+        st::g_netProfile.store(false);
+    }
+
+    // The engine applies this PC's volume on top of the game's group volume: the game still reads back its own value
+    // (snd_GetMasterVolume), effects and music are separate, 0 is silence
+    TEST(sound_player_volume_scales_one_group_only)
+    {
+        auto &e = wotm::snd::Engine::get();
+        e.setMasterVolume(0, 0x400);
+        e.setMasterVolume(1, 0x400);
+        const int full = e.adjustToGroup(0x4000, 0);
+        e.setPlayerVolume(0, 50);
+        CHECK(e.adjustToGroup(0x4000, 0) < full && e.adjustToGroup(0x4000, 0) > 0);
+        CHECK(e.adjustToGroup(0x4000, 1) == full);   // music untouched
+        CHECK(e.masterVolume(0) == 0x400);            // the game's own value is unchanged
+        e.setPlayerVolume(1, 0);
+        CHECK(e.adjustToGroup(0x4000, 1) == 0);
+        e.setPlayerVolume(0, 100);
+        e.setPlayerVolume(1, 100);
+        CHECK(e.adjustToGroup(0x4000, 0) == full && e.adjustToGroup(0x4000, 1) == full);
+    }
+
+    // The window at start (#6): the largest size of the frame's aspect that fits in 90% of the monitor, whatever the render resolution
+    TEST(window_fits_the_monitor_not_the_render_resolution)
+    {
+        namespace wf = wotm::windowfit;
+        int w = 0, h = 0;
+        wf::size(16.f / 9.f, 2560, 1440, w, h);
+        CHECK(w == 2304 && h == 1296);
+        wf::size(16.f / 9.f, 1920, 1200, w, h);   // 16:10 monitor: the width limits
+        CHECK(w == 1728 && h == 972);
+        wf::size(4.f / 3.f, 1920, 1080, w, h);    // 4:3 frame: the height limits
+        CHECK(w == 1296 && h == 972);
+        wf::size(16.f / 9.f, 0, 0, w, h);         // no monitor information: 1280x720
+        CHECK(w == 1280 && h == 720);
+        wf::size(16.f / 9.f, 2560, 1440, w, h, 360);   // a cap on the height (checks: WOTM_WINDOW)
+        CHECK(w == 640 && h == 360);
     }
 
     // Network match profile (wotm_settings.hpp): settings that change game state the same way for everyone take the fixed profile on

@@ -47,7 +47,7 @@ def check_env(runtime, res='720'):
     env = dict(os.environ)
     env.update(PS2X_NO_VU1='1', PS2X_NO_VIF1='1', PS2X_NO_GS='1', PS2X_SCENE='1', PS2X_FMV='1', WOTM_REPO=str(REPO),
                PS2X_CD_IMAGE=iso_path(runtime))
-    for k, v in (('WOTM_MUTE', '1'), ('WOTM_FULLSCREEN', '0'), ('WOTM_RES', res), ('WOTM_SETTINGS', '0')):
+    for k, v in (('WOTM_MUTE', '1'), ('WOTM_FULLSCREEN', '0'), ('WOTM_RES', res), ('WOTM_WINDOW', res), ('WOTM_SETTINGS', '0')):
         env.setdefault(k, v)
     return env
 

@@ -14,7 +14,7 @@
 // row is outside currentSelection (g_extraRow, like "quit game"); X on it opens the port's options panel in place of the list, without changing screens, and
 // triangle (or O) closes it. With the panel open (and for 20 frames after closing) the game sees no input at all: the panel reads
 // the devices directly (wotm_padsel::readDevice), on the EE thread, inside the screenGetInput hook.
-// Panel: tabs VIDEO / FEATURES / CAMERA / MODIFIERS / CONTROLS (L1/R1), up/down pick the row, left/right/X
+// Panel: tabs VIDEO / AUDIO / FEATURES / CAMERA / MODIFIERS / CONTROLS (L1/R1), up/down pick the row, left/right/X
 // change the value, which takes effect immediately and is saved to settings.ini (wotm_settings.hpp; video is applied on the window
 // thread by wotm_live.inc's applyVideoSettings). Drawn into a texture of our own over the whole big screen (the visible band below the menu's banner).
 // CONTROLS tab (scrolls): separate keyboard, which map the list shows (keyboard or gamepads), one row per PS2 button (X waits for the
@@ -120,8 +120,8 @@ static int g_pauseSuppress = 0;
 // Each option is a wotm_settings.hpp key; changing it saves settings.ini and takes effect immediately (video on the window thread,
 // mods and keyboard the next time they are read).
 namespace st = wotm::settings;
-enum Tab { TabVideo, TabFeatures, TabCamera, TabModifiers, TabControls, kTabs };
-constexpr const char *kTabNames[kTabs] = {"VIDEO", "FEATURES", "CAMERA", "MODIFIERS", "CONTROLS"};
+enum Tab { TabVideo, TabAudio, TabFeatures, TabCamera, TabModifiers, TabControls, kTabs };
+constexpr const char *kTabNames[kTabs] = {"VIDEO", "AUDIO", "FEATURES", "CAMERA", "MODIFIERS", "CONTROLS"};
 constexpr int kMaxOpts = 9;
 struct Opt { st::Key key; const char *label; const char *hint; };
 struct TabDef { int n; Opt opt[kMaxOpts]; };
@@ -136,11 +136,14 @@ constexpr TabDef kTabDefs[kTabs] = {
       {st::Interp, "INTERPOLATE FRAMES", "SMOOTHER MOTION ABOVE 60 HZ OR WHEN THE GAME DROPS TO 30. MAY ADD DELAY"},
       {st::Msaa, "ANTI-ALIASING", "MSAA SMOOTHS THE JAGGED EDGES OF THE 3D MODELS"},
       {st::TexFilter, "TEXTURE FILTER", "KEEPS TEXTURES SHARP FAR AWAY AND AT STEEP ANGLES"}}},
-    {5,
+    {3,   // this PC only: what you hear, never the game (online too)
+     {{st::VolSfx, "EFFECTS VOLUME", "HITS, ROARS, CRASHES AND MENU SOUNDS. ONLY ON THIS COMPUTER"},
+      {st::VolMusic, "MUSIC VOLUME", "THE MUSIC OF THE MENUS AND THE LEVELS. ONLY ON THIS COMPUTER"},
+      {st::Announcer, "NARRATOR", "A VOICE CALLS OUT THE MONSTER AND THE LEVEL YOU PICK, OR THE MONSTER ROARS"}}},
+    {4,
      {{st::LockToggle, "LOCK-ON TOGGLE", "TAP R1 TO LOCK ON AND AGAIN TO LET GO. THE D-PAD PICKS ANOTHER TARGET"},
       {st::EnemyBars, "ENEMY BARS", "SHOWS THE HEALTH AND ENERGY OF EACH ENEMY ABOVE THEIR HEAD"},
       {st::DamagePop, "DAMAGE NUMBERS", "SHOWS HOW MUCH DAMAGE EACH HIT DOES"},
-      {st::Announcer, "NARRATOR", "A VOICE CALLS OUT THE MONSTER AND THE LEVEL YOU PICK, OR THE MONSTER ROARS"},
       {st::SkipIntro, "SKIP INTRO MOVIES", "GOES STRAIGHT TO THE TITLE SCREEN. CHANGES TAKE EFFECT ON NEXT BOOT"}}},
     {5,
      {{st::Camera, "CAMERA STYLE", "MODERN TURNS WITH THE RIGHT STICK. CLASSIC IS THE CAMERA OF THE ORIGINAL GAME"},
@@ -387,6 +390,8 @@ static int choices(st::Key k, int out[16])
     case st::Display: for (int i = 0; i < 3; ++i) out[i] = i; return 3;
     case st::CamSens: for (int i = 0; i < 10; ++i) out[i] = i + 1; return 10;
     case st::Announcer: for (int i = 0; i < 3; ++i) out[i] = i; return 3;
+    case st::VolSfx:
+    case st::VolMusic: for (int i = 0; i <= 10; ++i) out[i] = i * 10; return 11;
     case st::Prompts:   // without PLAYSTATION: same as ORIGINAL (AUTO still uses it with a PlayStation gamepad)
     {
         int n = 0;
@@ -452,6 +457,8 @@ static void valueText(st::Key k, int v, char *buf, size_t sz)
     case st::MenuConfirm: std::snprintf(buf, sz, "%s", v ? "RIGHT BUTTON" : "BOTTOM BUTTON"); break;
     case st::Camera: std::snprintf(buf, sz, "%s", v ? "MODERN" : "CLASSIC"); break;
     case st::CamSens: std::snprintf(buf, sz, "%d", v); break;
+    case st::VolSfx:
+    case st::VolMusic: if (v > 0) std::snprintf(buf, sz, "%d", v); else std::snprintf(buf, sz, "OFF"); break;
     case st::Announcer:   // the narrator's voice (narrator/) or the chosen monster's cry
         std::snprintf(buf, sz, "%s", v == 2 ? "MONSTER CRY" : v ? "GODZILLA SAVE THE EARTH" : "OFF");
         break;
