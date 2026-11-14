@@ -1044,6 +1044,21 @@ namespace
 
     std::vector<uint8_t> bytesOf(const std::string &s) { return std::vector<uint8_t>(s.begin(), s.end()); }
 
+    // WOTM_NET: host[:port] for ENet, or a whole ws:// / wss:// URL (its colons are not a port)
+    TEST(server_address_splits_host_and_port)
+    {
+        std::string host;
+        uint16_t port = 0;
+        wotm_net::splitServerAddress("10.0.0.5:7790", host, port);
+        CHECK(host == "10.0.0.5" && port == 7790);
+        wotm_net::splitServerAddress("example.org", host, port);
+        CHECK(host == "example.org" && port == p::kDefaultPort);
+        wotm_net::splitServerAddress("wss://example.org/match", host, port);
+        CHECK(host == "wss://example.org/match" && port == p::kDefaultPort);
+        wotm_net::splitServerAddress("ws://127.0.0.1:7780/match", host, port);
+        CHECK(host == "ws://127.0.0.1:7780/match" && port == p::kDefaultPort);
+    }
+
     TEST(ws_accept_key_matches_rfc_example)
     {
         CHECK(wotm_net::ws::acceptKey("dGhlIHNhbXBsZSBub25jZQ==") == "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");

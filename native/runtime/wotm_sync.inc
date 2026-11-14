@@ -596,9 +596,14 @@ namespace wotm_sync
         std::fprintf(stderr, "[net] blocks of frame %u: not kept here (only the last two windows are)\n", frame);
     }
 
-    // Build identity (every PC needs the same exe): wotm.buildid next to the exe, written by tools\build_runtime.ps1
+    // Build identity (every PC needs the same exe): wotm.buildid next to the exe, written by tools\build_runtime.ps1. The browser
+    // version has no exe folder: the page passes the id from version.json (tools/build_web.sh) in WOTM_BUILDID
     std::string netBuildId()
     {
+#ifdef __EMSCRIPTEN__
+        if (const char *web = std::getenv("WOTM_BUILDID"); web && *web)
+            return web;
+#endif
         char path[1024] = {};
         const unsigned long n = GetModuleFileNameA(nullptr, path, sizeof path);
         std::string dir(path, n);
@@ -646,11 +651,8 @@ namespace wotm_sync
 
     void netInit(const char *addr)
     {
-        std::string a(addr);
-        const size_t colon = a.rfind(':');
         wotm_net::ClientConfig c;
-        c.host = colon == std::string::npos ? a : a.substr(0, colon);
-        c.port = colon == std::string::npos ? wotm_net::proto::kDefaultPort : static_cast<uint16_t>(std::atoi(a.c_str() + colon + 1));
+        wotm_net::splitServerAddress(addr, c.host, c.port);
         const char *token = std::getenv("WOTM_NETTOKEN"), *name = std::getenv("WOTM_NETNAME");
         c.token = token ? token : "";
         c.name = name && *name ? name : "player";
@@ -665,9 +667,10 @@ namespace wotm_sync
             return;
         }
         wotm_netstatus::g_active = true;
-        wotm_netstatus::setMessage("Connecting to " + c.host + ":" + std::to_string(c.port));
-        std::fprintf(stderr, "[net] connecting to %s:%u as %s (build %s, config %s)\n", c.host.c_str(), c.port, c.name.c_str(),
-                     c.buildId.c_str(), c.configHash.c_str());
+        const std::string where = wotm_net::isWebSocketAddress(c.host) ? c.host : c.host + ":" + std::to_string(c.port);
+        wotm_netstatus::setMessage("Connecting to " + where);
+        std::fprintf(stderr, "[net] connecting to %s as %s (build %s, config %s)\n", where.c_str(), c.name.c_str(), c.buildId.c_str(),
+                     c.configHash.c_str());
     }
 
     // rtPauseRT (Start or controller unplugged) calls rtReturnToShell(2, field) with the FIELD bit of the GS CSR, which the runtime's
