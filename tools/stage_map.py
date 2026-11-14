@@ -1306,8 +1306,9 @@ def make_copies(m, args, valid, valid_riders, pups, notes, parent=None):
             node = int(node_s, 16)
         except ValueError:
             v, node = [], None
-        if node is None or len(v) not in (3, 4) or not all(math.isfinite(x) for x in v):
-            raise ValueError("bad --copy %r (expected 0x..=x,y,z[,turn], finite numbers)" % arg)
+        if node is None or len(v) not in (3, 4) or not all(math.isfinite(x) for x in v) or \
+                not all(abs(x) <= WORLD_LIMIT for x in v[:3]):
+            raise ValueError("bad --copy %r (expected 0x..=x,y,z[,turn], x, y and z from -%d to %d)" % (arg, WORLD_LIMIT, WORLD_LIMIT))
         if node not in valid:
             raise ValueError("node 0x%x is not a piece of this stage (see: stage_map.py pieces)" % node)
         src = BASE + node

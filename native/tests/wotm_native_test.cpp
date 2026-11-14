@@ -1704,6 +1704,7 @@ TEST(stagemap_copy_parse)
     CHECK(bad(first + R"({"copy": 256, "at": [1, 2, 3]})", "edit 2: \"copy\""));
     CHECK(bad(first + R"({"copy": "0x100"})", "edit 2: \"at\""));
     CHECK(bad(first + R"({"copy": "0x100", "at": [1, 2]})", "edit 2: \"at\""));
+    CHECK(bad(first + R"({"copy": "0x100", "at": [500, 500, 1e30]})", "edit 2: \"at\""));   // outside the world
     CHECK(bad(first + R"({"copy": "0x100", "at": [1, 2, 3], "turn": "90"})", "edit 2: \"turn\""));
     CHECK(bad(first + R"({"copy": "0x100", "at": [1, 2, 3], "move": [1, 2, 3]})", "edit 2: unknown key \"move\""));
     CHECK(bad(first + R"({"addpowerup": -1, "from": [0, 0, 0], "at": [1, 1, 1]})", "edit 2: \"addpowerup\""));

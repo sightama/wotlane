@@ -178,7 +178,7 @@ bool parseCopy(const json::Value &e, const std::string &at, Copy &out, std::stri
     }
     if (!vec3(e.get("at"), out.at))
     {
-        why = at + "\"at\" must be [x, y, z] (numbers): where the copy goes";
+        why = at + "\"at\" must be [x, y, z] (numbers from -1000000 to 1000000): where the copy goes";
         return false;
     }
     if (turn && !finiteFloat(turn, out.turn))
