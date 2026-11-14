@@ -10,6 +10,7 @@
 #include "wotm_snd.hpp"
 #include "wotm_mods.hpp"   // fake LSNs for the files in mods/
 #include "wotm_disc.hpp"   // Shell bank for the pause panel (panelShellBank)
+#include "../wotm_settings.hpp"   // this PC's effects and music volume (wotmApplyAudioSettings)
 #include <cctype>
 #include <cstring>
 #include "Stubs/CD.h"   // from src/lib/Kernel, a public include dir of ps2_runtime (MSVC also found it next to the includer)
@@ -370,10 +371,27 @@ void wotmSndInstall(PS2Runtime &runtime)
 }
 // Game frame boundary in deterministic mode (wotm_sync.inc): the engine advances by `fields` fields
 void wotmSoundFrame(unsigned fields) { wotm::snd::Engine::get().advanceFrame(fields); }
+// This PC's effects and music volume (AUDIO tab, WOTM_VOL_SFX / WOTM_VOL_MUSIC) into the engine; every presented frame (wotm_live.inc),
+// so a panel change is heard at once. The engine only refreshes the playing sounds when a value changes.
+void wotmApplyAudioSettings()
+{
+    namespace st = wotm::settings;
+    auto &e = wotm::snd::Engine::get();
+    static int s_logged[2] = {-1, -1};
+    const int sfx = st::get(st::VolSfx), music = st::get(st::VolMusic);
+    e.setPlayerVolume(0, sfx);
+    e.setPlayerVolume(1, music);
+    if (sfx != s_logged[0] || music != s_logged[1])
+    {
+        std::fprintf(stderr, "[audio] this PC: effects %d%%, music %d%% (AUDIO tab, WOTM_VOL_SFX / WOTM_VOL_MUSIC)\n", sfx, music);
+        s_logged[0] = sfx, s_logged[1] = music;
+    }
+}
 #else
 void wotmSndInstall(PS2Runtime &)
 {
     std::fprintf(stderr, "[snd] native sound off: native/wotm_snd.hpp is missing (WOTM_NATIVE_DIR)\n");
 }
 void wotmSoundFrame(unsigned) {}
+void wotmApplyAudioSettings() {}
 #endif

@@ -8,6 +8,8 @@
 #include "wotm_net_proto.hpp"
 #include "wotm_net_server.hpp"
 #include "wotm_net_socket.hpp"
+#include "wotm_net_ws.hpp"
+#include "wotm_net_wslink.hpp"
 
 #include <atomic>
 #include <cctype>
@@ -357,7 +359,7 @@ namespace
         return c;
     }
 
-    std::string readUntil(LineSocket &s, const std::string &prefix, int ms = 3000)
+    std::string readUntil(wotm_net::LineLink &s, const std::string &prefix, int ms = 3000)
     {
         std::string line;
         while (s.readLine(line, ms))
@@ -462,7 +464,7 @@ namespace
         CHECK(readUntil(a, "MEMBERS " + code + " Ana Ana:3,") == "MEMBERS " + code + " Ana Ana:3,Bia:1");
 
         b.sendLine("SET wins=3");
-        CHECK(readUntil(b, "ERROR").find("owner") != std::string::npos);
+        CHECK(readUntil(b, "ERROR") == "ERROR only the lobby owner can change the stage, wins and modifiers");
         b.sendLine("START");
         CHECK(readUntil(b, "ERROR").find("owner") != std::string::npos);
         a.sendLine("SET stage=5 wins=3 mods=");
@@ -742,7 +744,8 @@ namespace
         CHECK(!old.connect("127.0.0.1", cfg.port, "b1", err, p::kProtocol - 1) && err.find("protocol") != std::string::npos);
     }
 
-    // two match clients exchange frames of input and see the same timeline
+    // two match clients exchange frames of input and see the same timeline; each frame is checked as soon as it is ready, because
+    // waitFrame keeps only the last 256 frames
     void exchange(MatchClient &a, MatchClient &b, uint32_t frames)
     {
         const uint32_t d = a.delay();
@@ -751,18 +754,18 @@ namespace
             a.pushLocal(f + d, pressed(static_cast<uint16_t>(f)));
             b.pushLocal(f + d, pressed(static_cast<uint16_t>(0x8000u | f)));
         }
-        bool all = true;
+        bool all = true, same = true, right = true;
         for (uint32_t f = 0; f < frames + d && all; ++f)
+        {
             all = a.waitFrame(f, 3000) && b.waitFrame(f, 3000);
-        CHECK(all);
-        bool same = true, right = true;
-        for (uint32_t f = 0; f < frames + d; ++f)
-            for (int pl = 0; pl < 2; ++pl)
+            for (int pl = 0; pl < 2 && all; ++pl)
             {
                 same = same && a.input(pl, f) == b.input(pl, f);
                 const PadState want = f < d ? PadState{} : pressed(static_cast<uint16_t>((pl ? 0x8000u : 0u) | (f - d)));
                 right = right && a.input(pl, f) == want;
             }
+        }
+        CHECK(all);
         CHECK(same);
         CHECK(right);
     }
@@ -1035,6 +1038,291 @@ namespace
         CHECK(a.desyncFrame() == 60u);
         CHECK(a.message() == "desync: state differs on frame 60: Ana vs Bia; blocks 5 (0x00a0000), 131 (0x1060000)");
         CHECK(!a.waitFrame(a.delay(), 200));   // desynced: no new frame runs
+    }
+
+    // ---- WebSocket (the browser version's transport) ----
+
+    std::vector<uint8_t> bytesOf(const std::string &s) { return std::vector<uint8_t>(s.begin(), s.end()); }
+
+    TEST(ws_accept_key_matches_rfc_example)
+    {
+        CHECK(wotm_net::ws::acceptKey("dGhlIHNhbXBsZSBub25jZQ==") == "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
+    }
+
+    TEST(ws_handshake_parses_path_and_key)
+    {
+        const std::string req = "GET /match HTTP/1.1\r\nHost: example\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+                                "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n";
+        const auto h = wotm_net::ws::parseHandshake(req);
+        CHECK(h.has_value());
+        CHECK(h && h->path == "/match");
+        CHECK(h && h->key == "dGhlIHNhbXBsZSBub25jZQ==");
+        CHECK(!wotm_net::ws::parseHandshake("GET / HTTP/1.1\r\nHost: example\r\n\r\n").has_value());   // not an upgrade
+        CHECK(!wotm_net::ws::parseHandshake("POST /match HTTP/1.1\r\nUpgrade: websocket\r\nSec-WebSocket-Key: x\r\n\r\n").has_value());
+        // a proxy (Caddy) may send the header names in another case
+        const auto lower = wotm_net::ws::parseHandshake("GET /lobby HTTP/1.1\r\nupgrade: WebSocket\r\nsec-websocket-key: abc\r\n\r\n");
+        CHECK(lower && lower->path == "/lobby" && lower->key == "abc");
+    }
+
+    TEST(ws_frame_roundtrip_masked)
+    {
+        using namespace wotm_net::ws;
+        const std::vector<uint8_t> payload = bytesOf("hello lockstep");
+        const std::vector<uint8_t> wire = encode(kBinary, payload.data(), payload.size(), true);
+        FrameParser p(true);
+        p.feed(wire.data(), wire.size());
+        Frame f;
+        CHECK(p.next(f) == FrameParser::Result::Ok);
+        CHECK(f.opcode == kBinary && f.payload == payload);
+        CHECK(p.next(f) == FrameParser::Result::NeedMore);
+    }
+
+    TEST(ws_frame_sizes_use_the_long_length_forms)
+    {
+        using namespace wotm_net::ws;
+        for (size_t n : {size_t(125), size_t(126), size_t(300), size_t(65535)})
+        {
+            const std::vector<uint8_t> payload(n, 0x5A);
+            const std::vector<uint8_t> wire = encode(kBinary, payload.data(), payload.size(), false);
+            FrameParser p(false);   // a client reads the server's unmasked frames
+            p.feed(wire.data(), wire.size());
+            Frame f;
+            CHECK(p.next(f) == FrameParser::Result::Ok && f.payload.size() == n);
+        }
+    }
+
+    TEST(ws_frame_split_across_feeds)
+    {
+        using namespace wotm_net::ws;
+        const std::vector<uint8_t> wire = encode(kText, reinterpret_cast<const uint8_t *>("LIST"), 4, true);
+        FrameParser p(true);
+        Frame f;
+        for (size_t i = 0; i + 1 < wire.size(); ++i)
+        {
+            p.feed(&wire[i], 1);
+            CHECK(p.next(f) == FrameParser::Result::NeedMore);
+        }
+        p.feed(&wire.back(), 1);
+        CHECK(p.next(f) == FrameParser::Result::Ok && f.opcode == kText && f.payload == bytesOf("LIST"));
+    }
+
+    TEST(ws_fragmented_message_is_joined)
+    {
+        using namespace wotm_net::ws;
+        std::vector<uint8_t> wire = encode(kText, reinterpret_cast<const uint8_t *>("HEL"), 3, true, false);
+        const std::vector<uint8_t> rest = encode(kContinuation, reinterpret_cast<const uint8_t *>("LO 4"), 4, true, true);
+        wire.insert(wire.end(), rest.begin(), rest.end());
+        FrameParser p(true);
+        p.feed(wire.data(), wire.size());
+        Frame f;
+        CHECK(p.next(f) == FrameParser::Result::Ok && f.opcode == kText && f.payload == bytesOf("HELLO 4"));
+    }
+
+    TEST(ws_rejects_unmasked_client_frame)
+    {
+        using namespace wotm_net::ws;
+        const std::vector<uint8_t> wire = encode(kText, reinterpret_cast<const uint8_t *>("LIST"), 4, false);
+        FrameParser p(true);   // the server requires masked frames (RFC 6455 5.1)
+        p.feed(wire.data(), wire.size());
+        Frame f;
+        CHECK(p.next(f) == FrameParser::Result::Error);
+    }
+
+    TEST(ws_rejects_oversized_frame)
+    {
+        using namespace wotm_net::ws;
+        const std::vector<uint8_t> payload(kMaxMessage + 1, 1);
+        const std::vector<uint8_t> wire = encode(kBinary, payload.data(), payload.size(), true);
+        FrameParser p(true);
+        p.feed(wire.data(), 16);   // the header alone is enough to refuse it
+        Frame f;
+        CHECK(p.next(f) == FrameParser::Result::Error);
+    }
+
+    TEST(ws_ping_pong_and_close_opcodes)
+    {
+        using namespace wotm_net::ws;
+        std::vector<uint8_t> wire = encode(kPing, reinterpret_cast<const uint8_t *>("12345678"), 8, true);
+        const std::vector<uint8_t> close = encode(kClose, nullptr, 0, true);
+        wire.insert(wire.end(), close.begin(), close.end());
+        FrameParser p(true);
+        p.feed(wire.data(), wire.size());
+        Frame f;
+        CHECK(p.next(f) == FrameParser::Result::Ok && f.opcode == kPing && f.payload == bytesOf("12345678"));
+        CHECK(p.next(f) == FrameParser::Result::Ok && f.opcode == kClose && f.payload.empty());
+    }
+
+    // a server with its WebSocket listener on (the browser version's lobby and match, behind the web server's proxy)
+    ServerConfig wsTestConfig()
+    {
+        ServerConfig c = testConfig();
+        c.wsPort = freePort();
+        return c;
+    }
+
+    std::string wsUrl(const ServerConfig &c, const std::string &path) { return "ws://127.0.0.1:" + std::to_string(c.wsPort) + path; }
+
+    // a browser in the lobby: the same lines as TCP, one per text frame
+    TEST(ws_lobby_member_joins_a_tcp_members_lobby)
+    {
+        ServerConfig cfg = wsTestConfig();
+        RunningServer rs(cfg);
+        CHECK(rs.ok);
+        LineSocket a;
+        CHECK(hello(a, cfg.port) == "WELCOME 0");
+        const std::string code = createLobby(a, "Lobby", "Ana", 3);
+        CHECK(code.size() == 4u);
+        wotm_net::WsLink b;
+        std::string err;
+        CHECK(b.connect(wsUrl(cfg, "/lobby"), 2000, err));
+        b.sendLine("HELLO " + std::to_string(p::kProtocol) + " b1");
+        CHECK(readUntil(b, "WELCOME") == "WELCOME 1");
+        b.sendLine("JOIN " + code + " Bia 1");
+        CHECK(readUntil(b, "JOINED") == "JOINED " + code);
+        CHECK(readUntil(a, "MEMBERS " + code + " Ana Ana:3,") == "MEMBERS " + code + " Ana Ana:3,Bia:1");
+        a.sendLine("START");
+        const auto mb = p::keyValues(p::words(readUntil(b, "MATCH")));
+        CHECK(mb.count("you") && mb.at("you") == "1");
+    }
+
+    TEST(ws_match_clients_share_every_frame_of_input)
+    {
+        ServerConfig cfg = wsTestConfig();
+        RunningServer rs(cfg);
+        auto ms = formMatch(cfg.port, {"Ana", "Bia"}, {3, 1});
+        ClientConfig ca = clientFor(cfg.port, *ms[0]), cb = clientFor(cfg.port, *ms[1]);
+        ca.host = cb.host = wsUrl(cfg, "/match");
+        MatchClient a, b;
+        std::string err;
+        CHECK(a.start(ca, err) && b.start(cb, err));
+        CHECK(a.waitStarted(5000) && b.waitStarted(5000));
+        CHECK(a.localPlayer() == 0 && b.localPlayer() == 1 && a.delay() == b.delay());
+        exchange(a, b, 300);
+        CHECK(a.status() == Status::Running && b.status() == Status::Running);
+    }
+
+    // a browser and a native client in the same match: the server relays between ENet and WebSocket
+    TEST(ws_match_mixes_enet_and_websocket_clients)
+    {
+        ServerConfig cfg = wsTestConfig();
+        RunningServer rs(cfg);
+        auto ms = formMatch(cfg.port, {"Ana", "Bia"}, {3, 1});
+        ClientConfig ca = clientFor(cfg.port, *ms[0]), cb = clientFor(cfg.port, *ms[1]);
+        cb.host = wsUrl(cfg, "/match");
+        MatchClient a, b;
+        std::string err;
+        CHECK(a.start(ca, err) && b.start(cb, err));
+        CHECK(a.waitStarted(5000) && b.waitStarted(5000));
+        exchange(a, b, 300);
+    }
+
+    // a malformed frame (unmasked, from a client) closes that connection only; the server and its other clients carry on
+    TEST(ws_bad_frame_closes_only_that_client)
+    {
+        ServerConfig cfg = wsTestConfig();
+        RunningServer rs(cfg);
+        LineSocket raw;
+        CHECK(raw.connect("127.0.0.1", cfg.wsPort, 2000));
+        const std::string req = wotm_net::ws::handshakeRequest("127.0.0.1", "/lobby", "dGhlIHNhbXBsZSBub25jZQ==");
+        raw.sendBytes(req.data(), req.size());
+        const std::vector<uint8_t> bad = wotm_net::ws::encode(wotm_net::ws::kText, reinterpret_cast<const uint8_t *>("LIST"), 4, false);
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        raw.sendBytes(bad.data(), bad.size());
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        bool closed = false;
+        while (!closed && std::chrono::steady_clock::now() < until)
+        {
+            closed = !raw.pump();
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        CHECK(closed);
+        wotm_net::WsLink good;
+        std::string err;
+        CHECK(good.connect(wsUrl(cfg, "/lobby"), 2000, err));
+        good.sendLine("HELLO " + std::to_string(p::kProtocol) + " b1");
+        CHECK(readUntil(good, "WELCOME") == "WELCOME 0");
+    }
+
+    TEST(ws_unknown_path_is_refused)
+    {
+        ServerConfig cfg = wsTestConfig();
+        RunningServer rs(cfg);
+        wotm_net::WsLink w;
+        std::string err;
+        const bool connected = w.connect(wsUrl(cfg, "/other"), 2000, err);
+        bool alive = connected;
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (alive && std::chrono::steady_clock::now() < until)
+        {
+            alive = w.pump();
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        CHECK(!alive);
+    }
+
+    // one connection holds one player: a second Join (another member's token) is refused and the connection closed, so the slot
+    // stays free for its owner and no slot is left pointing at a connection that went away
+    TEST(ws_match_connection_cannot_take_two_slots)
+    {
+        ServerConfig cfg = wsTestConfig();
+        RunningServer rs(cfg);
+        auto ms = formMatch(cfg.port, {"Ana", "Bia"}, {3, 1});
+        wotm_net::WsLink w;
+        std::string err;
+        CHECK(w.connect(wsUrl(cfg, "/match"), 2000, err));
+        auto joinPacket = [&](const std::string &token) {
+            p::Join j;
+            j.token = token, j.buildId = "b1", j.configHash = "cfg", j.name = "x";
+            std::vector<uint8_t> packet{p::kControl};
+            const std::vector<uint8_t> body = p::encode(j);
+            packet.insert(packet.end(), body.begin(), body.end());
+            return packet;
+        };
+        w.sendPacket(joinPacket(ms[0]->match["token"]));
+        w.sendPacket(joinPacket(ms[1]->match["token"]));
+        std::vector<p::Type> got;
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        bool alive = true;
+        while (alive && got.size() < 2 && std::chrono::steady_clock::now() < until)
+        {
+            alive = w.pump();
+            std::vector<uint8_t> packet;
+            while (w.nextPacket(packet))
+                if (packet.size() > 1)
+                    got.push_back(p::typeOf(std::vector<uint8_t>(packet.begin() + 1, packet.end())));
+            w.waitReadable(10);
+        }
+        CHECK(got.size() == 2u && got[0] == p::Type::Welcome && got[1] == p::Type::Reject);
+        w.close();
+        // Bia's slot is still free: her own client gets in, and the match starts once both are there
+        MatchClient b;
+        ClientConfig cb = clientFor(cfg.port, *ms[1]);
+        CHECK(b.start(cb, err));
+        const auto joined = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (b.status() == Status::Connecting && std::chrono::steady_clock::now() < joined)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        CHECK(b.status() == Status::Waiting);
+    }
+
+    TEST(ws_match_client_is_lost_when_the_server_stops)
+    {
+        ServerConfig cfg = wsTestConfig();
+        auto rs = std::make_unique<RunningServer>(cfg);
+        auto ms = formMatch(cfg.port, {"Ana", "Bia"}, {3, 1});
+        ClientConfig ca = clientFor(cfg.port, *ms[0]);
+        ca.host = wsUrl(cfg, "/match");
+        MatchClient a;
+        std::string err;
+        CHECK(a.start(ca, err));
+        const auto joined = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (a.status() == Status::Connecting && std::chrono::steady_clock::now() < joined)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        CHECK(a.status() == Status::Waiting);
+        rs.reset();
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        while (a.status() != Status::Lost && std::chrono::steady_clock::now() < until)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        CHECK(a.status() == Status::Lost);
     }
 }
 

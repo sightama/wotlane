@@ -18,6 +18,7 @@ namespace
     int usage()
     {
         std::printf("usage: wotm_server [--port 7777] [--lobbies 16] [--players 8] [--delay <frames>] [--announce <host>[:7778] [--name <name>]]\n"
+                    "                   [--ws-port <port> [--ws-bind 127.0.0.1]]\n"
                     "       wotm_server --master [--port 7778]\n"
                     "  --port      TCP (lobby) and UDP (match) port; forward both in the router to play over the internet\n"
                     "              (with --master: the TCP port clients and servers reach the master on)\n"
@@ -26,6 +27,8 @@ namespace
                     "  --delay     fixed input delay in frames (default: from each match's ping)\n"
                     "  --announce  list this server publicly on that master (every 10 s; players then see it with net_lobby.py --browse)\n"
                     "  --name      the name in the public list (letters, digits, - and _; up to 16; default wotlane)\n"
+                    "  --ws-port   also take browser players: lobby and match over WebSocket on this TCP port (paths /lobby and /match)\n"
+                    "  --ws-bind   the address the WebSocket port listens on (default 127.0.0.1: a web server in front serves HTTPS)\n"
                     "  --master    run the master server instead: the list of servers that announce themselves\n");
         return 2;
     }
@@ -64,6 +67,10 @@ int main(int argc, char **argv)
             if (cfg.name.empty())
                 return usage();
         }
+        else if (a == "--ws-port" && hasValue)
+            cfg.wsPort = static_cast<uint16_t>(std::atoi(argv[++i]));
+        else if (a == "--ws-bind" && hasValue)
+            cfg.wsBind = argv[++i];
         else if (a == "--master")
             master = true;
         else
