@@ -10,6 +10,7 @@
 #include "wotm_freecam.h"
 #include "wotm_glsl.hpp"
 #include "wotm_lockon.hpp"
+#include "wotm_hudedge.hpp"
 #include "wotm_trig_goldens.hpp"
 #include "net/wotm_modifiers.hpp"
 #include "net/wotm_camsettings.hpp"
@@ -743,6 +744,25 @@ TEST(lockon_cycles_targets_on_screen)
     const lo::Candidate pq[] = {{0x10, {0x1.c81efp-1f, 0x1.00026cp+0f, 0.f}}, {0x20, {0x1.c81f1p-1f, 0x1.00027ep+0f, 0.f}}};
     CHECK(bitsOf(lo::screenAngle(me, pq[0].pos, right, fwd)) == bitsOf(lo::screenAngle(me, pq[1].pos, right, fwd)));
     CHECK(lo::nextTarget(me, 0.f, pq, 2, right, fwd, 1) == 0x10);
+}
+
+// HUD at the window's edges (health and power bars, the WINS text): a wide window moves each side out by the extra width;
+// a 4:3 view, or a narrower one such as a split-screen half, stays as the game placed it
+TEST(hud_edge_shift_reaches_the_window_edge)
+{
+    namespace he = wotm::hudedge;
+    const float wide = (4.f / 3.f) / (16.f / 9.f);   // 16:9: the 4:3 picture's half-width is 0.75 of the window's
+    CHECK(he::shift(wide, false) == -0.25f);
+    CHECK(he::shift(wide, true) == 0.25f);
+    CHECK(he::shift(wide, true) * 1920.f / 2.f == (1920.f - 1440.f) / 2.f);   // in pixels: the whole side margin
+    CHECK(he::shift(1.f, false) == 0.f);
+    CHECK(he::shift(1.f, true) == 0.f);
+    const float splitHalf = (4.f / 3.f) / (8.f / 9.f);   // half of a 16:9 window
+    CHECK(he::shift(splitHalf, false) == 0.f);
+    CHECK(he::shift(splitHalf, true) == 0.f);
+    // only Hud::update's two WINS buffers go to the edge (any address segment); other text stays
+    CHECK(he::isWinsText(0x006EA920u) && he::isWinsText(0x006EA938u) && he::isWinsText(0x206EA920u));
+    CHECK(!he::isWinsText(0x006EA924u) && !he::isWinsText(0));
 }
 
 int main()

@@ -77,6 +77,7 @@ void wotmFontInitPacket(uint32_t vram);
 void wotmFontSetTexId(const uint8_t *rdram, uint32_t node);
 void wotmFontColor(const uint8_t *rdram, int font);
 void wotmFontGlyph(const uint8_t *rdram, int font, int ch);
+void wotmFontToEdge(bool on);   // the glyphs that follow are the WINS count (TextQuad::toEdge)
 void wotmFontDma(const uint8_t *rdram);
 void wotmShellFade(const uint8_t *rdram, int view, uint32_t r, uint32_t g, uint32_t b, int start, int end, int step, bool redraw);
 void wotmShellFadeStep();       // wotm_live.inc: entry of one sceGsSyncV in Shell::FadeScreen's loop
@@ -109,6 +110,7 @@ std::atomic<bool> g_wotmCheatWin{false};
 
 // Debug free camera (F5): the window (wotm_freecam.inc) moves the pose, the EE thread puts it into view 0's _cs (freeCamWrite).
 #include "wotm_freecam.h"
+#include "wotm_hudedge.hpp"   // the WINS text (font hooks below, wotm_training.inc)
 #include "wotm_lockon.hpp"   // lock-on target cycling (lockCycleTarget): the pick, on wotm_detmath
 #include "wotm_mouse.hpp"   // mouse for the modern camera (wotm_orbit.inc consumes it, the window accumulates it)
 #include "wotm_personalpause.hpp"   // network match: what this PC sends while its own menu is open (wotm_sync.inc)
@@ -1121,6 +1123,26 @@ namespace
         if (ctx->pc == kFontBuildPrim)
             wotmFontGlyph(rdram, static_cast<int>(GPR_U32(ctx, 4)), static_cast<int>(GPR_U32(ctx, 5) & 0xFF));
         g_origFontGlyph(rdram, ctx, runtime);
+    }
+    // fontSpritePrintXY / fontSpritePrintRightXY(font, x, y, str): the glyphs of the WINS count, from entry to return, are marked to go
+    // to the window's edge (TextQuad::toEdge)
+    constexpr uint32_t kFontPrintXY = wotm::fn::fontSpritePrintXY__FiiiPc, kFontPrintRightXY = wotm::fn::fontSpritePrintRightXY__FiiiPc;
+    PS2Runtime::RecompiledFunction g_origFontPrintXY = nullptr, g_origFontPrintRightXY = nullptr;
+    template <uint32_t Entry, PS2Runtime::RecompiledFunction *Orig> void fontPrintTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        static uint32_t ra = 0, sp = 0;
+        if (ctx->pc == Entry && wotm::hudedge::isWinsText(GPR_U32(ctx, 7)))
+        {
+            ra = GPR_U32(ctx, 31);
+            sp = GPR_U32(ctx, 29);
+            wotmFontToEdge(true);
+        }
+        (*Orig)(rdram, ctx, runtime);
+        if (ra && ctx->pc == ra && GPR_U32(ctx, 29) == sp)
+        {
+            ra = 0;
+            wotmFontToEdge(false);
+        }
     }
 
     void uiFadeScreenTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
@@ -2514,6 +2536,10 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
         runtime.registerFunction(kFontSetColorGifTag, &fontColorTapped);
     if ((g_origFontGlyph = runtime.lookupFunction(kFontBuildPrim)))
         runtime.registerFunction(kFontBuildPrim, &fontGlyphTapped);
+    if ((g_origFontPrintXY = runtime.lookupFunction(kFontPrintXY)))
+        runtime.registerFunction(kFontPrintXY, &fontPrintTapped<kFontPrintXY, &g_origFontPrintXY>);
+    if ((g_origFontPrintRightXY = runtime.lookupFunction(kFontPrintRightXY)))
+        runtime.registerFunction(kFontPrintRightXY, &fontPrintTapped<kFontPrintRightXY, &g_origFontPrintRightXY>);
     if ((g_origUiFade = runtime.lookupFunction(kUiFadeScreen)))
         runtime.registerFunction(kUiFadeScreen, &uiFadeScreenTapped);
     if ((g_origThreeMileFlash = runtime.lookupFunction(kThreeMileDrawFlash)))

@@ -1349,12 +1349,11 @@ namespace wotm_train
     // Hud::update's "WINS n" (m_gameMode 2..6, training's versus): in training it counts nothing and the dummy's lands under the panel.
     // Hud sprintfs into two buffers in Hud's .rodata (no symbol in the ELF: the left one and the right one) and passes them to
     // fontSpritePrint(Right)XY; with training on, those two are not printed
-    constexpr uint32_t kWinsLeft = 0x006EA920u, kWinsRight = 0x006EA938u;
     PS2Runtime::RecompiledFunction g_origPrint = nullptr, g_origPrintRight = nullptr;
     bool skipWins(R5900Context *ctx)
     {
         const uint32_t s = GPR_U32(ctx, 7) & 0x1FFFFFFFu;
-        if (!g_on.load(std::memory_order_relaxed) || (s != kWinsLeft && s != kWinsRight))
+        if (!g_on.load(std::memory_order_relaxed) || !wotm::hudedge::isWinsText(s))
             return false;
         ctx->pc = GPR_U32(ctx, 31);
         return true;
