@@ -1,8 +1,9 @@
-// ABOUTME: Retries the streamed disc's requests (data/) when the network or the server fails for a moment, so a blip doesn't leave the
-// ABOUTME: game waiting on a read forever. Linked as an Emscripten --pre-js: it runs in the page and in the worker that fetches the disc.
+// ABOUTME: Retries the streamed disc's requests (data/) when the network or the server fails for a moment, and tells the page how much
+// ABOUTME: arrived. Linked as an Emscripten --pre-js: it runs in the page and in the worker that fetches the disc.
 'use strict';
 
-function retryingFetch(baseFetch, { tries = 5, delayMs = 500 } = {}) {
+// `onBytes` hears the size of each disc chunk that arrives (the page shows the loading progress)
+function retryingFetch(baseFetch, { tries = 5, delayMs = 500, onBytes = null } = {}) {
   const isDisc = (url) => /(^|\/)data\//.test(typeof url === 'string' ? url : url.url);
   return async function (url, init) {
     if (!isDisc(url)) return baseFetch(url, init);
@@ -10,7 +11,10 @@ function retryingFetch(baseFetch, { tries = 5, delayMs = 500 } = {}) {
       try {
         const r = await baseFetch(url, init);
         // 5xx and 429 are worth another try; anything else (including 404) is the answer
-        if (r.status < 500 && r.status !== 429) return r;
+        if (r.status < 500 && r.status !== 429) {
+          if (r.status === 206) onBytes?.(Number(r.headers?.get('content-length')) || 0);   // a chunk (not a size probe)
+          return r;
+        }
         if (attempt >= tries) return r;
       } catch (e) {
         if (attempt >= tries) throw e;
@@ -23,5 +27,7 @@ function retryingFetch(baseFetch, { tries = 5, delayMs = 500 } = {}) {
 if (typeof module !== 'undefined' && module.exports) module.exports = { retryingFetch };
 else if (typeof globalThis.fetch === 'function' && !globalThis.wotmFetchRetrying) {
   globalThis.wotmFetchRetrying = true;
-  globalThis.fetch = retryingFetch(globalThis.fetch.bind(globalThis));
+  // the disc is fetched in a worker; the page listens on this channel (boot.js)
+  const progress = typeof BroadcastChannel === 'function' ? new BroadcastChannel('wotlane-disc') : null;
+  globalThis.fetch = retryingFetch(globalThis.fetch.bind(globalThis), { onBytes: (n) => progress?.postMessage(n) });
 }

@@ -47,6 +47,22 @@
     if (params.has(key)) allowed[key] = params.get(key);
   const fixed = { ...env };
 
+  // the text over the game while the disc streams in (data_retry.js reports each chunk from the worker that fetches it)
+  function showLoading(expectedBytes) {
+    const loadingEl = document.getElementById('loading');
+    const progress = new LoadingProgress(expectedBytes);
+    const channel = new BroadcastChannel('wotlane-disc');
+    channel.onmessage = (e) => progress.add(e.data, performance.now());
+    loadingEl.hidden = false;
+    const timer = setInterval(() => {
+      const text = progress.text(performance.now());
+      if (text) return void (loadingEl.textContent = text);
+      loadingEl.hidden = true;
+      channel.close();
+      clearInterval(timer);
+    }, 250);
+  }
+
   // loads the game once (front.js calls it for single player, or with a lobby's match environment); `build` is version.json's
   // build id, which the server compares with the lobby's
   let started = false;
@@ -63,6 +79,7 @@
       preRun: [() => Object.assign(window.Module.ENV, env)],
       onAbort: (what) => { statusEl.textContent = 'Stopped: ' + what; logEl.classList.add('open'); },
     };
+    showLoading(matchEnv ? 57 << 20 : 27 << 20);   // a first visit's download to a fight, or to the title
     const script = document.createElement('script');
     script.src = 'wotm.js';
     document.body.appendChild(script);
