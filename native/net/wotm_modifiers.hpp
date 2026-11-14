@@ -10,13 +10,38 @@ namespace wotm::modifiers
 enum Bit
 {
     Jump = 1,    // Super Jump: moon gravity (TheGame::m_gravity x kJumpGravity)
-    Fast = 2,    // Fast Monsters: walk, run, dash and ram x kFastSpeed
+    Fast = 2,    // Fast Monsters: walk, run, dash and ram x kFastSpeed, foot acceleration x kFastAccel, animations x kFastAnim
     Turbo = 4,   // the whole fight at 2x: 2 fields per frame, each frame paced at 1 vsync
 };
 inline constexpr int kCount = 3;
 inline constexpr const char *kNames[kCount] = {"jump", "fast", "turbo"};   // canonical order: bit i = 1 << i
 inline constexpr float kJumpGravity = 0.45f;
 inline constexpr float kFastSpeed = 1.5f;
+inline constexpr float kFastAccel = 4.f;   // well above kFastSpeed: walk and run reach their faster speed almost at once
+inline constexpr float kFastAnim = 1.5f;   // every animation of a monster (attacks and their hit windows follow)
+
+// An animation clip's clock (_animControlNode +0x14..+0x1C): its time is startTime + fields * deltaTime, where fields is
+// now - startField while it runs and startField itself while paused. deltaTime is the signed playback speed.
+struct ClipClock
+{
+    uint32_t startField;
+    float startTime;
+    float deltaTime;
+};
+
+inline float clipTime(const ClipClock &c, bool running, uint32_t now)
+{
+    const int fields = static_cast<int>(running ? now - c.startField : c.startField);
+    return static_cast<float>(fields) * c.deltaTime + c.startTime;
+}
+
+// Multiply the clip's speed by `factor` from field `now` on, with no jump in its time
+inline void rescaleClip(ClipClock &c, bool running, uint32_t now, float factor)
+{
+    c.startTime = clipTime(c, running, now);
+    c.startField = running ? now : 0u;
+    c.deltaTime *= factor;
+}
 
 // "turbo,jump" -> Jump | Turbo: comma list in any order, spaces around names ignored, repeats allowed, "" = none. An unknown or
 // empty name returns false and leaves `bits` alone.

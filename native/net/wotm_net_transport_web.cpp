@@ -64,7 +64,7 @@ namespace wotm_net
         EM_JS(void, wotm_net_web_open, (int id, const char *url), {
             const ws = new WebSocket(UTF8ToString(url));
             ws.binaryType = 'arraybuffer';
-            (globalThis.wotmSockets ??= {})[id] = ws;
+            (globalThis.wotmSockets = globalThis.wotmSockets || {})[id] = ws;
             ws.onopen = () => _wotm_net_web_event(id, 0, 0, 0);
             ws.onmessage = (e) => {
                 if (!(e.data instanceof ArrayBuffer)) return;
