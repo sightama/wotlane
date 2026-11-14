@@ -273,6 +273,10 @@ namespace
         CHECK(st::modifiers() == md::Turbo);
         CHECK(st::forced(st::SuperJump) && st::forced(st::Turbo) && st::get(st::SuperJump) == 0 && st::get(st::Turbo) == 1);
         CHECK(st::g_val[st::SuperJump].load() == 1);   // the player's own choice is still stored
+        // the lobby's list: an unknown name is reported (false) and plays as none on every PC, like the config hash
+        CHECK(st::setNetModifiers("jump,fast") && st::g_netMods.load() == (md::Jump | md::Fast));
+        CHECK(!st::setNetModifiers("moon") && st::g_netMods.load() == 0);
+        CHECK(st::setNetModifiers(nullptr) && st::g_netMods.load() == 0);
         st::g_netProfile.store(false);
         st::g_netMods.store(0);
         CHECK(st::modifiers() == (md::Jump | md::Fast | md::Turbo));
@@ -483,7 +487,9 @@ namespace
         bytes.insert(bytes.end(), {1, 2, 3});   // a truncated last record (the game was closed mid-write) is ignored
         std::vector<wotm_net::InputRecord> recs;
         std::string err;
-        CHECK(wotm_net::readInputRecords(bytes, recs, err) && err.empty());
+        int mods = 0;
+        CHECK(wotm_net::readInputRecords(bytes, recs, mods, err) && err.empty());
+        CHECK(mods == -1);   // no modifiers recorded: the replaying PC's apply
         CHECK(recs.size() == 2u);
         CHECK(recs[0].index == 7u && recs[0].controller == 2u && recs[0].state.buttons == 0xBFFEu);
         CHECK(recs[0].state.rx == 0x10u && recs[0].state.ry == 0x20u && recs[0].state.lx == 0x30u && recs[0].state.ly == 0x40u);
@@ -496,8 +502,9 @@ namespace
         wotm_net::InputRecord a{12, 0, {}}, b{12, 5, {}};
         a.state.buttons = 0x1234u, a.state.rx = 1, a.state.ry = 2, a.state.lx = 3, a.state.ly = 4;
         a.state.mouseX = -32768, a.state.mouseY = 32767, a.state.cam = 0x00A7u;
-        std::vector<uint8_t> bytes = wotm_net::encodeInputHeader();
-        CHECK(bytes.size() == 8u && std::memcmp(bytes.data(), "WOTMINP\x02", 8) == 0);
+        // the header carries the fight's gameplay modifiers, so the replay plays them back
+        std::vector<uint8_t> bytes = wotm_net::encodeInputHeader(wotm::modifiers::Jump | wotm::modifiers::Turbo);
+        CHECK(bytes.size() == 9u && std::memcmp(bytes.data(), "WOTMINP\x03\x05", 9) == 0);
         for (const auto &r : {a, b})
         {
             const std::vector<uint8_t> rec = wotm_net::encodeInputRecord(r);
@@ -506,22 +513,39 @@ namespace
         }
         std::vector<wotm_net::InputRecord> recs;
         std::string err;
-        CHECK(wotm_net::readInputRecords(bytes, recs, err));
+        int mods = -1;
+        CHECK(wotm_net::readInputRecords(bytes, recs, mods, err));
+        CHECK(mods == (wotm::modifiers::Jump | wotm::modifiers::Turbo));
         CHECK(recs.size() == 2u && recs[0].index == 12u && recs[0].controller == 0u && recs[0].state == a.state);
         CHECK(recs[1].controller == 5u && recs[1].state == b.state);
         bytes.push_back(9);   // truncated tail
-        CHECK(wotm_net::readInputRecords(bytes, recs, err) && recs.size() == 2u);
+        CHECK(wotm_net::readInputRecords(bytes, recs, mods, err) && recs.size() == 2u);
+        CHECK(wotm_net::readInputRecords(wotm_net::encodeInputHeader(0), recs, mods, err) && mods == 0 && recs.empty());
+    }
+
+    // Version 2 (no modifiers byte) still loads: same records, modifiers not recorded
+    TEST(inputfile_reads_version_2_without_modifiers)
+    {
+        std::vector<uint8_t> bytes = {'W', 'O', 'T', 'M', 'I', 'N', 'P', 2};
+        const std::vector<uint8_t> rec = wotm_net::encodeInputRecord({3, 1, {}});
+        bytes.insert(bytes.end(), rec.begin(), rec.end());
+        std::vector<wotm_net::InputRecord> recs;
+        std::string err;
+        int mods = 0;
+        CHECK(wotm_net::readInputRecords(bytes, recs, mods, err) && mods == -1);
+        CHECK(recs.size() == 1u && recs[0].index == 3u && recs[0].controller == 1u);
     }
 
     TEST(inputfile_rejects_unknown_version)
     {
-        std::vector<uint8_t> bytes = wotm_net::encodeInputHeader();
-        bytes[7] = 3;
+        std::vector<uint8_t> bytes = wotm_net::encodeInputHeader(0);
+        bytes[7] = 4;
         bytes.resize(bytes.size() + 20u, 0);
         std::vector<wotm_net::InputRecord> recs{wotm_net::InputRecord{}};
         std::string err;
-        CHECK(!wotm_net::readInputRecords(bytes, recs, err));
-        CHECK(recs.empty() && err.find("version 3") != std::string::npos);
+        int mods = 0;
+        CHECK(!wotm_net::readInputRecords(bytes, recs, mods, err));
+        CHECK(recs.empty() && err.find("version 4") != std::string::npos);
     }
 
     // Digest of the enabled mods (wotm_mods.hpp), which goes into the network match's settings hash: the same set of files gives the

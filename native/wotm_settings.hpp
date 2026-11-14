@@ -135,6 +135,16 @@ inline bool applyModifierList(const char *list)
     return true;
 }
 
+// The lobby's WOTM_MODIFIERS in a network match (null = none): false on an unknown name, which plays as none (the config hash parses
+// the list the same way, so every PC agrees)
+inline bool setNetModifiers(const char *list)
+{
+    int bits = 0;
+    const bool known = wotm::modifiers::parse(list ? list : "", bits);
+    g_netMods.store(bits);
+    return known;
+}
+
 // Fixed aspect ratio from the Aspect option (0 = dynamic)
 inline float aspectRatio()
 {
@@ -534,10 +544,10 @@ inline void load(const std::filesystem::path &dir)
         if (netMatch)
         {
             // the lobby's list, unset = none (never this PC's own choice: every PC must play the same modifiers)
-            int bits = 0;
-            wotm::modifiers::parse(modList ? modList : "", bits);
-            g_netMods.store(bits);
-            std::fprintf(stderr, "[settings] network match: modifiers \"%s\"\n", wotm::modifiers::format(bits).c_str());
+            if (!setNetModifiers(modList))
+                std::fprintf(stderr, "[settings] network match: WOTM_MODIFIERS=%s: unknown modifier (known: jump, fast, turbo); playing none\n",
+                             modList);
+            std::fprintf(stderr, "[settings] network match: modifiers \"%s\"\n", wotm::modifiers::format(g_netMods.load()).c_str());
             g_netProfile.store(true);
             std::fprintf(stderr, "[settings] network match: fixed profile (the game's lock-on, close camera; the camera options stay each player's own)\n");
         }
