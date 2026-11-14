@@ -5,6 +5,7 @@
 #include "wotm_snd.hpp"
 #include "wotm_windowfit.hpp"
 #include "wotm_personalpause.hpp"
+#include "wotm_pauseview.hpp"
 #include "wotm_mods.hpp"
 #include "wotm_detmath.hpp"
 #include "wotm_freecam.h"
@@ -21,6 +22,7 @@
 #include <cstdio>
 #include <cstring>
 #include <functional>
+#include <memory>
 #include <random>
 #include <vector>
 
@@ -339,6 +341,38 @@ namespace
         wf::size(16.f / 9.f, 2560, 1440, w, h, 360);   // a cap on the height (checks: WOTM_WINDOW)
         CHECK(w == 640 && h == 360);
     }
+
+    // Network match, one view per player (#18): in PAUSE ALL the game runs only view 0, so the frame has no snapshot of the local view;
+    // the present keeps drawing the one from before the pause behind the menu, and goes back to live drawing when the pause ends
+    TEST(pause_view_draws_the_local_view_held_from_before_the_pause)
+    {
+        namespace pv = wotm::pauseview;
+        struct Snap { int frame; };
+        pv::Held<Snap> held;
+        const auto before = std::make_shared<Snap>(Snap{1});
+        CHECK(pv::pick<Snap>(held, true, false, before) == before.get());   // online, unpaused: the live local view
+        CHECK(pv::pick<Snap>(held, true, true, nullptr) == before.get());   // online, paused: the one held from before the pause
+        CHECK(pv::pick<Snap>(held, true, true, nullptr) == before.get());   // for the whole pause
+        const auto after = std::make_shared<Snap>(Snap{2});
+        CHECK(pv::pick<Snap>(held, true, false, after) == after.get());     // the pause ends: live again
+        CHECK(held.snap == after);                                          // the pause's snapshot is gone
+        CHECK(pv::pick<Snap>(held, true, false, nullptr) == nullptr);       // unpaused frame without the local view: view 0, as before
+        CHECK(pv::pick<Snap>(held, true, true, nullptr) == nullptr);        // and a pause with nothing held falls back to view 0
+    }
+
+    // Offline (single player, split screen) nothing changes: the present draws view 0 and its split views, paused or not
+    TEST(pause_view_leaves_offline_drawing_alone)
+    {
+        namespace pv = wotm::pauseview;
+        struct Snap { int frame; };
+        pv::Held<Snap> held;
+        const auto split = std::make_shared<Snap>(Snap{1});
+        CHECK(pv::pick<Snap>(held, false, false, nullptr) == nullptr);      // single player
+        CHECK(pv::pick<Snap>(held, false, false, split) == nullptr);        // split screen: its views are drawn as split views
+        CHECK(pv::pick<Snap>(held, false, true, split) == nullptr);         // paused offline
+        CHECK(!held.snap);
+    }
+
 
     // Personal pause online (#16): Start opens this PC's menu instead of reaching the match, and while it is open (and until every
     // button is released after it closes) this PC sends neutral input, so the others keep playing and its monster stands still.
