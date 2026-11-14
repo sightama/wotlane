@@ -30,6 +30,7 @@
 
 #include <memory>
 #include <thread>
+#include <unordered_map>
 
 #include "net/wotm_lockstep.hpp"     // input timeline for deterministic mode and the netcode (wotm_sync.inc)
 #include "net/wotm_inputfile.hpp"    // input recordings, WOTM_INPUTREC/WOTM_INPUTPLAY (wotm_sync.inc)

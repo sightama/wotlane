@@ -234,6 +234,25 @@ namespace
         CHECK(md::scaledClock(5u, 0xFFFFFFF0u, 0u, 2u) == 42u);   // the host clock wrapped around
     }
 
+    // Fast Monsters: full speed almost at once (acceleration well above the speed factor) and every animation of a monster at
+    // kFastAnim. A clip's speed changes without a jump in its time: running, its time keeps counting from the switch at the new rate;
+    // paused, it stays where it was. The inverse factor gives the original speed back.
+    TEST(fast_monsters_factors_and_clip_rescale)
+    {
+        namespace md = wotm::modifiers;
+        CHECK(md::kFastSpeed == 1.5f && md::kFastAnim == 1.5f && md::kFastAccel >= 2.f * md::kFastSpeed);
+        md::ClipClock run{100u, 5.f, 1.f};
+        CHECK(md::clipTime(run, true, 130u) == 35.f);
+        md::rescaleClip(run, true, 130u, md::kFastAnim);
+        CHECK(md::clipTime(run, true, 130u) == 35.f && md::clipTime(run, true, 140u) == 50.f && run.deltaTime == 1.5f);
+        md::ClipClock paused{20u, 5.f, -1.f};   // paused: startField holds the fields it had run
+        CHECK(md::clipTime(paused, false, 999u) == -15.f);
+        md::rescaleClip(paused, false, 999u, md::kFastAnim);
+        CHECK(md::clipTime(paused, false, 999u) == -15.f && paused.deltaTime == -1.5f);
+        md::rescaleClip(run, true, 140u, 1.f / md::kFastAnim);
+        CHECK(md::clipTime(run, true, 150u) == 60.f && run.deltaTime == 1.f);
+    }
+
     // Modifier options (wotm_settings.hpp): three on/off keys offline; WOTM_MODIFIERS sets all three; in a network match the lobby's
     // list (g_netMods) is forced and the player's own values stay stored
     TEST(modifier_settings_and_net_lock)
