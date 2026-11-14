@@ -464,7 +464,7 @@ namespace
         CHECK(readUntil(a, "MEMBERS " + code + " Ana Ana:3,") == "MEMBERS " + code + " Ana Ana:3,Bia:1");
 
         b.sendLine("SET wins=3");
-        CHECK(readUntil(b, "ERROR").find("owner") != std::string::npos);
+        CHECK(readUntil(b, "ERROR") == "ERROR only the lobby owner can change the stage, wins and modifiers");
         b.sendLine("START");
         CHECK(readUntil(b, "ERROR").find("owner") != std::string::npos);
         a.sendLine("SET stage=5 wins=3 mods=");

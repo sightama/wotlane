@@ -389,7 +389,7 @@ namespace wotm_net::proto
     }
 
     // ---- lobby (TCP, one text line per message) ----
-    // Whoever creates the lobby is the owner: only the owner changes the stage and wins and starts the match; if the owner leaves, the
+    // Whoever creates the lobby is the owner: only the owner changes the stage, wins and modifiers and starts the match; if the owner leaves, the
     // next member becomes owner. The lobby has a 4-letter code (to join without the list) and may have a password. Members stay in it
     // during the match and, when the match ends (everyone has left it: QUIT closes the game), it goes back to waiting with the same
     // members. An empty lobby closes.
