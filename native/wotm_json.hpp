@@ -230,7 +230,7 @@ namespace wotm::json
                     int64_t n = 0;
                     uint64_t digits = 0;   // the first 19 significant digits
                     int kept = 0, exp10 = 0;
-                    bool any = false, frac = false;
+                    bool any = false, frac = false, big = false;   // big: more digits than int64 holds, read as a number
                     auto digit = [&](int d, bool fraction) {
                         if (kept < 19)
                         {
@@ -244,7 +244,11 @@ namespace wotm::json
                     while (p < end && *p >= '0' && *p <= '9')
                     {
                         const int d = *p++ - '0';
-                        n = n * 10 + d, any = true;
+                        if (n > (INT64_MAX - d) / 10)
+                            big = true;
+                        else
+                            n = n * 10 + d;
+                        any = true;
                         digit(d, false);
                     }
                     if (!any)
@@ -272,7 +276,7 @@ namespace wotm::json
                             e = e < 100000 ? e * 10 + (*p - '0') : e;
                         exp10 += eneg ? -e : e;
                     }
-                    if (!frac)
+                    if (!frac && !big)
                     {
                         v = Value::integer(neg ? -n : n);
                         return true;

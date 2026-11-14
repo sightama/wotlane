@@ -311,7 +311,8 @@ mods/my_mod/
   (`PowerUpTool::exportPoints`) and logs `[stages] <id>: moved N power-ups`. An index past the stage's count or a place that
   is not at `from` (within 0.01) is refused with a log line, and the rest of the map applies; two edits of the same index make
   the file invalid. A power-up edit applies even when the loader refuses its piece's edit, as a rider's does.
-- Unknown keys in an edit are refused; the scan logs why a folder was skipped (`[stages] my_mod/stages/x ignored: ...`).
+- Every coordinate (`move`, `from`, `at`) is from -1000000 to 1000000 (stock stages span a few thousand units). Unknown keys in an
+  edit are refused; the scan logs why a folder was skipped (`[stages] my_mod/stages/x ignored: ...`).
 
 **What a piece is.** A building, prop, destructible or level pickup with its own position in the stage: the nearest `TRANSLATE` or
 `ROTATE` above it, with no other transform above that. Ground and terrain, pedestrians and animated parts (vehicles, moving

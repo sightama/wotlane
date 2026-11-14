@@ -989,6 +989,11 @@ TEST(json_numbers_keep_fractions)
     CHECK(wotm::json::dump(wotm::json::Value::number(-0.0)) == "-0.0\n");
     CHECK(wotm::json::parse("-0.0", v) && v.asNum() == 0.0 && std::signbit(v.asNum()));
     CHECK(!wotm::json::parse("1.", v) && !wotm::json::parse("1e", v));
+    // an integer past int64 reads as a number with its real value (never a wrapped integer); int64's own limits stay integers
+    CHECK(wotm::json::parse("100000000000000000000", v) && v.frac && v.asNum() == 1e20);
+    CHECK(wotm::json::parse("-100000000000000000000", v) && v.frac && v.asNum() == -1e20);
+    CHECK(wotm::json::parse("9223372036854775807", v) && !v.frac && v.i == INT64_MAX);
+    CHECK(wotm::json::parse("-9223372036854775807", v) && !v.frac && v.i == -INT64_MAX);
 }
 
 namespace
@@ -1320,6 +1325,10 @@ TEST(stagemap_parse)
     CHECK(bad(R"({"node": "0x100", "spin": 1})", "spin"));
     CHECK(bad(R"({"node": "0x100", "move": ["a", 0, 0]})", "move"));
     CHECK(bad(R"({"node": "0x100", "move": [1, 2]})", "move"));
+    // a shared map's coordinates stay inside the world: no huge values that would reach guest RAM as inf (sphere radii squared)
+    CHECK(bad(R"({"node": "0x100", "move": [0, 0, 1e20]})", "move"));
+    CHECK(bad(R"({"node": "0x100", "move": [-1000001, 0, 0]})", "move"));
+    CHECK(bad(R"({"node": "0x100", "move": [0, 100000000000000000000, 0]})", "move"));
     CHECK(bad(R"({"node": "0x100", "turn": "90"})", "turn"));
     CHECK(bad(R"({"node": "0x100"})", "nothing"));
     sm::Map empty;
@@ -1400,6 +1409,8 @@ TEST(stagemap_powerup_parse)
     CHECK(bad(R"({"powerup": 1, "from": [0, 0], "at": [1, 1, 1]})", "from"));
     CHECK(bad(R"({"powerup": 1, "from": [0, 0, 0]})", "at"));
     CHECK(bad(R"({"powerup": 1, "from": [0, 0, 0], "at": [1, "a", 1]})", "at"));
+    CHECK(bad(R"({"powerup": 1, "from": [0, 0, 0], "at": [1, 1, 3e9]})", "at"));
+    CHECK(bad(R"({"powerup": 1, "from": [0, -2e6, 0], "at": [1, 1, 1]})", "from"));
     CHECK(bad(R"({"powerup": 1, "from": [0, 0, 0], "at": [1, 1, 1], "node": "0x100"})", "node"));
     CHECK(bad(R"({"powerup": 1, "from": [0, 0, 0], "at": [1, 1, 1], "turn": 90})", "turn"));
     CHECK(bad(R"({"powerup": 7, "from": [0, 0, 0], "at": [1, 1, 1]}, {"node": "0x100", "remove": true},
