@@ -4,6 +4,7 @@
 #include "wotm_settings.hpp"
 #include "wotm_snd.hpp"
 #include "wotm_windowfit.hpp"
+#include "wotm_personalpause.hpp"
 #include "wotm_mods.hpp"
 #include "wotm_detmath.hpp"
 #include "wotm_freecam.h"
@@ -314,6 +315,78 @@ namespace
         CHECK(w == 1280 && h == 720);
         wf::size(16.f / 9.f, 2560, 1440, w, h, 360);   // a cap on the height (checks: WOTM_WINDOW)
         CHECK(w == 640 && h == 360);
+    }
+
+    // Personal pause online (#16): Start opens this PC's menu instead of reaching the match, and while it is open (and until every
+    // button is released after it closes) this PC sends neutral input, so the others keep playing and its monster stands still.
+    // Buttons are active low (0xFFFF = nothing pressed).
+    TEST(personal_pause_opens_on_start_and_sends_neutral_input)
+    {
+        namespace pp = wotm::personalpause;
+        constexpr uint16_t none = 0xFFFF, start = 0xFFFF & ~pp::kStart, cross = 0xFFFF & ~0x4000;
+        pp::Menu m;
+        pp::Out o = pp::step(m, cross, true);
+        CHECK(!o.neutral && !o.start && !m.open());                  // closed: the input goes to the match
+        o = pp::step(m, start, false);
+        CHECK(!o.neutral && !m.open());                              // not allowed (game dialog, shared pause): Start reaches the game
+        o = pp::step(m, none, true);
+        o = pp::step(m, start, true);
+        CHECK(o.neutral && !o.start && m.open());                    // Start opens the menu, the match never sees it
+        o = pp::step(m, cross, true);
+        CHECK(o.neutral && m.open());                                // open: neutral whatever is pressed
+        pp::close(m);
+        o = pp::step(m, cross, true);
+        CHECK(o.neutral && !m.open());                               // closed, X still held: neutral until released
+        o = pp::step(m, none, true);
+        CHECK(!o.neutral && !o.start);
+        o = pp::step(m, cross, true);
+        CHECK(!o.neutral);                                           // back to the match
+    }
+
+    // A Start held from before (or the one that opened the menu) never reopens it: only a new press does
+    TEST(personal_pause_needs_a_new_start_press)
+    {
+        namespace pp = wotm::personalpause;
+        constexpr uint16_t none = 0xFFFF, start = 0xFFFF & ~pp::kStart;
+        pp::Menu m;
+        pp::step(m, start, true);
+        CHECK(m.open());
+        pp::close(m);
+        CHECK(pp::step(m, start, true).neutral && !m.open());        // still held: no reopen
+        CHECK(!pp::step(m, none, true).neutral);
+        pp::step(m, start, true);
+        CHECK(m.open());
+    }
+
+    // PAUSE MATCH FOR EVERYONE: once every button is released, one frame with Start goes to the match (the game's shared pause, with
+    // QUIT), then the input is the player's again
+    TEST(personal_pause_can_pause_the_match_for_everyone)
+    {
+        namespace pp = wotm::personalpause;
+        constexpr uint16_t none = 0xFFFF, start = 0xFFFF & ~pp::kStart, cross = 0xFFFF & ~0x4000;
+        pp::Menu m;
+        pp::step(m, start, true);
+        pp::pauseEveryone(m);
+        pp::Out o = pp::step(m, cross, true);
+        CHECK(o.neutral && !o.start && !m.open());                   // X that chose it still held
+        o = pp::step(m, none, true);
+        CHECK(o.neutral && o.start);                                 // one frame of Start alone
+        o = pp::step(m, none, true);
+        CHECK(!o.neutral && !o.start);
+    }
+
+    // A game dialog appearing while the menu is open (the match ends, someone else pauses for everyone) closes it: the game's own
+    // screen needs this player's input
+    TEST(personal_pause_closes_when_the_game_takes_over)
+    {
+        namespace pp = wotm::personalpause;
+        constexpr uint16_t none = 0xFFFF, start = 0xFFFF & ~pp::kStart;
+        pp::Menu m;
+        pp::step(m, start, true);
+        pp::step(m, none, true);
+        CHECK(m.open());
+        const pp::Out o = pp::step(m, none, false);
+        CHECK(!m.open() && !o.neutral);
     }
 
     // Network match profile (wotm_settings.hpp): settings that change game state the same way for everyone take the fixed profile on

@@ -124,8 +124,11 @@ to the console) and starts once that many players are in; `--code <code> --name 
 - Endless free-for-all with Wins to end 0: knocked-out monsters get back up, no end-of-match screen; QUIT from the pause menu (or closing the window) leaves. With a wins
   target (the host's **Wins to end**) the first to reach it ends the match with the game's PLAY AGAIN / REBUILD LEVEL /
   QUIT screen; any player's controller moves the cursor and confirms, and every PC follows the same choice.
-- Pausing works for everyone: whoever presses Start pauses every PC, and the pause menu moves the same everywhere. RECOMPILED OPTIONS
-  does nothing online.
+- Start opens your own menu: the match keeps running for everyone and your monster stands still while it is open. **CONTINUE** goes
+  back to the fight; **RECOMPILED OPTIONS** has your volume, video, camera and controls (the match-wide settings, lock-on toggle,
+  close-up camera and modifiers, show "SET IN THE LOBBY"); **PAUSE MATCH FOR EVERYONE** opens the game's pause on every PC, where
+  RESTART and QUIT are, and that pause moves the same everywhere. The menu makes no sound (a sound would change the game's sound
+  state on your PC only).
 - Everyone plays with the game's default options (difficulty, volumes, controller layout): local saves are neither read nor written
   online, because they live in game memory and would make the PCs drift apart.
 - Your camera is yours online: the modern camera with the mouse or a controller's right stick, with your own sensitivity, inversion
