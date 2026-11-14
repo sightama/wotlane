@@ -7,6 +7,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <deque>
 #include <random>
 #include <string>
@@ -46,8 +47,7 @@ namespace wotm_net
                 return err = "could not send the WebSocket request", false;
             std::string head;
             const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
-            size_t end;
-            while ((end = head.find("\r\n\r\n")) == std::string::npos)
+            while (head.find("\r\n\r\n") == std::string::npos)
             {
                 const bool alive = sock_.pump();
                 head += sock_.takeReceived();
@@ -60,6 +60,7 @@ namespace wotm_net
                 }
                 sock_.waitReadable(20);
             }
+            const size_t end = head.find("\r\n\r\n");
             const auto accept = ws::header(std::string_view(head).substr(0, end + 2), "Sec-WebSocket-Accept");
             if (head.compare(0, 12, "HTTP/1.1 101") != 0 || !accept || *accept != ws::acceptKey(key))
             {

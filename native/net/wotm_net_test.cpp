@@ -359,7 +359,7 @@ namespace
         return c;
     }
 
-    std::string readUntil(LineSocket &s, const std::string &prefix, int ms = 3000)
+    std::string readUntil(wotm_net::LineLink &s, const std::string &prefix, int ms = 3000)
     {
         std::string line;
         while (s.readLine(line, ms))
@@ -744,7 +744,8 @@ namespace
         CHECK(!old.connect("127.0.0.1", cfg.port, "b1", err, p::kProtocol - 1) && err.find("protocol") != std::string::npos);
     }
 
-    // two match clients exchange frames of input and see the same timeline
+    // two match clients exchange frames of input and see the same timeline; each frame is checked as soon as it is ready, because
+    // waitFrame keeps only the last 256 frames
     void exchange(MatchClient &a, MatchClient &b, uint32_t frames)
     {
         const uint32_t d = a.delay();
@@ -753,18 +754,18 @@ namespace
             a.pushLocal(f + d, pressed(static_cast<uint16_t>(f)));
             b.pushLocal(f + d, pressed(static_cast<uint16_t>(0x8000u | f)));
         }
-        bool all = true;
+        bool all = true, same = true, right = true;
         for (uint32_t f = 0; f < frames + d && all; ++f)
+        {
             all = a.waitFrame(f, 3000) && b.waitFrame(f, 3000);
-        CHECK(all);
-        bool same = true, right = true;
-        for (uint32_t f = 0; f < frames + d; ++f)
-            for (int pl = 0; pl < 2; ++pl)
+            for (int pl = 0; pl < 2 && all; ++pl)
             {
                 same = same && a.input(pl, f) == b.input(pl, f);
                 const PadState want = f < d ? PadState{} : pressed(static_cast<uint16_t>((pl ? 0x8000u : 0u) | (f - d)));
                 right = right && a.input(pl, f) == want;
             }
+        }
+        CHECK(all);
         CHECK(same);
         CHECK(right);
     }
@@ -1257,6 +1258,50 @@ namespace
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
         CHECK(!alive);
+    }
+
+    // one connection holds one player: a second Join (another member's token) is refused and the connection closed, so the slot
+    // stays free for its owner and no slot is left pointing at a connection that went away
+    TEST(ws_match_connection_cannot_take_two_slots)
+    {
+        ServerConfig cfg = wsTestConfig();
+        RunningServer rs(cfg);
+        auto ms = formMatch(cfg.port, {"Ana", "Bia"}, {3, 1});
+        wotm_net::WsLink w;
+        std::string err;
+        CHECK(w.connect(wsUrl(cfg, "/match"), 2000, err));
+        auto joinPacket = [&](const std::string &token) {
+            p::Join j;
+            j.token = token, j.buildId = "b1", j.configHash = "cfg", j.name = "x";
+            std::vector<uint8_t> packet{p::kControl};
+            const std::vector<uint8_t> body = p::encode(j);
+            packet.insert(packet.end(), body.begin(), body.end());
+            return packet;
+        };
+        w.sendPacket(joinPacket(ms[0]->match["token"]));
+        w.sendPacket(joinPacket(ms[1]->match["token"]));
+        std::vector<p::Type> got;
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        bool alive = true;
+        while (alive && got.size() < 2 && std::chrono::steady_clock::now() < until)
+        {
+            alive = w.pump();
+            std::vector<uint8_t> packet;
+            while (w.nextPacket(packet))
+                if (packet.size() > 1)
+                    got.push_back(p::typeOf(std::vector<uint8_t>(packet.begin() + 1, packet.end())));
+            w.waitReadable(10);
+        }
+        CHECK(got.size() == 2u && got[0] == p::Type::Welcome && got[1] == p::Type::Reject);
+        w.close();
+        // Bia's slot is still free: her own client gets in, and the match starts once both are there
+        MatchClient b;
+        ClientConfig cb = clientFor(cfg.port, *ms[1]);
+        CHECK(b.start(cb, err));
+        const auto joined = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        while (b.status() == Status::Connecting && std::chrono::steady_clock::now() < joined)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        CHECK(b.status() == Status::Waiting);
     }
 
     TEST(ws_match_client_is_lost_when_the_server_stops)

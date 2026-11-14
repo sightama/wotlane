@@ -92,6 +92,142 @@ namespace wotm_net
         // waits up to `ms` for something to arrive
         virtual void waitReadable(int ms) = 0;
 
+        // waits up to `timeoutMs` for a line
+        bool readLine(std::string &line, int timeoutMs)
+        {
+            const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+            for (;;)
+            {
+                if (nextLine(line))
+                    return true;
+                if (!pump())
+                    return nextLine(line);
+                if (nextLine(line))
+                    return true;
+                const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(until - std::chrono::steady_clock::now()).count();
+                if (left <= 0)
+                    return false;
+                waitReadable(static_cast<int>(std::min<long long>(left, 50)));
+            }
+        }
+
+    };
+
+    class LineSocket : public LineLink
+    {
+    public:
+        LineSocket() = default;
+        explicit LineSocket(SocketHandle s) : s_(s) { setup(); }
+        LineSocket(const LineSocket &) = delete;
+        LineSocket &operator=(const LineSocket &) = delete;
+        LineSocket(LineSocket &&o) noexcept : s_(o.s_), in_(std::move(o.in_)) { o.s_ = kNoSocket; }
+        LineSocket &operator=(LineSocket &&o) noexcept
+        {
+            if (this != &o)
+            {
+                close();
+                s_ = o.s_, in_ = std::move(o.in_);
+                o.s_ = kNoSocket;
+            }
+            return *this;
+        }
+        ~LineSocket() override { close(); }
+
+        bool open() const override { return s_ != kNoSocket; }
+
+        bool connect(const std::string &host, uint16_t port, int timeoutMs)
+        {
+            close();
+            if (!socketsInit())
+                return false;
+            addrinfo hints{}, *res = nullptr;
+            hints.ai_family = AF_INET;
+            hints.ai_socktype = SOCK_STREAM;
+            if (getaddrinfo(host.c_str(), std::to_string(port).c_str(), &hints, &res) != 0 || !res)
+                return false;
+            s_ = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+            bool ok = s_ != kNoSocket;
+            if (ok)
+            {
+                setNonBlocking(s_);
+                const int r = ::connect(s_, res->ai_addr, static_cast<int>(res->ai_addrlen));
+                ok = r == 0 || (wouldBlock() && waitSocket(s_, timeoutMs, true) && connectedOk());
+            }
+            freeaddrinfo(res);
+            if (!ok)
+                close();
+            else
+                setup();
+            return ok;
+        }
+
+        bool sendLine(const std::string &line) override
+        {
+            const std::string s = line + "\n";
+            return sendBytes(s.data(), s.size());
+        }
+
+        // sends all of `data` (waits up to 2 s for room); closes the socket on failure
+        bool sendBytes(const void *data, size_t size)
+        {
+            if (!open())
+                return false;
+            const char *bytes = static_cast<const char *>(data);
+            size_t sent = 0;
+            const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+            while (sent < size)
+            {
+                const int n = ::send(s_, bytes + sent, static_cast<int>(size - sent), kSendFlags);
+                if (n > 0)
+                    sent += static_cast<size_t>(n);
+                else if (n < 0 && wouldBlock() && std::chrono::steady_clock::now() < until)
+                    waitSocket(s_, 50, true);
+                else
+                {
+                    close();
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        bool pump() override
+        {
+            if (!open())
+                return false;
+            char buf[4096];
+            for (;;)
+            {
+                const int n = ::recv(s_, buf, sizeof buf, 0);
+                if (n > 0)
+                {
+                    in_.append(buf, static_cast<size_t>(n));
+                    if (in_.size() > 65536u)   // absurdly long line: drop the connection
+                    {
+                        close();
+                        return false;
+                    }
+                    continue;
+                }
+                if (n < 0 && wouldBlock())
+                    return true;
+                close();
+                return false;
+            }
+        }
+
+        bool nextLine(std::string &line) override
+        {
+            const size_t nl = in_.find('\n');
+            if (nl == std::string::npos)
+                return false;
+            line = in_.substr(0, nl);
+            in_.erase(0, nl + 1);
+            if (!line.empty() && line.back() == '\r')
+                line.pop_back();
+            return true;
+        }
+
         void waitReadable(int ms) override
         {
             if (open())

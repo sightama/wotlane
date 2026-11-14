@@ -1,9 +1,10 @@
-// ABOUTME: Network match client (ENet, on its own thread): joins with the lobby token, sends local inputs, receives the others'
-// ABOUTME: and hands the game the lockstep timeline. No game code; wotm.exe uses it through wotm_sync.inc.
+// ABOUTME: Network match client (on its own thread, over ENet or WebSocket): joins with the lobby token, sends local inputs, receives
+// ABOUTME: the others' and hands the game the lockstep timeline. No game code; wotm.exe uses it through wotm_sync.inc.
 #pragma once
 
 #include "wotm_lockstep.hpp"
 #include "wotm_net_proto.hpp"
+#include "wotm_net_transport.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -15,14 +16,11 @@
 #include <thread>
 #include <vector>
 
-struct _ENetHost;
-struct _ENetPeer;
-
 namespace wotm_net
 {
     struct ClientConfig
     {
-        std::string host;
+        std::string host;   // a host name or address (ENet, with port), or a ws:// or wss:// URL (WebSocket: the browser version)
         uint16_t port = proto::kDefaultPort;
         std::string token, buildId, configHash, name;
         int dropInputPercent = 0;   // test: discards this percentage of the input packets sent
@@ -86,9 +84,8 @@ namespace wotm_net
         std::thread thread_;
         std::atomic<bool> stop_{false};
         std::atomic<uint32_t> rtt_{0};
-        _ENetHost *host_ = nullptr;
-        _ENetPeer *peer_ = nullptr;
-        bool enetUp_ = false;
+        std::unique_ptr<Transport> net_;
+        bool connected_ = false;
         ClientConfig cfg_;
         std::mt19937 rng_{12345u};
 

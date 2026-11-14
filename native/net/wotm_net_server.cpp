@@ -432,14 +432,14 @@ namespace wotm_net
     {
         Conn &c = *conns_[static_cast<size_t>(ci)];
         if (c.lobby < 0)
-            return void(c.socket.sendLine("ERROR join a lobby first"));
+            return void(c.link->sendLine("ERROR join a lobby first"));
         const Lobby &l = lobbies_[static_cast<size_t>(c.lobby)];
         if (l.match)
-            return void(c.socket.sendLine("ERROR lobby is in a match; change monster after it ends"));
+            return void(c.link->sendLine("ERROR lobby is in a match; change monster after it ends"));
         const int monster = std::atoi(w[1].c_str());
         std::string err;
         if (!monsterFits(l, monster, err, ci))
-            return void(c.socket.sendLine("ERROR " + err));
+            return void(c.link->sendLine("ERROR " + err));
         c.monster = monster;
         log("lobby %s: %s changed monster to %d", l.code.c_str(), c.name.c_str(), monster);
         sendMembers(c.lobby);
@@ -664,6 +664,8 @@ namespace wotm_net
         };
         if (j.protocol != proto::kProtocol)
             return reject("different protocol");
+        if (dataOf(peer))
+            return reject("this connection already holds a player");
         for (size_t li = 0; li < lobbies_.size(); ++li)
         {
             Match *m = lobbies_[li].match.get();
