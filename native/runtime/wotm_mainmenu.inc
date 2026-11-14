@@ -917,9 +917,13 @@ static void personalListInput(bool startEdge)
         std::lock_guard<std::mutex> lk(g_m);
         hv = g_pauseHover;
     }
+    static uint32_t s_seq = 0;
+    const uint32_t seq = wotm::mouse::g_moveSeq.load(std::memory_order_relaxed);
+    const bool moved = seq != s_seq;
+    s_seq = seq;
     const bool click = wotm::mouse::takeClick(wotm::mouse::g_clickL);
     e[PBack] |= wotm::mouse::takeClick(wotm::mouse::g_clickR) || startEdge;
-    if (hv.prow >= 0 && hv.prow < kPersonalRows && hv.prow != g_personalSel && (click || hv.part == HRow))
+    if (hv.prow >= 0 && hv.prow < kPersonalRows && hv.prow != g_personalSel && (click || moved))
     {
         g_personalSel = hv.prow;
         panelSfx(nullptr, nullptr, nullptr, 4);
