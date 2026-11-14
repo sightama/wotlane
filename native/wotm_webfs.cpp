@@ -17,7 +17,7 @@ namespace
 
 // globalThis.wotmFrames: frames presented, time spent in the loop's own work and time waiting for the browser (the page shows the rate)
 EM_ASYNC_JS(void, wotm_web_wait_frame, (), {
-    const s = globalThis.wotmFrames ??= {frames: 0, workMs: 0, waitMs: 0, last: performance.now()};
+    const s = globalThis.wotmFrames = globalThis.wotmFrames || {frames: 0, workMs: 0, waitMs: 0, last: performance.now()};
     const t0 = performance.now();
     s.workMs += t0 - s.last;
     await new Promise(resolve => requestAnimationFrame(resolve));
