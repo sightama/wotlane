@@ -7,17 +7,15 @@ set -eu
 usage() {
     cat <<EOF
 usage: sh tools/test_web.sh   (full build log: native/tests/build/web/build.log)
-  Uses emcc from PATH, else EMSDK (default ~/emsdk). Needs no runtime and no game files, so CI runs it too. The game itself
-  (sh tools/build_web.sh) needs the translated game and is not built here.
+  Uses the Emscripten in EMSDK (default ~/emsdk) when there is one, else the one on PATH. Needs no runtime
+  and no game files, so CI runs it too. The game itself (sh tools/build_web.sh) needs the translated game and is not built here.
 EOF
 }
 case ${1:-} in -h|--help) usage; exit 0 ;; esac
 
-if ! command -v emcc >/dev/null 2>&1; then
-    emsdk=${EMSDK:-$HOME/emsdk}
-    [ -f "$emsdk/emsdk_env.sh" ] || fail "no emcc on PATH and no Emscripten at $emsdk (set EMSDK)"
-    . "$emsdk/emsdk_env.sh" >/dev/null 2>&1
-fi
+emsdk=${EMSDK:-$HOME/emsdk}
+if [ -f "$emsdk/emsdk_env.sh" ]; then . "$emsdk/emsdk_env.sh" >/dev/null 2>&1; fi
+
 need emcmake em++ cmake ninja node
 
 step 'native tests (wasm, node)'
