@@ -14,7 +14,7 @@ EOF
 case ${1:-} in -h|--help) usage; exit 0 ;; esac
 
 emsdk=${EMSDK:-$HOME/emsdk}
-if [ -f "$emsdk/emsdk_env.sh" ]; then . "$emsdk/emsdk_env.sh" >/dev/null 2>&1; fi
+use_emsdk "$emsdk" || true   # else the one on PATH
 
 need emcmake em++ cmake ninja node
 
