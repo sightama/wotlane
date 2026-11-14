@@ -20,6 +20,11 @@
   }
 
   document.getElementById('logToggle').addEventListener('click', () => logEl.classList.toggle('open'));
+  // the canvas and its bar go fullscreen together (Esc leaves); the canvas keeps the game's shape
+  document.getElementById('fullscreen').addEventListener('click', () => {
+    document.getElementById('stage').requestFullscreen?.().catch(() => {});
+    canvas.focus();
+  });
   canvas.addEventListener('click', () => canvas.focus());
 
   // the runtime's environment: the disc comes from /disc and saves go to /save (wotm_webfs.cpp); movies are skipped (no FFmpeg in
@@ -41,15 +46,28 @@
   for (const key of fromAddress)
     if (params.has(key)) allowed[key] = params.get(key);
   const fixed = { ...env };
-  Object.assign(env, allowed, window.wotmMatchEnv || {}, fixed);
 
-  window.Module = {
-    canvas,
-    arguments: ['/disc/SCUS_971.97'],
-    print: out,
-    printErr: out,
-    setStatus: (text) => { statusEl.textContent = text || 'Running'; },
-    preRun: [() => Object.assign(window.Module.ENV, env)],
-    onAbort: (what) => { statusEl.textContent = 'Stopped: ' + what; logEl.classList.add('open'); },
+  // loads the game once (front.js calls it for single player, or with a lobby's match environment); `build` is version.json's
+  // build id, which the server compares with the lobby's
+  let started = false;
+  window.wotmStart = function (matchEnv, build) {
+    if (started) return;
+    started = true;
+    Object.assign(env, allowed, matchEnv || {}, build ? { WOTM_BUILDID: build } : {}, fixed);
+    window.Module = {
+      canvas,
+      arguments: ['/disc/SCUS_971.97'],
+      print: out,
+      printErr: out,
+      setStatus: (text) => { statusEl.textContent = text || 'Running'; },
+      preRun: [() => Object.assign(window.Module.ENV, env)],
+      onAbort: (what) => { statusEl.textContent = 'Stopped: ' + what; logEl.classList.add('open'); },
+    };
+    const script = document.createElement('script');
+    script.src = 'wotm.js';
+    document.body.appendChild(script);
+    canvas.focus();
   };
+  // a test link with a direct match skips the front panel
+  window.wotmDirect = params.has('WOTM_MATCH');
 })();

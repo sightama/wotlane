@@ -1,0 +1,148 @@
+// ABOUTME: The browser version's lobby client: wotm_server's lobby lines over a WebSocket (/lobby), and the game environment for a
+// ABOUTME: MATCH line (the same mapping as tools/net_lobby.py's match_env, with the match WebSocket as WOTM_NET).
+
+export const PROTOCOL = 4;   // native/net/wotm_net_proto.hpp kProtocol
+
+// one lobby line: the command, its words, and its key=value words as fields (MATCH, SETTINGS); `rest` is everything after the command
+export function parseLine(line) {
+  const text = String(line).replace(/\r?\n?$/, '');
+  const space = text.indexOf(' ');
+  const cmd = space < 0 ? text : text.slice(0, space);
+  const rest = space < 0 ? '' : text.slice(space + 1);
+  const words = rest ? rest.split(' ') : [];
+  const fields = {};
+  for (const w of words) {
+    const eq = w.indexOf('=');
+    if (eq > 0) fields[w.slice(0, eq)] = w.slice(eq + 1);
+  }
+  return { cmd, rest, words, fields };
+}
+
+// MEMBERS <code> <owner or -> <name:monster,... or ->
+export function parseMembers(parsed) {
+  const [code = '', owner = '-', list = '-'] = parsed.words;
+  const members = list === '-' ? [] : list.split(',').map((m) => {
+    const colon = m.lastIndexOf(':');
+    return { name: m.slice(0, colon), monster: Number(m.slice(colon + 1)) };
+  });
+  return { code, owner: owner === '-' ? '' : owner, members };
+}
+
+// the game's environment for a MATCH line's fields; `matchUrl` is the match WebSocket (wss://<host>/match)
+export function matchEnv(match, matchUrl) {
+  const you = Number(match.you);
+  return {
+    WOTM_NET: matchUrl,
+    WOTM_NETTOKEN: match.token,
+    WOTM_NETNAME: match.names.split(',')[you],
+    WOTM_MATCH: `${match.monsters},${match.stage}`,
+    WOTM_PLAYERS: String(Number(match.players)),
+    WOTM_FIXEDSTEP: match.step,
+    WOTM_SEED: match.seed,
+    WOTM_KILLTARGET: match.wins ?? '0',
+    WOTM_MODIFIERS: match.mods ?? '',
+    WOTM_LOCALPLAYER: String(you + 1),
+  };
+}
+
+// the server's WebSocket on the page's own host (the web server in front passes /lobby and /match to wotm_server)
+export function lobbySocketUrl(location, path) {
+  return (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + path;
+}
+
+// One lobby connection. Requests wait for their reply (or the ERROR that refuses them), in order; MEMBERS, SETTINGS and MATCH can
+// arrive at any time and go to onMembers, onSettings and onMatch. `socket` is a WebSocket (or anything with send, close and the
+// on* handlers).
+export class LobbyClient {
+  constructor(socket, build) {
+    this.socket = socket;
+    this.settings = {};
+    this.code = '';
+    this.onMembers = null;
+    this.onSettings = null;
+    this.onMatch = null;
+    this.onClose = null;
+    this.onError = null;   // an ERROR no request waits for (a refused MONSTER or START)
+    // requests waiting for their replies, oldest first: {replies (commands still expected, in order), got (the first reply),
+    // resolve, reject}. An ERROR refuses the oldest one
+    this.waiting = [];
+    socket.onmessage = (e) => this.receive(String(e.data));
+    socket.onclose = () => this.closed();
+    socket.onerror = () => {};
+    this.ready = this.expect(['WELCOME']);
+    socket.onopen = () => socket.send(`HELLO ${PROTOCOL} ${build}`);
+  }
+
+  expect(replies) {
+    return new Promise((resolve, reject) => this.waiting.push({ replies: [...replies], got: null, resolve, reject }));
+  }
+
+  receive(line) {
+    const p = parseLine(line);
+    if (p.cmd === 'ERROR') {
+      const w = this.waiting.shift();
+      if (w) w.reject(new Error(p.rest));
+      else this.onError?.(p.rest);
+      return;
+    }
+    if (p.cmd === 'SETTINGS') {
+      this.settings = { stage: p.fields.stage, wins: p.fields.wins, mods: p.fields.mods ?? '' };
+      this.onSettings?.(this.settings);
+    } else if (p.cmd === 'MEMBERS') {
+      this.onMembers?.(parseMembers(p));
+    } else if (p.cmd === 'MATCH') {
+      this.onMatch?.(p.fields);
+    } else if (p.cmd === 'JOINED') {
+      this.code = p.words[0];
+    }
+    const w = this.waiting[0];
+    if (w && p.cmd === w.replies[0]) {
+      w.replies.shift();
+      w.got ??= p;
+      if (!w.replies.length) {
+        this.waiting.shift();
+        w.resolve(w.got);
+      }
+    }
+  }
+
+  closed() {
+    for (const w of this.waiting.splice(0)) w.reject(new Error('lost the connection to the game server'));
+    this.onClose?.();
+  }
+
+  // sends a line and resolves with the first of `replies` once all of them arrived, in order
+  request(line, replies) {
+    const done = this.expect(replies);
+    this.socket.send(line);
+    return done;
+  }
+
+  // a new lobby named after its owner; resolves with its 4-letter code
+  async create(name, monster) {
+    const created = await this.request(`CREATE ${name} ${name} ${monster}`, ['CREATED', 'JOINED', 'SETTINGS']);
+    return created.words[0];
+  }
+
+  // resolves with the lobby code
+  async join(code, name, monster) {
+    const joined = await this.request(`JOIN ${code} ${name} ${monster}`, ['JOINED', 'SETTINGS']);
+    return joined.words[0];
+  }
+
+  // owner only: stage, wins and modifiers for the next match; resolves with what the server stored
+  async set({ stage, wins, mods }) {
+    const parts = [];
+    if (stage !== undefined) parts.push(`stage=${stage}`);
+    if (wins !== undefined) parts.push(`wins=${wins}`);
+    if (mods !== undefined) parts.push(`mods=${mods}`);
+    await this.request('SET ' + parts.join(' '), ['SETTINGS']);
+    return this.settings;
+  }
+
+  monster(id) { this.socket.send(`MONSTER ${id}`); }
+
+  start() { this.socket.send('START'); }
+
+  close() { this.socket.close(); }
+}
