@@ -35,10 +35,12 @@ namespace wotm_modifiers
 
     bool on(int bit) { return (wotm_sync::g_mods & bit) != 0; }
 
-    // Shell::LoadLevelFiles entry (wotm_sync::levelLoad): latch the panel's (or the lobby's) set for this fight
+    // Shell::LoadLevelFiles entry (wotm_sync::levelLoad): latch the panel's (or the lobby's) set for this fight; an offline replay
+    // (WOTM_INPUTPLAY) plays the set its recording was made with
     void fightStart()
     {
-        wotm_sync::g_mods = wotm::settings::modifiers();
+        const bool recorded = !wotm_sync::g_net && wotm_sync::g_inputPlayMods >= 0;
+        wotm_sync::g_mods = recorded ? wotm_sync::g_inputPlayMods : wotm::settings::modifiers();
         g_rising = false, g_maxRise = 0.f, g_maxSpeed = 0.f;
         if (!wotm_sync::g_fixedStep)
             setGameClockScale(on(md::Turbo) ? 2u : 1u);
