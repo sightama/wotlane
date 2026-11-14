@@ -958,6 +958,7 @@ void wotmFontGlyph(const uint8_t *rdram, int font, int ch)
     if (rdram) wotm_live::g_font.glyph(wotm::Ram{rdram, PS2_RAM_SIZE}, font, ch);
     if (font == 0 || font == 1) g_lastFontIdx = font;
 }
+void wotmFontToEdge(bool on) { wotm_live::g_font.toEdge = on; }
 // Split screen: rtMain sends each view's text in its own fontDmaFontData (view 0, then 1, and 2 and 3 with 3 and 4 players). What is
 // published is all of them together: view 0 goes out with the others' latest text (one frame behind until each sends its own), so the
 // present never catches only part of the HUD. A view that hasn't sent text since the previous view 0 (dialog: only 0) gets none.
@@ -2629,6 +2630,7 @@ void wotmFontInitPacket(uint32_t) {}
 void wotmFontSetTexId(const uint8_t *, uint32_t) {}
 void wotmFontColor(const uint8_t *, int) {}
 void wotmFontGlyph(const uint8_t *, int, int) {}
+void wotmFontToEdge(bool) {}
 void wotmFontDma(const uint8_t *) {}
 void wotmScreenPoly(const uint8_t *, int, int, int, uint32_t) {}
 bool wotmScreenPolyBox(const uint8_t *, int, int, int, uint32_t, float *) { return false; }
