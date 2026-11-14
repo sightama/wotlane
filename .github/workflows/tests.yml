@@ -1,0 +1,78 @@
+# ABOUTME: Builds and tests everything that needs no game files, on every push and pull request: the netcode, the native layer's
+# ABOUTME: unit tests, the tools' Python tests, the launcher, the browser build's own code (Emscripten) and the doc linter.
+# The runners never get game files or secrets: the game itself (runtime, browser build of the game) is not built here.
+name: tests
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # doclint compares a pull request with its base
+      - run: sudo apt-get -qq install -y ninja-build
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: netcode (wotm_server, wotm_net_test)
+        run: sh tools/test_net.sh
+      - name: native layer unit tests
+        run: sh tools/test_native.sh
+      # after the netcode: test_net_lobby.py starts the wotm_server just built
+      - name: tools (Python unit tests)
+        run: python3 -m unittest discover -s tools -p 'test_*.py'
+      - name: launcher (lobby logic against wotm_server, WinForms compile check)
+        run: sh tools/test_launcher.sh
+
+      # tools/doclint.py checks the staged lines: for a pull request, stage everything it adds over its base; for a push, only
+      # the whole TODO.md is checked.
+      - name: doclint
+        run: |
+          if [ -n "$BASE" ]; then
+            git fetch -q origin "$BASE"
+            git reset -q --soft "$(git merge-base HEAD "origin/$BASE")"
+          fi
+          python3 tools/doclint.py
+        env:
+          BASE: ${{ github.base_ref }}
+
+  web:
+    runs-on: ubuntu-latest
+    env:
+      EMSDK_VERSION: 7.0.0
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get -qq install -y ninja-build
+      - uses: actions/cache@v4
+        with:
+          path: ~/emsdk
+          key: emsdk-${{ runner.os }}-${{ env.EMSDK_VERSION }}
+      - name: Emscripten
+        run: |
+          if [ ! -f ~/emsdk/emsdk_env.sh ]; then git clone -q https://github.com/emscripten-core/emsdk ~/emsdk; fi
+          ~/emsdk/emsdk install "$EMSDK_VERSION" >/dev/null
+          ~/emsdk/emsdk activate "$EMSDK_VERSION" >/dev/null
+      - name: browser build's own code (native tests under wasm, browser-only sources, page scripts)
+        run: sh tools/test_web.sh
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: netcode (wotm_server, wotm_net_test)
+        shell: cmd
+        run: tools\build_net.bat
+      - name: native layer unit tests
+        shell: cmd
+        run: tools\test_native.bat
+      - name: launcher (WotM_Launcher.exe)
+        shell: cmd
+        run: tools\launcher\build.bat
+      - name: launcher tests (against the wotm_server just built)
+        shell: cmd
+        run: tools\launcher\test.bat
