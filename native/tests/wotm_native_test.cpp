@@ -855,6 +855,44 @@ TEST(creator_raw_alpha_round_trip)
     CHECK(!wotm::creator::applyRawAlpha(px, shortRaw) && (px[200] >> 24) == 200u);   // size mismatch: untouched
 }
 
+// The creator saves into mods/Creator: a skin of the same monster and id that another mod already registered would win again at
+// the next boot (the later mod in alphabetical order), so the creator asks who owns the id before writing anything
+TEST(mods_skin_owner)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "wotm_test_skinowner";
+    fs::remove_all(root);
+    fs::create_directories(root / "Other" / "skins" / "green");
+    { std::ofstream o(root / "Other" / "skins" / "green" / "skin.json"); o << wotm::creator::skinJson("togera", "green", "GREEN", 1); }
+    wotm::mods::Registry reg;
+    reg.scan(root);
+    CHECK(reg.skinOwner(3, "green") == "Other");   // Togera's green belongs to Other
+    CHECK(reg.skinOwner(3, "blue").empty());       // no such skin
+    CHECK(reg.skinOwner(1, "green").empty());      // the same id on another monster is another skin
+    fs::remove_all(root);
+}
+
+// The mods folder when WOTM_MODS is not set: mods/ next to the ELF, else the repo's; in the browser, mods/ in the game's working
+// folder (/save, the browser's private file system), so what the player makes or imports survives a reload
+TEST(mods_default_dir)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "wotm_test_modsdir";
+    fs::remove_all(root);
+    fs::create_directories(root / "game");
+    fs::create_directories(root / "repo" / "mods");
+    const std::string repo = (root / "repo").string();
+#ifdef __EMSCRIPTEN__
+    CHECK(wotm::mods::defaultDir(root / "game", repo.c_str()) == fs::path("mods"));
+#else
+    CHECK(wotm::mods::defaultDir(root / "game", repo.c_str()) == root / "repo" / "mods");   // none next to the ELF: the repo's
+    CHECK(wotm::mods::defaultDir(root / "game", nullptr) == root / "game" / "mods");        // no repo either: next to the ELF
+    fs::create_directories(root / "game" / "mods");
+    CHECK(wotm::mods::defaultDir(root / "game", repo.c_str()) == root / "game" / "mods");   // next to the ELF wins
+#endif
+    fs::remove_all(root);
+}
+
 TEST(mods_add_skin_after_scan)
 {
     namespace fs = std::filesystem;

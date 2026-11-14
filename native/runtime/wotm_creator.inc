@@ -438,6 +438,14 @@ static bool checkExisting(SaveCtx &c)
                      other.c_str(), asciiName(c.mods).c_str(), c.id.c_str());
         return false;
     }
+    // the same monster and id in another mod: that mod's skin would win again at the next boot, so this one would never show
+    const std::string owner = wotm::mods::Registry::get().skinOwner(c.mi.type, c.id);
+    if (!owner.empty() && owner != cr::kMod)
+    {
+        c.fail("NAME IN USE");
+        std::fprintf(stderr, "[creator] %s/%s is mod %s's skin; pick another name\n", c.mi.name, c.id.c_str(), owner.c_str());
+        return false;
+    }
     std::error_code ec;
     if (!fs::exists(c.dir, ec)) return true;
     // a skin folder holds one monster's skin; a missing or unreadable skin.json is not "in use" (the overwrite question applies)
