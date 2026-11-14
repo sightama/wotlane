@@ -488,15 +488,6 @@ namespace wotm_sync
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
-    std::string netNames(const std::vector<int> &players)
-    {
-        const std::vector<std::string> names = g_net->names();
-        std::string s;
-        for (int p : players)
-            s += (s.empty() ? "" : ", ") + (p < static_cast<int>(names.size()) ? names[static_cast<size_t>(p)] : "player " + std::to_string(p + 1));
-        return s;
-    }
-
     // Entry of Shell::LoadLevelFiles: waits for everyone to reach the match (the server measures the ping and picks the delay)
     void netStart()
     {
@@ -526,9 +517,21 @@ namespace wotm_sync
     uint32_t g_netStalls = 0;
     double g_netStallMs = 0.0;
 
+    // browser: tells the others when this tab is hidden or back, so their "Waiting for" message says why (the game keeps running in a
+    // hidden tab, but the browser may slow or freeze it)
+    void netAwayUpdate()
+    {
+#ifdef __EMSCRIPTEN__
+        static bool sent = false;
+        if (const bool hidden = wotmWebHidden(); hidden != sent)
+            g_net->setAway(sent = hidden);
+#endif
+    }
+
     void netWaitFrame(uint32_t frame)
     {
         wotm_netstatus::g_pingMs = g_net->rttMs();
+        netAwayUpdate();
         if (g_net->waitFrame(frame, 0))
             return;
         const auto t0 = std::chrono::steady_clock::now();
@@ -536,16 +539,26 @@ namespace wotm_sync
         bool shown = false;
         while (!g_net->waitFrame(frame, 50) && !stopRequested())
         {
+            netAwayUpdate();
             if (g_net->status() != wotm_net::MatchClient::Status::Running)
                 return netFail(g_net->message());
             if (std::chrono::steady_clock::now() - t0 > std::chrono::milliseconds(250))
             {
-                wotm_netstatus::setMessage("Waiting for " + netNames(g_net->missing(frame)));
+                const std::string text = g_net->waitingText(frame);
+                wotm_netstatus::setMessage(text);
+#ifdef __EMSCRIPTEN__
+                wotmWebNetStall(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count(), text.c_str());
+#endif
                 shown = true;
             }
         }
         if (shown)
+        {
             wotm_netstatus::setMessage("");
+#ifdef __EMSCRIPTEN__
+            wotmWebNetStall(0, "");
+#endif
+        }
         wotm_netstatus::g_waiting = false;
         const auto waited = std::chrono::steady_clock::now() - t0;
         g_runtime->eeScheduler().shiftHostDeadlines(waited);

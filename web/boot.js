@@ -63,6 +63,30 @@
     }, 250);
   }
 
+  // the game hears when the tab is hidden: an online match keeps running and tells the others why it may lag (wotm_webfs.cpp)
+  function tellHidden() {
+    window.Module._wotm_web_set_hidden?.(document.hidden ? 1 : 0);
+  }
+
+  // after a long wait for another player, the page offers to keep waiting or leave the match (back to the front panel)
+  function watchStalls() {
+    const prompt = new StallPrompt(60000);
+    const el = document.getElementById('stall');
+    const waitMs = () => window.Module._wotm_web_net_stall_ms?.() ?? 0;
+    document.getElementById('keepWaiting').addEventListener('click', () => {
+      prompt.keepWaiting(waitMs());
+      el.hidden = true;
+      canvas.focus();
+    });
+    document.getElementById('leaveMatch').addEventListener('click', () => location.reload());
+    setInterval(() => {
+      const show = prompt.show(waitMs());
+      if (show && el.hidden)
+        document.getElementById('stallText').textContent = window.Module.UTF8ToString(window.Module._wotm_web_net_stall_text()) + '.';
+      el.hidden = !show;
+    }, 500);
+  }
+
   // loads the game once (front.js calls it for single player, or with a lobby's match environment); `build` is version.json's
   // build id, which the server compares with the lobby's
   let started = false;
@@ -78,8 +102,11 @@
       setStatus: (text) => { statusEl.textContent = text || 'Running'; },
       preRun: [() => Object.assign(window.Module.ENV, env)],
       onAbort: (what) => { statusEl.textContent = 'Stopped: ' + what; logEl.classList.add('open'); },
+      onRuntimeInitialized: tellHidden,
     };
     showLoading(matchEnv ? 57 << 20 : 27 << 20);   // a first visit's download to a fight, or to the title
+    document.addEventListener('visibilitychange', tellHidden);
+    if (matchEnv) watchStalls();
     const script = document.createElement('script');
     script.src = 'wotm.js';
     document.body.appendChild(script);

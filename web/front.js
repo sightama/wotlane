@@ -75,6 +75,7 @@ async function connect(build) {
   client.onError = say;
   client.onClose = () => { if (!front.hidden) say('Lost the connection to the game server. Reload the page to try again.'); };
   client.onMatch = (match) => {
+    try { sessionStorage.setItem('wotlane.lobby', client.code); } catch { /* private window: not kept */ }
     front.hidden = true;
     window.wotmStart(matchEnv(match, serverUrl('/match')), build);
   };
@@ -121,6 +122,13 @@ function init() {
     return;
   }
   $('name').value = recall('name', '');
+  // back from a match (Leave the match reloads the page): Join puts the player back in the same lobby
+  let lastLobby = null;
+  try { lastLobby = sessionStorage.getItem('wotlane.lobby'); } catch { /* private window */ }
+  if (lastLobby) {
+    $('joinCode').value = lastLobby;
+    say(`Your last lobby was ${lastLobby}: Join puts you back in it.`);
+  }
   fill($('monster'), MONSTERS, recall('monster', 5));
   fill($('lobbyStage'), STAGES, recall('stage', 1));
   fill($('wins'), [[0, 'Endless'], ...[1, 2, 3, 4, 5].map((n) => [n, String(n)])], recall('wins', 2));
