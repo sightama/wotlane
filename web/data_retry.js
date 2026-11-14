@@ -12,7 +12,7 @@ function retryingFetch(baseFetch, { tries = 5, delayMs = 500, onBytes = null } =
         const r = await baseFetch(url, init);
         // 5xx and 429 are worth another try; anything else (including 404) is the answer
         if (r.status < 500 && r.status !== 429) {
-          if (r.status === 206) onBytes?.(Number(r.headers?.get('content-length')) || 0);   // a chunk (not a size probe)
+          if (r.status === 206 && init?.method !== 'HEAD') onBytes?.(Number(r.headers?.get('content-length')) || 0);   // a chunk, not a size probe
           return r;
         }
         if (attempt >= tries) return r;
