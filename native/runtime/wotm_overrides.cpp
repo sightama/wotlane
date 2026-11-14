@@ -909,8 +909,10 @@ namespace
             }
         }
         const double field = 294912000.0 / 59.94;
-        static uint32_t lastTics = 0;   // host ticks (native clock) or D_006F8DC4, the emulated timer 1's (9619 per field)
-        const uint32_t tics = g_nativeTimer ? hostTics() : READ32(0x6F8DC4u);
+        // the clock the game sees (native: with turbo's 2x and the fixed step's virtual ticks) or D_006F8DC4, the emulated timer 1's
+        // (9619 per field)
+        static uint32_t lastTics = 0;
+        const uint32_t tics = g_nativeTimer ? gameTics() : READ32(0x6F8DC4u);
         static double lastCpuMs = 0.0;   // EE thread CPU (user + kernel): a slow frame with little CPU = blocked outside idle
         const double cpuMs = wotmThreadCpuMs();
         // the line in a single write: stderr is unbuffered, and each fprintf would be a system call on the EE thread

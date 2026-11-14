@@ -16,8 +16,7 @@ EOF
 case ${1:-} in -h|--help) usage; exit 0 ;; esac
 
 emsdk=${EMSDK:-$HOME/emsdk}
-[ -f "$emsdk/emsdk_env.sh" ] || fail "no Emscripten at $emsdk (set EMSDK)"
-. "$emsdk/emsdk_env.sh" >/dev/null 2>&1
+use_emsdk "$emsdk" || fail "no Emscripten at $emsdk (set EMSDK)"
 need emcmake cmake ninja python3
 
 rt=$(runtime_dir)
