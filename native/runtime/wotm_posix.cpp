@@ -6,7 +6,9 @@
 #include <cstring>
 #include <cxxabi.h>
 #include <dlfcn.h>
+#ifndef __EMSCRIPTEN__
 #include <execinfo.h>
+#endif
 #include <unistd.h>
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
@@ -40,6 +42,10 @@ unsigned long GetModuleFileNameA(void *module, char *path, unsigned long size)
 void wotmCrashTrace(void *signalContext)
 {
     (void)signalContext;
+#ifdef __EMSCRIPTEN__
+    // the browser console already prints the wasm stack of an abort
+    std::fprintf(stderr, "[CRASH] (no native stack trace in the browser build)\n");
+#else
     void *frames[48];
     const int n = backtrace(frames, 48);
     Dl_info self{};
@@ -67,6 +73,7 @@ void wotmCrashTrace(void *signalContext)
         else
             std::fprintf(stderr, "[CRASH]   #%-2d %s+0x%llx\n", i, modName, rel);
     }
+#endif
     std::fflush(stderr);
 }
 

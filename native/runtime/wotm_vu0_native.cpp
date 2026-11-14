@@ -163,6 +163,33 @@ namespace
         c.s = mask4(vreinterpretq_u64_f64(exact.lo), vreinterpretq_u64_f64(exact.hi));
         return c;
     }
+#elif defined(__EMSCRIPTEN__)
+    // WebAssembly has no AVX: two SSE2 pairs (x,y | z,w), which Emscripten maps onto wasm SIMD
+    struct D4
+    {
+        __m128d lo, hi;
+    };
+
+    WOTM_VU0_FI D4 W(__m128 v) { return {_mm_cvtps_pd(v), _mm_cvtps_pd(_mm_movehl_ps(v, v))}; }
+    WOTM_VU0_FI D4 dAdd(D4 a, D4 b) { return {_mm_add_pd(a.lo, b.lo), _mm_add_pd(a.hi, b.hi)}; }
+    WOTM_VU0_FI D4 dSub(D4 a, D4 b) { return {_mm_sub_pd(a.lo, b.lo), _mm_sub_pd(a.hi, b.hi)}; }
+    WOTM_VU0_FI D4 dMul(D4 a, D4 b) { return {_mm_mul_pd(a.lo, b.lo), _mm_mul_pd(a.hi, b.hi)}; }
+    WOTM_VU0_FI __m128 toFloat4(D4 v) { return _mm_movelh_ps(_mm_cvtpd_ps(v.lo), _mm_cvtpd_ps(v.hi)); }
+
+    // per-lane masks of zero, overflow, underflow (including zero) and sign, before the D and ~z masking
+    WOTM_VU0_FI Cls rawClassify(D4 exact)
+    {
+        const __m128d sign = _mm_set1_pd(-0.0);
+        const __m128d mlo = _mm_andnot_pd(sign, exact.lo), mhi = _mm_andnot_pd(sign, exact.hi);
+        const __m128d zero = _mm_setzero_pd(), fmax = _mm_set1_pd((double)FLT_MAX), fmin = _mm_set1_pd((double)FLT_MIN);
+        const auto pair = [](__m128d lo, __m128d hi) { return _mm_movemask_pd(lo) | (_mm_movemask_pd(hi) << 2); };
+        Cls c;
+        c.z = pair(_mm_cmpeq_pd(mlo, zero), _mm_cmpeq_pd(mhi, zero));
+        c.o = pair(_mm_cmpgt_pd(mlo, fmax), _mm_cmpgt_pd(mhi, fmax));
+        c.u = pair(_mm_cmplt_pd(mlo, fmin), _mm_cmplt_pd(mhi, fmin));
+        c.s = pair(exact.lo, exact.hi);
+        return c;
+    }
 #else
     using D4 = __m256d;
 
@@ -321,8 +348,13 @@ void wotmVu0NativeRun(WotmVu0Fn fn, VU1State &state, uint8_t *vu0Data)
 {
     // round toward zero, like the VU (and like VU1Interpreter::run). On x86 this only sets MXCSR, since all the math is SSE/AVX;
     // on ARM, sse2neon maps it to FPCR, which also covers the NEON doubles
+#if defined(__EMSCRIPTEN__)
+    // WebAssembly has no rounding-mode control: the math rounds to nearest here (a known difference from the native builds)
+    fn(state, vu0Data);
+#else
     const unsigned int csr = _mm_getcsr();
     _mm_setcsr((csr & ~0x6000u) | 0x6000u);
     fn(state, vu0Data);
     _mm_setcsr(csr);
+#endif
 }

@@ -1,8 +1,6 @@
-// ABOUTME: Network match client implementation: an ENet thread that joins with the token, relays inputs with acks and
-// ABOUTME: redundancy, applies drops and stops on desync. The game only calls pushLocal/waitFrame/input from its own thread.
+// ABOUTME: Network match client implementation: a thread that joins with the token over the match transport (ENet or WebSocket),
+// ABOUTME: relays inputs with acks and redundancy, applies drops and stops on desync. The game only calls pushLocal/waitFrame/input.
 #include "wotm_net_client.hpp"
-
-#include <enet/enet.h>
 
 #include <algorithm>
 
@@ -14,35 +12,18 @@ namespace wotm_net
     {
         stop();
         cfg_ = c;
-        if (enet_initialize() != 0)
+        net_ = makeTransport(c.host);
+        if (!net_->open(c.host, c.port, err))
         {
-            err = "enet_initialize failed";
+            net_.reset();
             return false;
         }
-        enetUp_ = true;
-        host_ = enet_host_create(nullptr, 1, proto::kChannels, 0, 0);
-        if (!host_)
-        {
-            err = "could not open a UDP socket";
-            return false;
-        }
-        ENetAddress a;
-        if (enet_address_set_host(&a, c.host.c_str()) != 0)
-        {
-            err = "invalid address: " + c.host;
-            return false;
-        }
-        a.port = c.port;
-        peer_ = enet_host_connect(host_, &a, proto::kChannels, 0);
-        if (!peer_)
-        {
-            err = "enet_host_connect failed";
-            return false;
-        }
+        connected_ = false;
+        const std::string where = isWebSocketAddress(c.host) ? c.host : c.host + ":" + std::to_string(c.port);
         {
             std::lock_guard<std::mutex> lk(mu_);
             status_ = Status::Connecting;
-            message_ = "connecting to " + c.host + ":" + std::to_string(c.port);
+            message_ = "connecting to " + where;
         }
         stop_ = false;
         thread_ = std::thread([this] { run(); });
@@ -56,17 +37,12 @@ namespace wotm_net
             stop_ = true;
             thread_.join();
         }
-        if (host_)
+        if (net_)
         {
-            enet_host_destroy(host_);
-            host_ = nullptr;
-            peer_ = nullptr;
+            net_->close();
+            net_.reset();
         }
-        if (enetUp_)
-        {
-            enet_deinitialize();
-            enetUp_ = false;
-        }
+        connected_ = false;
         std::lock_guard<std::mutex> lk(mu_);
         if (status_ == Status::Connecting || status_ == Status::Waiting || status_ == Status::Running)
             status_ = Status::Idle;
@@ -82,58 +58,38 @@ namespace wotm_net
 
     void MatchClient::run()
     {
+        const std::string where = isWebSocketAddress(cfg_.host) ? cfg_.host : cfg_.host + ":" + std::to_string(cfg_.port);
         while (!stop_)
         {
-            ENetEvent ev;
+            TransportEvent ev;
             int wait = 1;
-            while (enet_host_service(host_, &ev, static_cast<enet_uint32>(wait)) > 0)
+            while (net_->poll(ev, wait))
             {
                 wait = 0;
-                if (ev.type == ENET_EVENT_TYPE_CONNECT)
+                if (ev.kind == TransportEvent::Kind::Connected)
                 {
-                    enet_peer_ping_interval(peer_, 100);
-                    enet_peer_timeout(peer_, 0, 10000, 20000);
+                    connected_ = true;
                     proto::Join j;
                     j.token = cfg_.token, j.buildId = cfg_.buildId, j.configHash = cfg_.configHash, j.name = cfg_.name;
-                    const std::vector<uint8_t> b = proto::encode(j);
-                    enet_peer_send(peer_, proto::kControl, enet_packet_create(b.data(), b.size(), ENET_PACKET_FLAG_RELIABLE));
+                    net_->send(proto::kControl, proto::encode(j), true);
                 }
-                else if (ev.type == ENET_EVENT_TYPE_RECEIVE)
-                {
-                    const std::vector<uint8_t> data(ev.packet->data, ev.packet->data + ev.packet->dataLength);
-                    enet_packet_destroy(ev.packet);
-                    handle(data);
-                }
-                else if (ev.type == ENET_EVENT_TYPE_DISCONNECT)
+                else if (ev.kind == TransportEvent::Kind::Message)
+                    handle(ev.data);
+                else
                 {
                     std::lock_guard<std::mutex> lk(mu_);
                     if (status_ == Status::Connecting)
-                        setStatus(Status::Lost, "no answer from the server " + cfg_.host + ":" + std::to_string(cfg_.port));
+                        setStatus(Status::Lost, "no answer from the server " + where);
                     else if (status_ != Status::Rejected && status_ != Status::Desynced)
                         setStatus(Status::Lost, "connection to the server dropped");
-                    peer_ = nullptr;
+                    connected_ = false;
                 }
             }
-            if (peer_)
+            if (connected_)
             {
-                rtt_ = peer_->roundTripTime;
+                rtt_ = net_->rttMs();
                 sendInput(Clock::now());
             }
-        }
-        if (peer_)
-        {
-            enet_peer_disconnect(peer_, 0);
-            ENetEvent ev;
-            const auto until = Clock::now() + std::chrono::milliseconds(500);
-            while (Clock::now() < until && enet_host_service(host_, &ev, 10) >= 0)
-            {
-                if (ev.type == ENET_EVENT_TYPE_RECEIVE)
-                    enet_packet_destroy(ev.packet);
-                else if (ev.type == ENET_EVENT_TYPE_DISCONNECT)
-                    break;
-            }
-            enet_peer_reset(peer_);
-            peer_ = nullptr;
         }
     }
 
@@ -259,11 +215,10 @@ namespace wotm_net
         }
         for (const proto::Hash &h : hashes)
         {
-            const std::vector<uint8_t> b = proto::encode(h);
-            enet_peer_send(peer_, proto::kControl, enet_packet_create(b.data(), b.size(), ENET_PACKET_FLAG_RELIABLE));
+            net_->send(proto::kControl, proto::encode(h), true);
         }
         if (!packet.empty() && !(cfg_.dropInputPercent > 0 && static_cast<int>(rng_() % 100u) < cfg_.dropInputPercent))
-            enet_peer_send(peer_, proto::kInputs, enet_packet_create(packet.data(), packet.size(), 0));
+            net_->send(proto::kInputs, packet, false);
     }
 
     MatchClient::Status MatchClient::status() const

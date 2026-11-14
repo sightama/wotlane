@@ -1,10 +1,16 @@
 // ABOUTME: Unit tests for the pure parts of the native layer (no game, no window): frame interpolation from wotm_interp.hpp (matrices,
-// ABOUTME: camera, cuts, projection), the settings profile for network matches and the mod digest. Build and run: tools\test_native.bat
+// ABOUTME: camera, cuts, projection), the settings profile for network matches, the mod digest and lock-on target cycling. Build and run: tools\test_native.bat
 #include "wotm_interp.hpp"
 #include "wotm_settings.hpp"
+#include "wotm_snd.hpp"
+#include "wotm_windowfit.hpp"
+#include "wotm_personalpause.hpp"
+#include "wotm_pauseview.hpp"
 #include "wotm_mods.hpp"
 #include "wotm_detmath.hpp"
 #include "wotm_freecam.h"
+#include "wotm_glsl.hpp"
+#include "wotm_lockon.hpp"
 #include "wotm_trig_goldens.hpp"
 #include "net/wotm_modifiers.hpp"
 #include "wotm_tint.hpp"
@@ -20,6 +26,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <memory>
 #include <random>
 #include <string>
 #include <vector>
@@ -234,6 +241,25 @@ namespace
         CHECK(md::scaledClock(5u, 0xFFFFFFF0u, 0u, 2u) == 42u);   // the host clock wrapped around
     }
 
+    // Fast Monsters: full speed almost at once (acceleration well above the speed factor) and every animation of a monster at
+    // kFastAnim. A clip's speed changes without a jump in its time: running, its time keeps counting from the switch at the new rate;
+    // paused, it stays where it was. The inverse factor gives the original speed back.
+    TEST(fast_monsters_factors_and_clip_rescale)
+    {
+        namespace md = wotm::modifiers;
+        CHECK(md::kFastSpeed == 1.5f && md::kFastAnim == 1.5f && md::kFastAccel >= 2.f * md::kFastSpeed);
+        md::ClipClock run{100u, 5.f, 1.f};
+        CHECK(md::clipTime(run, true, 130u) == 35.f);
+        md::rescaleClip(run, true, 130u, md::kFastAnim);
+        CHECK(md::clipTime(run, true, 130u) == 35.f && md::clipTime(run, true, 140u) == 50.f && run.deltaTime == 1.5f);
+        md::ClipClock paused{20u, 5.f, -1.f};   // paused: startField holds the fields it had run
+        CHECK(md::clipTime(paused, false, 999u) == -15.f);
+        md::rescaleClip(paused, false, 999u, md::kFastAnim);
+        CHECK(md::clipTime(paused, false, 999u) == -15.f && paused.deltaTime == -1.5f);
+        md::rescaleClip(run, true, 140u, 1.f / md::kFastAnim);
+        CHECK(md::clipTime(run, true, 150u) == 60.f && run.deltaTime == 1.f);
+    }
+
     // Modifier options (wotm_settings.hpp): three on/off keys offline; WOTM_MODIFIERS sets all three; in a network match the lobby's
     // list (g_netMods) is forced and the player's own values stay stored
     TEST(modifier_settings_and_net_lock)
@@ -254,6 +280,10 @@ namespace
         CHECK(st::modifiers() == md::Turbo);
         CHECK(st::forced(st::SuperJump) && st::forced(st::Turbo) && st::get(st::SuperJump) == 0 && st::get(st::Turbo) == 1);
         CHECK(st::g_val[st::SuperJump].load() == 1);   // the player's own choice is still stored
+        // the lobby's list: an unknown name is reported (false) and plays as none on every PC, like the config hash
+        CHECK(st::setNetModifiers("jump,fast") && st::g_netMods.load() == (md::Jump | md::Fast));
+        CHECK(!st::setNetModifiers("moon") && st::g_netMods.load() == 0);
+        CHECK(st::setNetModifiers(nullptr) && st::g_netMods.load() == 0);
         st::g_netProfile.store(false);
         st::g_netMods.store(0);
         CHECK(st::modifiers() == (md::Jump | md::Fast | md::Turbo));
@@ -261,6 +291,164 @@ namespace
         CHECK(st::parse(st::Turbo, "1", v) && v == 1 && st::parse(st::Turbo, "0", v) && v == 0);
         CHECK(std::string(st::kEnv[st::SuperJump]) == "WOTM_SUPERJUMP" && std::string(st::kEnv[st::Turbo]) == "WOTM_TURBO");
         st::g_val[st::SuperJump].store(0), st::g_val[st::FastMonsters].store(0), st::g_val[st::Turbo].store(0);
+    }
+
+    // Effects and music volume (AUDIO tab, #7): per-PC percentages 0..100, default 100, from WOTM_VOL_SFX / WOTM_VOL_MUSIC or settings.ini;
+    // never forced by the network profile (they change what you hear, not the game)
+    TEST(volume_settings_are_per_pc_percentages)
+    {
+        namespace st = wotm::settings;
+        CHECK(std::string(st::kEnv[st::VolSfx]) == "WOTM_VOL_SFX" && std::string(st::kEnv[st::VolMusic]) == "WOTM_VOL_MUSIC");
+        CHECK(st::kDefault[st::VolSfx] == 100 && st::kDefault[st::VolMusic] == 100);
+        int v = -1;
+        CHECK(st::parse(st::VolSfx, "40", v) && v == 40);
+        CHECK(st::parse(st::VolMusic, "0", v) && v == 0);
+        CHECK(st::parse(st::VolMusic, "250", v) && v == 100);
+        CHECK(st::parse(st::VolSfx, "-5", v) && v == 0);
+        CHECK(!st::parse(st::VolSfx, "loud", v));
+        st::g_netProfile.store(true);
+        CHECK(!st::forced(st::VolSfx) && !st::forced(st::VolMusic));
+        st::g_netProfile.store(false);
+    }
+
+    // The engine applies this PC's volume on top of the game's group volume: the game still reads back its own value
+    // (snd_GetMasterVolume), effects and music are separate, 0 is silence
+    TEST(sound_player_volume_scales_one_group_only)
+    {
+        auto &e = wotm::snd::Engine::get();
+        e.setMasterVolume(0, 0x400);
+        e.setMasterVolume(1, 0x400);
+        const int full = e.adjustToGroup(0x4000, 0);
+        e.setPlayerVolume(0, 50);
+        CHECK(e.adjustToGroup(0x4000, 0) < full && e.adjustToGroup(0x4000, 0) > 0);
+        CHECK(e.adjustToGroup(0x4000, 1) == full);   // music untouched
+        CHECK(e.masterVolume(0) == 0x400);            // the game's own value is unchanged
+        e.setPlayerVolume(1, 0);
+        CHECK(e.adjustToGroup(0x4000, 1) == 0);
+        e.setPlayerVolume(0, 100);
+        e.setPlayerVolume(1, 100);
+        CHECK(e.adjustToGroup(0x4000, 0) == full && e.adjustToGroup(0x4000, 1) == full);
+    }
+
+    // The window at start (#6): the largest size of the frame's aspect that fits in 90% of the monitor, whatever the render resolution
+    TEST(window_fits_the_monitor_not_the_render_resolution)
+    {
+        namespace wf = wotm::windowfit;
+        int w = 0, h = 0;
+        wf::size(16.f / 9.f, 2560, 1440, w, h);
+        CHECK(w == 2304 && h == 1296);
+        wf::size(16.f / 9.f, 1920, 1200, w, h);   // 16:10 monitor: the width limits
+        CHECK(w == 1728 && h == 972);
+        wf::size(4.f / 3.f, 1920, 1080, w, h);    // 4:3 frame: the height limits
+        CHECK(w == 1296 && h == 972);
+        wf::size(16.f / 9.f, 0, 0, w, h);         // no monitor information: 1280x720
+        CHECK(w == 1280 && h == 720);
+        wf::size(16.f / 9.f, 2560, 1440, w, h, 360);   // a cap on the height (checks: WOTM_WINDOW)
+        CHECK(w == 640 && h == 360);
+    }
+
+    // Network match, one view per player (#18): in PAUSE ALL the game runs only view 0, so the frame has no snapshot of the local view;
+    // the present keeps drawing the one from before the pause behind the menu, and goes back to live drawing when the pause ends
+    TEST(pause_view_draws_the_local_view_held_from_before_the_pause)
+    {
+        namespace pv = wotm::pauseview;
+        struct Snap { int frame; };
+        pv::Held<Snap> held;
+        const auto before = std::make_shared<Snap>(Snap{1});
+        CHECK(pv::pick<Snap>(held, true, false, before) == before.get());   // online, unpaused: the live local view
+        CHECK(pv::pick<Snap>(held, true, true, nullptr) == before.get());   // online, paused: the one held from before the pause
+        CHECK(pv::pick<Snap>(held, true, true, nullptr) == before.get());   // for the whole pause
+        const auto after = std::make_shared<Snap>(Snap{2});
+        CHECK(pv::pick<Snap>(held, true, false, after) == after.get());     // the pause ends: live again
+        CHECK(held.snap == after);                                          // the pause's snapshot is gone
+        CHECK(pv::pick<Snap>(held, true, false, nullptr) == nullptr);       // unpaused frame without the local view: view 0, as before
+        CHECK(pv::pick<Snap>(held, true, true, nullptr) == nullptr);        // and a pause with nothing held falls back to view 0
+    }
+
+    // Offline (single player, split screen) nothing changes: the present draws view 0 and its split views, paused or not
+    TEST(pause_view_leaves_offline_drawing_alone)
+    {
+        namespace pv = wotm::pauseview;
+        struct Snap { int frame; };
+        pv::Held<Snap> held;
+        const auto split = std::make_shared<Snap>(Snap{1});
+        CHECK(pv::pick<Snap>(held, false, false, nullptr) == nullptr);      // single player
+        CHECK(pv::pick<Snap>(held, false, false, split) == nullptr);        // split screen: its views are drawn as split views
+        CHECK(pv::pick<Snap>(held, false, true, split) == nullptr);         // paused offline
+        CHECK(!held.snap);
+    }
+
+
+    // Personal pause online (#16): Start opens this PC's menu instead of reaching the match, and while it is open (and until every
+    // button is released after it closes) this PC sends neutral input, so the others keep playing and its monster stands still.
+    // Buttons are active low (0xFFFF = nothing pressed).
+    TEST(personal_pause_opens_on_start_and_sends_neutral_input)
+    {
+        namespace pp = wotm::personalpause;
+        constexpr uint16_t none = 0xFFFF, start = 0xFFFF & ~pp::kStart, cross = 0xFFFF & ~0x4000;
+        pp::Menu m;
+        pp::Out o = pp::step(m, cross, true);
+        CHECK(!o.neutral && !o.start && !m.open());                  // closed: the input goes to the match
+        o = pp::step(m, start, false);
+        CHECK(!o.neutral && !m.open());                              // not allowed (game dialog, shared pause): Start reaches the game
+        o = pp::step(m, none, true);
+        o = pp::step(m, start, true);
+        CHECK(o.neutral && !o.start && m.open());                    // Start opens the menu, the match never sees it
+        o = pp::step(m, cross, true);
+        CHECK(o.neutral && m.open());                                // open: neutral whatever is pressed
+        pp::close(m);
+        o = pp::step(m, cross, true);
+        CHECK(o.neutral && !m.open());                               // closed, X still held: neutral until released
+        o = pp::step(m, none, true);
+        CHECK(!o.neutral && !o.start);
+        o = pp::step(m, cross, true);
+        CHECK(!o.neutral);                                           // back to the match
+    }
+
+    // A Start held from before (or the one that opened the menu) never reopens it: only a new press does
+    TEST(personal_pause_needs_a_new_start_press)
+    {
+        namespace pp = wotm::personalpause;
+        constexpr uint16_t none = 0xFFFF, start = 0xFFFF & ~pp::kStart;
+        pp::Menu m;
+        pp::step(m, start, true);
+        CHECK(m.open());
+        pp::close(m);
+        CHECK(pp::step(m, start, true).neutral && !m.open());        // still held: no reopen
+        CHECK(!pp::step(m, none, true).neutral);
+        pp::step(m, start, true);
+        CHECK(m.open());
+    }
+
+    // PAUSE MATCH FOR EVERYONE: once every button is released, one frame with Start goes to the match (the game's shared pause, with
+    // QUIT), then the input is the player's again
+    TEST(personal_pause_can_pause_the_match_for_everyone)
+    {
+        namespace pp = wotm::personalpause;
+        constexpr uint16_t none = 0xFFFF, start = 0xFFFF & ~pp::kStart, cross = 0xFFFF & ~0x4000;
+        pp::Menu m;
+        pp::step(m, start, true);
+        pp::pauseEveryone(m);
+        pp::Out o = pp::step(m, cross, true);
+        CHECK(o.neutral && !o.start && !m.open());                   // X that chose it still held
+        o = pp::step(m, none, true);
+        CHECK(o.neutral && o.start);                                 // one frame of Start alone
+        o = pp::step(m, none, true);
+        CHECK(!o.neutral && !o.start);
+    }
+
+    // A game dialog appearing while the menu is open (the match ends, someone else pauses for everyone) closes it: the game's own
+    // screen needs this player's input
+    TEST(personal_pause_closes_when_the_game_takes_over)
+    {
+        namespace pp = wotm::personalpause;
+        constexpr uint16_t none = 0xFFFF, start = 0xFFFF & ~pp::kStart;
+        pp::Menu m;
+        pp::step(m, start, true);
+        pp::step(m, none, true);
+        CHECK(m.open());
+        const pp::Out o = pp::step(m, none, false);
+        CHECK(!m.open() && !o.neutral);
     }
 
     // Network match profile (wotm_settings.hpp): settings that change game state the same way for everyone take the fixed profile on
@@ -338,7 +526,9 @@ namespace
         bytes.insert(bytes.end(), {1, 2, 3});   // a truncated last record (the game was closed mid-write) is ignored
         std::vector<wotm_net::InputRecord> recs;
         std::string err;
-        CHECK(wotm_net::readInputRecords(bytes, recs, err) && err.empty());
+        int mods = 0;
+        CHECK(wotm_net::readInputRecords(bytes, recs, mods, err) && err.empty());
+        CHECK(mods == -1);   // no modifiers recorded: the replaying PC's apply
         CHECK(recs.size() == 2u);
         CHECK(recs[0].index == 7u && recs[0].controller == 2u && recs[0].state.buttons == 0xBFFEu);
         CHECK(recs[0].state.rx == 0x10u && recs[0].state.ry == 0x20u && recs[0].state.lx == 0x30u && recs[0].state.ly == 0x40u);
@@ -351,8 +541,9 @@ namespace
         wotm_net::InputRecord a{12, 0, {}}, b{12, 5, {}};
         a.state.buttons = 0x1234u, a.state.rx = 1, a.state.ry = 2, a.state.lx = 3, a.state.ly = 4;
         a.state.mouseX = -32768, a.state.mouseY = 32767, a.state.cam = 0x00A7u;
-        std::vector<uint8_t> bytes = wotm_net::encodeInputHeader();
-        CHECK(bytes.size() == 8u && std::memcmp(bytes.data(), "WOTMINP\x02", 8) == 0);
+        // the header carries the fight's gameplay modifiers, so the replay plays them back
+        std::vector<uint8_t> bytes = wotm_net::encodeInputHeader(wotm::modifiers::Jump | wotm::modifiers::Turbo);
+        CHECK(bytes.size() == 9u && std::memcmp(bytes.data(), "WOTMINP\x03\x05", 9) == 0);
         for (const auto &r : {a, b})
         {
             const std::vector<uint8_t> rec = wotm_net::encodeInputRecord(r);
@@ -361,22 +552,39 @@ namespace
         }
         std::vector<wotm_net::InputRecord> recs;
         std::string err;
-        CHECK(wotm_net::readInputRecords(bytes, recs, err));
+        int mods = -1;
+        CHECK(wotm_net::readInputRecords(bytes, recs, mods, err));
+        CHECK(mods == (wotm::modifiers::Jump | wotm::modifiers::Turbo));
         CHECK(recs.size() == 2u && recs[0].index == 12u && recs[0].controller == 0u && recs[0].state == a.state);
         CHECK(recs[1].controller == 5u && recs[1].state == b.state);
         bytes.push_back(9);   // truncated tail
-        CHECK(wotm_net::readInputRecords(bytes, recs, err) && recs.size() == 2u);
+        CHECK(wotm_net::readInputRecords(bytes, recs, mods, err) && recs.size() == 2u);
+        CHECK(wotm_net::readInputRecords(wotm_net::encodeInputHeader(0), recs, mods, err) && mods == 0 && recs.empty());
+    }
+
+    // Version 2 (no modifiers byte) still loads: same records, modifiers not recorded
+    TEST(inputfile_reads_version_2_without_modifiers)
+    {
+        std::vector<uint8_t> bytes = {'W', 'O', 'T', 'M', 'I', 'N', 'P', 2};
+        const std::vector<uint8_t> rec = wotm_net::encodeInputRecord({3, 1, {}});
+        bytes.insert(bytes.end(), rec.begin(), rec.end());
+        std::vector<wotm_net::InputRecord> recs;
+        std::string err;
+        int mods = 0;
+        CHECK(wotm_net::readInputRecords(bytes, recs, mods, err) && mods == -1);
+        CHECK(recs.size() == 1u && recs[0].index == 3u && recs[0].controller == 1u);
     }
 
     TEST(inputfile_rejects_unknown_version)
     {
-        std::vector<uint8_t> bytes = wotm_net::encodeInputHeader();
-        bytes[7] = 3;
+        std::vector<uint8_t> bytes = wotm_net::encodeInputHeader(0);
+        bytes[7] = 4;
         bytes.resize(bytes.size() + 20u, 0);
         std::vector<wotm_net::InputRecord> recs{wotm_net::InputRecord{}};
         std::string err;
-        CHECK(!wotm_net::readInputRecords(bytes, recs, err));
-        CHECK(recs.empty() && err.find("version 3") != std::string::npos);
+        int mods = 0;
+        CHECK(!wotm_net::readInputRecords(bytes, recs, mods, err));
+        CHECK(recs.empty() && err.find("version 4") != std::string::npos);
     }
 
     // Digest of the enabled mods (wotm_mods.hpp), which goes into the network match's settings hash: the same set of files gives the
@@ -679,6 +887,72 @@ TEST(mods_add_skin_after_scan)
     fs::create_directories(root / "Creator" / "skins" / "bad");
     CHECK(!reg.addSkin(root / "Creator" / "skins" / "bad", why) && why.find("skin.json") != std::string::npos);
     fs::remove_all(root);
+}
+
+TEST(glsl_desktop_source_unchanged)
+{
+    const std::string src = "#version 330\nin vec2 uv;\nvoid main() {}\n";
+    CHECK(wotm_glsl::forTarget(src, false) == src);
+}
+
+TEST(glsl_es_rewrites_version_and_adds_precision)
+{
+    CHECK(wotm_glsl::forTarget("#version 330\nin vec2 uv;\nvoid main() {}\n", true) ==
+          "#version 300 es\nprecision highp float;\nprecision highp int;\nprecision highp sampler2D;\nin vec2 uv;\nvoid main() {}\n");
+}
+
+TEST(glsl_es_leaves_source_without_version_alone)
+{
+    const std::string src = "in vec2 uv;\nvoid main() {}\n";
+    CHECK(wotm_glsl::forTarget(src, true) == src);
+}
+
+TEST(card_root_defaults_to_mc0_next_to_the_elf)
+{
+    CHECK(wotm::settings::cardRoot({}, "/game", nullptr) == std::filesystem::path("/game/mc0"));
+}
+
+TEST(card_root_keeps_the_runtime_card_folder)
+{
+    CHECK(wotm::settings::cardRoot("/cards/mc0", "/game", "") == std::filesystem::path("/cards/mc0"));
+}
+
+TEST(card_root_follows_the_save_folder)
+{
+    CHECK(wotm::settings::cardRoot("/cards/mc0", "/disc", "/save") == std::filesystem::path("/save/mc0"));
+}
+
+// Lock-on target switching (Tab/R/wheel): the nearest to the right or left on screen, wrapping around at the end
+TEST(lockon_cycles_targets_on_screen)
+{
+    namespace lo = wotm::lockon;
+    const float me[3] = {0.f, 0.f, 0.f}, right[2] = {1.f, 0.f}, fwd[2] = {0.f, 1.f};   // camera looking down +Y
+    // ahead (1), ahead-right (2), right (3), ahead-left (4); 5 is behind the player, the farthest left on screen
+    const lo::Candidate all[] = {{1, {0.f, 10.f, 0.f}}, {2, {5.f, 10.f, 0.f}}, {3, {10.f, 0.f, 0.f}}, {4, {-5.f, 10.f, 0.f}}, {5, {-1.f, -10.f, 0.f}}};
+    auto next = [&](uint32_t cur, int dir) {
+        std::vector<lo::Candidate> others;
+        float curA = 0.f;
+        for (const lo::Candidate &c : all)
+            if (c.id == cur)
+                curA = lo::screenAngle(me, c.pos, right, fwd);
+            else
+                others.push_back(c);
+        return lo::nextTarget(me, curA, others.data(), others.size(), right, fwd, dir);
+    };
+    uint32_t t = 1;
+    const uint32_t rightward[] = {2, 3, 5, 4, 1};   // after 3 (right) wraps around to the farthest left
+    for (uint32_t want : rightward)
+        CHECK((t = next(t, 1)) == want);
+    const uint32_t leftward[] = {4, 5, 3, 2, 1};
+    for (uint32_t want : leftward)
+        CHECK((t = next(t, -1)) == want);
+    CHECK(lo::nextTarget(me, 0.f, nullptr, 0, right, fwd, 1) == 0);
+
+    // The pick is game state, so it must not depend on the machine's libm. P and Q have the same detmath angle (the earlier one, P,
+    // wins the tie); Apple's atan2f puts Q 1 ulp lower, which would pick Q on the Mac and P on Windows.
+    const lo::Candidate pq[] = {{0x10, {0x1.c81efp-1f, 0x1.00026cp+0f, 0.f}}, {0x20, {0x1.c81f1p-1f, 0x1.00027ep+0f, 0.f}}};
+    CHECK(bitsOf(lo::screenAngle(me, pq[0].pos, right, fwd)) == bitsOf(lo::screenAngle(me, pq[1].pos, right, fwd)));
+    CHECK(lo::nextTarget(me, 0.f, pq, 2, right, fwd, 1) == 0x10);
 }
 
 int main()

@@ -53,6 +53,8 @@ enum Key
     SuperJump,    // gameplay modifiers (net/wotm_modifiers.hpp, wotm_modifiers.inc): 0/1 each, latched at fight start
     FastMonsters,
     Turbo,
+    VolSfx,       // this PC's effects volume, 0..100 % on top of the game's own (AUDIO tab; wotm_snd.hpp setPlayerVolume)
+    VolMusic,     // this PC's music volume, 0..100 %
     kKeys
 };
 
@@ -61,8 +63,8 @@ inline constexpr const char *kEnv[kKeys] = {"WOTM_RES",        "WOTM_ASPECT",   
                                             "WOTM_PROMPTS",    "WOTM_MENUCONFIRM", "WOTM_CAMERA",    "WOTM_CAMRECENTER", "WOTM_CLOSECAM",
                                             "WOTM_CAMSENS",    "WOTM_CAMINVERT",   "WOTM_RENDERSCALE", "WOTM_MSAA",      "WOTM_TEXFILTER",
                                             "WOTM_ANNOUNCER",  "WOTM_SKIPINTRO",   "WOTM_VIBRATION",   "WOTM_INTERP",
-                                            "WOTM_SUPERJUMP",  "WOTM_FASTMONSTERS", "WOTM_TURBO"};
-inline constexpr int kDefault[kKeys] = {720, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1, 5, 0, 100, 0, 0, 1, 0, 1, 1, 0, 0, 0};
+                                            "WOTM_SUPERJUMP",  "WOTM_FASTMONSTERS", "WOTM_TURBO",     "WOTM_VOL_SFX",   "WOTM_VOL_MUSIC"};
+inline constexpr int kDefault[kKeys] = {720, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1, 5, 0, 100, 0, 0, 1, 0, 1, 1, 0, 0, 0, 100, 100};
 inline constexpr const char *kPromptNames[] = {"auto", "original", "keyboard", "xbox", "playstation", "nintendo"};
 inline constexpr int kPromptStyles = 6;
 enum PromptStyle { PromptAuto, PromptOriginal, PromptKeyboard, PromptXbox, PromptPs, PromptNintendo };
@@ -78,7 +80,7 @@ inline constexpr const char *kAspectNames[] = {"dynamic", "4:3", "16:9", "16:10"
 inline constexpr float kAspectRatio[] = {0.f, 4.f / 3.f, 16.f / 9.f, 16.f / 10.f, 21.f / 9.f, 32.f / 9.f};
 inline constexpr int kAspects = 6;
 
-inline std::atomic<int> g_val[kKeys] = {720, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1, 5, 0, 100, 0, 0, 1, 0, 1, 1, 0, 0, 0};
+inline std::atomic<int> g_val[kKeys] = {720, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1, 5, 0, 100, 0, 0, 1, 0, 1, 1, 0, 0, 0, 100, 100};
 inline std::filesystem::path g_path;   // empty: no file (WOTM_SETTINGS=0 or before load)
 inline std::mutex g_fileMutex;
 inline bool g_pathPending = false;   // load found keys from an older layout: rewrites the file at the end of load
@@ -131,6 +133,16 @@ inline bool applyModifierList(const char *list)
     for (int i = 0; i < wotm::modifiers::kCount; ++i)
         g_val[kModKeys[i]].store((bits >> i) & 1);
     return true;
+}
+
+// The lobby's WOTM_MODIFIERS in a network match (null = none): false on an unknown name, which plays as none (the config hash parses
+// the list the same way, so every PC agrees)
+inline bool setNetModifiers(const char *list)
+{
+    int bits = 0;
+    const bool known = wotm::modifiers::parse(list ? list : "", bits);
+    g_netMods.store(bits);
+    return known;
 }
 
 // Fixed aspect ratio from the Aspect option (0 = dynamic)
@@ -198,6 +210,11 @@ inline bool parse(Key k, const char *s, int &out)
         out = std::clamp(v, 1, 10);
         return true;
     }
+    case VolSfx:
+    case VolMusic:
+        if ((*s < '0' || *s > '9') && *s != '-') return false;
+        out = std::clamp(std::atoi(s), 0, 100);
+        return true;
     case Vsync: out = *s == '0' ? 0 : 1; return true;
     case Announcer: out = std::clamp(std::atoi(s), 0, 2); return true;
     case Interp: out = std::atoi(s) > 0 || !std::strcmp(s, "on") ? 1 : 0; return true;   // "redraw" (stage-0 diagnostic) doesn't turn it on
@@ -447,6 +464,17 @@ inline int applyEnv()
 // Already at static initialization: whatever doesn't go through load (replay --vu1cmp, without the hooks) gets the environment, as before
 inline const int g_envAtStart = applyEnv();
 
+// Card 1's folder (mc0); save.json and settings.ini sit in its parent. `saveDir` (WOTM_SAVEDIR, the browser version's /save) wins;
+// otherwise the runtime's card folder, or mc0 next to the ELF. Shared by wotm_save.inc and the settings load in wotm_overrides.cpp.
+inline std::filesystem::path cardRoot(const std::filesystem::path &mcRoot, const std::filesystem::path &elfDirectory, const char *saveDir)
+{
+    if (saveDir && *saveDir)
+        return (std::filesystem::path(saveDir) / "mc0").lexically_normal();
+    if (!mcRoot.empty())
+        return mcRoot.lexically_normal();
+    return ((!elfDirectory.empty() ? elfDirectory : std::filesystem::current_path()) / "mc0").lexically_normal();
+}
+
 // Once, when the hooks are installed (before the first frame). `dir` = save.json's folder.
 inline void load(const std::filesystem::path &dir)
 {
@@ -516,10 +544,10 @@ inline void load(const std::filesystem::path &dir)
         if (netMatch)
         {
             // the lobby's list, unset = none (never this PC's own choice: every PC must play the same modifiers)
-            int bits = 0;
-            wotm::modifiers::parse(modList ? modList : "", bits);
-            g_netMods.store(bits);
-            std::fprintf(stderr, "[settings] network match: modifiers \"%s\"\n", wotm::modifiers::format(bits).c_str());
+            if (!setNetModifiers(modList))
+                std::fprintf(stderr, "[settings] network match: WOTM_MODIFIERS=%s: unknown modifier (known: jump, fast, turbo); playing none\n",
+                             modList);
+            std::fprintf(stderr, "[settings] network match: modifiers \"%s\"\n", wotm::modifiers::format(g_netMods.load()).c_str());
             g_netProfile.store(true);
             std::fprintf(stderr, "[settings] network match: fixed profile (the game's lock-on, close camera; the camera options stay each player's own)\n");
         }

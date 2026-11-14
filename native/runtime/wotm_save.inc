@@ -396,10 +396,7 @@ namespace wotm_save
     void initPaths()
     {
         const PS2Runtime::IoPaths &io = PS2Runtime::getIoPaths();
-        fs::path root = io.mcRoot;
-        if (root.empty())
-            root = !io.elfDirectory.empty() ? io.elfDirectory / "mc0" : fs::current_path() / "mc0";
-        root = root.lexically_normal();
+        const fs::path root = wotm::settings::cardRoot(io.mcRoot, io.elfDirectory, std::getenv("WOTM_SAVEDIR"));
         const fs::path parent = root.parent_path();
         g_cards[0].dir = root / "BASCUS-97197";
         g_cards[1].dir = parent / "mc1" / "BASCUS-97197";

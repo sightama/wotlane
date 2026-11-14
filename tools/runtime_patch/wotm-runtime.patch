@@ -197,7 +197,7 @@ index 0000000..9095b52
 +    }
 +}
 diff --git a/ps2xRuntime/CMakeLists.txt b/ps2xRuntime/CMakeLists.txt
-index 589d768..c5c3193 100644
+index 589d768..d8a295d 100644
 --- a/ps2xRuntime/CMakeLists.txt
 +++ b/ps2xRuntime/CMakeLists.txt
 @@ -393,6 +393,7 @@ add_library(ps2_runtime STATIC
@@ -317,7 +317,7 @@ index 589d768..c5c3193 100644
  
      if(WIN32 AND NOT PS2X_SHOW_WINDOWS_CONSOLE)
          if(MSVC)
-@@ -608,3 +645,94 @@ endif()
+@@ -608,3 +645,104 @@ endif()
  install(DIRECTORY include/
      DESTINATION include
  )
@@ -345,6 +345,16 @@ index 589d768..c5c3193 100644
 +    "${WOTM_NATIVE_DIR}/runtime/wotm_vu0_native.cpp"
 +    "${WOTM_NATIVE_DIR}/wotm_detmath.cpp"
 +)
++# WotM, browser build (tools/build_web.sh): WebGL2 for the GL calls the native layer makes, the streamed disc and OPFS saves
++# (wotm_webfs.cpp), pthreads on SharedArrayBuffer, wasm exceptions and JSPI (the frame loop waits on requestAnimationFrame);
++# web/data_retry.js retries the disc's requests in every thread
++if(EMSCRIPTEN)
++    target_sources(ps2_runtime PRIVATE "${WOTM_NATIVE_DIR}/wotm_glad_web.cpp" "${WOTM_NATIVE_DIR}/wotm_webfs.cpp")
++    target_link_options(ps2EntryRunner PRIVATE -pthread -fwasm-exceptions -sJSPI -sWASMFS -sUSE_GLFW=3 -sUSE_WEBGL2=1
++        -sMIN_WEBGL_VERSION=2 -sFULL_ES3=1 -sINITIAL_MEMORY=512MB -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=2GB -sPTHREAD_POOL_SIZE=8
++        -sSTACK_SIZE=8MB -sDEFAULT_PTHREAD_STACK_SIZE=8MB -sEXIT_RUNTIME=0 -sEXPORTED_RUNTIME_METHODS=ENV,HEAPF32
++        "--pre-js=${WOTM_NATIVE_DIR}/../web/data_retry.js")
++endif()
 +# WotM, macOS/Linux: crash stack trace and the macOS menu bar/Dock in fullscreen (wotm_posix.cpp; system headers that clash with raylib)
 +if(NOT WIN32)
 +    target_sources(ps2_runtime PRIVATE "${WOTM_NATIVE_DIR}/runtime/wotm_posix.cpp")
@@ -413,7 +423,7 @@ index 589d768..c5c3193 100644
 +    ps2x_stage_ffmpeg_runtime_dlls(wotm)
 +endif()
 diff --git a/ps2xRuntime/cmake/ReleaseMode.cmake b/ps2xRuntime/cmake/ReleaseMode.cmake
-index 92ef0d5..d7c208c 100644
+index 92ef0d5..ab49082 100644
 --- a/ps2xRuntime/cmake/ReleaseMode.cmake
 +++ b/ps2xRuntime/cmake/ReleaseMode.cmake
 @@ -4,6 +4,36 @@ check_ipo_supported(RESULT IPO_SUPPORTED OUTPUT IPO_ERROR)
@@ -431,7 +441,7 @@ index 92ef0d5..d7c208c 100644
 +    endif()
 +    # WotM: gcc/clang on x86 get the same instruction set as MSVC's /arch:AVX2 below (ps2_runtime_macros.h and native/ use SSE4.1
 +    # intrinsics); ARM builds go through sse2neon and need nothing here
-+    if(NOT MSVC AND NOT PS2X_IS_ARM_TARGET)
++    if(NOT MSVC AND NOT PS2X_IS_ARM_TARGET AND NOT EMSCRIPTEN)
 +        target_compile_options(${TargetName} PRIVATE -mavx2 -mbmi2 -mlzcnt -mpopcnt)
 +    endif()
 +    if(PS2X_FAST_LINK)
@@ -4573,16 +4583,19 @@ index 8590f14..7e48d74 100644
      data[2] = static_cast<uint8_t>(btns & 0xFF);
      data[3] = static_cast<uint8_t>(btns >> 8);
 diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
-index 45cb9d2..52a8929 100644
+index 45cb9d2..f51ac7e 100644
 --- a/ps2xRuntime/src/lib/ps2_runtime.cpp
 +++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
-@@ -1,3 +1,5 @@
+@@ -1,3 +1,8 @@
 +#include <cstdio>
 +#include <vector>
++#ifdef __EMSCRIPTEN__
++#include "wotm_web.h"
++#endif
  #include "ps2_runtime.h"
  #include "ps2_log.h"
  #include "ps2_stubs.h"
-@@ -13,6 +15,7 @@
+@@ -13,6 +18,7 @@
  #include "ps2_host_backend.h"
  #include "ps2_iop_host.h"
  #include "ps2x/iop/iop_subsystem.h"
@@ -4590,7 +4603,7 @@ index 45cb9d2..52a8929 100644
  
  #include <iostream>
  #include <stdexcept>
-@@ -31,6 +34,7 @@ namespace ps2_stubs
+@@ -31,6 +37,7 @@ namespace ps2_stubs
  {
      void resetSifState();
  }
@@ -4598,7 +4611,7 @@ index 45cb9d2..52a8929 100644
  
  #define ELF_MAGIC 0x464C457F // "\x7FELF" in little endian
  #define ET_EXEC 2            // Executable file
-@@ -375,6 +379,20 @@ namespace
+@@ -375,6 +382,20 @@ namespace
  
  static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint32_t &outHeight)
  {
@@ -4619,7 +4632,7 @@ index 45cb9d2..52a8929 100644
      static uint64_t s_lastPresentationTick = std::numeric_limits<uint64_t>::max();
      static bool s_hasLatchedInitialFrame = false;
      static uint32_t s_lastDisplayFbp = std::numeric_limits<uint32_t>::max();
-@@ -414,7 +432,7 @@ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint
+@@ -414,7 +435,7 @@ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint
                                                     &sourceFbp,
                                                     &usedPreferredDisplaySource))
      {
@@ -4628,7 +4641,7 @@ index 45cb9d2..52a8929 100644
          UpdateTexture(tex, blank.data);
          UnloadImage(blank);
          outWidth = FB_WIDTH;
-@@ -475,6 +493,7 @@ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint
+@@ -475,6 +496,7 @@ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint
      outWidth = width;
      outHeight = height;
      s_hasUploadedFrame = true;
@@ -4636,7 +4649,7 @@ index 45cb9d2..52a8929 100644
  }
  
  PS2Runtime::PS2Runtime()
-@@ -500,11 +519,11 @@ PS2Runtime::PS2Runtime()
+@@ -500,11 +522,11 @@ PS2Runtime::PS2Runtime()
      m_guestHeapBlocks.clear();
      m_guestHeapBase = kGuestHeapDefaultBase;
      m_guestHeapEnd = kGuestHeapDefaultBase;
@@ -4651,7 +4664,7 @@ index 45cb9d2..52a8929 100644
  }
  
  void PS2Runtime::setDebugUiCallbacks(DebugUiCallback initCallback,
-@@ -594,6 +613,9 @@ bool PS2Runtime::canBindIopRpc(uint32_t sid) const noexcept
+@@ -594,6 +616,9 @@ bool PS2Runtime::canBindIopRpc(uint32_t sid) const noexcept
  
  ps2x::iop::RpcResult PS2Runtime::handleIopRpc(uint8_t *rdram, R5900Context *ctx, ps2x::iop::RpcRequest request)
  {
@@ -4661,7 +4674,7 @@ index 45cb9d2..52a8929 100644
      auto scope = m_iopHost->enterCall(ctx, rdram);
      request.callToken = scope.token();
      return m_iopSubsystem->handleRpc(request);
-@@ -601,6 +623,10 @@ ps2x::iop::RpcResult PS2Runtime::handleIopRpc(uint8_t *rdram, R5900Context *ctx,
+@@ -601,6 +626,10 @@ ps2x::iop::RpcResult PS2Runtime::handleIopRpc(uint8_t *rdram, R5900Context *ctx,
  
  void PS2Runtime::notifyIopSifTransfer(uint8_t *rdram, const ps2x::iop::SifTransfer &transfer)
  {
@@ -4672,7 +4685,7 @@ index 45cb9d2..52a8929 100644
      auto scope = m_iopHost->enterCall(nullptr, rdram);
      m_iopSubsystem->onSifTransfer(transfer);
  }
-@@ -664,6 +690,14 @@ bool PS2Runtime::syncCoreSubsystems()
+@@ -664,6 +693,14 @@ bool PS2Runtime::syncCoreSubsystems()
          return true;
      }
  
@@ -4687,7 +4700,7 @@ index 45cb9d2..52a8929 100644
      m_gs.init(gsVram, static_cast<uint32_t>(PS2_GS_VRAM_SIZE), &m_memory.gs());
      m_gifArbiter.setProcessPacketFn([this](const uint8_t *data, uint32_t size)
                                      { m_gs.processGIFPacket(data, size); });
-@@ -707,6 +741,7 @@ bool PS2Runtime::syncCoreSubsystems()
+@@ -707,6 +744,7 @@ bool PS2Runtime::syncCoreSubsystems()
      resetIop();
      m_vu0.reset();
      m_vu1.reset();
@@ -4695,7 +4708,7 @@ index 45cb9d2..52a8929 100644
  
      m_boundRdram = rdram;
      m_boundGSVram = gsVram;
-@@ -732,7 +767,9 @@ bool PS2Runtime::initialize(const char *title)
+@@ -732,11 +770,17 @@ bool PS2Runtime::initialize(const char *title)
          InitWindow(HOST_WINDOW_WIDTH, HOST_WINDOW_HEIGHT, title); // raylib vita does not support audio
  #else
          SetConfigFlags(FLAG_WINDOW_RESIZABLE);
@@ -4705,7 +4718,15 @@ index 45cb9d2..52a8929 100644
          InitAudioDevice();
          m_audioBackend.setAudioReady(IsAudioDeviceReady());
  #endif
-@@ -949,20 +986,20 @@ bool PS2Runtime::loadELF(const std::string &elfPath)
++#ifdef __EMSCRIPTEN__
++        SetTargetFPS(0);   // the browser paces the loop (wotmWebPresent waits for requestAnimationFrame)
++#else
+         SetTargetFPS(60);
++#endif
+         if (m_debugUiInitCallback)
+         {
+             m_debugUiInitCallback(*this, m_debugUiUserData);
+@@ -949,20 +993,20 @@ bool PS2Runtime::loadELF(const std::string &elfPath)
          return false;
      }
  
@@ -4731,7 +4752,7 @@ index 45cb9d2..52a8929 100644
              m_guestHeapSuggestedBase = std::min(suggestedHeapBase, hardLimit);
              m_guestHeapBase = m_guestHeapSuggestedBase;
              m_guestHeapEnd = m_guestHeapSuggestedBase;
-@@ -971,9 +1008,9 @@ bool PS2Runtime::loadELF(const std::string &elfPath)
+@@ -971,9 +1015,9 @@ bool PS2Runtime::loadELF(const std::string &elfPath)
      }
      {
          std::lock_guard<std::mutex> lock(m_asyncCallbackStackMutex);
@@ -4744,7 +4765,7 @@ index 45cb9d2..52a8929 100644
      }
  
      LoadedModule module;
-@@ -1008,6 +1045,10 @@ bool PS2Runtime::loadELF(const std::string &elfPath)
+@@ -1008,6 +1052,10 @@ bool PS2Runtime::loadELF(const std::string &elfPath)
                                        m_cpuContext.pc,
                                        elfCrc32,
                                        elfCrc32Valid);
@@ -4755,7 +4776,7 @@ index 45cb9d2..52a8929 100644
  
      RUNTIME_LOG("ELF file loaded successfully. Entry point: 0x" << std::hex << m_cpuContext.pc << std::dec);
      return true;
-@@ -1342,6 +1383,16 @@ void PS2Runtime::reportMissingFunction(uint8_t *rdram,
+@@ -1342,6 +1390,16 @@ void PS2Runtime::reportMissingFunction(uint8_t *rdram,
      }
  }
  
@@ -4772,7 +4793,7 @@ index 45cb9d2..52a8929 100644
  bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
                                       R5900Context *ctx,
                                       uint32_t targetPc,
-@@ -1351,13 +1402,19 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
+@@ -1351,13 +1409,19 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
                                       const char *debugName)
  {
      ctx->pc = targetPc;
@@ -4792,7 +4813,7 @@ index 45cb9d2..52a8929 100644
          return false;
      }
  
-@@ -1396,6 +1453,7 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
+@@ -1396,6 +1460,7 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
  
      RecompiledFunction targetFn = lookupFunction(targetPc);
      const uint32_t entryPc = ctx->pc;
@@ -4800,7 +4821,7 @@ index 45cb9d2..52a8929 100644
      targetFn(rdram, ctx, this);
  
      if (isStopRequested() || ctx->pc == 0u)
-@@ -1403,7 +1461,10 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
+@@ -1403,7 +1468,10 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
          return false;
      }
  
@@ -4812,7 +4833,7 @@ index 45cb9d2..52a8929 100644
      {
          ctx->pc = fallthroughPc;
      }
-@@ -1423,9 +1484,46 @@ void PS2Runtime::SignalException(R5900Context *ctx, PS2Exception exception)
+@@ -1423,9 +1491,46 @@ void PS2Runtime::SignalException(R5900Context *ctx, PS2Exception exception)
                         exception == EXCEPTION_TLB_REFILL);
  }
  
@@ -4859,7 +4880,7 @@ index 45cb9d2..52a8929 100644
  
      uint8_t *const vu0Code = m_memory.getVU0Code();
      uint8_t *const vu0Data = m_memory.getVU0Data();
-@@ -1437,13 +1535,121 @@ void PS2Runtime::executeVU0Microprogram(uint8_t *rdram, R5900Context *ctx, uint3
+@@ -1437,13 +1542,121 @@ void PS2Runtime::executeVU0Microprogram(uint8_t *rdram, R5900Context *ctx, uint3
          return;
      }
  
@@ -4981,7 +5002,7 @@ index 45cb9d2..52a8929 100644
  }
  
  void PS2Runtime::vu0StartMicroProgram(uint8_t *rdram, R5900Context *ctx, uint32_t address)
-@@ -1485,6 +1691,8 @@ void PS2Runtime::handleBreak(uint8_t *rdram, R5900Context *ctx)
+@@ -1485,6 +1698,8 @@ void PS2Runtime::handleBreak(uint8_t *rdram, R5900Context *ctx)
  
  void PS2Runtime::drainCompletedDmacHandlers(uint8_t *rdram)
  {
@@ -4990,7 +5011,7 @@ index 45cb9d2..52a8929 100644
      for (uint32_t cause : m_memory.consumeCompletedDmacCauses())
      {
          ps2_syscalls::dispatchDmacHandlersForCause(rdram, this, cause);
-@@ -2165,6 +2373,7 @@ void PS2Runtime::kickGifDmaChainFromMMIO(uint8_t *rdram,
+@@ -2165,6 +2380,7 @@ void PS2Runtime::kickGifDmaChainFromMMIO(uint8_t *rdram,
      ps2TraceGuestWrite(rdram, GIF_TADR, 4u, tadr, 0u, "WRITE32", ctx);
      m_memory.writeIORegister(GIF_TADR, tadr);
      ps2TraceGuestWrite(rdram, GIF_CHCR, 4u, chcr, 0u, "WRITE32", ctx);
@@ -4998,7 +5019,7 @@ index 45cb9d2..52a8929 100644
      if (m_memory.tryProcessNativeGifImageUploadChain(m_gs, tadr, chcr))
      {
          drainCompletedDmacHandlers(rdram);
-@@ -2175,6 +2384,7 @@ void PS2Runtime::kickGifDmaChainFromMMIO(uint8_t *rdram,
+@@ -2175,6 +2391,7 @@ void PS2Runtime::kickGifDmaChainFromMMIO(uint8_t *rdram,
          drainCompletedDmacHandlers(rdram);
          return;
      }
@@ -5006,7 +5027,7 @@ index 45cb9d2..52a8929 100644
      m_memory.writeIORegister(GIF_CHCR, chcr);
      m_memory.processPendingTransfers();
      drainCompletedDmacHandlers(rdram);
-@@ -2211,7 +2421,10 @@ void PS2Runtime::postEeEvent(EeEvent event)
+@@ -2211,7 +2428,10 @@ void PS2Runtime::postEeEvent(EeEvent event)
  
  bool PS2Runtime::eeCheckpointDue(uint32_t cycles) noexcept
  {
@@ -5018,7 +5039,7 @@ index 45cb9d2..52a8929 100644
  }
  
  [[noreturn]] void PS2Runtime::eeWaitVSyncTicks(uint32_t ticks, uint32_t resumePc)
-@@ -2356,6 +2569,7 @@ void PS2Runtime::run()
+@@ -2356,6 +2576,7 @@ void PS2Runtime::run()
      m_debugGp.store(static_cast<uint32_t>(_mm_extract_epi32(m_cpuContext.r[28], 0)), std::memory_order_relaxed);
  
      RUNTIME_LOG("Starting execution at address 0x" << std::hex << m_cpuContext.pc << std::dec);
@@ -5026,7 +5047,7 @@ index 45cb9d2..52a8929 100644
  
      // A blank image to use as a framebuffer
      Image blank = GenImageColor(FB_WIDTH, FB_HEIGHT, BLANK);
-@@ -2422,7 +2636,11 @@ void PS2Runtime::run()
+@@ -2422,7 +2643,11 @@ void PS2Runtime::run()
          });
          uint32_t presentWidth = FB_WIDTH;
          uint32_t presentHeight = DEFAULT_DISPLAY_HEIGHT;
@@ -5038,7 +5059,7 @@ index 45cb9d2..52a8929 100644
  
          BeginDrawing();
          ClearBackground(BLACK);
-@@ -2444,7 +2662,268 @@ void PS2Runtime::run()
+@@ -2444,14 +2669,280 @@ void PS2Runtime::run()
          {
              m_debugUiDrawCallback(*this, m_debugUiUserData);
          }
@@ -5274,6 +5295,9 @@ index 45cb9d2..52a8929 100644
 +            }
 +        }
          EndDrawing();
++#ifdef __EMSCRIPTEN__
++        wotmWebPresent();   // the browser shows the frame (one requestAnimationFrame)
++#endif
 +        s_drawUs += std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - wotmT1).count();
 +        {
 +            static long s_n = 0;
@@ -5305,8 +5329,17 @@ index 45cb9d2..52a8929 100644
 +            }
 +        }
  
++#ifndef __EMSCRIPTEN__   // a browser tab never asks to close, and raylib's web WindowShouldClose sleeps 16 ms on every call
          if (WindowShouldClose())
          {
+             RUNTIME_LOG("[run] window close requested, breaking out of loop");
+             requestStop();
+             break;
+         }
++#endif
+     }
+ 
+     requestStop();
 diff --git a/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp b/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
 index b02c7ca..d7afc31 100644
 --- a/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
@@ -6104,15 +6137,18 @@ index bd75bba..e099e6e 100644
          }
  
 diff --git a/ps2xRuntime/src/main.cpp b/ps2xRuntime/src/main.cpp
-index 563bcbd..84ef087 100644
+index 563bcbd..46862ae 100644
 --- a/ps2xRuntime/src/main.cpp
 +++ b/ps2xRuntime/src/main.cpp
-@@ -164,12 +164,108 @@ namespace
+@@ -164,12 +164,114 @@ namespace
      }
  }
  
 +#include "ps2_runtime_macros.h"
 +#include "wotm_syms.h"   // wotm::sym / wotm::fn (native/; in the cobaia runtime, addresses from the nmall ELF)
++#ifdef __EMSCRIPTEN__
++#include "wotm_web.h"   // browser build: streamed disc, saves in OPFS, frame pacing (native/wotm_webfs.cpp)
++#endif
 +
 +// Test hook: skips the movies (the game's IPU decoder has no backend yet).
 +// Does what the natural end would do: movieRequested=1, movieIsCompletelyFinished=1.
@@ -6212,19 +6248,22 @@ index 563bcbd..84ef087 100644
 +#endif
 +    }
 +#endif
++#ifdef __EMSCRIPTEN__
++    wotmWebMount();
++#endif
 +    wotmBoot("starting the runtime");
  
      try
      {
-@@ -177,21 +273,9 @@ int main(int argc, char *argv[])
+@@ -177,21 +279,9 @@ int main(int argc, char *argv[])
  
          std::string filePathStr = pathObj.string();
          std::string elfName = pathObj.filename().string();
 -        std::string normalizedId = normalizeGameId(elfName);
- 
+-
 -        std::string windowTitle = "PS2-Recomp | ";
 -        const char *gameName = getGameName(normalizedId);
--
+ 
 -#if !defined(PLATFORM_VITA)
 -        if (gameName)
 -        {
@@ -6240,7 +6279,7 @@ index 563bcbd..84ef087 100644
  
          PS2Runtime runtime;
  #if defined(PS2X_ENABLE_DEBUG_UI) && !defined(PLATFORM_VITA)
-@@ -220,12 +304,79 @@ int main(int argc, char *argv[])
+@@ -220,12 +310,79 @@ int main(int argc, char *argv[])
              return 1;
          }
  
