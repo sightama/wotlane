@@ -48,11 +48,18 @@ namespace wotm_modifiers
 
     bool on(int bit) { return (wotm_sync::g_mods & bit) != 0; }
 
+    // Fast Monsters: |deltaTime| as the animation hooks last wrote it per control node: any other value means the game (or a reload of
+    // the monster's data) set a new base speed since. animationSetDirection only flips the sign, so magnitudes are compared. It decides
+    // whether a clip gets scaled, so it is simulation state: emptied at every fight start, so a node address reused from an earlier
+    // fight (or a fight only one PC played) can't make two PCs disagree.
+    std::unordered_map<uint32_t, float> g_fastClips;
+
     // Shell::LoadLevelFiles entry (wotm_sync::levelLoad): latch the panel's (or the lobby's) set for this fight
     void fightStart()
     {
         wotm_sync::g_mods = wotm::settings::modifiers();
         g_rising = false, g_maxRise = 0.f, g_maxSpeed = 0.f;
+        g_fastClips.clear();
         if (!wotm_sync::g_fixedStep)
             setGameClockScale(on(md::Turbo) ? 2u : 1u);
         std::fprintf(stderr, "[modifiers] fight: \"%s\"\n", md::format(wotm_sync::g_mods).c_str());
@@ -126,10 +133,6 @@ namespace wotm_modifiers
     }
 
     // Keeps a clip's speed at kFastAnim x the game's own while Fast is on and the clip is a monster's, and gives it back when not.
-    // g_fastClips holds |deltaTime| as this hook last wrote it per control node: any other value means the game (or a reload of the
-    // monster's data) set a new base speed since. animationSetDirection only flips the sign, so magnitudes are compared.
-    std::unordered_map<uint32_t, float> g_fastClips;
-
     void rescaleClip(uint8_t *rdram, uint32_t ctl, float factor)
     {
         md::ClipClock c{FAST_READ32(ctl + kClipStartField), rdF(rdram, ctl + kClipStartTime), rdF(rdram, ctl + kClipDeltaTime)};
