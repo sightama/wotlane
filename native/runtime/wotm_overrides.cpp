@@ -91,6 +91,7 @@ void wotmBarRect(float x0, float y0, float x1, float y1, uint8_t r, uint8_t g, u
 void wotmBarTex(float x0, float y0, float x1, float y1, uint64_t tex0, float u0, float v0, float u1, float v1);   // wotm_live.inc: portrait
 void wotmBarView(int view);   // wotm_live.inc: view of the bars that follow
 void wotmSoundFrame(unsigned fields);   // wotm_snd.inc: sound advances one game frame (deterministic mode)
+bool wotmPersonalPause(uint16_t buttons, bool &start);   // wotm_mainmenu.inc: network match, this player's own menu (personal pause)
 void wotmHudAnchor(const uint8_t *rdram, float cx, float cy, const float *world, bool bars);   // wotm_live.inc: health icon (photo mode)
 void wotmHudAnchorEnd();
 float wotmHealthIconShift(const uint8_t *rdram, float rx);   // wotm_live.inc: bar x clamped to the widescreen view's edge
@@ -109,6 +110,7 @@ std::atomic<bool> g_wotmCheatWin{false};
 #include "wotm_freecam.h"
 #include "wotm_lockon.hpp"   // lock-on target cycling (lockCycleTarget): the pick, on wotm_detmath
 #include "wotm_mouse.hpp"   // mouse for the modern camera (wotm_orbit.inc consumes it, the window accumulates it)
+#include "wotm_personalpause.hpp"   // network match: what this PC sends while its own menu is open (wotm_sync.inc)
 #include "wotm_detmath.hpp"   // trig with the same bits on every machine, for results that reach guest RAM (wotm_orbit.inc, lock-on)
 std::atomic<bool> g_wotmFreeCam{false};
 std::atomic<bool> g_wotmFreeCamPad{false};

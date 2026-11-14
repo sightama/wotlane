@@ -266,6 +266,7 @@ static void wotmBootPresent(uint32_t eePc, uint64_t vsync)
 #include "wotm_native.hpp"
 #include "wotm_msaa.hpp"   // frame MSAA (ANTI-ALIASING option)
 #include "wotm_windowfit.hpp"   // window size at start (fitWindow)
+#include "wotm_personalpause.hpp"   // network match: Start opens this player's own menu (wotm_mainmenu.inc)
 #include "wotm_preview.hpp"   // previews for the VIDEO tab options (wotm_mainmenu.inc)
 #include "wotm_cheats.h"   // debug menu (F1)
 #include "wotm_netstatus.h"   // network match: on-screen message, debug keys off
