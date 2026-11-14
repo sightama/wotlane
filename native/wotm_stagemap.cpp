@@ -110,10 +110,18 @@ bool finiteFloat(const json::Value *v, float &out)
     return std::isfinite(out);
 }
 
+// A position in the world: stock stages span a few thousand units, so anything past kWorldLimit is a broken or hostile file (its
+// squares, the bounding spheres' radii, would reach guest RAM as inf)
+constexpr float kWorldLimit = 1e6f;
+bool worldCoord(const json::Value *v, float &out)
+{
+    return finiteFloat(v, out) && std::fabs(out) <= kWorldLimit;
+}
+
 bool vec3(const json::Value *v, float out[3])
 {
-    return v && v->type == json::Value::Arr && v->arr.size() == 3 && finiteFloat(&v->arr[0], out[0]) &&
-           finiteFloat(&v->arr[1], out[1]) && finiteFloat(&v->arr[2], out[2]);
+    return v && v->type == json::Value::Arr && v->arr.size() == 3 && worldCoord(&v->arr[0], out[0]) &&
+           worldCoord(&v->arr[1], out[1]) && worldCoord(&v->arr[2], out[2]);
 }
 
 json::Value vec3Value(const float v[3])
@@ -142,12 +150,12 @@ bool parsePowerUp(const json::Value &e, const std::string &at, const std::string
     out.index = uint32_t(idx->i);
     if (!vec3(e.get("from"), out.from))
     {
-        why = at + "\"from\" must be [x, y, z] (numbers): the power-up's place on the disc";
+        why = at + "\"from\" must be [x, y, z] (numbers from -1000000 to 1000000): the power-up's place on the disc";
         return false;
     }
     if (!vec3(e.get("at"), out.at))
     {
-        why = at + "\"at\" must be [x, y, z] (numbers)";
+        why = at + "\"at\" must be [x, y, z] (numbers from -1000000 to 1000000)";
         return false;
     }
     return true;
@@ -299,10 +307,9 @@ bool parse(const std::string &text, Map &out, std::string &why)
         }
         if (move)
         {
-            if (move->type != json::Value::Arr || move->arr.size() != 3 || !finiteFloat(&move->arr[0], ed.pos[0]) ||
-                !finiteFloat(&move->arr[1], ed.pos[1]) || !finiteFloat(&move->arr[2], ed.pos[2]))
+            if (!vec3(move, ed.pos))
             {
-                why = at + "\"move\" must be [x, y, z] (numbers)";
+                why = at + "\"move\" must be [x, y, z] (numbers from -1000000 to 1000000)";
                 return false;
             }
             ed.move = true;

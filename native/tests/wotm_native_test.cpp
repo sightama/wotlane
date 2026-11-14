@@ -856,6 +856,44 @@ TEST(creator_raw_alpha_round_trip)
     CHECK(!wotm::creator::applyRawAlpha(px, shortRaw) && (px[200] >> 24) == 200u);   // size mismatch: untouched
 }
 
+// The creator saves into mods/Creator: a skin of the same monster and id that another mod already registered would win again at
+// the next boot (the later mod in alphabetical order), so the creator asks who owns the id before writing anything
+TEST(mods_skin_owner)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "wotm_test_skinowner";
+    fs::remove_all(root);
+    fs::create_directories(root / "Other" / "skins" / "green");
+    { std::ofstream o(root / "Other" / "skins" / "green" / "skin.json"); o << wotm::creator::skinJson("togera", "green", "GREEN", 1); }
+    wotm::mods::Registry reg;
+    reg.scan(root);
+    CHECK(reg.skinOwner(3, "green") == "Other");   // Togera's green belongs to Other
+    CHECK(reg.skinOwner(3, "blue").empty());       // no such skin
+    CHECK(reg.skinOwner(1, "green").empty());      // the same id on another monster is another skin
+    fs::remove_all(root);
+}
+
+// The mods folder when WOTM_MODS is not set: mods/ next to the ELF, else the repo's; in the browser, mods/ in the game's working
+// folder (/save, the browser's private file system), so what the player makes or imports survives a reload
+TEST(mods_default_dir)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "wotm_test_modsdir";
+    fs::remove_all(root);
+    fs::create_directories(root / "game");
+    fs::create_directories(root / "repo" / "mods");
+    const std::string repo = (root / "repo").string();
+#ifdef __EMSCRIPTEN__
+    CHECK(wotm::mods::defaultDir(root / "game", repo.c_str()) == fs::path("mods"));
+#else
+    CHECK(wotm::mods::defaultDir(root / "game", repo.c_str()) == root / "repo" / "mods");   // none next to the ELF: the repo's
+    CHECK(wotm::mods::defaultDir(root / "game", nullptr) == root / "game" / "mods");        // no repo either: next to the ELF
+    fs::create_directories(root / "game" / "mods");
+    CHECK(wotm::mods::defaultDir(root / "game", repo.c_str()) == root / "game" / "mods");   // next to the ELF wins
+#endif
+    fs::remove_all(root);
+}
+
 TEST(mods_add_skin_after_scan)
 {
     namespace fs = std::filesystem;
@@ -995,6 +1033,11 @@ TEST(json_numbers_keep_fractions)
     CHECK(wotm::json::dump(wotm::json::Value::number(-0.0)) == "-0.0\n");
     CHECK(wotm::json::parse("-0.0", v) && v.asNum() == 0.0 && std::signbit(v.asNum()));
     CHECK(!wotm::json::parse("1.", v) && !wotm::json::parse("1e", v));
+    // an integer past int64 reads as a number with its real value (never a wrapped integer); int64's own limits stay integers
+    CHECK(wotm::json::parse("100000000000000000000", v) && v.frac && v.asNum() == 1e20);
+    CHECK(wotm::json::parse("-100000000000000000000", v) && v.frac && v.asNum() == -1e20);
+    CHECK(wotm::json::parse("9223372036854775807", v) && !v.frac && v.i == INT64_MAX);
+    CHECK(wotm::json::parse("-9223372036854775807", v) && !v.frac && v.i == -INT64_MAX);
 }
 
 namespace
@@ -1522,6 +1565,10 @@ TEST(stagemap_parse)
     CHECK(bad(R"({"node": "0x100", "spin": 1})", "spin"));
     CHECK(bad(R"({"node": "0x100", "move": ["a", 0, 0]})", "move"));
     CHECK(bad(R"({"node": "0x100", "move": [1, 2]})", "move"));
+    // a shared map's coordinates stay inside the world: no huge values that would reach guest RAM as inf (sphere radii squared)
+    CHECK(bad(R"({"node": "0x100", "move": [0, 0, 1e20]})", "move"));
+    CHECK(bad(R"({"node": "0x100", "move": [-1000001, 0, 0]})", "move"));
+    CHECK(bad(R"({"node": "0x100", "move": [0, 100000000000000000000, 0]})", "move"));
     CHECK(bad(R"({"node": "0x100", "turn": "90"})", "turn"));
     CHECK(bad(R"({"node": "0x100"})", "nothing"));
     sm::Map empty;
@@ -1602,6 +1649,8 @@ TEST(stagemap_powerup_parse)
     CHECK(bad(R"({"powerup": 1, "from": [0, 0], "at": [1, 1, 1]})", "from"));
     CHECK(bad(R"({"powerup": 1, "from": [0, 0, 0]})", "at"));
     CHECK(bad(R"({"powerup": 1, "from": [0, 0, 0], "at": [1, "a", 1]})", "at"));
+    CHECK(bad(R"({"powerup": 1, "from": [0, 0, 0], "at": [1, 1, 3e9]})", "at"));
+    CHECK(bad(R"({"powerup": 1, "from": [0, -2e6, 0], "at": [1, 1, 1]})", "from"));
     CHECK(bad(R"({"powerup": 1, "from": [0, 0, 0], "at": [1, 1, 1], "node": "0x100"})", "node"));
     CHECK(bad(R"({"powerup": 1, "from": [0, 0, 0], "at": [1, 1, 1], "turn": 90})", "turn"));
     CHECK(bad(R"({"powerup": 7, "from": [0, 0, 0], "at": [1, 1, 1]}, {"node": "0x100", "remove": true},

@@ -1582,6 +1582,10 @@ def cmd_pieces(a):
     return 0
 
 
+# the largest coordinate a stage.json may hold (kWorldLimit in native/wotm_stagemap.cpp): stock stages span a few thousand units
+WORLD_LIMIT = 1000000
+
+
 def num(v):
     return int(v) if float(v).is_integer() else v
 
@@ -1614,8 +1618,8 @@ def make_edits(valid, base, moves, turns, removes):
             v = [float(x) for x in s.split(",")]
         except ValueError:
             v = []
-        if len(v) not in n or not all(math.isfinite(x) for x in v):
-            raise ValueError("bad %s %r (expected %s, finite numbers)" % (arg, s, what))
+        if len(v) not in n or not all(math.isfinite(x) and abs(x) <= WORLD_LIMIT for x in v):
+            raise ValueError("bad %s %r (expected %s, numbers from -%d to %d)" % (arg, s, what, WORLD_LIMIT, WORLD_LIMIT))
         return v
     for mv in moves:
         node_s, _, vals = mv.partition("=")

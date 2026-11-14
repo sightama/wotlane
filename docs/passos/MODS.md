@@ -329,7 +329,8 @@ mods/my_mod/
   New places go after the stock ones, in file order, and the log says `[stages] <id>: added N power-ups (M places)`. The
   stage holds 256 places at most (the rest are refused and logged), and the game creates 100 power-ups at most: places past
   the 100th get none (the log says so).
-- Unknown keys in an edit are refused; the scan logs why a folder was skipped (`[stages] my_mod/stages/x ignored: ...`).
+- Every coordinate (`move`, `from`, `at`) is from -1000000 to 1000000 (stock stages span a few thousand units). Unknown keys in an
+  edit are refused; the scan logs why a folder was skipped (`[stages] my_mod/stages/x ignored: ...`).
 
 **What a piece is.** A building, prop, destructible or level pickup with its own position in the stage: the nearest `TRANSLATE` or
 `ROTATE` above it, with no other transform above that. Ground and terrain, pedestrians and animated parts (vehicles, moving
