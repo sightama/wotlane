@@ -75,7 +75,7 @@ static Sound *soundOf(const std::string &name)
 static float effectsVolume()
 {
 #if defined(WOTM_HAVE_SND)
-    const float f = float(wotm::snd::Engine::get().masterVolume(0)) / float(0x400);
+    const float f = float(wotm::snd::Engine::get().masterVolume(0)) / float(0x400) * float(wotm::snd::Engine::get().playerVolume(0)) / 100.f;
     return std::clamp(f * f, 0.f, 1.f);
 #else
     return 1.f;

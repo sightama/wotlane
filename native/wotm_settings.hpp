@@ -53,6 +53,8 @@ enum Key
     SuperJump,    // gameplay modifiers (net/wotm_modifiers.hpp, wotm_modifiers.inc): 0/1 each, latched at fight start
     FastMonsters,
     Turbo,
+    VolSfx,       // this PC's effects volume, 0..100 % on top of the game's own (AUDIO tab; wotm_snd.hpp setPlayerVolume)
+    VolMusic,     // this PC's music volume, 0..100 %
     kKeys
 };
 
@@ -61,8 +63,8 @@ inline constexpr const char *kEnv[kKeys] = {"WOTM_RES",        "WOTM_ASPECT",   
                                             "WOTM_PROMPTS",    "WOTM_MENUCONFIRM", "WOTM_CAMERA",    "WOTM_CAMRECENTER", "WOTM_CLOSECAM",
                                             "WOTM_CAMSENS",    "WOTM_CAMINVERT",   "WOTM_RENDERSCALE", "WOTM_MSAA",      "WOTM_TEXFILTER",
                                             "WOTM_ANNOUNCER",  "WOTM_SKIPINTRO",   "WOTM_VIBRATION",   "WOTM_INTERP",
-                                            "WOTM_SUPERJUMP",  "WOTM_FASTMONSTERS", "WOTM_TURBO"};
-inline constexpr int kDefault[kKeys] = {720, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1, 5, 0, 100, 0, 0, 1, 0, 1, 1, 0, 0, 0};
+                                            "WOTM_SUPERJUMP",  "WOTM_FASTMONSTERS", "WOTM_TURBO",     "WOTM_VOL_SFX",   "WOTM_VOL_MUSIC"};
+inline constexpr int kDefault[kKeys] = {720, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1, 5, 0, 100, 0, 0, 1, 0, 1, 1, 0, 0, 0, 100, 100};
 inline constexpr const char *kPromptNames[] = {"auto", "original", "keyboard", "xbox", "playstation", "nintendo"};
 inline constexpr int kPromptStyles = 6;
 enum PromptStyle { PromptAuto, PromptOriginal, PromptKeyboard, PromptXbox, PromptPs, PromptNintendo };
@@ -78,7 +80,7 @@ inline constexpr const char *kAspectNames[] = {"dynamic", "4:3", "16:9", "16:10"
 inline constexpr float kAspectRatio[] = {0.f, 4.f / 3.f, 16.f / 9.f, 16.f / 10.f, 21.f / 9.f, 32.f / 9.f};
 inline constexpr int kAspects = 6;
 
-inline std::atomic<int> g_val[kKeys] = {720, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1, 5, 0, 100, 0, 0, 1, 0, 1, 1, 0, 0, 0};
+inline std::atomic<int> g_val[kKeys] = {720, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1, 5, 0, 100, 0, 0, 1, 0, 1, 1, 0, 0, 0, 100, 100};
 inline std::filesystem::path g_path;   // empty: no file (WOTM_SETTINGS=0 or before load)
 inline std::mutex g_fileMutex;
 inline bool g_pathPending = false;   // load found keys from an older layout: rewrites the file at the end of load
@@ -198,6 +200,11 @@ inline bool parse(Key k, const char *s, int &out)
         out = std::clamp(v, 1, 10);
         return true;
     }
+    case VolSfx:
+    case VolMusic:
+        if ((*s < '0' || *s > '9') && *s != '-') return false;
+        out = std::clamp(std::atoi(s), 0, 100);
+        return true;
     case Vsync: out = *s == '0' ? 0 : 1; return true;
     case Announcer: out = std::clamp(std::atoi(s), 0, 2); return true;
     case Interp: out = std::atoi(s) > 0 || !std::strcmp(s, "on") ? 1 : 0; return true;   // "redraw" (stage-0 diagnostic) doesn't turn it on
