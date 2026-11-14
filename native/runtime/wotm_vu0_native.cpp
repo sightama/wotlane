@@ -5,6 +5,7 @@
 // cycle where the pipeline would publish them); the vu0bench bench checks it against real samples and perturbed inputs.
 // A program only runs if the hash of its bytes in VU0 code memory matches the generator's.
 #include "wotm_vu0_native.h"
+#include "wotm_rtz.hpp"   // the browser build (no rounding-mode control in WebAssembly)
 
 #include <cfloat>
 #include <cmath>
@@ -248,6 +249,79 @@ namespace
         return _mm_castsi128_ps(bits);
     }
 
+#if defined(__EMSCRIPTEN__)
+    // WebAssembly only rounds to nearest, so the arithmetic rounds toward zero in software (wotm_rtz.hpp), one lane at a time: the
+    // value in double (what dAdd/dSub/dMul give in round-toward-zero mode) and the float result truncated from it
+    struct Lanes
+    {
+        alignas(16) float a[4], b[4], r[4];
+        alignas(16) double e[4];
+
+        Lanes(__m128 x, __m128 y)
+        {
+            _mm_store_ps(a, x);
+            _mm_store_ps(b, y);
+        }
+        __m128 result() const { return _mm_load_ps(r); }
+        D4 exact() const { return {_mm_load_pd(e), _mm_load_pd(e + 2)}; }
+    };
+
+    template <int D>
+    WOTM_VU0_FI __m128 ADD4(__m128 a, __m128 b, Fm &f)
+    {
+        Lanes l(a, b);
+        for (int k = 0; k < 4; ++k)
+        {
+            l.e[k] = wotm::rtz::add((double)l.a[k], (double)l.b[k]);
+            l.r[k] = wotm::rtz::toFloat(l.e[k]);
+        }
+        return fin4<D>(l.result(), l.exact(), f);
+    }
+    template <int D>
+    WOTM_VU0_FI __m128 SUB4(__m128 a, __m128 b, Fm &f)
+    {
+        Lanes l(a, b);
+        for (int k = 0; k < 4; ++k)
+        {
+            l.e[k] = wotm::rtz::sub((double)l.a[k], (double)l.b[k]);
+            l.r[k] = wotm::rtz::toFloat(l.e[k]);
+        }
+        return fin4<D>(l.result(), l.exact(), f);
+    }
+    template <int D>
+    WOTM_VU0_FI __m128 MUL4(__m128 a, __m128 b, Fm &f)
+    {
+        Lanes l(a, b);
+        for (int k = 0; k < 4; ++k)
+        {
+            l.e[k] = (double)l.a[k] * (double)l.b[k];   // exact
+            l.r[k] = wotm::rtz::toFloat(l.e[k]);
+        }
+        return fin4<D>(l.result(), l.exact(), f);
+    }
+
+    // madd/msub: acc +- a*b (two roundings in float), plus the product's sticky flags (calculateFmacProductSticky)
+    template <int D>
+    WOTM_VU0_FI __m128 MADD4(__m128 c, __m128 a, __m128 b, Fm &f, bool sub)
+    {
+        Lanes l(a, b);
+        alignas(16) float acc[4];
+        alignas(16) double p[4];
+        _mm_store_ps(acc, c);
+        for (int k = 0; k < 4; ++k)
+        {
+            p[k] = (double)l.a[k] * (double)l.b[k];   // exact
+            const float pf = wotm::rtz::toFloat(p[k]);
+            l.r[k] = sub ? wotm::rtz::sub(acc[k], pf) : wotm::rtz::add(acc[k], pf);
+            l.e[k] = sub ? wotm::rtz::sub((double)acc[k], p[k]) : wotm::rtz::add((double)acc[k], p[k]);
+        }
+        f.ext |= flagsOf(classify4<D>(D4{_mm_load_pd(p), _mm_load_pd(p + 2)}));
+        return fin4<D>(l.result(), l.exact(), f);
+    }
+
+    // ITOF0
+    WOTM_VU0_FI float I2F(int32_t value) { return wotm::rtz::fromInt(value); }
+#else
     template <int D>
     WOTM_VU0_FI __m128 ADD4(__m128 a, __m128 b, Fm &f) { return fin4<D>(_mm_add_ps(a, b), dAdd(W(a), W(b)), f); }
     template <int D>
@@ -266,6 +340,10 @@ namespace
         f.ext |= flagsOf(classify4<D>(p));
         return fin4<D>(r, e, f);
     }
+
+    // ITOF0 (the CPU rounds toward zero while a program runs: wotmVu0NativeRun)
+    WOTM_VU0_FI float I2F(int32_t value) { return (float)value; }
+#endif
 
     // writes the lanes in D (x = bit 0)
     template <int D>
@@ -349,7 +427,7 @@ void wotmVu0NativeRun(WotmVu0Fn fn, VU1State &state, uint8_t *vu0Data)
     // round toward zero, like the VU (and like VU1Interpreter::run). On x86 this only sets MXCSR, since all the math is SSE/AVX;
     // on ARM, sse2neon maps it to FPCR, which also covers the NEON doubles
 #if defined(__EMSCRIPTEN__)
-    // WebAssembly has no rounding-mode control: the math rounds to nearest here (a known difference from the native builds)
+    // WebAssembly has no rounding-mode control: the arithmetic helpers above round toward zero in software
     fn(state, vu0Data);
 #else
     const unsigned int csr = _mm_getcsr();
