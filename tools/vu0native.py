@@ -301,7 +301,7 @@ def emit_upper(u, slot, out):
             continue
         if form == 'itof0':
             out.append(f'        int32_t i{c}; std::memcpy(&i{c}, &s.vf[{u["fs"]}][{c}], 4);')
-            out.append(f'        const float u{c} = (float)i{c};')
+            out.append(f'        const float u{c} = I2F(i{c});')
             continue
         if form == 'ftoi0':
             out.append(f'        const int32_t i{c} = F2I(N(s.vf[{u["fs"]}][{c}]));')
