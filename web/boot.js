@@ -114,11 +114,32 @@
     showLoading(matchEnv ? 57 << 20 : 27 << 20);   // a first visit's download to a fight, or to the title
     document.addEventListener('visibilitychange', tellHidden);
     if (matchEnv) watchStalls();
-    const script = document.createElement('script');
-    script.src = 'wotm.js';
-    document.body.appendChild(script);
+    // the game reads its mods at start, so the repo's built-in mods are in place first
+    syncMods().finally(() => {
+      const script = document.createElement('script');
+      script.src = 'wotm.js';
+      document.body.appendChild(script);
+    });
     canvas.focus();
   };
+
+  // mirrors the built-in mods served with the page into the browser's mods folder (web/builtin_mods.js); a failure is logged and
+  // the game starts anyway (with whatever mods are there)
+  async function syncMods() {
+    try {
+      const r = await fetch('mods/manifest.json', { cache: 'no-store' });
+      if (!r.ok) return;
+      const fetchBytes = async (path) => {
+        const f = await fetch('mods/' + path.split('/').map(encodeURIComponent).join('/'));
+        if (!f.ok) throw new Error(`mods/${path}: HTTP ${f.status}`);
+        return new Uint8Array(await f.arrayBuffer());
+      };
+      const copied = await wotmSyncBuiltinMods(await navigator.storage.getDirectory(), await r.json(), fetchBytes);
+      if (copied) out(`[mods] built-in mods updated (${copied} files)`);
+    } catch (e) {
+      out('[mods] built-in mods not updated: ' + e.message);
+    }
+  }
   // a test link with a direct match skips the front panel
   window.wotmDirect = params.has('WOTM_MATCH');
 })();

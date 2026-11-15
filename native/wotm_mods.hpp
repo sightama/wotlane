@@ -150,8 +150,8 @@ inline uint64_t digest(const std::filesystem::path &dir) {
         const std::string n = e.path().filename().string();
         if (!e.is_directory(ec) || n.empty() || n[0] == '_' || n[0] == '.') continue;
         for (auto it = fs::recursive_directory_iterator(e.path(), ec); !ec && it != fs::recursive_directory_iterator(); it.increment(ec))
-            if (it->is_regular_file(ec))
-                files.emplace_back(fs::relative(it->path(), dir, ec).generic_string(), it->path());
+            if (it->is_regular_file(ec))   // lexically: fs::relative looks the paths up and gives "" in the browser's OPFS folder
+                files.emplace_back(it->path().lexically_relative(dir).generic_string(), it->path());
     }
     if (files.empty()) return 0;
     std::sort(files.begin(), files.end());

@@ -664,6 +664,26 @@ namespace
         CHECK(wotm::mods::digest(b) != base);
         fs::remove_all(root);
     }
+
+    // The digest's value is fixed by its definition (each file's path inside the mods folder, then its contents), whatever form the
+    // folder is given in: the browser passes the relative "mods", natives an absolute path, and both must agree for cross-play
+    TEST(mod_digest_value_is_paths_inside_the_folder_and_contents)
+    {
+        namespace fs = std::filesystem;
+        const fs::path root = fs::temp_directory_path() / "wotm_modvalue";
+        fs::remove_all(root);
+        fs::create_directories(root / "mods" / "skin" / "MON");
+        std::ofstream(root / "mods" / "skin" / "MON" / "LIZARD1.TEX", std::ios::binary) << "tex";
+        std::ofstream(root / "mods" / "skin" / "MON" / "LIZARD1.NGP", std::ios::binary) << "ngp";
+        constexpr uint64_t kWant = 0xb2a1725a117d59b1ull;   // FNV-1a of "skin/MON/LIZARD1.NGP\0ngp\0skin/MON/LIZARD1.TEX\0tex\0"
+        CHECK(wotm::mods::digest(root / "mods") == kWant);
+        const fs::path cwd = fs::current_path();
+        fs::current_path(root);
+        CHECK(wotm::mods::digest("mods") == kWant);
+        CHECK(wotm::mods::digest("./mods") == kWant);
+        fs::current_path(cwd);
+        fs::remove_all(root);
+    }
 }
 
 namespace
