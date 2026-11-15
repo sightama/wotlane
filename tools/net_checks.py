@@ -3,11 +3,29 @@
 # ABOUTME: with 2 players (3 where it says so) and checks identical state on every frame plus the log. Exit 1 if any fail.
 """Usage: python3 tools/net_checks.py [--only <name>] [--list]"""
 import argparse
+import shutil
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
+TOOLS = Path(__file__).resolve().parent
+# map creator: map t1 (stage_map.py, CENTRAL: one removed, three moved, one turned) in a folder every PC uses, and an empty mods
+# folder for the PC that lacks it
+MAP_MODS = Path(tempfile.gettempdir()) / 'wotm_map_net'
+NO_MAP = Path(tempfile.gettempdir()) / 'wotm_map_net_none'
+
+
+def make_map():
+    for d in (MAP_MODS, NO_MAP):
+        shutil.rmtree(d, ignore_errors=True)
+        d.mkdir(parents=True)
+    subprocess.run([sys.executable, str(TOOLS / 'stage_map.py'), 'make', '--base', 'CENTRAL', '--id', 't1', '--name', 'TEST MAP',
+                    '--out', str(MAP_MODS / 'Maps' / 'stages'), '--remove', '0x18a410', '--move', '0x165a70=-185.7,475.8,0',
+                    '--move', '0x2d85a0=768.1,499.6,74.1', '--turn', '0x4da6b0=90', '--move', '0x5c95a0=400,-100,11.9'], check=True)
+
+
+# Entry keys: net_check.py's options, and setup (optional: a function run before the match; an error fails the entry)
 CHECKS = {
     # mouse on one PC only (WOTM_ORBITMOUSE: mouse-like movement from input frame 300 on), modern camera on both: the motion travels in
     # player 2's input with player 2's own sensitivity and inversion, so both PCs turn that camera alike
@@ -52,12 +70,21 @@ CHECKS = {
     # (tools\live_checks.ps1 -Only creator_script): it creates the folder
     'creator_skin_folder': dict(extra_env='WOTM_MODS=' + str(Path(tempfile.gettempdir()) / 'wotm_creator_mods'), secs=60,
                                 expect=r'\[mods\] skin togera/green .* = costume 4'),
+    # a saved map online (WOTM_MATCH's stage field is the map id on both PCs, the same mods folder): applied on both, same state
+    'map_online': dict(setup=make_map, extra_env=f'WOTM_MODS={MAP_MODS}', stage='t1', secs=60,
+                       expect=r'\[stages\] map t1 |||\[stages\] t1: applied 13 edits',
+                       reject='does not match|||nothing applied|||not found in mods'),
+    # the second PC without the map's folder: the mods digest differs and the server refuses the match (as different_mods)
+    'map_online_missing': dict(setup=make_map, extra_env=f'WOTM_MODS={MAP_MODS}', player_env=f'2:WOTM_MODS={NO_MAP}', stage='t1',
+                               secs=30, expect_refused='game configuration differs'),
 }
 
 
 def args_for(check):
     out = []
     for key, value in check.items():
+        if key == 'setup':
+            continue
         out += ['--' + key.replace('_', '-'), str(value)]
     return out
 
@@ -78,6 +105,13 @@ def main():
         if a.only and name != a.only:
             continue
         print(f'== {name}', flush=True)
+        if 'setup' in check:
+            try:
+                check['setup']()
+            except Exception as e:   # noqa: BLE001 (any setup failure fails the entry)
+                print(f'FAILED  setup: {e}')
+                failed.append(name)
+                continue
         if subprocess.run([sys.executable, str(Path(__file__).with_name('net_check.py'))] + args_for(check)).returncode != 0:
             failed.append(name)
     print(f"Failed: {', '.join(failed)}" if failed else 'All passed')

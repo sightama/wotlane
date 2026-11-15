@@ -2118,7 +2118,11 @@ static void changeScreenHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runt
         }
         else if (from == 8 && to == 99)   // stage select confirmed (the game has already written m_levelNum)
         {
-            if (!wotm_levelsel::resolveRandom(rdram))   // RANDOM: the rolled stage (wotm_levelsel.inc), without the narrator (a surprise)
+            // RANDOM: the rolled stage, never a map; then a map slot: its base stage, the map active (any other stage clears it).
+            // Neither is announced by the narrator (wotm_levelsel.inc)
+            const bool random = wotm_levelsel::resolveRandom(rdram);
+            const bool map = wotm_levelsel::resolveMap(rdram);
+            if (!random && !map)
                 wotm_narrator::announceLevel(int(rd32(rdram, kShell + 0x2BB0)));
             extraCpus(rdram);
         }
