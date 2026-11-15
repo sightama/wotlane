@@ -1,5 +1,6 @@
 // ABOUTME: Netcode tests without the game: the input timeline (lockstep), message encoding, and a real ENet server and client
 // ABOUTME: on localhost. Exits with 0 if everything passes; each failure prints the file, line and expression.
+#include "wotm_confighash.hpp"
 #include "wotm_lockstep.hpp"
 #include "wotm_monsters.hpp"
 #include "wotm_lobby_client.hpp"
@@ -64,6 +65,19 @@ namespace
         PadState s;
         s.buttons = static_cast<uint16_t>(0xFFFFu & ~mask);
         return s;
+    }
+
+    // A config hash is "<settings hash>:<mods digest>": a refusal says which part differs, so a player knows whether to import the
+    // host's creations or to check the match settings
+    TEST(config_mismatch_names_the_part_that_differs)
+    {
+        namespace ch = wotm_net::confighash;
+        CHECK(ch::compose("1111", "aaaa") == "1111:aaaa");
+        CHECK(ch::mismatch("1111:aaaa", "1111:bbbb") == "the mods (creations) differ");
+        CHECK(ch::mismatch("1111:aaaa", "2222:aaaa") == "the game settings differ");
+        CHECK(ch::mismatch("1111:aaaa", "2222:bbbb") == "the game settings and the mods (creations) differ");
+        CHECK(ch::mismatch("cfgA", "cfgB").empty());   // a hash without the two parts (an older client): nothing more to say
+        CHECK(ch::mismatch("1111:aaaa", "cfgB").empty());
     }
 
     TEST(timeline_first_frames_are_neutral_for_the_delay)
@@ -992,6 +1006,18 @@ namespace
         CHECK(b.start(clientFor(cfg.port, *ms[1], "cfgB"), err));
         CHECK(!b.waitStarted(1500) && b.status() == Status::Rejected);
         CHECK(b.message().find("configuration") != std::string::npos);
+
+        // the same settings with other mods: the refusal says the mods differ
+        auto ms2 = formMatch(cfg.port, {"Caio", "Duda"}, {3, 1});
+        MatchClient c, d;
+        CHECK(c.start(clientFor(cfg.port, *ms2[0], "1111:aaaa"), err));
+        const auto until2 = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        while (c.status() != Status::Waiting && std::chrono::steady_clock::now() < until2)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        CHECK(c.status() == Status::Waiting);
+        CHECK(d.start(clientFor(cfg.port, *ms2[1], "1111:bbbb"), err));
+        CHECK(!d.waitStarted(1500) && d.status() == Status::Rejected);
+        CHECK(d.message().find("game configuration differs from the others: the mods (creations) differ") != std::string::npos);
     }
 
     TEST(match_drops_a_player_that_leaves_at_an_agreed_frame)
