@@ -481,6 +481,20 @@ namespace
         CHECK(!o.neutral && !o.start);
     }
 
+    // The list also follows this PC's sampled pad (where scripted input, PS2X_PAD, arrives; the devices are read apart): up and down
+    // move, X acts, triangle and O go back
+    TEST(personal_pause_list_follows_the_sampled_pad)
+    {
+        namespace pp = wotm::personalpause;
+        const pp::ListKeys idle = pp::listKeys(0xFFFF);
+        CHECK(!idle.up && !idle.down && !idle.ok && !idle.back);
+        CHECK(pp::listKeys(0xFFFF & ~0x0010).up && pp::listKeys(0xFFFF & ~0x0040).down);
+        CHECK(pp::listKeys(0xFFFF & ~0x4000).ok);
+        CHECK(pp::listKeys(0xFFFF & ~0x1000).back && pp::listKeys(0xFFFF & ~0x2000).back);
+        const pp::ListKeys start = pp::listKeys(0xFFFF & ~pp::kStart);   // Start has its own edge (it closes the menu)
+        CHECK(!start.up && !start.down && !start.ok && !start.back);
+    }
+
     // A game dialog appearing while the menu is open (the match ends, someone else pauses for everyone) closes it: the game's own
     // screen needs this player's input
     TEST(personal_pause_closes_when_the_game_takes_over)
