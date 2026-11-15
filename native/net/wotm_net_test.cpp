@@ -1020,6 +1020,29 @@ namespace
         CHECK(d.message().find("game configuration differs from the others: the mods (creations) differ") != std::string::npos);
     }
 
+    // A refused seat (other build or settings) never becomes a neutral opponent: the match does not start, even after the join
+    // timeout that drops players who never arrive, and the players already in are told who could not join and why
+    TEST(match_never_starts_when_a_seat_was_refused)
+    {
+        ServerConfig cfg = testConfig();
+        cfg.joinTimeoutMs = 1500;
+        RunningServer rs(cfg);
+        auto ms = formMatch(cfg.port, {"Ana", "Bia"}, {3, 1});
+        MatchClient a, b;
+        std::string err;
+        CHECK(a.start(clientFor(cfg.port, *ms[0], "1111:aaaa"), err));
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        while (a.status() != Status::Waiting && std::chrono::steady_clock::now() < until)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        CHECK(a.status() == Status::Waiting);
+        CHECK(b.start(clientFor(cfg.port, *ms[1], "1111:bbbb"), err));
+        CHECK(!b.waitStarted(1500) && b.status() == Status::Rejected);
+        CHECK(!a.waitStarted(3000));   // past the join timeout
+        CHECK(a.status() == Status::Rejected);
+        CHECK(a.message().find("Bia") != std::string::npos);
+        CHECK(a.message().find("the mods (creations) differ") != std::string::npos);
+    }
+
     TEST(match_drops_a_player_that_leaves_at_an_agreed_frame)
     {
         ServerConfig cfg = testConfig();

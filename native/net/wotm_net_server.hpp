@@ -105,6 +105,7 @@ namespace wotm_net
             int lobby = 0;
             std::vector<Slot> slots;
             std::string config;            // config of the first to join: everyone must match it
+            std::string refusal;           // the first seat refused (other build or settings): the match never starts
             bool started = false, desynced = false;
             uint32_t delay = 0;
             InputTimeline inputs{0, 0};
@@ -158,6 +159,7 @@ namespace wotm_net
         void serviceWebSockets();
         void onReceive(PeerRef peer, const std::vector<uint8_t> &data);
         void onDisconnect(PeerRef peer);
+        void refuse(PeerRef peer, const std::string &why);   // sends Reject{why} and closes the connection
         void onJoin(PeerRef peer, const proto::Join &j);
         void dropSlot(Match &m, int slot);
         void tickMatches();
