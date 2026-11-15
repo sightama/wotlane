@@ -431,8 +431,8 @@ find a piece, take the position from `pieces` and look at it with the free camer
 - **Direct match:** `WOTM_MATCH=3,1,downtown` (the map id in the stage field).
 - **Same id in two mods:** the first one in mod order wins (`[stages] map <id>: <mod> beats <mod>`).
 - **Online:** every PC needs the same mods folder. The map's files are part of the mod digest in the config hash, so a PC without
-  the map (or with another version of it) is refused (`game configuration differs`). Today a map is picked online through
-  `WOTM_MATCH`; picking one in the launcher's lobby is a follow-up.
+  the map (or with another version of it) is refused (`game configuration differs`). The lobby owner picks a map as the stage by
+  its id (`SET stage=<id>`, `net_lobby.py --stage <id>`, the browser lobby's stage list); the Windows launcher lists stock stages only.
 
 **Known limits.**
 - Move, turn, remove and copy within the stage: no pieces from other stages, no ground or terrain edits.

@@ -57,9 +57,10 @@ namespace wotm_net
         return expect("WELCOME", line, err, kReplyMs);
     }
 
-    std::string LobbyClient::create(const std::string &lobby, const std::string &name, int monster, const std::string &password, std::string &err)
+    std::string LobbyClient::create(const std::string &lobby, const std::string &name, const std::string &monster, const std::string &password,
+                                    std::string &err)
     {
-        s_.sendLine("CREATE " + lobby + " " + name + " " + std::to_string(monster) + (password.empty() ? "" : " " + password));
+        s_.sendLine("CREATE " + lobby + " " + name + " " + monster + (password.empty() ? "" : " " + password));
         std::string line;
         if (!expect("CREATED ", line, err, kReplyMs))
             return {};
@@ -69,9 +70,10 @@ namespace wotm_net
         return code_;
     }
 
-    bool LobbyClient::join(const std::string &code, const std::string &name, int monster, const std::string &password, std::string &err)
+    bool LobbyClient::join(const std::string &code, const std::string &name, const std::string &monster, const std::string &password,
+                           std::string &err)
     {
-        s_.sendLine("JOIN " + code + " " + name + " " + std::to_string(monster) + (password.empty() ? "" : " " + password));
+        s_.sendLine("JOIN " + code + " " + name + " " + monster + (password.empty() ? "" : " " + password));
         std::string line;
         if (!expect("JOINED ", line, err, kReplyMs))
             return false;
@@ -79,9 +81,9 @@ namespace wotm_net
         return expect("SETTINGS", line, err, kReplyMs);
     }
 
-    bool LobbyClient::set(int stage, int wins, const std::string &mods, std::string &err)
+    bool LobbyClient::set(const std::string &stage, int wins, const std::string &mods, std::string &err)
     {
-        s_.sendLine("SET stage=" + std::to_string(stage) + " wins=" + std::to_string(wins) + " mods=" + mods);
+        s_.sendLine("SET stage=" + stage + " wins=" + std::to_string(wins) + " mods=" + mods);
         std::string line;
         return expect("SETTINGS", line, err, kReplyMs);
     }

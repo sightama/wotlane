@@ -13,7 +13,8 @@
 
 namespace wotm_net::proto
 {
-    constexpr uint16_t kProtocol = 4;   // 3: pad states carry mouse motion and camera settings; 4: Hash carries the 256 block hashes
+    constexpr uint16_t kProtocol = 5;   // 3: pad states carry mouse motion and camera settings; 4: Hash carries the 256 block hashes;
+                                        // 5: the lobby carries saved map ids (stage) and skin ids (<monster>:<skin>)
     constexpr int kMaxPlayers = 8;   // 4 in the game's player slots and 4 in AI slots driven by the network (wotm_multi.inc)
     constexpr uint16_t kDefaultPort = 7777;
     constexpr uint16_t kDefaultMasterPort = 7778;   // the master server (list of public servers, wotm_net_master.hpp)
@@ -394,10 +395,11 @@ namespace wotm_net::proto
     // during the match and, when the match ends (everyone has left it: QUIT closes the game), it goes back to waiting with the same
     // members. An empty lobby closes.
     // client: HELLO <protocol> <build> | LIST | CREATE <lobby> <name> <monster> [password] | JOIN <code> <name> <monster> [password] |
-    //         SET [stage=<stage>] [wins=<wins>] | MONSTER <monster> (any member, while the lobby waits) | START | LEAVE
+    //         SET [stage=<stage>] [wins=<wins>] [mods=<list>] | MONSTER <monster> (any member, while the lobby waits) | START | LEAVE
     // server: WELCOME <open lobbies> | LOBBY <code> <waiting|playing> <n>/<max> <open|locked> <lobby> <owner> <names,...|-> |
-    //         END | CREATED <code> | JOINED <code> | LEFT <code> | SETTINGS <code> stage=<stage> wins=<wins> |
+    //         END | CREATED <code> | JOINED <code> | LEFT <code> | SETTINGS <code> stage=<stage> wins=<wins> mods=<list> |
     //         MEMBERS <code> <owner> <name:monster,...> | MATCH <key=value>... | ERROR <text>
+    // <monster> is "<number>" or "<number>:<skin id>" (Pick); <stage> is a stage number or a saved map's id (validStage)
     constexpr int kMaxWins = 99;
     constexpr const char *kCodeLetters = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";   // no I, O, 0 or 1 (easily confused when reading the code aloud)
     inline std::vector<std::string> words(const std::string &line)
@@ -435,5 +437,36 @@ namespace wotm_net::proto
             if ((std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '-') && out.size() < 16u)
                 out += c;
         return out;
+    }
+
+    // A lobby member's monster: "<monster>" or "<monster>:<skin id>" (a mod skin, mods/<mod>/skins/<id>/: a-z, 0-9 and _, up to 32,
+    // as the game scans them). In the MATCH line it is what WOTM_MATCH reads
+    struct Pick
+    {
+        int monster = 0;
+        std::string skin;
+        std::string text() const { return std::to_string(monster) + (skin.empty() ? "" : ":" + skin); }
+    };
+    inline bool parsePick(const std::string &s, Pick &out)
+    {
+        const size_t colon = s.find(':');
+        const std::string num = s.substr(0, colon);
+        if (num.empty() || num.size() > 3 || num.find_first_not_of("0123456789") != std::string::npos)
+            return false;
+        out.monster = std::atoi(num.c_str());
+        out.skin = colon == std::string::npos ? "" : s.substr(colon + 1);
+        if (colon != std::string::npos &&
+            (out.skin.empty() || out.skin.size() > 32u || out.skin.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789_") != std::string::npos))
+            return false;
+        return true;
+    }
+
+    // A lobby stage: a stock stage number, or a saved map's id (mods/<mod>/stages/<id>/: a letter, then a-z, 0-9 and _, up to 16)
+    inline bool validStage(const std::string &s)
+    {
+        if (!s.empty() && s.size() <= 3u && s.find_first_not_of("0123456789") == std::string::npos)
+            return true;
+        return !s.empty() && s.size() <= 16u && s[0] >= 'a' && s[0] <= 'z' &&
+               s.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789_") == std::string::npos;
     }
 }
