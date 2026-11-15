@@ -2,7 +2,10 @@
 # ABOUTME: Determinism test for the netcode on macOS, Linux or Windows (same as tools\determinism_check.ps1): runs the same fight twice,
 # ABOUTME: the second with slow frames (WOTM_LOGICDELAY), in deterministic mode, and compares the per-frame state hash. Exit 0 if equal.
 """Usage: python3 tools/determinism_check.py [--match 3,1,1] [--players 2] [--secs 60] [--delay 40] [--step 1] [--replay [--input-delay N]]
+                                       [--env "A=1;B=2"] [--env-b "C=;D=1"]
   --match/--players: the fight (AI on everyone's pad).   --delay: maximum slow-frame delay in ms for the second run.
+  --env: extra variables for both runs.   --env-b: extra variables for the second run only ("NAME=" removes one), to check that a
+    setting does not change the state (for example the movie switches in the network config hash).
   --replay: the players stay on the pad: run A plays a pad script and records every frame's input (WOTM_INPUTREC); run B, with slow
     frames, replays the recording (WOTM_INPUTPLAY). --input-delay N: run A applies local input N frames after sampling it, and the
     first input sampled on frame X must be applied on frame X + N in both runs.
@@ -37,16 +40,20 @@ def main():
     ap.add_argument('--step', type=int, default=1)
     ap.add_argument('--replay', action='store_true')
     ap.add_argument('--input-delay', type=int, default=0)
+    ap.add_argument('--env', default='')
+    ap.add_argument('--env-b', default='')
     a = ap.parse_args()
 
     rt = gamecheck.runtime_dir()
-    base = f'WOTM_MATCH={a.match};WOTM_PLAYERS={a.players};WOTM_NOINPUT=1;WOTM_FIXEDSTEP={a.step};WOTM_SEED=1234'
+    base = f'WOTM_MATCH={a.match};WOTM_PLAYERS={a.players};WOTM_NOINPUT=1;WOTM_FIXEDSTEP={a.step};WOTM_SEED=1234' + (f';{a.env}' if a.env else '')
     if a.replay:
         inputs = rt / 'det_inputs.bin'
         runs = [('A', REPLAY_SCRIPT, f'WOTM_LOGICDELAY=;WOTM_AIVSAI=;WOTM_INPUTREC={inputs};WOTM_INPUTPLAY=;WOTM_INPUTDELAY={a.input_delay}'),
                 ('B', '', f'WOTM_LOGICDELAY={a.delay};WOTM_AIVSAI=;WOTM_INPUTREC=;WOTM_INPUTPLAY={inputs};WOTM_INPUTDELAY=')]
     else:
         runs = [('A', '', 'WOTM_LOGICDELAY=;WOTM_AIVSAI=1'), ('B', '', f'WOTM_LOGICDELAY={a.delay};WOTM_AIVSAI=1')]
+    if a.env_b:
+        runs[1] = (runs[1][0], runs[1][1], f'{runs[1][2]};{a.env_b}')
     logs = {}
     for name, pad, extra in runs:
         h = rt / f'det_{name}.hash'
