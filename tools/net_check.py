@@ -111,9 +111,6 @@ def main():
     ap.add_argument('--reject', default='')
     ap.add_argument('--expect-refused', default='')
     a = ap.parse_args()
-    # a saved map (mods/<mod>/stages/<id>/): the lobby carries stage numbers only, so it gets 1 and the stage field of WOTM_MATCH (its
-    # last one) becomes the map id, as tools\net_check.ps1 does
-    map_id = '' if a.stage.isdigit() else a.stage
 
     rt = gamecheck.runtime_dir()
     server = build_server()
@@ -133,14 +130,10 @@ def main():
         names = ','.join(f'J{i}' for i in range(1, a.players + 1))
         mons = ','.join(a.monsters.split(',')[:a.players])
         lobby = [sys.executable, str(gamecheck.REPO / 'tools' / 'net_lobby.py'), '--server', f'127.0.0.1:{a.port}', '--group', names,
-                 '--monsters', mons, '--stage', '1' if map_id else a.stage, '--wins', str(a.wins), '--env-dir', str(out)]
+                 '--monsters', mons, '--stage', a.stage, '--wins', str(a.wins), '--env-dir', str(out)]
         if a.mods:
             lobby += ['--mods', a.mods]
         subprocess.run(lobby, check=True)
-        if map_id:
-            for i in range(1, a.players + 1):
-                f = out / f'env_{i}.txt'
-                f.write_text(re.sub(r'^(WOTM_MATCH=.*),\d+$', lambda m: f'{m.group(1)},{map_id}', f.read_text(), flags=re.M))
         for i in range(1, a.players + 1):
             env = dict(base)
             gamecheck.apply_pairs(env, gamecheck.env_pairs((out / f'env_{i}.txt').read_text().replace('\n', ';')))

@@ -130,6 +130,22 @@ class LobbyTest(unittest.TestCase):
         self.assertIn('WOTM_LOCALPLAYER=2', second.stdout)
         self.assertIn('WOTM_LOCALPLAYER=1', out1)
 
+    # protocol 5: a created skin (--monster 3:green) and a saved map (--stage t1) go through the lobby into WOTM_MATCH
+    def test_cli_carries_a_skin_and_a_map_id(self):
+        tool = [sys.executable, str(REPO / 'tools' / 'net_lobby.py'), '--server', f'127.0.0.1:{self.port}', '--build', 'b1']
+        first = subprocess.Popen(tool + ['--create', 'Sala', '--name', 'Ana', '--monster', '3:green', '--stage', 't1', '--start-with', '2'],
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        code = ''
+        deadline = time.time() + 10
+        while not code and time.time() < deadline:
+            m = re.search(r'code ([A-Z0-9]{4})', first.stderr.readline())
+            code = m.group(1) if m else ''
+        self.assertEqual(len(code), 4)
+        second = subprocess.run(tool + ['--code', code, '--name', 'Bia', '--monster', '1'], capture_output=True, text=True, timeout=10)
+        first.communicate(timeout=10)
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertIn('WOTM_MATCH=3:green,1,t1', second.stdout)
+
     # match between two PCs: the second player joins (or the owner starts) after the Lobby's 10 s read timeout
     def test_host_waits_longer_than_the_read_timeout_for_players(self):
         tool = [sys.executable, str(REPO / 'tools' / 'net_lobby.py'), '--server', f'127.0.0.1:{self.port}', '--build', 'b1']
