@@ -1015,6 +1015,49 @@ namespace
         CHECK(a.input(1, d + 49) == pressed(1) && a.input(1, d + 50) == PadState{});
     }
 
+    TEST(proto_away_roundtrip)
+    {
+        p::Away a{2, true};
+        p::Away ab;
+        CHECK(p::decode(p::encode(a), ab) && ab.player == 2 && ab.away);
+        p::Away back{1, false};
+        CHECK(p::decode(p::encode(back), ab) && ab.player == 1 && !ab.away);
+    }
+
+    // true once `cond` holds, polling for up to 3 s
+    template <typename F> bool soon(F cond)
+    {
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        while (!cond())
+        {
+            if (std::chrono::steady_clock::now() > until)
+                return false;
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        return true;
+    }
+
+    // a player whose game goes to the background (a hidden browser tab) tells the others through the server, so their "Waiting for"
+    // message says why; coming back clears it
+    TEST(match_tells_the_others_a_player_is_away)
+    {
+        ServerConfig cfg = testConfig();
+        RunningServer rs(cfg);
+        auto ms = formMatch(cfg.port, {"Ana", "Bia"}, {3, 1});
+        MatchClient a, b;
+        std::string err;
+        CHECK(a.start(clientFor(cfg.port, *ms[0]), err) && b.start(clientFor(cfg.port, *ms[1]), err));
+        CHECK(a.waitStarted(5000) && b.waitStarted(5000));
+        const uint32_t f = a.delay() + 10;   // nobody has sent this frame yet
+        CHECK(a.waitingText(f) == "Waiting for Ana, Bia");
+        b.setAway(true);
+        CHECK(soon([&] { return a.away(1); }));
+        CHECK(a.waitingText(f) == "Waiting for Ana, Bia (their game tab is in the background)");
+        b.setAway(false);
+        CHECK(soon([&] { return !a.away(1); }));
+        CHECK(a.waitingText(f) == "Waiting for Ana, Bia");
+    }
+
     TEST(match_stops_both_peers_on_a_state_hash_mismatch)
     {
         ServerConfig cfg = testConfig();
@@ -1043,6 +1086,21 @@ namespace
     // ---- WebSocket (the browser version's transport) ----
 
     std::vector<uint8_t> bytesOf(const std::string &s) { return std::vector<uint8_t>(s.begin(), s.end()); }
+
+    // WOTM_NET: host[:port] for ENet, or a whole ws:// / wss:// URL (its colons are not a port)
+    TEST(server_address_splits_host_and_port)
+    {
+        std::string host;
+        uint16_t port = 0;
+        wotm_net::splitServerAddress("10.0.0.5:7790", host, port);
+        CHECK(host == "10.0.0.5" && port == 7790);
+        wotm_net::splitServerAddress("example.org", host, port);
+        CHECK(host == "example.org" && port == p::kDefaultPort);
+        wotm_net::splitServerAddress("wss://example.org/match", host, port);
+        CHECK(host == "wss://example.org/match" && port == p::kDefaultPort);
+        wotm_net::splitServerAddress("ws://127.0.0.1:7780/match", host, port);
+        CHECK(host == "ws://127.0.0.1:7780/match" && port == p::kDefaultPort);
+    }
 
     TEST(ws_accept_key_matches_rfc_example)
     {

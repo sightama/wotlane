@@ -1,11 +1,12 @@
 // ABOUTME: The match transport over ENet (UDP, reliable control channel and unreliable inputs): native builds' connection to wotm_server.
-// ABOUTME: Also picks the transport for an address (makeTransport): WebSocket for ws:// and wss://, ENet otherwise.
+// ABOUTME: Also reads a server address and picks its transport (makeTransport): WebSocket for ws:// and wss://, ENet otherwise.
 #include "wotm_net_proto.hpp"
 #include "wotm_net_transport.hpp"
 
 #include <enet/enet.h>
 
 #include <chrono>
+#include <cstdlib>
 
 namespace wotm_net
 {
@@ -110,6 +111,19 @@ namespace wotm_net
     }
 
     bool isWebSocketAddress(const std::string &host) { return host.rfind("ws://", 0) == 0 || host.rfind("wss://", 0) == 0; }
+
+    void splitServerAddress(const std::string &addr, std::string &host, uint16_t &port)
+    {
+        const size_t colon = addr.rfind(':');
+        port = proto::kDefaultPort;
+        if (isWebSocketAddress(addr) || colon == std::string::npos)
+            host = addr;
+        else
+        {
+            host = addr.substr(0, colon);
+            port = static_cast<uint16_t>(std::atoi(addr.c_str() + colon + 1));
+        }
+    }
 
     std::unique_ptr<Transport> makeTransport(const std::string &host)
     {

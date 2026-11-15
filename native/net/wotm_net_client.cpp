@@ -166,6 +166,17 @@ namespace wotm_net
             }
             break;
         }
+        case proto::Type::Away:
+        {
+            proto::Away a;
+            if (proto::decode(data, a))
+            {
+                if (away_.size() <= a.player)
+                    away_.resize(a.player + 1u, false);
+                away_[a.player] = a.away;
+            }
+            break;
+        }
         case proto::Type::Desync:
         {
             proto::Desync d;
@@ -186,10 +197,12 @@ namespace wotm_net
     void MatchClient::sendInput(Clock::time_point now)
     {
         std::vector<uint8_t> packet;
+        std::vector<proto::Away> aways;
         std::vector<proto::Hash> hashes;
         {
             std::lock_guard<std::mutex> lk(mu_);
             hashes.swap(hashQueue_);
+            aways.swap(awayQueue_);
             if (status_ == Status::Running && local_ >= 0)
             {
                 const uint32_t have = inputs_.nextMissing(local_);
@@ -217,6 +230,8 @@ namespace wotm_net
         {
             net_->send(proto::kControl, proto::encode(h), true);
         }
+        for (const proto::Away &a : aways)
+            net_->send(proto::kControl, proto::encode(a), true);
         if (!packet.empty() && !(cfg_.dropInputPercent > 0 && static_cast<int>(rng_() % 100u) < cfg_.dropInputPercent))
             net_->send(proto::kInputs, packet, false);
     }
@@ -298,6 +313,34 @@ namespace wotm_net
             if (!inputs_.has(q, frame))
                 out.push_back(q);
         return out;
+    }
+
+    void MatchClient::setAway(bool away)
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        awayQueue_.push_back({0, away});
+    }
+
+    bool MatchClient::away(int player) const
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        return player >= 0 && static_cast<size_t>(player) < away_.size() && away_[static_cast<size_t>(player)];
+    }
+
+    std::string MatchClient::waitingText(uint32_t frame) const
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        std::string s;
+        for (int q = 0; q < players_; ++q)
+        {
+            if (inputs_.has(q, frame))
+                continue;
+            s += s.empty() ? "Waiting for " : ", ";
+            s += q < static_cast<int>(names_.size()) ? names_[static_cast<size_t>(q)] : "player " + std::to_string(q + 1);
+            if (static_cast<size_t>(q) < away_.size() && away_[static_cast<size_t>(q)])
+                s += " (their game tab is in the background)";
+        }
+        return s;
     }
 
     void MatchClient::sendHash(uint32_t frame, uint64_t hash, std::vector<uint64_t> blocks)

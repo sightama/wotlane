@@ -45,3 +45,19 @@ test('requests outside data/ are left alone', async () => {
   await assert.rejects(retryingFetch(f, fast)('wotm.wasm', {}), TypeError);
   assert.equal(f.calls.length, 1);
 });
+
+test('each disc chunk that arrives reports its size, other requests do not', async () => {
+  const sizes = [];
+  const f = async (url) => ({ ok: true, status: 206, headers: new Map([['content-length', '1048576']]) });
+  const fetchDisc = retryingFetch(f, { ...fast, onBytes: (n) => sizes.push(n) });
+  await fetchDisc('data//game.iso', {});
+  await fetchDisc('wotm.wasm', {});
+  assert.deepEqual(sizes, [1048576]);
+});
+
+test('a size probe (HEAD with an open range: a 206 with the whole file length) is not counted as downloaded', async () => {
+  const sizes = [];
+  const f = async () => ({ ok: true, status: 206, headers: new Map([['content-length', '1258815488']]) });
+  await retryingFetch(f, { ...fast, onBytes: (n) => sizes.push(n) })('data//game.iso', { method: 'HEAD', headers: { Range: 'bytes=0-' } });
+  assert.deepEqual(sizes, []);
+});

@@ -71,6 +71,11 @@ namespace wotm_net
         bool waitAcked(int ms);
         uint32_t dropFrame(int player) const;   // 0xFFFFFFFF if not dropped
         uint32_t desyncFrame() const;           // 0xFFFFFFFF if none
+        // this player's game went to the background (a hidden browser tab) or came back: the others' "Waiting for" message says so
+        void setAway(bool away);
+        bool away(int player) const;
+        // "Waiting for <names>" for the players with no input for the frame, noting the ones whose game is in the background
+        std::string waitingText(uint32_t frame) const;
 
     private:
         using Clock = std::chrono::steady_clock;
@@ -100,6 +105,8 @@ namespace wotm_net
         uint32_t serverAck_ = 0;                        // first local frame the server doesn't have yet
         std::vector<uint32_t> sentAcks_;
         std::vector<proto::Hash> hashQueue_;
+        std::vector<proto::Away> awayQueue_;
+        std::vector<bool> away_;                        // per player, from the server's Away messages
         bool dirty_ = false;
         Clock::time_point lastSend_{};
         uint32_t desyncFrame_ = 0xFFFFFFFFu;

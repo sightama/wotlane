@@ -20,6 +20,11 @@
   }
 
   document.getElementById('logToggle').addEventListener('click', () => logEl.classList.toggle('open'));
+  // the canvas and its bar go fullscreen together (Esc leaves); the canvas keeps the game's shape
+  document.getElementById('fullscreen').addEventListener('click', () => {
+    document.getElementById('stage').requestFullscreen?.().catch(() => {});
+    canvas.focus();
+  });
   canvas.addEventListener('click', () => canvas.focus());
 
   // the runtime's environment: the disc comes from /disc and saves go to /save (wotm_webfs.cpp); movies are skipped (no FFmpeg in
@@ -41,15 +46,79 @@
   for (const key of fromAddress)
     if (params.has(key)) allowed[key] = params.get(key);
   const fixed = { ...env };
-  Object.assign(env, allowed, window.wotmMatchEnv || {}, fixed);
 
-  window.Module = {
-    canvas,
-    arguments: ['/disc/SCUS_971.97'],
-    print: out,
-    printErr: out,
-    setStatus: (text) => { statusEl.textContent = text || 'Running'; },
-    preRun: [() => Object.assign(window.Module.ENV, env)],
-    onAbort: (what) => { statusEl.textContent = 'Stopped: ' + what; logEl.classList.add('open'); },
+  // the text over the game while the disc streams in (data_retry.js reports each chunk from the worker that fetches it)
+  function showLoading(expectedBytes) {
+    const loadingEl = document.getElementById('loading');
+    const progress = new LoadingProgress(expectedBytes);
+    const channel = new BroadcastChannel('wotlane-disc');
+    channel.onmessage = (e) => progress.add(e.data, performance.now());
+    loadingEl.hidden = false;
+    const timer = setInterval(() => {
+      const text = progress.text(performance.now());
+      if (text) return void (loadingEl.textContent = text);
+      loadingEl.hidden = true;
+      channel.close();
+      clearInterval(timer);
+    }, 250);
+  }
+
+  // the game hears when the tab is hidden: an online match keeps running and tells the others why it may lag (wotm_webfs.cpp)
+  function tellHidden() {
+    window.Module._wotm_web_set_hidden?.(document.hidden ? 1 : 0);
+  }
+
+  // after a long wait for another player, the page offers to keep waiting or leave the match (back to the front panel)
+  function watchStalls() {
+    const prompt = new StallPrompt(60000);
+    const el = document.getElementById('stall');
+    const waitMs = () => window.Module._wotm_web_net_stall_ms?.() ?? 0;
+    document.getElementById('keepWaiting').addEventListener('click', () => {
+      prompt.keepWaiting(waitMs());
+      el.hidden = true;
+      canvas.focus();
+    });
+    document.getElementById('leaveMatch').addEventListener('click', () => location.reload());
+    setInterval(() => {
+      const wait = waitMs();
+      const show = prompt.show(wait);
+      if (show && el.hidden) {
+        const text = window.Module.UTF8ToString(window.Module._wotm_web_net_stall_text());
+        const stopped = prompt.stopped(wait);   // refused, desync or connection lost: only the way back is left
+        document.getElementById('stallText').textContent = stopped ? `The match stopped: ${text}.` : text + '.';
+        document.getElementById('stallNote').hidden = stopped;
+        document.getElementById('keepWaiting').hidden = stopped;
+        document.getElementById('leaveMatch').textContent = stopped ? 'Back to the front page' : 'Leave the match';
+      }
+      el.hidden = !show;
+    }, 500);
+  }
+
+  // loads the game once (front.js calls it for single player, or with a lobby's match environment); `build` is version.json's
+  // build id, which the server compares with the lobby's
+  let started = false;
+  window.wotmStart = function (matchEnv, build) {
+    if (started) return;
+    started = true;
+    Object.assign(env, allowed, matchEnv || {}, build ? { WOTM_BUILDID: build } : {}, fixed);
+    window.Module = {
+      canvas,
+      arguments: ['/disc/SCUS_971.97'],
+      print: out,
+      printErr: out,
+      setStatus: (text) => { statusEl.textContent = text || 'Running'; },
+      preRun: [() => Object.assign(window.Module.ENV, env)],
+      onAbort: (what) => { statusEl.textContent = 'Stopped: ' + what; logEl.classList.add('open'); },
+      onRuntimeInitialized: tellHidden,
+    };
+    showLoading(matchEnv ? 57 << 20 : 27 << 20);   // a first visit's download to a fight, or to the title
+    document.addEventListener('visibilitychange', tellHidden);
+    if (matchEnv) watchStalls();
+    const script = document.createElement('script');
+    script.src = 'wotm.js';
+    document.body.appendChild(script);
+    canvas.focus();
   };
+  // a test link with a direct match skips the front panel
+  window.wotmDirect = params.has('WOTM_MATCH');
 })();

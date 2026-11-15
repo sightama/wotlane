@@ -647,6 +647,20 @@ namespace wotm_net
             checkHashes(*m);
             break;
         }
+        case proto::Type::Away:
+        {
+            proto::Away a;
+            if (!m || !proto::decode(data, a) || m->slots[static_cast<size_t>(si)].away == a.away)
+                break;
+            m->slots[static_cast<size_t>(si)].away = a.away;
+            a.player = static_cast<uint8_t>(si);
+            for (size_t q = 0; q < m->slots.size(); ++q)
+                if (static_cast<int>(q) != si && m->slots[q].peer && !m->slots[q].gone)
+                    send(m->slots[q].peer, proto::kControl, proto::encode(a), true);
+            log("lobby %s: %s's game %s", lobbies_[static_cast<size_t>(m->lobby)].code.c_str(), m->slots[static_cast<size_t>(si)].name.c_str(),
+                a.away ? "went to the background" : "is back");
+            break;
+        }
         default:
             break;
         }

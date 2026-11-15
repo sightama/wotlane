@@ -42,6 +42,8 @@ namespace wotm_net::proto
         Hash,         // client -> server: state hash on a frame
         Desync,       // server -> client: the hashes for a frame differ; the match stops
         Drop,         // server -> client: a player left; neutral from a given frame
+        Away,         // client -> server: this player's game went to the background or came back (a hidden browser tab);
+                      // server -> client: the same for another player. Older peers ignore it
     };
 
     struct Join
@@ -94,6 +96,11 @@ namespace wotm_net::proto
     {
         uint8_t player = 0;
         uint32_t frame = 0;
+    };
+    struct Away
+    {
+        uint8_t player = 0;   // the server fills it in; a client sends its own slot as 0
+        bool away = false;
     };
 
     class Writer
@@ -353,6 +360,19 @@ namespace wotm_net::proto
     {
         Reader r(b, Type::Drop);
         m.player = r.u8(), m.frame = r.u32();
+        return r.done();
+    }
+
+    inline std::vector<uint8_t> encode(const Away &m)
+    {
+        Writer w(Type::Away);
+        w.u8(m.player), w.u8(m.away ? 1u : 0u);
+        return w.take();
+    }
+    inline bool decode(const std::vector<uint8_t> &b, Away &m)
+    {
+        Reader r(b, Type::Away);
+        m.player = r.u8(), m.away = r.u8() != 0;
         return r.done();
     }
 

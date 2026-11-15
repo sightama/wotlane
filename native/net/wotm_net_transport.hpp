@@ -37,5 +37,7 @@ namespace wotm_net
 
     // ws://... or wss://... = WebSocket (in the browser, the page's WebSocket); anything else = ENet to host:port
     bool isWebSocketAddress(const std::string &host);
+    // WOTM_NET into what MatchClient takes: host and port for ENet ("host" alone means the default port); a WebSocket URL stays whole
+    void splitServerAddress(const std::string &addr, std::string &host, uint16_t &port);
     std::unique_ptr<Transport> makeTransport(const std::string &host);
 }

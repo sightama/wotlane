@@ -1,18 +1,25 @@
-// ABOUTME: Browser build only: mounts the streamed disc (/disc, read lazily from data/ with HTTP range requests) and the persistent
-// ABOUTME: save folder (/save, OPFS), and paces the render loop on requestAnimationFrame (JSPI suspends the loop between frames).
+// ABOUTME: Browser build only: mounts the streamed disc (/disc, read lazily from data/) and the save folder (/save, OPFS), paces the
+// ABOUTME: render loop on requestAnimationFrame (JSPI suspends it between frames), and shares the tab and network state with the page.
 #ifdef __EMSCRIPTEN__
 #include "wotm_web.h"
 
 #include <emscripten.h>
 #include <emscripten/wasmfs.h>
 
+#include <atomic>
 #include <cstdio>
+#include <mutex>
+#include <string>
 #include <unistd.h>
 
 namespace
 {
     constexpr unsigned kDiscChunkBytes = 1u << 20;   // one range request per MiB the game touches; each chunk is fetched once
     constexpr const char *kDiscFiles[] = {"SCUS_971.97", "game.iso"};
+    std::atomic<bool> g_hidden{false};
+    std::atomic<double> g_stallMs{0};
+    std::mutex g_stallMu;
+    std::string g_stallText;
 }
 
 // globalThis.wotmFrames: frames presented, time spent in the loop's own work and time waiting for the browser (the page shows the rate)
@@ -27,6 +34,36 @@ EM_ASYNC_JS(void, wotm_web_wait_frame, (), {
 });
 
 void wotmWebPresent() { wotm_web_wait_frame(); }
+
+bool wotmWebHidden() { return g_hidden.load(); }
+
+void wotmWebPageSize(int &w, int &h)
+{
+    w = MAIN_THREAD_EM_ASM_INT({ return window.innerWidth; });
+    h = MAIN_THREAD_EM_ASM_INT({ return window.innerHeight; });
+}
+
+void wotmWebNetStall(double ms, const char *text)
+{
+    std::lock_guard<std::mutex> lk(g_stallMu);
+    g_stallText = text;
+    g_stallMs = ms;
+}
+
+// called by the page (boot.js)
+extern "C"
+{
+    EMSCRIPTEN_KEEPALIVE void wotm_web_set_hidden(int hidden) { g_hidden = hidden != 0; }
+    EMSCRIPTEN_KEEPALIVE double wotm_web_net_stall_ms() { return g_stallMs.load(); }
+    // the text stays valid until the next call (the page reads it right away)
+    EMSCRIPTEN_KEEPALIVE const char *wotm_web_net_stall_text()
+    {
+        static std::string copy;
+        std::lock_guard<std::mutex> lk(g_stallMu);
+        copy = g_stallText;
+        return copy.c_str();
+    }
+}
 
 void wotmWebMount()
 {
