@@ -1,6 +1,7 @@
 // ABOUTME: The browser version's front panel: single player, or an online lobby on the game server (Host shows a 4-letter code,
 // ABOUTME: Join takes one). When the owner starts, every member's game loads with the match environment (boot.js wotmStart).
 import { LobbyClient, lobbySocketUrl, matchEnv } from './lobby.js';
+import { initCreations } from './creations_ui.js';
 
 const MONSTERS = [[1, 'Congar'], [2, 'Robo-47'], [3, 'Togera'], [4, 'Ultra V'], [5, 'Preytor'], [7, 'Kineticlops'], [8, 'Magmo'],
   [9, 'Raptros'], [10, 'Agamo'], [11, 'Zorgulon']];
@@ -143,6 +144,7 @@ function init() {
     for (const id of ['single', 'host', 'join']) $(id).disabled = true;
     return;
   }
+  initCreations();
   if (window.wotmDirect) {
     front.hidden = true;
     buildId().then((b) => window.wotmStart(null, b));
