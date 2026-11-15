@@ -32,6 +32,7 @@
 #include "rlgl.h"
 #include "wotm_gs.hpp"
 #include "wotm_interp.hpp"   // M4, GameCamera and frame interpolation (no raylib, tested in native/tests)
+#include "wotm_hudedge.hpp"   // how far the HUD moves to the edge of a wide window (drawHudAtEdges, drawQuads)
 #include "wotm_mods.hpp"   // .RTX palettes: mods/ wins over the disc (loadResources)
 #include "wotm_disc.hpp"   // disc files from the extracted root or the ISO (readDisc)
 #include "wotm_texmods.hpp"   // mod textures as PNG (textureId, residentTexture)
@@ -612,6 +613,7 @@ struct TextQuad {
     float x0, y0, x1, y1;
     uint8_t r, g, b, a;   // GS RGBAQ: 0x80 = 1.0 (the color modulates the texture)
     uint64_t tex0;        // TEX0 in effect (T8H 512x512 atlas from the stage's .RTX + CBP palette)
+    bool toEdge = false;  // the WINS count: in a wide window it goes to its edge like the HUD (Scene::drawQuads)
 };
 
 // Untextured screen rectangle (fade): a GS SPRITE with ABE and ALPHA_1 0x44 ((Cs - Cd)·As + Cd, As = a/0x80) over the view, built
@@ -762,6 +764,7 @@ struct FontText {
     uint64_t tex0 = 0;
     uint8_t col[4] = {0x80, 0x80, 0x40, 0x80}, headerCol[4] = {0x80, 0x80, 0x40, 0x80};
     std::vector<TextQuad> building;   // glyphs since the last fontDmaFontData
+    bool toEdge = false;              // glyphs being built belong to the WINS count (TextQuad::toEdge)
 
     void initPacket(uint32_t vram) {
         const uint64_t tbp = uint16_t(int32_t((vram - 0x840u) << 10) >> 16), cbp = uint16_t(int32_t((vram - 0x40u) << 10) >> 16);
@@ -808,6 +811,7 @@ struct FontText {
         t.x1 = float(x1) / 16.f - kOx; t.y1 = float(y1) / 16.f - kOy;
         t.r = col[0]; t.g = col[1]; t.b = col[2]; t.a = col[3];
         t.tex0 = tex0;
+        t.toEdge = toEdge;
         building.push_back(t);
     }
     // At the entry of fontDmaFontData: true = the frame was closed (glyphs in `out`).
@@ -3503,7 +3507,7 @@ public:
         }
         for (int side = 0; side < 2; ++side) {
             if (sides[side].empty()) continue;
-            const float dx = (side ? 1.f : -1.f) * (1.f - half43);
+            const float dx = hudedge::shift(half43, side == 1);
             Matrix shifted = proj;   // NDC x + dx: clip x gains dx * clip w (row 0 += dx * row 3)
             shifted.m0 += dx * proj.m3, shifted.m4 += dx * proj.m7, shifted.m8 += dx * proj.m11, shifted.m12 += dx * proj.m15;
             rlDrawRenderBatchActive();
@@ -4020,10 +4024,13 @@ public:
             const bool gain = textShader_.id > 0;   // without the shader the color stays <= 1.0 (doubles here)
             const int k = gain ? 1 : 2;
             const Color tint{uint8_t(std::min(255, t.r * k)), uint8_t(std::min(255, t.g * k)), uint8_t(std::min(255, t.b * k)), uint8_t(std::min(255, t.a * 2))};
+            // the WINS count goes to the window's edge like the rest of the HUD (drawHudAtEdges): left of center to the left one. Split
+            // screen leaves it: its halves are narrower than 4:3
+            const float dx = t.toEdge && !splitEdges ? hudedge::shift(gr.w / rw, t.x0 + t.x1 > 640.f) * rw * 0.5f : 0.f;
             // Inverted UV (u1 < u0, v1 < v0: ScreenPolys mirrors and polyBuildPrim writes V = 0x80 - v): the GS walks from u0 to u1.
             // DrawTexturePro with negative width mirrors the range [x, x + |w|], so the origin is the smaller of the two.
             DrawTexturePro(tex, texelRect(tex, t.tex0, Rectangle{std::min(t.u0, t.u1), std::min(t.v0, t.v1), t.u1 - t.u0, t.v1 - t.v0}),
-                           Rectangle{gr.x0 + t.x0 * sx, t.y0 * sy, (t.x1 - t.x0) * sx, (t.y1 - t.y0) * sy}, Vector2{0.f, 0.f}, 0.f, tint);
+                           Rectangle{gr.x0 + dx + t.x0 * sx, t.y0 * sy, (t.x1 - t.x0) * sx, (t.y1 - t.y0) * sy}, Vector2{0.f, 0.f}, 0.f, tint);
         }
         if (textShader_.id > 0) EndShaderMode();
     }

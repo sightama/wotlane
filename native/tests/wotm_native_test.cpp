@@ -11,6 +11,8 @@
 #include "wotm_freecam.h"
 #include "wotm_glsl.hpp"
 #include "wotm_lockon.hpp"
+#include "wotm_rtz.hpp"
+#include "wotm_hudedge.hpp"
 #include "wotm_trig_goldens.hpp"
 #include "net/wotm_modifiers.hpp"
 #include "wotm_tint.hpp"
@@ -18,9 +20,12 @@
 #include "wotm_stagemap.hpp"
 #include "net/wotm_camsettings.hpp"
 #include "net/wotm_inputfile.hpp"
+#include "net/wotm_confighash.hpp"
 
 #include <algorithm>
 #include <array>
+#include <cfenv>
+#include <cfloat>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -297,6 +302,38 @@ namespace
         CHECK(st::parse(st::Turbo, "1", v) && v == 1 && st::parse(st::Turbo, "0", v) && v == 0);
         CHECK(std::string(st::kEnv[st::SuperJump]) == "WOTM_SUPERJUMP" && std::string(st::kEnv[st::Turbo]) == "WOTM_TURBO");
         st::g_val[st::SuperJump].store(0), st::g_val[st::FastMonsters].store(0), st::g_val[st::Turbo].store(0);
+    }
+
+    // The variables in a network match's config hash (the server refuses a player whose hash differs): adding or removing one
+    // decides who can play together, so the list is pinned here
+    TEST(config_hash_variables_are_pinned)
+    {
+        const std::vector<std::string> want = {"WOTM_MATCH",     "WOTM_PLAYERS", "WOTM_AIVSAI", "WOTM_RATEMIN",    "WOTM_FIXEDSTEP",
+                                               "WOTM_SEED",      "WOTM_HIGHRAM", "WOTM_ENEMYBARS", "WOTM_CHEATS",  "WOTM_CLOAK",
+                                               "WOTM_SAVEJSON",  "WOTM_FREECAM", "WOTM_KILLTARGET", "WOTM_30HZ",   "WOTM_MODE",
+                                               "PS2X_NOOP"};
+        const std::vector<std::string> got(std::begin(wotm_net::confighash::kVars), std::end(wotm_net::confighash::kVars));
+        CHECK(got == want);
+    }
+
+    // Movies never play inside a match's frames (it boots straight into the fight): a native player with movies on (PS2X_FMV) and a
+    // browser player, which skips them (no FFmpeg), share a match. Measured: tools/determinism_check.py --env-b with the switches.
+    TEST(config_hash_ignores_movie_switches)
+    {
+        using Env = std::vector<std::pair<std::string, std::string>>;
+        auto text = [](const Env &env) {
+            return wotm_net::confighash::envText([&env](const char *name) -> const char * {
+                for (const auto &[k, v] : env)
+                    if (k == name)
+                        return v.c_str();
+                return nullptr;
+            });
+        };
+        const Env native = {{"WOTM_SEED", "7"}, {"PS2X_FMV", "1"}};
+        const Env browser = {{"WOTM_SEED", "7"}, {"PS2X_SKIP_MOVIES", "1"}, {"PS2X_SKIP_CMOVIE", "1"}};
+        CHECK(text(native) == text(browser));
+        CHECK(text(native) != text({{"WOTM_SEED", "8"}, {"PS2X_FMV", "1"}}));
+        CHECK(text({{"WOTM_SEED", "7"}}).find("WOTM_SEED=7;") != std::string::npos);
     }
 
     // Effects and music volume (AUDIO tab, #7): per-PC percentages 0..100, default 100, from WOTM_VOL_SFX / WOTM_VOL_MUSIC or settings.ini;
@@ -2202,6 +2239,129 @@ TEST(stagemap_stock_grid_rule)
     }
 }
 
+namespace
+{
+    double doubleOf(uint64_t u)
+    {
+        double d;
+        std::memcpy(&d, &u, 8);
+        return d;
+    }
+    uint64_t bitsOfDouble(double d)
+    {
+        uint64_t u;
+        std::memcpy(&u, &d, 8);
+        return u;
+    }
+
+    // Operand pairs for the round-toward-zero checks, from a fixed LCG so every machine sees the same list. Normal floats only
+    // (the VU0 code normalizes its operands): random exponents, close ones (cancellation), far ones (the sum is inexact even in
+    // double), products near the float limits, and integers past 2^24.
+    struct RtzCase
+    {
+        float a, b, c;   // c: the accumulator of a madd
+        int32_t i;
+    };
+    std::vector<RtzCase> rtzCases(int n)
+    {
+        uint32_t s = 2463534242u;
+        auto next = [&s] { return s = s * 1664525u + 1013904223u; };
+        auto normal = [&](uint32_t exponent) { return floatOf((next() & 0x807FFFFFu) | ((exponent % 254u + 1u) << 23)); };
+        std::vector<RtzCase> v;
+        for (int k = 0; k < n; ++k)
+        {
+            const float a = normal(next() >> 24);
+            const uint32_t ea = (bitsOf(a) >> 23) & 0xFFu;
+            float b;
+            switch (k % 5)
+            {
+            case 0: b = normal(next() >> 24); break;
+            case 1: b = floatOf((bitsOf(a) ^ 0x80000000u) + (next() % 64u) - 32u); break;   // a - b cancels
+            case 2: b = normal(ea > 64u ? ea - 1u - next() % 64u : ea + next() % 64u); break;   // up to 64 binades apart
+            case 3: b = normal(254u - ea + next() % 4u); break;   // a*b near 1, or near the float limits
+            default: b = normal(127u + next() % 16u); break;
+            }
+            const float c = normal(next() >> 24);
+            v.push_back({a, b, c, (int32_t)next()});
+        }
+        return v;
+    }
+}
+
+#ifndef __EMSCRIPTEN__
+// What the native builds get from the CPU with round toward zero set (wotm_vu0_native.cpp), computed here with the CPU's own
+// rounding mode; the software version (wotm_rtz.hpp, used by the browser build) must give the same bits for every case.
+#ifdef _MSC_VER
+#pragma fenv_access(on)
+#else
+#pragma STDC FENV_ACCESS ON
+#endif
+TEST(rtz_software_equals_the_cpu_rounding_mode)
+{
+    int bad = 0;
+    for (const RtzCase &t : rtzCases(200000))
+    {
+        volatile float a = t.a, b = t.b;
+        volatile int32_t i = t.i;
+        const double p = (double)t.a * (double)t.b;
+        volatile double vp = p, vc = t.c;
+        const int saved = std::fegetround();
+        std::fesetround(FE_TOWARDZERO);
+        volatile float add = a + b, sub = a - b, mul = a * b, fromInt = (float)i;   // volatile: computed before the mode goes back
+        volatile double dAdd = vc + vp, dSub = vc - vp;
+        std::fesetround(saved);
+        bad += bitsOf(add) != bitsOf(wotm::rtz::add(t.a, t.b));
+        bad += bitsOf(sub) != bitsOf(wotm::rtz::sub(t.a, t.b));
+        bad += bitsOf(mul) != bitsOf(wotm::rtz::mul(t.a, t.b));
+        bad += bitsOf(fromInt) != bitsOf(wotm::rtz::fromInt(t.i));
+        bad += bitsOfDouble(dAdd) != bitsOfDouble(wotm::rtz::add((double)t.c, p));
+        bad += bitsOfDouble(dSub) != bitsOfDouble(wotm::rtz::sub((double)t.c, p));
+    }
+    CHECK(bad == 0);
+}
+#ifdef _MSC_VER
+#pragma fenv_access(off)
+#else
+#pragma STDC FENV_ACCESS OFF
+#endif
+#endif
+
+// The browser build has no rounding-mode control and uses wotm_rtz.hpp for VU0; its results must be the native ones. The digest
+// was measured on the Mac (where the test above ties it to the CPU); the wasm build of these tests (tools/test_web.sh) must match.
+TEST(rtz_same_bits_on_every_machine)
+{
+    uint64_t h = 1469598103934665603ull;   // FNV-1a over the result bits
+    auto mix = [&h](uint64_t u, int bytes) {
+        for (int k = 0; k < bytes; ++k)
+            h = (h ^ ((u >> (8 * k)) & 0xFFu)) * 1099511628211ull;
+    };
+    for (const RtzCase &t : rtzCases(200000))
+    {
+        const double p = (double)t.a * (double)t.b;
+        mix(bitsOf(wotm::rtz::add(t.a, t.b)), 4);
+        mix(bitsOf(wotm::rtz::sub(t.a, t.b)), 4);
+        mix(bitsOf(wotm::rtz::mul(t.a, t.b)), 4);
+        mix(bitsOf(wotm::rtz::fromInt(t.i)), 4);
+        mix(bitsOfDouble(wotm::rtz::add((double)t.c, p)), 8);
+        mix(bitsOfDouble(wotm::rtz::sub((double)t.c, p)), 8);
+    }
+    std::printf("  rtz digest %016llx\n", static_cast<unsigned long long>(h));
+    CHECK(h == 0x4db21735e0cf6d5aull);
+}
+
+TEST(rtz_edges)
+{
+    namespace rtz = wotm::rtz;
+    CHECK(bitsOf(rtz::add(FLT_MAX, FLT_MAX)) == 0x7F7FFFFFu);   // overflow stops at the largest float, never inf
+    CHECK(bitsOf(rtz::mul(-FLT_MAX, 2.f)) == 0xFF7FFFFFu);
+    CHECK(bitsOf(rtz::add(1.f, -1e-30f)) == bitsOf(std::nextafter(1.f, 0.f)));   // the exact sum is just below 1
+    CHECK(bitsOf(rtz::add(1.f, 1e-30f)) == bitsOf(1.f));
+    CHECK(bitsOf(rtz::sub(1.f, 1.f)) == 0u);   // +0, as in round to nearest
+    CHECK(bitsOf(rtz::fromInt(16777217)) == bitsOf(16777216.f));
+    CHECK(bitsOf(rtz::fromInt(-16777219)) == bitsOf(-16777218.f));
+    CHECK(bitsOfDouble(rtz::add(1.0, -doubleOf(0x3C80000000000001ull))) == bitsOfDouble(std::nextafter(1.0, 0.0)));
+}
+
 TEST(glsl_desktop_source_unchanged)
 {
     const std::string src = "#version 330\nin vec2 uv;\nvoid main() {}\n";
@@ -2266,6 +2426,25 @@ TEST(lockon_cycles_targets_on_screen)
     const lo::Candidate pq[] = {{0x10, {0x1.c81efp-1f, 0x1.00026cp+0f, 0.f}}, {0x20, {0x1.c81f1p-1f, 0x1.00027ep+0f, 0.f}}};
     CHECK(bitsOf(lo::screenAngle(me, pq[0].pos, right, fwd)) == bitsOf(lo::screenAngle(me, pq[1].pos, right, fwd)));
     CHECK(lo::nextTarget(me, 0.f, pq, 2, right, fwd, 1) == 0x10);
+}
+
+// HUD at the window's edges (health and power bars, the WINS text): a wide window moves each side out by the extra width;
+// a 4:3 view, or a narrower one such as a split-screen half, stays as the game placed it
+TEST(hud_edge_shift_reaches_the_window_edge)
+{
+    namespace he = wotm::hudedge;
+    const float wide = (4.f / 3.f) / (16.f / 9.f);   // 16:9: the 4:3 picture's half-width is 0.75 of the window's
+    CHECK(he::shift(wide, false) == -0.25f);
+    CHECK(he::shift(wide, true) == 0.25f);
+    CHECK(he::shift(wide, true) * 1920.f / 2.f == (1920.f - 1440.f) / 2.f);   // in pixels: the whole side margin
+    CHECK(he::shift(1.f, false) == 0.f);
+    CHECK(he::shift(1.f, true) == 0.f);
+    const float splitHalf = (4.f / 3.f) / (8.f / 9.f);   // half of a 16:9 window
+    CHECK(he::shift(splitHalf, false) == 0.f);
+    CHECK(he::shift(splitHalf, true) == 0.f);
+    // only Hud::update's two WINS buffers go to the edge (any address segment); other text stays
+    CHECK(he::isWinsText(0x006EA920u) && he::isWinsText(0x006EA938u) && he::isWinsText(0x206EA920u));
+    CHECK(!he::isWinsText(0x006EA924u) && !he::isWinsText(0));
 }
 
 int main()
