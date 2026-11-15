@@ -2118,7 +2118,11 @@ static void changeScreenHook(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runt
         }
         else if (from == 8 && to == 99)   // stage select confirmed (the game has already written m_levelNum)
         {
-            if (!wotm_levelsel::resolveRandom(rdram))   // RANDOM: the rolled stage (wotm_levelsel.inc), without the narrator (a surprise)
+            // RANDOM: the rolled stage, never a map; then a map slot: its base stage, the map active (any other stage clears it).
+            // Neither is announced by the narrator (wotm_levelsel.inc)
+            const bool random = wotm_levelsel::resolveRandom(rdram);
+            const bool map = wotm_levelsel::resolveMap(rdram);
+            if (!random && !map)
                 wotm_narrator::announceLevel(int(rd32(rdram, kShell + 0x2BB0)));
             extraCpus(rdram);
         }
@@ -2442,6 +2446,14 @@ static RenderTexture2D g_selRt{};
 // Cache key: monster | costume << 8 | fallback disc costume (the skin's base) << 16
 static const wotm::model::Model *selModel(uint32_t id)
 {
+    // A skin saved again in the character creator keeps its costume index (same key) with new PNGs: the cached models hold the old
+    // decoded pixels, so they all go (the Renderers reupload: a new Model has a new gen()). Pointers from earlier frames are not kept.
+    static uint32_t texGen = wotm::texmods::Index::get().gen();
+    if (const uint32_t g = wotm::texmods::Index::get().gen(); g != texGen)
+    {
+        texGen = g;
+        g_selCache.clear();
+    }
     if (auto it = g_selCache.find(id); it != g_selCache.end())
         return it->second.get();
     static const PS2Runtime::IoPaths &io = PS2Runtime::getIoPaths();

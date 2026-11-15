@@ -2,6 +2,8 @@
 # ABOUTME: wotm.exe per player (each with its own pad script) and checks that all have the same state on every frame (tools\statediff.py).
 #
 # Usage: powershell -File tools\net_check.ps1 [-Players 2] [-Monsters 3,1] [-Stage 1] [-Secs 70] [-Port 7811] [-Exe <wotm.exe>]...
+#   -Stage: a stage number, or a saved map's id (mods/<mod>/stages/<id>/, map creator): the lobby carries numbers only, so it gets
+#     stage 1 and every player's WOTM_MATCH ends with the map id instead (the runtime loads the map's base stage with its edits).
 #   -Exe: one wotm.exe per player (comma-separated; the last one applies to any remaining players), to prove that two builds in
 #     different folders play together. Default: the runtime's build_dev.
 #   -Wins <n>: wins needed to end the match (the lobby owner picks them; they become WOTM_KILLTARGET for everyone). 0 = endless.
@@ -14,7 +16,7 @@
 param(
     [int]$Players = 2,
     [string]$Monsters = '3,1,2,5,4,7,8,9',   # one per player, up to 8 (valid ones: native/net/wotm_monsters.hpp)
-    [int]$Stage = 1,
+    [string]$Stage = '1',
     [int]$Wins = 0,
     [string]$Modifiers = '',   # gameplay modifiers the lobby owner sets (comma list: jump, fast, turbo)
     [int]$Secs = 70,
@@ -35,6 +37,7 @@ $server = Join-Path $repo 'native\net\build\wotm_server.exe'
 $serverStale = (Test-Path $server) -and ((Get-ChildItem "$repo\native\net\*.cpp", "$repo\native\net\*.hpp" | Measure-Object LastWriteTime -Maximum).Maximum -gt (Get-Item $server).LastWriteTime)
 if (-not (Test-Path $server) -or $serverStale) { & cmd /c "`"$repo\tools\build_net.bat`" notest" | Out-Null }
 if (-not (Test-Path $server)) { throw "wotm_server.exe did not build (tools\build_net.bat)" }
+if (-not $env:WOTM_BACKGROUND) { $env:WOTM_BACKGROUND = '1' }   # the game windows open without taking the focus
 $exes = @(if ($Exe) { $Exe -split ',' } else { Join-Path $runtime 'build_dev\ps2xRuntime\wotm.exe' })
 $disc = Join-Path $runtime 'discroot'
 $elf = Join-Path $disc 'SCUS_971.97'
@@ -62,8 +65,15 @@ try {
     Start-Sleep -Milliseconds 500
     $names = (1..$Players | ForEach-Object { "J$_" }) -join ','
     $mons = ($Monsters -split ',')[0..($Players - 1)] -join ','
-    & python (Join-Path $PSScriptRoot 'net_lobby.py') --server "127.0.0.1:$Port" --group $names --monsters $mons --stage $Stage --wins $Wins @(if ($Modifiers) { '--mods', $Modifiers }) --env-dir $out
+    $map = if ($Stage -match '^\d+$') { '' } else { $Stage }
+    & python (Join-Path $PSScriptRoot 'net_lobby.py') --server "127.0.0.1:$Port" --group $names --monsters $mons --stage $(if ($map) { 1 } else { $Stage }) --wins $Wins @(if ($Modifiers) { '--mods', $Modifiers }) --env-dir $out
     if ($LASTEXITCODE -ne 0) { throw 'the lobby did not form the match (tools\net_lobby.py)' }
+    if ($map) {   # the stage field of WOTM_MATCH (its last one) becomes the map id
+        for ($i = 1; $i -le $Players; $i++) {
+            $f = Join-Path $out "env_$i.txt"
+            (Get-Content $f) -replace '^(WOTM_MATCH=.*),\d+$', "`$1,$map" | Set-Content $f -Encoding ascii
+        }
+    }
 
     # scripts: each player walks, hits and jumps at different times (seconds since launch; the fight starts at about 15 s)
     $scripts = @(

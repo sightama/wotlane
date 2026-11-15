@@ -43,11 +43,12 @@ def iso_path(runtime):
 
 def check_env(runtime, res='720'):
     """The environment every check starts from (as run_live and the .ps1 checks): native drawing, no sound, a small window that does
-    not cover the screen, this PC's settings.ini ignored. Variables already set in the caller's environment win."""
+    not cover the screen nor take the focus, this PC's settings.ini ignored. Variables already set in the caller's environment win."""
     env = dict(os.environ)
     env.update(PS2X_NO_VU1='1', PS2X_NO_VIF1='1', PS2X_NO_GS='1', PS2X_SCENE='1', PS2X_FMV='1', WOTM_REPO=str(REPO),
                PS2X_CD_IMAGE=iso_path(runtime))
-    for k, v in (('WOTM_MUTE', '1'), ('WOTM_FULLSCREEN', '0'), ('WOTM_RES', res), ('WOTM_WINDOW', res), ('WOTM_SETTINGS', '0')):
+    for k, v in (('WOTM_MUTE', '1'), ('WOTM_FULLSCREEN', '0'), ('WOTM_RES', res), ('WOTM_WINDOW', res), ('WOTM_SETTINGS', '0'),
+                 ('WOTM_BACKGROUND', '1')):
         env.setdefault(k, v)
     return env
 
