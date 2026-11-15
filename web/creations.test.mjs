@@ -112,6 +112,17 @@ test('a zip with any entry outside the creation layout, or a creation without it
   await assert.rejects(importZip(mods, text('not a zip')), /not a zip/);
 });
 
+test('a zip aimed at a built-in mod folder (any letter case) is refused: the next built-in update would wipe it', async () => {
+  const mods = new Dir();
+  const z = await zip([{ name: 'Goliath Prime/skins/x/skin.json', data: text('{"monster": "togera"}') }]);
+  await assert.rejects(importZip(mods, z, { builtin: ['Goliath Prime', 'Cerebulon'] }), /Goliath Prime.*built-in/);
+  const lower = await zip([{ name: 'cerebulon/skins/x/skin.json', data: text('{"monster": "togera"}') }]);
+  await assert.rejects(importZip(mods, lower, { builtin: ['Goliath Prime', 'Cerebulon'] }), /built-in/);
+  assert.equal(mods.items.size, 0);
+  const ok = await zip([{ name: 'Creator/skins/x/skin.json', data: text('{"monster": "togera"}') }]);
+  assert.equal((await importZip(mods, ok, { builtin: ['Goliath Prime'] })).length, 1);
+});
+
 test('delete removes only that creation', async () => {
   const mods = await sample();
   await deleteCreation(mods, { mod: 'Creator', kind: 'skins', id: 'green' });

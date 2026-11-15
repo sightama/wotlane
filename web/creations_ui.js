@@ -10,6 +10,16 @@ async function modsFolder() {
   return (await navigator.storage.getDirectory()).getDirectoryHandle('mods', { create: true });
 }
 
+// the built-in mods' folder names (mods/manifest.json, served with the page): imports into them are refused
+async function builtinMods() {
+  try {
+    const r = await fetch('mods/manifest.json', { cache: 'no-store' });
+    return r.ok ? [...new Set((await r.json()).files.map((f) => f.path.split('/')[0]))] : [];
+  } catch {
+    return [];
+  }
+}
+
 function download(fileName, bytes) {
   const url = URL.createObjectURL(new Blob([bytes], { type: 'application/zip' }));
   const a = Object.assign(document.createElement('a'), { href: url, download: fileName });
@@ -64,7 +74,7 @@ export function initCreations() {
     ev.target.value = '';
     if (!file) return;
     try {
-      const added = await importZip(await modsFolder(), new Uint8Array(await file.arrayBuffer()));
+      const added = await importZip(await modsFolder(), new Uint8Array(await file.arrayBuffer()), { builtin: await builtinMods() });
       say(`Imported ${added.map((c) => c.name).join(', ')}.`);
     } catch (e) {
       say(`Could not import ${file.name}: ${e.message}`);

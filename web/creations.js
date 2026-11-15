@@ -65,14 +65,19 @@ export async function exportCreation(mods, c) {
   return { fileName: `${c.id}.zip`, bytes: await zip(entries) };
 }
 
-// Every entry is checked before anything is written: one entry outside the creation layout, or a creation folder without its own
-// json file, refuses the whole zip. An imported creation replaces a folder of the same path. Returns the imported creations.
-export async function importZip(mods, bytes) {
+// Every entry is checked before anything is written: one entry outside the creation layout, one in a built-in mod's folder
+// (`builtin`: the names in mods/manifest.json, mirrored whole before each boot, so an import there would be wiped), or a creation
+// folder without its own json file, refuses the whole zip. An imported creation replaces a folder of the same path. Returns the
+// imported creations.
+export async function importZip(mods, bytes, { builtin = [] } = {}) {
   const entries = await unzip(bytes, LIMITS);
+  const reserved = new Set(builtin.map((n) => n.toLowerCase()));
   const byFolder = new Map();
   for (const e of entries) {
     const p = parseCreationPath(e.name);
     if (!p) throw new Error(`${e.name}: not part of a creation (expected <mod>/skins/<id>/<file> or <mod>/stages/<id>/<file>)`);
+    if (reserved.has(p.mod.toLowerCase()))
+      throw new Error(`${e.name}: "${p.mod}" is a built-in mod's folder; put the creation in a folder of its own (e.g. Creator)`);
     const key = `${p.mod}/${p.kind}/${p.id}`;
     if (!byFolder.has(key)) byFolder.set(key, { c: { mod: p.mod, kind: p.kind, id: p.id }, files: [] });
     byFolder.get(key).files.push({ file: p.file, data: e.data });
