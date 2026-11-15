@@ -64,6 +64,15 @@ class BuildIdTest(unittest.TestCase):
             self.assertEqual(msvc, self.compute(*make_tree(Path(b), ver='14.44.35208')))
             self.assertEqual(msvc, self.compute(*make_clang_tree(Path(c), '17.0.0.17000013', 'arm64')))
 
+    def test_the_browser_build_plays_with_the_native_dev_build(self):
+        # build_web (Emscripten) is build_dev's code with VU0 rounding toward zero in software (wotm_rtz.hpp): the same states, so
+        # browser and native players can share a lobby; the LTCG build stays apart
+        with tempfile.TemporaryDirectory() as a:
+            repo, runtime = make_tree(Path(a))
+            dev = build_id.compute(repo, runtime, 'build_dev', ps2recomp_commit='2c5fbb9')
+            self.assertEqual(dev, build_id.compute(repo, runtime, 'build_web', ps2recomp_commit='2c5fbb9'))
+            self.assertNotEqual(dev, build_id.compute(repo, runtime, 'build', ps2recomp_commit='2c5fbb9'))
+
     def test_build_output_is_ignored(self):
         with tempfile.TemporaryDirectory() as a:
             repo, runtime = make_tree(Path(a))
