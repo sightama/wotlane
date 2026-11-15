@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # ABOUTME: Network match checks on one computer (macOS, Linux or Windows; same table as tools\net_checks.ps1): each runs net_check.py
 # ABOUTME: with 2 players (3 where it says so) and checks identical state on every frame plus the log. Exit 1 if any fail.
-"""Usage: python3 tools/net_checks.py [--only <name>] [--list]"""
+"""Usage: python3 tools/net_checks.py [--only <name>] [--list] [--port 7811]
+  --port: the local server's port (another wotm_server on this computer may hold the default)."""
 import argparse
 import hashlib
 import json
@@ -151,6 +152,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--only', default='')
     ap.add_argument('--list', action='store_true')
+    ap.add_argument('--port', type=int, default=7811)
     a = ap.parse_args()
     if a.list:
         print('\n'.join(CHECKS))
@@ -170,7 +172,7 @@ def main():
                 print(f'FAILED  setup: {e}')
                 failed.append(name)
                 continue
-        if subprocess.run([sys.executable, str(Path(__file__).with_name('net_check.py'))] + args_for(check)).returncode != 0:
+        if subprocess.run([sys.executable, str(Path(__file__).with_name('net_check.py'))] + args_for(check) + ['--port', str(a.port)]).returncode != 0:
             failed.append(name)
             continue
         if 'after' in check:
