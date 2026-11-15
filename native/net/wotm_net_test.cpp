@@ -741,6 +741,8 @@ namespace
         CHECK(readUntil(a, "MEMBERS") == "MEMBERS " + code + " Ana Ana:3:green");
         b.sendLine("JOIN " + code + " Bia 3:Bad!");   // a skin id is a-z, 0-9 and _ (up to 32), as the game scans them
         CHECK(readUntil(b, "ERROR").find("skin") != std::string::npos);
+        b.sendLine("JOIN " + code + " Bia 3:2");   // a leading digit is a disc costume number to WOTM_MATCH, which skips the costume check
+        CHECK(readUntil(b, "ERROR").find("skin") != std::string::npos);
         b.sendLine("JOIN " + code + " Bia 3:green");   // the same skin twice: the game would give the second a disc costume
         CHECK(readUntil(b, "ERROR").find("skin") != std::string::npos);
         b.sendLine("JOIN " + code + " Bia 3");   // the same monster with its disc costume is fine

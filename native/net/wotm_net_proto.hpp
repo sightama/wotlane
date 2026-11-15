@@ -440,7 +440,7 @@ namespace wotm_net::proto
     }
 
     // A lobby member's monster: "<monster>" or "<monster>:<skin id>" (a mod skin, mods/<mod>/skins/<id>/: a-z, 0-9 and _, up to 32,
-    // as the game scans them). In the MATCH line it is what WOTM_MATCH reads
+    // not starting with a digit, as WOTM_MATCH reads them). In the MATCH line it is what WOTM_MATCH reads
     struct Pick
     {
         int monster = 0;
@@ -455,8 +455,10 @@ namespace wotm_net::proto
             return false;
         out.monster = std::atoi(num.c_str());
         out.skin = colon == std::string::npos ? "" : s.substr(colon + 1);
+        // a skin id that starts with a digit would reach WOTM_MATCH as a disc costume number (past the lobby's costume check)
         if (colon != std::string::npos &&
-            (out.skin.empty() || out.skin.size() > 32u || out.skin.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789_") != std::string::npos))
+            (out.skin.empty() || out.skin.size() > 32u || (out.skin[0] >= '0' && out.skin[0] <= '9') ||
+             out.skin.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789_") != std::string::npos))
             return false;
         return true;
     }
