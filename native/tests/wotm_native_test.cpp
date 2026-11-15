@@ -3908,6 +3908,42 @@ TEST(mapedit_pick_finds_items_where_they_stand_now)
     ses.selectPiece(c);
     ses.remove();
     CHECK(ses.pickItem(overC, down) == -1);
+    // the view lists every item as it stands: the stock pieces first, then the copies; the drawing and the preview read it
+    const std::vector<me::ItemView> v = ses.view();
+    CHECK(v.size() == ps.size() + 1);
+    if (v.size() == ps.size() + 1)
+    {
+        CHECK(v[size_t(a)].pos[0] == 300.f && !v[size_t(a)].copy && !v[size_t(a)].removed && v[size_t(a)].node == s.tA);
+        CHECK(v[size_t(c)].removed && v.back().copy && v.back().removed && near(v[size_t(a)].centre[0], 300.f) && v[size_t(a)].radius > 0);
+    }
+}
+
+// WOTM_MAPEDIT_TEST: the editor's commands as text, run on a session (the runtime check drives the editor this way)
+TEST(mapedit_script_commands)
+{
+    std::vector<me::Command> cmds;
+    std::string why;
+    CHECK(me::parseScript("select 0x100; move 50 0 0 ;turn 90;copy 10 -20; remove; undo; reset;save", cmds, why) && cmds.size() == 8);
+    CHECK(!me::parseScript("select zz", cmds, why) && why.find("select") != std::string::npos);
+    CHECK(!me::parseScript("move 1 2", cmds, why) && why.find("move") != std::string::npos);
+    CHECK(!me::parseScript("fly 3", cmds, why) && why.find("fly") != std::string::npos);
+    CHECK(!me::parseScript("move 1e9 0 0", cmds, why));   // a place the loader would refuse (+-1000000)
+
+    Stage s;
+    const std::vector<me::Piece> ps = me::pieces(s.im.mem());
+    me::Session ses("CENTRAL", 1, ps);
+    char text[160];
+    std::snprintf(text, sizeof text, "select 0x%x; move 50 0 0; turn 90; select 0x%x; copy 100 0; select 0x%x; remove; save", s.off(s.tA),
+                  s.off(s.tC), s.off(s.rB));
+    CHECK(me::parseScript(text, cmds, why));
+    int saves = 0;
+    for (const me::Command &c : cmds)
+        saves += me::run(ses, c) ? 1 : 0;   // run() says true for a save: the caller writes the file
+    CHECK(saves == 1);
+    const sm::Map m = ses.toMap("ed", "ED");
+    CHECK(m.edits.size() == 2 && m.copies.size() == 1);
+    CHECK(!m.edits.empty() && m.edits[0].node == s.off(s.tA) && m.edits[0].pos[0] == 150.f && m.edits[0].turn == 90.f);
+    CHECK(!m.copies.empty() && m.copies[0].node == s.off(s.tC) && m.copies[0].at[0] == 800.f);
 }
 
 TEST(mapedit_slide_follows_the_camera)

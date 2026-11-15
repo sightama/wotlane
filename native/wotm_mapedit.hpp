@@ -5,6 +5,8 @@
 
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -71,6 +73,10 @@ inline int pick(const std::vector<Piece> &ps, const float eye[3], const float di
     return best;
 }
 
+// An item as it stands now (Session::view): the piece's node (a copy: its source's), its place and turn, its sphere carried along
+struct ItemView { uint32_t node = 0; bool copy = false, removed = false; float pos[3] = {0, 0, 0}; float turn = 0; float centre[3] = {0, 0, 0};
+                  float radius = 0; };
+
 // One editing session on one stage. Items are the stage's pieces (in pieces() order) followed by the copies made; the selected
 // item is what move, slide, turn, remove, copy and reset act on. Every change can be undone, one step at a time.
 class Session {
@@ -91,6 +97,15 @@ public:
     int selected() const { return sel_; }
     // selects stock piece i (-1: nothing)
     void selectPiece(int i) { sel_ = i >= 0 && i < int(pieces_.size()) ? i : -1; }
+    // selects the stock piece at `node` (its offset in the image, as stage.json writes it); false when no piece is there
+    bool selectNode(uint32_t node)
+    {
+        for (size_t i = 0; i < pieces_.size(); ++i)
+            if (pieces_[i].node - sm::kBase == node)
+                return selectPiece(int(i)), true;
+        sel_ = -1;
+        return false;
+    }
     // the item the ray reaches first, the copies included and the removed left out, as it stands now; selects it and returns it
     int pickItem(const float eye[3], const float dir[3])
     {
@@ -177,6 +192,21 @@ public:
             it.pos[k] = pieces_[size_t(it.piece)].pos[k];
         it.turn = 0;
     }
+    std::vector<ItemView> view() const
+    {
+        std::vector<ItemView> out;
+        for (const Item &it : items_)
+        {
+            ItemView v;
+            v.node = pieces_[size_t(it.piece)].node;
+            v.copy = it.copy, v.removed = it.removed, v.turn = it.turn, v.radius = pieces_[size_t(it.piece)].radius;
+            for (int k = 0; k < 3; ++k)
+                v.pos[k] = it.pos[k];
+            centreOf(it, v.centre);
+            out.push_back(v);
+        }
+        return out;
+    }
     bool undo()
     {
         if (undo_.empty())
@@ -249,5 +279,75 @@ private:
     std::vector<std::pair<std::vector<Item>, int>> undo_;
     int sel_ = -1;
 };
+
+// One editor command: what the keys and the mouse send, and what WOTM_MAPEDIT_TEST spells out
+struct Command {
+    enum Kind { Select, Pick, Move, Slide, Turn, Copy, Remove, Undo, Reset, Save } kind = Undo;
+    uint32_t node = 0;   // Select: the piece's offset in the image
+    float a[6] = {};     // Pick: eye, direction; Move: dx, dy, dz; Slide: forward, right, camera yaw; Turn: degrees; Copy: dx, dy
+};
+
+// Runs a command on the session; true for Save (the caller writes the file and says where)
+inline bool run(Session &s, const Command &c)
+{
+    switch (c.kind)
+    {
+    case Command::Select: s.selectNode(c.node); break;
+    case Command::Pick: s.pickItem(c.a, c.a + 3); break;
+    case Command::Move: s.move(c.a[0], c.a[1], c.a[2]); break;
+    case Command::Slide: s.slide(c.a[0], c.a[1], c.a[2]); break;
+    case Command::Turn: s.turn(c.a[0]); break;
+    case Command::Copy: s.copy(c.a[0], c.a[1]); break;
+    case Command::Remove: s.remove(); break;
+    case Command::Undo: s.undo(); break;
+    case Command::Reset: s.reset(); break;
+    case Command::Save: return true;
+    }
+    return false;
+}
+
+// "select 0x<node>; move dx dy dz; turn deg; copy dx dy; remove; undo; reset; save" (';' between commands, spaces between words).
+// Numbers stay inside the world (+-1000000, as stage.json's): false with `why` on the first bad command
+inline bool parseScript(const std::string &text, std::vector<Command> &out, std::string &why)
+{
+    out.clear();
+    std::stringstream all(text);
+    std::string part;
+    while (std::getline(all, part, ';'))
+    {
+        std::stringstream words(part);
+        std::string verb;
+        if (!(words >> verb))
+            continue;
+        Command c;
+        int need = 0;
+        if (verb == "select") c.kind = Command::Select;
+        else if (verb == "move") c.kind = Command::Move, need = 3;
+        else if (verb == "turn") c.kind = Command::Turn, need = 1;
+        else if (verb == "copy") c.kind = Command::Copy, need = 2;
+        else if (verb == "remove") c.kind = Command::Remove;
+        else if (verb == "undo") c.kind = Command::Undo;
+        else if (verb == "reset") c.kind = Command::Reset;
+        else if (verb == "save") c.kind = Command::Save;
+        else
+            return why = "unknown command \"" + verb + "\"", false;
+        if (c.kind == Command::Select)
+        {
+            std::string node;
+            char *end = nullptr;
+            if (!(words >> node) || node.rfind("0x", 0) != 0 || (c.node = uint32_t(std::strtoul(node.c_str() + 2, &end, 16)), *end))
+                return why = "select needs a node: select 0x<offset>", false;
+        }
+        for (int i = 0; i < need; ++i)
+        {
+            std::string w;
+            char *end = nullptr;
+            if (!(words >> w) || (c.a[i] = std::strtof(w.c_str(), &end), *end) || !std::isfinite(c.a[i]) || std::fabs(c.a[i]) > 1e6f)
+                return why = verb + " needs " + std::to_string(need) + " numbers (from -1000000 to 1000000)", false;
+        }
+        out.push_back(c);
+    }
+    return true;
+}
 
 } // namespace wotm::mapedit
