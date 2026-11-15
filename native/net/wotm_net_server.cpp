@@ -16,7 +16,8 @@ namespace wotm_net
 {
     namespace
     {
-        const char *const kBadPick = "ERROR bad monster (a monster number, or <monster>:<skin id> with a-z, 0-9 and _ in the skin id)";
+        const char *const kBadPick = "ERROR bad monster (a monster number, or <monster>:<skin id> with a-z, 0-9 and _ in the skin id, "
+                                     "not starting with a digit)";
 
         // peer->data holds the match's (lobby, slot): 1 + lobby * 64 + slot (0 = no token yet)
         void *peerTag(int lobby, int slot) { return reinterpret_cast<void *>(static_cast<uintptr_t>(1 + lobby * 64 + slot)); }

@@ -825,6 +825,8 @@ TEST(creator_id_from_name)
     CHECK(idFromName("---") == "skin");
     CHECK(idFromName(std::string(40, 'A')).size() == 32);
     CHECK(idFromName(std::string(31, 'a') + " bcd") == std::string(31, 'a'));
+    CHECK(idFromName("2 Fast") == "skin_2_fast");   // a leading digit would read as a disc costume number in WOTM_MATCH and the lobby
+    CHECK(idFromName("9" + std::string(40, 'a')).size() == 32);
 }
 
 TEST(creator_env_parse)
@@ -840,6 +842,7 @@ TEST(creator_env_parse)
     CHECK(!parseScript("togera:9:x", s, err) && err.find("costume") != std::string::npos);
     CHECK(!parseScript("togera:1", s, err));
     CHECK(!parseScript("togera:1:Bad Id", s, err) && err.find("id") != std::string::npos);
+    CHECK(!parseScript("togera:1:2fast", s, err) && err.find("digit") != std::string::npos);
     CHECK(!parseScript("togera:1:x:nan", s, err) && err.find("number") != std::string::npos);
 }
 

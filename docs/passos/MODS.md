@@ -145,7 +145,8 @@ A skin is a folder in `mods/<mod>/skins/<folder>/` with a `skin.json`:
   `agamo`, `zorgulon`), the file prefix (`SHOGUN`) or the `id` of a custom monster (`moddedtogera`; see "Custom monsters"). A
   custom's skin only shows up in that custom's list, never in the base monster's column nor in the AI draw; without `base`, the `costume`
   from `monster.json` applies.
-- `id`: lowercase letters, digits and `_` (without it, the folder name). The save stores `"ultra-v/roxo"`.
+- `id`: lowercase letters, digits and `_` (without it, the folder name). The save stores `"ultra-v/roxo"`. An id that starts with a
+  digit can't be picked through `WOTM_MATCH` or the online lobby (`<monster>:<skin id>`: a leading digit reads as a disc costume).
 - `name`: what the select screen shows. `base`: the disc costume (0 to 3) that supplies whatever the folder does not bring, and the costume's sounds.
   `ai`: whether randomly drawn AIs can use it (default no).
 - A mod skin is always unlocked: it does not go through the unlock screen.
