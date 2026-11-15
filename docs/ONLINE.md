@@ -162,7 +162,7 @@ to the console) and starts once that many players are in; `--code <code> --name 
 - "game configuration differs from the others": the text after it says what differs. "the game settings differ": someone launched with
   different game options (enemy bars, cheats, `WOTM_RATEMIN`, wins target); use the same launcher checkboxes in the Mods group. "the mods
   (creations) differ": a different set of mods in `mods\`; copy the same mod folders (folders whose name starts with `_` are off and do not
-  count), or in the browser import the same creations. Without either text, someone runs an older build.
+  count), or in the browser import the same creations. Without either text, a player runs a much older build.
 - "no answer from the server": the server is not running, the port is not forwarded (TCP and UDP), or a firewall blocks it.
   `native/net/build/wotm_net_probe <host>[:7777]` (built with the server) checks a server from any PC without the game: two clients
   form a lobby over TCP and play a short match over UDP; it says which step fails.

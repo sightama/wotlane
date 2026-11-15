@@ -30,7 +30,8 @@ namespace wotm_net::confighash
     // The hash a PC sends: "<settings hash>:<mods digest>". The server compares the whole text; the two parts only say what to fix
     inline std::string compose(const std::string &settings, const std::string &mods) { return settings + ":" + mods; }
 
-    // What differs between two hashes ("" when either lacks the two parts, as an older client's does), for the refusal message
+    // What differs between two hashes ("" when either lacks the two parts, as an older client's does), for the refusal message.
+    // Both parts are hex, so the first ':' is the split
     inline std::string mismatch(const std::string &a, const std::string &b)
     {
         const size_t ca = a.find(':'), cb = b.find(':');

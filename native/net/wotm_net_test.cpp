@@ -1014,6 +1014,7 @@ namespace
         const auto until2 = std::chrono::steady_clock::now() + std::chrono::seconds(3);
         while (c.status() != Status::Waiting && std::chrono::steady_clock::now() < until2)
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        CHECK(c.status() == Status::Waiting);
         CHECK(d.start(clientFor(cfg.port, *ms2[1], "1111:bbbb"), err));
         CHECK(!d.waitStarted(1500) && d.status() == Status::Rejected);
         CHECK(d.message().find("game configuration differs from the others: the mods (creations) differ") != std::string::npos);
