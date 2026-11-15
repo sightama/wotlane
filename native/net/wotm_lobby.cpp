@@ -18,7 +18,8 @@ namespace
                      "usage: wotm_lobby --create <lobby> --name <name> --monster <id> [--stage S] [--wins W] [--mods jump,fast,turbo]\n"
                      "                  [--start-with <players>] [--server host:port] [--build <id>]\n"
                      "       wotm_lobby --code <CODE> --name <name> --monster <id> [--server host:port] [--build <id>]\n"
-                     "  Without --server: the shared game server (%s). --build: default the wotm.buildid next to this program.\n"
+                     "  --monster: a number, or <monster>:<skin id> for a mod skin; --stage: a number, or a saved map's id. Without --server: the shared\n"
+                     "  game server (%s). --build: default the wotm.buildid next to this program.\n"
                      "  --create prints \"lobby created, code XXXX\" on stderr, waits for --start-with players (default 2) and starts.\n"
                      "  Both print the game's environment (WOTM_NET=..., one per line) on stdout once the match starts.\n",
                      proto::kDefaultServer);
@@ -63,7 +64,7 @@ int main(int argc, char **argv)
     if (const size_t colon = server.rfind(':'); colon != std::string::npos)
         host = server.substr(0, colon), port = static_cast<uint16_t>(std::atoi(server.c_str() + colon + 1));
     const std::string build = a.count("build") ? a["build"] : buildNextTo(argv[0]);
-    const int monster = std::atoi(a["monster"].c_str());
+    const std::string monster = a["monster"];   // "<monster>" or "<monster>:<skin id>"
 
     LobbyClient c;
     std::string err;
@@ -75,7 +76,7 @@ int main(int argc, char **argv)
         if (code.empty())
             return fail(err);
         std::fprintf(stderr, "lobby created, code %s\n", code.c_str());
-        if (!c.set(a.count("stage") ? std::atoi(a["stage"].c_str()) : 1, a.count("wins") ? std::atoi(a["wins"].c_str()) : 0,
+        if (!c.set(a.count("stage") ? a["stage"] : "1", a.count("wins") ? std::atoi(a["wins"].c_str()) : 0,
                    a.count("mods") ? a["mods"] : "", err) ||
             !c.waitMembers(a.count("start-with") ? std::atoi(a["start-with"].c_str()) : 2, err) || !c.start(err))
             return fail(err);

@@ -725,6 +725,48 @@ namespace
         CHECK(readUntil(b, "ERROR").find("match") != std::string::npos);
     }
 
+    // creations online (protocol 5): the stage can be a saved map's id and a member's monster can carry a skin id
+    // ("<monster>:<skin>"); both go into the MATCH line as WOTM_MATCH reads them. Every PC needs the same mods (the config hash)
+    TEST(lobby_carries_map_ids_and_skins)
+    {
+        ServerConfig cfg = testConfig();
+        RunningServer rs(cfg);
+        LineSocket a, b;
+        hello(a, cfg.port);
+        hello(b, cfg.port);
+        a.sendLine("CREATE Lobby Ana 3:green");
+        const std::string created = readUntil(a, "CREATED");
+        const std::string code = created.size() > 8 ? created.substr(8) : std::string{};
+        CHECK(code.size() == 4u);
+        CHECK(readUntil(a, "MEMBERS") == "MEMBERS " + code + " Ana Ana:3:green");
+        b.sendLine("JOIN " + code + " Bia 3:Bad!");   // a skin id is a-z, 0-9 and _ (up to 32), as the game scans them
+        CHECK(readUntil(b, "ERROR").find("skin") != std::string::npos);
+        b.sendLine("JOIN " + code + " Bia 3:2");   // a leading digit is a disc costume number to WOTM_MATCH, which skips the costume check
+        CHECK(readUntil(b, "ERROR").find("skin") != std::string::npos);
+        b.sendLine("JOIN " + code + " Bia 3:green");   // the same skin twice: the game would give the second a disc costume
+        CHECK(readUntil(b, "ERROR").find("skin") != std::string::npos);
+        b.sendLine("JOIN " + code + " Bia 3");   // the same monster with its disc costume is fine
+        CHECK(readUntil(b, "JOINED") == "JOINED " + code);
+        b.sendLine("MONSTER 1:blue");
+        CHECK(readUntil(a, "MEMBERS " + code + " Ana Ana:3:green,Bia:1") == "MEMBERS " + code + " Ana Ana:3:green,Bia:1:blue");
+
+        a.sendLine("SET stage=t1");
+        CHECK(readUntil(a, "SETTINGS") == "SETTINGS " + code + " stage=t1 wins=0 mods=");
+        a.sendLine("SET stage=9lives");   // a map id starts with a letter, then a-z, 0-9 and _ (up to 16)
+        CHECK(readUntil(a, "ERROR").find("stage") != std::string::npos);
+        a.sendLine("SET stage=Big-Map");
+        CHECK(readUntil(a, "ERROR").find("stage") != std::string::npos);
+        a.sendLine("SET wins=1");
+        CHECK(readUntil(a, "SETTINGS") == "SETTINGS " + code + " stage=t1 wins=1 mods=");
+
+        a.sendLine("START");
+        const auto ma = p::keyValues(p::words(readUntil(a, "MATCH"))), mb = p::keyValues(p::words(readUntil(b, "MATCH")));
+        CHECK(ma.count("stage") && ma.at("stage") == "t1" && mb.count("stage") && mb.at("stage") == "t1");
+        CHECK(ma.count("monsters") && ma.at("monsters") == "3:green,1:blue");
+        a.sendLine("SET stage=4");   // back to a stock stage by number
+        CHECK(readUntil(a, "SETTINGS") == "SETTINGS " + code + " stage=4 wins=1 mods=");
+    }
+
     // the lobby client the game and wotm_lobby use (as tools/net_lobby.py): the owner creates, sets the stage and wins, waits for the
     // second player and starts; the other joins by code; both get the MATCH and its game environment
     TEST(lobby_client_creates_joins_and_gets_the_match_environment)
@@ -734,11 +776,11 @@ namespace
         LobbyClient a, b;
         std::string err;
         CHECK(a.connect("127.0.0.1", cfg.port, "b1", err));
-        const std::string code = a.create("Sala", "Ana", 3, "", err);
+        const std::string code = a.create("Sala", "Ana", "3:green", "", err);
         CHECK(code.size() == 4u);
-        CHECK(a.set(9, 2, "turbo", err));
+        CHECK(a.set("t1", 2, "turbo", err));
         CHECK(b.connect("127.0.0.1", cfg.port, "b1", err));
-        CHECK(b.join(code, "Bia", 1, "", err));
+        CHECK(b.join(code, "Bia", "1", "", err));
         CHECK(a.waitMembers(2, err, 5000));
         CHECK(a.start(err));
         std::map<std::string, std::string> ma, mb;
@@ -746,14 +788,14 @@ namespace
         const auto env = matchEnv(mb, "127.0.0.1");
         std::map<std::string, std::string> e(env.begin(), env.end());
         CHECK(e["WOTM_NET"] == "127.0.0.1:" + std::to_string(cfg.port));
-        CHECK(e["WOTM_MATCH"] == "3,1,9");
+        CHECK(e["WOTM_MATCH"] == "3:green,1,t1");
         CHECK(e["WOTM_PLAYERS"] == "2" && e["WOTM_LOCALPLAYER"] == "2" && e["WOTM_NETNAME"] == "Bia");
         CHECK(e["WOTM_KILLTARGET"] == "2" && e["WOTM_MODIFIERS"] == "turbo");
         CHECK(!e["WOTM_NETTOKEN"].empty() && e["WOTM_NETTOKEN"] != matchEnv(ma, "127.0.0.1")[1].second);
 
         LobbyClient c;
         CHECK(c.connect("127.0.0.1", cfg.port, "b1", err));
-        CHECK(!c.join("QQQQ", "Cid", 1, "", err) && err.find("no such lobby") != std::string::npos);
+        CHECK(!c.join("QQQQ", "Cid", "1", "", err) && err.find("no such lobby") != std::string::npos);
         LobbyClient old;
         CHECK(!old.connect("127.0.0.1", cfg.port, "b1", err, p::kProtocol - 1) && err.find("protocol") != std::string::npos);
     }
@@ -1018,6 +1060,29 @@ namespace
         CHECK(d.start(clientFor(cfg.port, *ms2[1], "1111:bbbb"), err));
         CHECK(!d.waitStarted(1500) && d.status() == Status::Rejected);
         CHECK(d.message().find("game configuration differs from the others: the mods (creations) differ") != std::string::npos);
+    }
+
+    // A refused seat (other build or settings) never becomes a neutral opponent: the match does not start, even after the join
+    // timeout that drops players who never arrive, and the players already in are told who could not join and why
+    TEST(match_never_starts_when_a_seat_was_refused)
+    {
+        ServerConfig cfg = testConfig();
+        cfg.joinTimeoutMs = 1500;
+        RunningServer rs(cfg);
+        auto ms = formMatch(cfg.port, {"Ana", "Bia"}, {3, 1});
+        MatchClient a, b;
+        std::string err;
+        CHECK(a.start(clientFor(cfg.port, *ms[0], "1111:aaaa"), err));
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        while (a.status() != Status::Waiting && std::chrono::steady_clock::now() < until)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        CHECK(a.status() == Status::Waiting);
+        CHECK(b.start(clientFor(cfg.port, *ms[1], "1111:bbbb"), err));
+        CHECK(!b.waitStarted(1500) && b.status() == Status::Rejected);
+        CHECK(!a.waitStarted(3000));   // past the join timeout
+        CHECK(a.status() == Status::Rejected);
+        CHECK(a.message().find("Bia") != std::string::npos);
+        CHECK(a.message().find("the mods (creations) differ") != std::string::npos);
     }
 
     TEST(match_drops_a_player_that_leaves_at_an_agreed_frame)

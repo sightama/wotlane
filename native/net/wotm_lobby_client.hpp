@@ -19,11 +19,13 @@ namespace wotm_net
         static constexpr int kWaitForever = INT_MAX;   // waiting on other players: joining, starting
         // HELLO with the protocol (the current one unless a test asks for another) and this game's build id
         bool connect(const std::string &host, uint16_t port, const std::string &build, std::string &err, int protocol = proto::kProtocol);
-        // CREATE: the creator owns the lobby; returns its 4-letter code ("" with err on failure)
-        std::string create(const std::string &lobby, const std::string &name, int monster, const std::string &password, std::string &err);
-        bool join(const std::string &code, const std::string &name, int monster, const std::string &password, std::string &err);
-        // owner only: stage, wins and gameplay modifiers ("jump,fast,turbo", "" = none) of the next match
-        bool set(int stage, int wins, const std::string &mods, std::string &err);
+        // CREATE: the creator owns the lobby; returns its 4-letter code ("" with err on failure). `monster`: "<monster>" or
+        // "<monster>:<skin id>" (proto::Pick)
+        std::string create(const std::string &lobby, const std::string &name, const std::string &monster, const std::string &password,
+                           std::string &err);
+        bool join(const std::string &code, const std::string &name, const std::string &monster, const std::string &password, std::string &err);
+        // owner only: stage (a number or a saved map's id), wins and gameplay modifiers ("jump,fast,turbo", "" = none) of the next match
+        bool set(const std::string &stage, int wins, const std::string &mods, std::string &err);
         // waits until the lobby has `count` members (they may still be on their way: no time limit unless `ms` says one)
         bool waitMembers(int count, std::string &err, int ms = kWaitForever);
         bool start(std::string &err);

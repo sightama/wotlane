@@ -19,6 +19,17 @@ MAP_MODS = Path(tempfile.gettempdir()) / 'wotm_map_net'
 NO_MAP = Path(tempfile.gettempdir()) / 'wotm_map_net_none'
 
 
+SKIN_MODS = Path(tempfile.gettempdir()) / 'wotm_skin_net'
+
+
+def make_skin():
+    """A skin of Togera in a fresh mods folder: skin.json alone (no PNG: the base costume's textures serve), as the creator writes it."""
+    shutil.rmtree(SKIN_MODS, ignore_errors=True)
+    d = SKIN_MODS / 'Creator' / 'skins' / 'green'
+    d.mkdir(parents=True)
+    (d / 'skin.json').write_text('{"monster": "togera", "id": "green", "name": "GREEN", "base": 1, "ai": false}\n', encoding='utf-8')
+
+
 def make_map():
     for d in (MAP_MODS, NO_MAP):
         shutil.rmtree(d, ignore_errors=True)
@@ -116,12 +127,15 @@ CHECKS = {
                            'WOTM_ORBITMOUSE=300:900:4:1;PS2X_PAD=24:0.3:start;25:0.3:up;26:0.3:cross', secs=50, expect=r'\[dialog\] 0 opened'),
     # 3 players with Turbo (2 fields per frame on top of the 30 Hz mode) and a pause by player 1
     'turbo_3p': dict(players=3, mods='turbo', player_env='1:PS2X_PAD=24:0.3:start;25:0.3:up;26:0.3:cross', secs=45, expect=r'\[dialog\] 0 opened'),
-    # a skin made by the character creator in every PC's mods folder (the same folder) does not break the mods digest or the lockstep;
-    # the skin itself is not picked online (the lobby carries disc costumes only). Run the WOTM_CREATOR live check first
-    # (tools\live_checks.ps1 -Only creator_script): it creates the folder
+    # a skin made by the character creator in every PC's mods folder (the same folder) does not break the mods digest or the lockstep
+    # (nobody picks it: creator_skin_online does). Run the WOTM_CREATOR live check first (tools\live_checks.ps1 -Only creator_script):
+    # it creates the folder
     'creator_skin_folder': dict(extra_env='WOTM_MODS=' + str(Path(tempfile.gettempdir()) / 'wotm_creator_mods'), secs=60,
                                 expect=r'\[mods\] skin togera/green .* = costume 4'),
-    # a saved map online (WOTM_MATCH's stage field is the map id on both PCs, the same mods folder): applied on both, same state
+    # a skin picked in the lobby (protocol 5: "<monster>:<skin id>"): player 1 plays Togera's "green" on both PCs, same state
+    'creator_skin_online': dict(setup=make_skin, extra_env=f'WOTM_MODS={SKIN_MODS}', monsters='3:green,1', secs=60,
+                                expect=r'\[mods\] skin togera/green \(costume 4\) in the fight', reject='not found in mods'),
+    # a saved map picked in the lobby (protocol 5: the stage is the map id; the same mods folder on both PCs): applied on both, same state
     'map_online': dict(setup=make_map, extra_env=f'WOTM_MODS={MAP_MODS}', stage='t1', secs=60,
                        expect=r'\[stages\] map t1 |||\[stages\] t1: applied 13 edits',
                        reject='does not match|||nothing applied|||not found in mods'),
