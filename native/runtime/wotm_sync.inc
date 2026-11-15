@@ -630,15 +630,7 @@ namespace wotm_sync
     // Settings that change the game state (docs/plans/determinism-audit.md 1.7): the same on every PC or the server refuses
     std::string netConfigHash()
     {
-        static const char *const kVars[] = {"WOTM_MATCH", "WOTM_PLAYERS", "WOTM_AIVSAI", "WOTM_RATEMIN", "WOTM_FIXEDSTEP", "WOTM_SEED",
-                                            "WOTM_HIGHRAM", "WOTM_ENEMYBARS", "WOTM_CHEATS", "WOTM_CLOAK", "WOTM_SAVEJSON",
-                                            "WOTM_FREECAM", "WOTM_KILLTARGET", "WOTM_30HZ", "WOTM_MODE", "PS2X_FMV", "PS2X_SKIP_MOVIES", "PS2X_SKIP_CMOVIE", "PS2X_NOOP"};
-        std::string all;
-        for (const char *v : kVars)
-        {
-            const char *e = std::getenv(v);
-            all += std::string(v) + "=" + (e ? e : "") + ";";
-        }
+        std::string all = wotm_net::confighash::envText([](const char *name) { return std::getenv(name); });
         // the enabled mods change the game data: the same set (names and contents) on every PC, or the server refuses
         char mods[17];
         std::snprintf(mods, sizeof mods, "%016llx", static_cast<unsigned long long>(wotm::mods::digest(wotm::mods::Registry::get().dir())));

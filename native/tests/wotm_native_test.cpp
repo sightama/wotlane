@@ -15,6 +15,7 @@
 #include "net/wotm_modifiers.hpp"
 #include "net/wotm_camsettings.hpp"
 #include "net/wotm_inputfile.hpp"
+#include "net/wotm_confighash.hpp"
 
 #include <algorithm>
 #include <cfenv>
@@ -283,6 +284,38 @@ namespace
         CHECK(st::parse(st::Turbo, "1", v) && v == 1 && st::parse(st::Turbo, "0", v) && v == 0);
         CHECK(std::string(st::kEnv[st::SuperJump]) == "WOTM_SUPERJUMP" && std::string(st::kEnv[st::Turbo]) == "WOTM_TURBO");
         st::g_val[st::SuperJump].store(0), st::g_val[st::FastMonsters].store(0), st::g_val[st::Turbo].store(0);
+    }
+
+    // The variables in a network match's config hash (the server refuses a player whose hash differs): adding or removing one
+    // decides who can play together, so the list is pinned here
+    TEST(config_hash_variables_are_pinned)
+    {
+        const std::vector<std::string> want = {"WOTM_MATCH",     "WOTM_PLAYERS", "WOTM_AIVSAI", "WOTM_RATEMIN",    "WOTM_FIXEDSTEP",
+                                               "WOTM_SEED",      "WOTM_HIGHRAM", "WOTM_ENEMYBARS", "WOTM_CHEATS",  "WOTM_CLOAK",
+                                               "WOTM_SAVEJSON",  "WOTM_FREECAM", "WOTM_KILLTARGET", "WOTM_30HZ",   "WOTM_MODE",
+                                               "PS2X_NOOP"};
+        const std::vector<std::string> got(std::begin(wotm_net::confighash::kVars), std::end(wotm_net::confighash::kVars));
+        CHECK(got == want);
+    }
+
+    // Movies never play inside a match's frames (it boots straight into the fight): a native player with movies on (PS2X_FMV) and a
+    // browser player, which skips them (no FFmpeg), share a match. Measured: tools/determinism_check.py --env-b with the switches.
+    TEST(config_hash_ignores_movie_switches)
+    {
+        using Env = std::vector<std::pair<std::string, std::string>>;
+        auto text = [](const Env &env) {
+            return wotm_net::confighash::envText([&env](const char *name) -> const char * {
+                for (const auto &[k, v] : env)
+                    if (k == name)
+                        return v.c_str();
+                return nullptr;
+            });
+        };
+        const Env native = {{"WOTM_SEED", "7"}, {"PS2X_FMV", "1"}};
+        const Env browser = {{"WOTM_SEED", "7"}, {"PS2X_SKIP_MOVIES", "1"}, {"PS2X_SKIP_CMOVIE", "1"}};
+        CHECK(text(native) == text(browser));
+        CHECK(text(native) != text({{"WOTM_SEED", "8"}, {"PS2X_FMV", "1"}}));
+        CHECK(text({{"WOTM_SEED", "7"}}).find("WOTM_SEED=7;") != std::string::npos);
     }
 
     // Effects and music volume (AUDIO tab, #7): per-PC percentages 0..100, default 100, from WOTM_VOL_SFX / WOTM_VOL_MUSIC or settings.ini;
