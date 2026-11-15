@@ -767,7 +767,11 @@ namespace
 #ifndef __EMSCRIPTEN__
 // What the native builds get from the CPU with round toward zero set (wotm_vu0_native.cpp), computed here with the CPU's own
 // rounding mode; the software version (wotm_rtz.hpp, used by the browser build) must give the same bits for every case.
+#ifdef _MSC_VER
+#pragma fenv_access(on)
+#else
 #pragma STDC FENV_ACCESS ON
+#endif
 TEST(rtz_software_equals_the_cpu_rounding_mode)
 {
     int bad = 0;
@@ -791,7 +795,11 @@ TEST(rtz_software_equals_the_cpu_rounding_mode)
     }
     CHECK(bad == 0);
 }
+#ifdef _MSC_VER
+#pragma fenv_access(off)
+#else
 #pragma STDC FENV_ACCESS OFF
+#endif
 #endif
 
 // The browser build has no rounding-mode control and uses wotm_rtz.hpp for VU0; its results must be the native ones. The digest
