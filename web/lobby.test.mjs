@@ -2,7 +2,7 @@
 // ABOUTME: tools/net_lobby.py's match_env) and the lobby client's requests and replies over a fake WebSocket. Run: node --test web/
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseLine, parseMembers, matchEnv, lobbySocketUrl, LobbyClient } from './lobby.js';
+import { PROTOCOL, parseLine, parseMembers, matchEnv, lobbySocketUrl, LobbyClient } from './lobby.js';
 
 const MATCH_LINE = 'MATCH lobby=QZXW players=2 stage=9 wins=2 mods=jump,turbo monsters=5,1 names=Ana,Bia ' +
   'seed=12345 step=1 you=1 token=00aa11bb22cc33dd port=7777';
@@ -18,9 +18,11 @@ test('parseLine splits the command, its words and its key=value pairs', () => {
   assert.deepEqual(parseLine('CREATED ABCD\r').words, ['ABCD']);
 });
 
-test('parseMembers reads the owner and each member with their monster', () => {
+test('parseMembers reads the owner and each member with their monster and skin', () => {
   assert.deepEqual(parseMembers(parseLine('MEMBERS QZXW Ana Ana:5,Bia:1')),
-    { code: 'QZXW', owner: 'Ana', members: [{ name: 'Ana', monster: 5 }, { name: 'Bia', monster: 1 }] });
+    { code: 'QZXW', owner: 'Ana', members: [{ name: 'Ana', monster: 5, skin: '' }, { name: 'Bia', monster: 1, skin: '' }] });
+  assert.deepEqual(parseMembers(parseLine('MEMBERS QZXW Ana Ana:3:green,Bia:1')).members,
+    [{ name: 'Ana', monster: 3, skin: 'green' }, { name: 'Bia', monster: 1, skin: '' }]);
   assert.deepEqual(parseMembers(parseLine('MEMBERS QZXW - -')), { code: 'QZXW', owner: '', members: [] });
 });
 
@@ -59,7 +61,7 @@ async function connected(build = 'wl-1') {
   const client = new LobbyClient(ws, build);
   const ready = client.ready;
   ws.open();
-  assert.equal(ws.sent[0], 'HELLO 4 wl-1');
+  assert.equal(ws.sent[0], `HELLO ${PROTOCOL} wl-1`);
   ws.reply('WELCOME 3');
   await ready;
   return { ws, client };
@@ -82,6 +84,16 @@ test('LobbyClient join is refused with the server reason', async () => {
   assert.equal(ws.sent[1], 'JOIN ZZZZ Bia 1');
   ws.reply('ERROR no such lobby (check the code)');
   await assert.rejects(join, /no such lobby/);
+});
+
+test('a MATCH with a skin and a saved map goes into WOTM_MATCH as the game reads it', () => {
+  const env = matchEnv({ you: '0', token: 't', names: 'Ana,Bia', monsters: '3:green,1', stage: 't1', players: '2', step: '1', seed: '7' },
+    'ws://h/match');
+  assert.equal(env.WOTM_MATCH, '3:green,1,t1');
+});
+
+test('the lobby speaks protocol 5 (map ids and skins)', () => {
+  assert.equal(PROTOCOL, 5);
 });
 
 test('LobbyClient reports members, settings and the match as they arrive', async () => {

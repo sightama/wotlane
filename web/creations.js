@@ -31,17 +31,17 @@ async function folder(mods, { mod, kind, id }, create = false) {
   return (await m.getDirectoryHandle(kind, { create })).getDirectoryHandle(id, { create });
 }
 
-// The name the game shows ("name" in skin.json or stage.json), else the id
-async function displayName(dir, kind, id) {
-  try {
-    const name = JSON.parse(new TextDecoder().decode(await readFile(dir, KINDS[kind]))).name;
-    return typeof name === 'string' && name ? name : id;
-  } catch {
-    return id;
-  }
+// What the list shows of a creation: the name the game shows ("name" in skin.json or stage.json, else the id) and, for a skin, its
+// monster ("monster" in skin.json, lowercase)
+async function describe(dir, kind, id) {
+  let doc = {};
+  try { doc = JSON.parse(new TextDecoder().decode(await readFile(dir, KINDS[kind]))); } catch { /* unreadable: the id alone */ }
+  const out = { name: typeof doc.name === 'string' && doc.name ? doc.name : id };
+  if (kind === 'skins') out.monster = typeof doc.monster === 'string' ? doc.monster.toLowerCase() : '';
+  return out;
 }
 
-// [{mod, kind, id, name}], by mod, then skins before maps, then id
+// [{mod, kind, id, name, monster (skins)}], by mod, then skins before maps, then id
 export async function listCreations(mods) {
   const out = [];
   for (const [mod, m] of await children(mods, 'directory')) {
@@ -50,7 +50,7 @@ export async function listCreations(mods) {
       let k;
       try { k = await m.getDirectoryHandle(kind); } catch { continue; }
       for (const [id, dir] of await children(k, 'directory'))
-        if (ID[kind].test(id)) out.push({ mod, kind, id, name: await displayName(dir, kind, id) });
+        if (ID[kind].test(id)) out.push({ mod, kind, id, ...(await describe(dir, kind, id)) });
     }
   }
   return out;
@@ -65,14 +65,19 @@ export async function exportCreation(mods, c) {
   return { fileName: `${c.id}.zip`, bytes: await zip(entries) };
 }
 
-// Every entry is checked before anything is written: one entry outside the creation layout, or a creation folder without its own
-// json file, refuses the whole zip. An imported creation replaces a folder of the same path. Returns the imported creations.
-export async function importZip(mods, bytes) {
+// Every entry is checked before anything is written: one entry outside the creation layout, one in a built-in mod's folder
+// (`builtin`: the names in mods/manifest.json, mirrored whole before each boot, so an import there would be wiped), or a creation
+// folder without its own json file, refuses the whole zip. An imported creation replaces a folder of the same path. Returns the
+// imported creations.
+export async function importZip(mods, bytes, { builtin = [] } = {}) {
   const entries = await unzip(bytes, LIMITS);
+  const reserved = new Set(builtin.map((n) => n.toLowerCase()));
   const byFolder = new Map();
   for (const e of entries) {
     const p = parseCreationPath(e.name);
     if (!p) throw new Error(`${e.name}: not part of a creation (expected <mod>/skins/<id>/<file> or <mod>/stages/<id>/<file>)`);
+    if (reserved.has(p.mod.toLowerCase()))
+      throw new Error(`${e.name}: "${p.mod}" is a built-in mod's folder; put the creation in a folder of its own (e.g. Creator)`);
     const key = `${p.mod}/${p.kind}/${p.id}`;
     if (!byFolder.has(key)) byFolder.set(key, { c: { mod: p.mod, kind: p.kind, id: p.id }, files: [] });
     byFolder.get(key).files.push({ file: p.file, data: e.data });
@@ -89,9 +94,25 @@ export async function importZip(mods, bytes) {
       await w.write(data);
       await w.close();
     }
-    out.push({ ...c, name: await displayName(dir, c.kind, c.id) });
+    out.push({ ...c, ...(await describe(dir, c.kind, c.id)) });
   }
   return out;
+}
+
+// The playable monsters by the names skin.json uses (native/wotm_mods.hpp kMonsters)
+const MONSTER_IDS = { congar: 1, 'robo-47': 2, togera: 3, 'ultra-v': 4, preytor: 5, kineticlops: 7, magmo: 8, raptros: 9, agamo: 10,
+  zorgulon: 11 };
+
+// What the online lobby can carry (protocol 5): skins as "<monster number>:<id>" and maps by id. A skin of a monster the lobby doesn't
+// know, or whose id starts with a digit (the game reads that as a disc costume number), is left out
+export function lobbyChoices(list) {
+  const skins = [], maps = [];
+  for (const c of list) {
+    if (c.kind === 'stages') maps.push({ value: c.id, label: `${c.name} (map)` });
+    const monster = MONSTER_IDS[(c.monster || '').toLowerCase()];
+    if (c.kind === 'skins' && monster && !/^[0-9]/.test(c.id)) skins.push({ value: `${monster}:${c.id}`, monster, label: `${c.name} (skin)` });
+  }
+  return { skins, maps };
 }
 
 // Removes the creation's folder (nothing when there is none)

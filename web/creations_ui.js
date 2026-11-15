@@ -1,6 +1,6 @@
 // ABOUTME: The front panel's "Your creations" section: lists the skins and maps saved in this browser, exports one as a zip to share,
 // ABOUTME: imports a friend's zip and deletes. Runs before the game starts (the game scans mods/ once, at boot).
-import { listCreations, exportCreation, importZip, deleteCreation } from './creations.js';
+import { listCreations, exportCreation, importZip, deleteCreation, lobbyChoices } from './creations.js';
 
 const $ = (id) => document.getElementById(id);
 const KIND_LABEL = { skins: 'skin', stages: 'map' };
@@ -10,6 +10,16 @@ async function modsFolder() {
   return (await navigator.storage.getDirectory()).getDirectoryHandle('mods', { create: true });
 }
 
+// the built-in mods' folder names (mods/manifest.json, served with the page): imports into them are refused
+async function builtinMods() {
+  try {
+    const r = await fetch('mods/manifest.json', { cache: 'no-store' });
+    return r.ok ? [...new Set((await r.json()).files.map((f) => f.path.split('/')[0]))] : [];
+  } catch {
+    return [];
+  }
+}
+
 function download(fileName, bytes) {
   const url = URL.createObjectURL(new Blob([bytes], { type: 'application/zip' }));
   const a = Object.assign(document.createElement('a'), { href: url, download: fileName });
@@ -17,6 +27,19 @@ function download(fileName, bytes) {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+// The online lobby's pickers get this browser's creations: each skin after the stock monsters ("Togera: GREEN (skin)", value
+// "3:green") and each map after the stock stages (value: its id). Players need the same creations (the server compares the mods)
+export async function addLobbyChoices(monsterSelect, stageSelect) {
+  let list = [];
+  try { list = await listCreations(await modsFolder()); } catch { return; }
+  const { skins, maps } = lobbyChoices(list);
+  for (const s of skins) {
+    const base = [...monsterSelect.options].find((o) => o.value === String(s.monster));
+    monsterSelect.add(new Option(`${base ? base.text : 'Monster ' + s.monster}: ${s.label}`, s.value));
+  }
+  for (const m of maps) stageSelect.add(new Option(m.label, m.value));
 }
 
 export function initCreations() {
@@ -64,7 +87,7 @@ export function initCreations() {
     ev.target.value = '';
     if (!file) return;
     try {
-      const added = await importZip(await modsFolder(), new Uint8Array(await file.arrayBuffer()));
+      const added = await importZip(await modsFolder(), new Uint8Array(await file.arrayBuffer()), { builtin: await builtinMods() });
       say(`Imported ${added.map((c) => c.name).join(', ')}.`);
     } catch (e) {
       say(`Could not import ${file.name}: ${e.message}`);
