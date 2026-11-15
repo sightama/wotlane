@@ -309,10 +309,11 @@ Spec: `docs/superpowers/specs/2026-11-05-character-creator-design.md` (design hi
 - **Scripted (`WOTM_CREATOR=<monster>:<costume>:<id>[:<hue>[:<sat>[:<bright>]]]`, for example `togera:1:green:120`):** at boot,
   after the mods scan, the same save with those values on every texture group (every group gets a PNG), the name = the id in
   capitals and no OVERWRITE? question; then the game boots as usual. The costume is 0 to 3 and must exist on the disc, the id is
-  lowercase letters, digits and `_`. A bad value logs `[creator] WOTM_CREATOR ignored: <reason>` and writes nothing.
+  lowercase letters, digits and `_`, not starting with a digit (a name like "2 FAST" saves as `skin_2_fast`). A bad value logs `[creator] WOTM_CREATOR ignored: <reason>` and writes nothing.
 - **Online:** a created skin is drawing only (nothing in the lockstep state changes); the same folder on every PC keeps the mods
-  digest equal, and a PC without it is refused ("game configuration differs"). The lobby (`net_lobby.py`, `LobbyClient.cs`,
-  `wotm_net_server.cpp`) hands out disc costumes 0 to 3 only, so picking a created skin online waits for a lobby protocol change (#14).
+  digest equal, and a PC without it is refused ("game configuration differs"). In the lobby a member picks it as
+  `<monster>:<skin id>` (`MONSTER 3:green`, `net_lobby.py --monster 3:green`), which reaches `WOTM_MATCH` as is; two members can't
+  pick the same skin. Check `creator_skin_online`.
 - Not in the creator: the HUD portrait (it lives in the shell's `.RTX`), custom monster fields and geometry (steps 2 and 3 of #42).
 
 ## Runtime: direct match, AI vs AI and batch (`tools/lote.ps1`)

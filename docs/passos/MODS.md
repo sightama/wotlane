@@ -145,7 +145,8 @@ A skin is a folder in `mods/<mod>/skins/<folder>/` with a `skin.json`:
   `agamo`, `zorgulon`), the file prefix (`SHOGUN`) or the `id` of a custom monster (`moddedtogera`; see "Custom monsters"). A
   custom's skin only shows up in that custom's list, never in the base monster's column nor in the AI draw; without `base`, the `costume`
   from `monster.json` applies.
-- `id`: lowercase letters, digits and `_` (without it, the folder name). The save stores `"ultra-v/roxo"`.
+- `id`: lowercase letters, digits and `_` (without it, the folder name). The save stores `"ultra-v/roxo"`. An id that starts with a
+  digit can't be picked through `WOTM_MATCH` or the online lobby (`<monster>:<skin id>`: a leading digit reads as a disc costume).
 - `name`: what the select screen shows. `base`: the disc costume (0 to 3) that supplies whatever the folder does not bring, and the costume's sounds.
   `ai`: whether randomly drawn AIs can use it (default no).
 - A mod skin is always unlocked: it does not go through the unlock screen.
@@ -431,8 +432,8 @@ find a piece, take the position from `pieces` and look at it with the free camer
 - **Direct match:** `WOTM_MATCH=3,1,downtown` (the map id in the stage field).
 - **Same id in two mods:** the first one in mod order wins (`[stages] map <id>: <mod> beats <mod>`).
 - **Online:** every PC needs the same mods folder. The map's files are part of the mod digest in the config hash, so a PC without
-  the map (or with another version of it) is refused (`game configuration differs`). Today a map is picked online through
-  `WOTM_MATCH`; picking one in the launcher's lobby is a follow-up.
+  the map (or with another version of it) is refused (`game configuration differs`). The lobby owner picks a map as the stage by
+  its id (`SET stage=<id>`, `net_lobby.py --stage <id>`, the browser lobby's stage list); the Windows launcher lists stock stages only.
 
 **Known limits.**
 - Move, turn, remove and copy within the stage: no pieces from other stages, no ground or terrain edits.

@@ -68,7 +68,7 @@ namespace wotm_net
             std::string build;
             int lobby = -1;
             std::string name;
-            int monster = 0;
+            proto::Pick pick;   // monster and skin for the next match
         };
 
         // a browser in a match (WebSocket /match)
@@ -119,7 +119,8 @@ namespace wotm_net
             bool open = false;             // slot in use (created, and has someone in it or is in a match)
             std::string code, name, password;
             int host = -1;                 // owner's index in conns_
-            int stage = 1, wins = 0;
+            std::string stage = "1";       // a stock stage number or a saved map's id (proto::validStage)
+            int wins = 0;
             std::string mods;              // gameplay modifiers, canonical list (wotm_modifiers.hpp); "" = none
             std::vector<int> members;      // indices into conns_
             std::string build;
@@ -135,13 +136,13 @@ namespace wotm_net
         void setLobby(int c, const std::vector<std::string> &w);
         void changeMonster(int c, const std::vector<std::string> &w);
         // joins lobby li (already validated): member, owner if first, JOINED, SETTINGS and MEMBERS
-        void addMember(int c, int li, const std::string &name, int monster);
+        void addMember(int c, int li, const std::string &name, const proto::Pick &pick);
         // `except`: a member left out of the costume check (the one changing monster)
-        bool monsterFits(const Lobby &l, int monster, std::string &err, int except = -1) const;
+        bool monsterFits(const Lobby &l, const proto::Pick &pick, std::string &err, int except = -1) const;
         void leaveLobby(int c);
         bool closeIfEmpty(int lobby);
         void sendMembers(int lobby);
-        // SETTINGS <code> stage=<n> wins=<n> mods=<list>
+        // SETTINGS <code> stage=<n or map id> wins=<n> mods=<list>
         std::string settingsLine(const Lobby &l) const;
         void sendSettings(int lobby);
         void startMatch(int lobby);

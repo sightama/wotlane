@@ -16,6 +16,9 @@ namespace wotm_net
 {
     namespace
     {
+        const char *const kBadPick = "ERROR bad monster (a monster number, or <monster>:<skin id> with a-z, 0-9 and _ in the skin id, "
+                                     "not starting with a digit)";
+
         // peer->data holds the match's (lobby, slot): 1 + lobby * 64 + slot (0 = no token yet)
         void *peerTag(int lobby, int slot) { return reinterpret_cast<void *>(static_cast<uintptr_t>(1 + lobby * 64 + slot)); }
 
@@ -302,18 +305,29 @@ namespace wotm_net
     }
 
     // the monster exists on the disc and still has a free costume given the other members' (costumes as the match hands them out:
-    // wotm_monsters::fits)
-    bool Server::monsterFits(const Lobby &l, int monster, std::string &err, int except) const
+    // wotm_monsters::fits). A skin is its own costume: no other member may have the same one, and it takes no disc costume
+    bool Server::monsterFits(const Lobby &l, const proto::Pick &pick, std::string &err, int except) const
     {
+        const int monster = pick.monster;
         if (wotm_monsters::costumes(monster) == 0)
         {
             err = "invalid monster (no files on the disc)";
             return false;
         }
+        if (!pick.skin.empty())
+        {
+            for (int m : l.members)
+                if (m != except && conns_[static_cast<size_t>(m)]->pick.monster == monster && conns_[static_cast<size_t>(m)]->pick.skin == pick.skin)
+                {
+                    err = "that skin is already taken in the lobby (pick another skin or costume)";
+                    return false;
+                }
+            return true;
+        }
         int list[wotm_monsters::kMaxList], n = 0;
         for (int m : l.members)
-            if (m != except && n < wotm_monsters::kMaxList - 1)
-                list[n++] = conns_[static_cast<size_t>(m)]->monster;
+            if (m != except && n < wotm_monsters::kMaxList - 1 && conns_[static_cast<size_t>(m)]->pick.skin.empty())
+                list[n++] = conns_[static_cast<size_t>(m)]->pick.monster;
         list[n++] = monster;
         if (!wotm_monsters::fits(list, nullptr, n))
         {
@@ -328,10 +342,12 @@ namespace wotm_net
     {
         Conn &c = *conns_[static_cast<size_t>(ci)];
         const std::string lobbyName = proto::cleanName(w[1]), name = proto::cleanName(w[2]);
-        const int monster = std::atoi(w[3].c_str());
+        proto::Pick pick;
         const std::string password = w.size() >= 5 ? proto::cleanName(w[4]) : "";
         if (lobbyName.empty() || name.empty())
             return void(c.link->sendLine("ERROR empty name (use letters, digits, _ or -)"));
+        if (!proto::parsePick(w[3], pick))
+            return void(c.link->sendLine(kBadPick));
         int li = -1;
         for (size_t i = 0; i < lobbies_.size() && li < 0; ++i)
             if (!lobbies_[i].open && !lobbies_[i].match)
@@ -340,7 +356,7 @@ namespace wotm_net
             return void(c.link->sendLine("ERROR the server already has " + std::to_string(lobbies_.size()) + " lobbies open; join one of them"));
         Lobby probe;
         std::string err;
-        if (!monsterFits(probe, monster, err))
+        if (!monsterFits(probe, pick, err))
             return void(c.link->sendLine("ERROR " + err));
         leaveLobby(ci);
         Lobby &l = lobbies_[static_cast<size_t>(li)];
@@ -349,14 +365,14 @@ namespace wotm_net
         l.name = lobbyName;
         l.password = password;
         l.host = -1;
-        l.stage = 1;
+        l.stage = "1";
         l.wins = 0;
         l.mods.clear();
         l.members.clear();
         l.build = c.build;
         c.link->sendLine("CREATED " + l.code);
         log("lobby %s (%s): created by %s%s", l.code.c_str(), l.name.c_str(), name.c_str(), password.empty() ? "" : ", with password");
-        addMember(ci, li, name, monster);
+        addMember(ci, li, name, pick);
     }
 
     // JOIN <code> <name> <monster> [password]
@@ -365,8 +381,10 @@ namespace wotm_net
         Conn &c = *conns_[static_cast<size_t>(ci)];
         const int li = lobbyByCode(w[1]);
         const std::string name = proto::cleanName(w[2]);
-        const int monster = std::atoi(w[3].c_str());
+        proto::Pick pick;
         const std::string password = w.size() >= 5 ? w[4] : "";
+        if (!proto::parsePick(w[3], pick))
+            return void(c.link->sendLine(kBadPick));
         if (li < 0)
             return void(c.link->sendLine("ERROR no such lobby (check the code)"));
         Lobby &l = lobbies_[static_cast<size_t>(li)];
@@ -386,27 +404,27 @@ namespace wotm_net
             if (conns_[static_cast<size_t>(m)]->name == name)
                 return void(c.link->sendLine("ERROR name already taken in the lobby"));
         std::string err;
-        if (!monsterFits(l, monster, err))
+        if (!monsterFits(l, pick, err))
             return void(c.link->sendLine("ERROR " + err));
         leaveLobby(ci);
-        addMember(ci, li, name, monster);
+        addMember(ci, li, name, pick);
     }
 
-    void Server::addMember(int ci, int li, const std::string &name, int monster)
+    void Server::addMember(int ci, int li, const std::string &name, const proto::Pick &pick)
     {
         Conn &c = *conns_[static_cast<size_t>(ci)];
         Lobby &l = lobbies_[static_cast<size_t>(li)];
         l.members.push_back(ci);
         if (l.host < 0)
             l.host = ci;
-        c.lobby = li, c.name = name, c.monster = monster;
+        c.lobby = li, c.name = name, c.pick = pick;
         c.link->sendLine("JOINED " + l.code);
         c.link->sendLine(settingsLine(l));
-        log("lobby %s: %s joined (monster %d), %zu player(s)", l.code.c_str(), name.c_str(), monster, l.members.size());
+        log("lobby %s: %s joined (monster %s), %zu player(s)", l.code.c_str(), name.c_str(), pick.text().c_str(), l.members.size());
         sendMembers(li);
     }
 
-    // SET [stage=<stage>] [wins=<wins>] [mods=<list>]: owner only; an unknown modifier changes nothing
+    // SET [stage=<stage number or map id>] [wins=<wins>] [mods=<list>]: owner only; an unknown modifier or a bad stage changes nothing
     void Server::setLobby(int ci, const std::vector<std::string> &w)
     {
         Conn &c = *conns_[static_cast<size_t>(ci)];
@@ -419,16 +437,19 @@ namespace wotm_net
         int mods = 0;
         if (auto it = kv.find("mods"); it != kv.end() && !wotm::modifiers::parse(it->second, mods))
             return void(c.link->sendLine("ERROR unknown modifier in \"" + it->second + "\" (known: jump, fast, turbo)"));
+        if (auto it = kv.find("stage"); it != kv.end() && !proto::validStage(it->second))
+            return void(c.link->sendLine("ERROR bad stage \"" + it->second + "\" (a stage number, or a saved map's id: a letter, then a-z, 0-9 "
+                                         "and _, up to 16)"));
         if (kv.count("mods"))
             l.mods = wotm::modifiers::format(mods);
         if (auto it = kv.find("stage"); it != kv.end())
-            l.stage = std::max(0, std::atoi(it->second.c_str()));
+            l.stage = it->second;
         if (auto it = kv.find("wins"); it != kv.end())
             l.wins = std::clamp(std::atoi(it->second.c_str()), 0, proto::kMaxWins);
         sendSettings(c.lobby);
     }
 
-    // MONSTER <monster>: any member, while the lobby waits; the same checks as JOIN, against the other members (#14)
+    // MONSTER <monster>[:<skin>]: any member, while the lobby waits; the same checks as JOIN, against the other members (#14)
     void Server::changeMonster(int ci, const std::vector<std::string> &w)
     {
         Conn &c = *conns_[static_cast<size_t>(ci)];
@@ -437,12 +458,14 @@ namespace wotm_net
         const Lobby &l = lobbies_[static_cast<size_t>(c.lobby)];
         if (l.match)
             return void(c.link->sendLine("ERROR lobby is in a match; change monster after it ends"));
-        const int monster = std::atoi(w[1].c_str());
+        proto::Pick pick;
+        if (!proto::parsePick(w[1], pick))
+            return void(c.link->sendLine(kBadPick));
         std::string err;
-        if (!monsterFits(l, monster, err, ci))
+        if (!monsterFits(l, pick, err, ci))
             return void(c.link->sendLine("ERROR " + err));
-        c.monster = monster;
-        log("lobby %s: %s changed monster to %d", l.code.c_str(), c.name.c_str(), monster);
+        c.pick = pick;
+        log("lobby %s: %s changed monster to %s", l.code.c_str(), c.name.c_str(), pick.text().c_str());
         sendMembers(c.lobby);
     }
 
@@ -480,7 +503,7 @@ namespace wotm_net
         Lobby &l = lobbies_[static_cast<size_t>(li)];
         std::vector<std::string> v;
         for (int m : l.members)
-            v.push_back(conns_[static_cast<size_t>(m)]->name + ":" + std::to_string(conns_[static_cast<size_t>(m)]->monster));
+            v.push_back(conns_[static_cast<size_t>(m)]->name + ":" + conns_[static_cast<size_t>(m)]->pick.text());
         const std::string host = l.host >= 0 ? conns_[static_cast<size_t>(l.host)]->name : "-";
         const std::string line = "MEMBERS " + l.code + " " + host + " " + (v.empty() ? "-" : join(v, ","));
         for (int m : l.members)
@@ -489,7 +512,7 @@ namespace wotm_net
 
     std::string Server::settingsLine(const Lobby &l) const
     {
-        return "SETTINGS " + l.code + " stage=" + std::to_string(l.stage) + " wins=" + std::to_string(l.wins) + " mods=" + l.mods;
+        return "SETTINGS " + l.code + " stage=" + l.stage + " wins=" + std::to_string(l.wins) + " mods=" + l.mods;
     }
 
     void Server::sendSettings(int li)
@@ -516,7 +539,7 @@ namespace wotm_net
         for (int ci : l.members)
         {
             const Conn &c = *conns_[static_cast<size_t>(ci)];
-            monsters.push_back(std::to_string(c.monster));
+            monsters.push_back(c.pick.text());
             names.push_back(c.name);
             Slot s;
             s.token = hex64(rng_());
@@ -527,14 +550,14 @@ namespace wotm_net
         for (int i = 0; i < players; ++i)
         {
             Conn &c = *conns_[static_cast<size_t>(l.members[static_cast<size_t>(i)])];
-            c.link->sendLine("MATCH lobby=" + l.code + " players=" + std::to_string(players) + " stage=" + std::to_string(l.stage) +
+            c.link->sendLine("MATCH lobby=" + l.code + " players=" + std::to_string(players) + " stage=" + l.stage +
                               " wins=" + std::to_string(l.wins) + " mods=" + l.mods + " monsters=" + join(monsters, ",") +
                               " names=" + join(names, ",") +
                               " seed=" + std::to_string(seed) + " step=" + std::to_string(step) + " you=" + std::to_string(i) +
                               " token=" + m->slots[static_cast<size_t>(i)].token + " port=" + std::to_string(cfg_.port));
         }
-        log("lobby %s: match with %d player(s) (%s), stage %d, %d win(s), seed %u", l.code.c_str(), players, join(names, ",").c_str(),
-            l.stage, l.wins, seed);
+        log("lobby %s: match with %d player(s) (%s), stage %s, %d win(s), seed %u", l.code.c_str(), players, join(names, ",").c_str(),
+            l.stage.c_str(), l.wins, seed);
         l.match = std::move(m);
     }
 

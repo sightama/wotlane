@@ -23,7 +23,7 @@ import sys
 import time
 from pathlib import Path
 
-PROTOCOL = 4   # native/net/wotm_net_proto.hpp kProtocol
+PROTOCOL = 5   # native/net/wotm_net_proto.hpp kProtocol
 MASTER_PORT = 7778   # wotm_server --master (proto::kDefaultMasterPort)
 DEFAULT_SERVER = '35.185.58.174:7777'   # the always-on game server everyone shares (tools/launcher LobbyClient.DefaultServer)
 REPO = Path(__file__).resolve().parent.parent
@@ -248,11 +248,11 @@ def main():
     ap.add_argument('--code')
     ap.add_argument('--password')
     ap.add_argument('--name')
-    ap.add_argument('--monster', type=int, default=0)
+    ap.add_argument('--monster', default='0')   # a number, or <monster>:<skin id> (a mod skin)
     ap.add_argument('--start-with', type=int, default=0, metavar='PLAYERS')
     ap.add_argument('--group')
     ap.add_argument('--monsters')
-    ap.add_argument('--stage', type=int, default=1)
+    ap.add_argument('--stage', default='1')   # a number, or a saved map's id
     ap.add_argument('--wins', type=int, default=0)
     ap.add_argument('--mods', default='', help='gameplay modifiers for the match: comma list of jump, fast, turbo')
     ap.add_argument('--env-dir')
@@ -282,7 +282,7 @@ def main():
             return 0
         if a.group:
             names = a.group.split(',')
-            monsters = [int(m) for m in a.monsters.split(',')]
+            monsters = a.monsters.split(',')
             envs = form_group(host, int(port), names, monsters, a.stage, build, a.wins, a.mods)
             out = Path(a.env_dir or '.')
             for i, env in enumerate(envs, 1):

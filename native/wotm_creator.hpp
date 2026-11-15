@@ -31,6 +31,8 @@ inline std::string idFromName(const std::string &name) {
             out += char(std::tolower(c));
         } else gap = true;
     }
+    // a leading digit would read as a disc costume number where the id is picked (WOTM_MATCH's "<monster>:<skin>", the lobby)
+    if (!out.empty() && std::isdigit(static_cast<unsigned char>(out[0]))) out = "skin_" + out;
     if (out.size() > 32) out.resize(32);
     while (!out.empty() && out.back() == '_') out.pop_back();   // the cut can land right after a _
     return out.empty() ? "skin" : out;
@@ -81,8 +83,9 @@ inline bool parseScript(const std::string &text, Script &out, std::string &err) 
     const long c = std::strtol(f[1].c_str(), &end, 10);
     if (f[1].empty() || *end || c < 0 || c >= wotm_monsters::costumes(mi->type)) { err = "costume \"" + f[1] + "\" is not on the disc"; return false; }
     out.costume = int(c);
-    if (f[2].empty() || f[2].size() > 32 || f[2].find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789_") != std::string::npos) {
-        err = "id must be lowercase letters, digits and _ (up to 32)"; return false;
+    if (f[2].empty() || f[2].size() > 32 || f[2].find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789_") != std::string::npos ||
+        std::isdigit(static_cast<unsigned char>(f[2][0]))) {
+        err = "id must be lowercase letters, digits and _ (up to 32), not starting with a digit"; return false;
     }
     out.id = f[2];
     float *vals[3] = {&out.hue, &out.sat, &out.bright};

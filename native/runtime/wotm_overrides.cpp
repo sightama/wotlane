@@ -2674,14 +2674,16 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
                         ++t;
                     const std::string id(q, t);
                     const wotm::mods::Skin *sk = wotm::mods::Registry::get().skin(v[n - 1], id);
+                    // not found: an automatic costume, which goes through the disc costume check (the lobby can't check a skin's
+                    // files, so a mistyped id online must not become a requested costume the disc may not have)
                     if (!sk)
-                        std::fprintf(stderr, "[wotm] WOTM_MATCH: skin \"%s\" for monster %d not found in mods/; costume 0\n", id.c_str(), v[n - 1]);
-                    c[n - 1] = sk ? sk->index : 0;
+                        std::fprintf(stderr, "[wotm] WOTM_MATCH: skin \"%s\" for monster %d not found in mods/; automatic costume\n", id.c_str(), v[n - 1]);
+                    c[n - 1] = sk ? sk->index : -1;
                     end = const_cast<char *>(t);
                 }
                 else
                     c[n - 1] = static_cast<int>(std::strtol(q, &end, 10));
-                if (end == q || c[n - 1] < 0 || c[n - 1] > 99)   // 4..99: mod costumes (file name up to 8 letters)
+                if (end == q || c[n - 1] < -1 || c[n - 1] > 99)   // 4..99: mod costumes (file name up to 8 letters); -1: automatic
                 {
                     p = nullptr;
                     break;
