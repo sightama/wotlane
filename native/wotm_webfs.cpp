@@ -37,6 +37,12 @@ void wotmWebPresent() { wotm_web_wait_frame(); }
 
 bool wotmWebHidden() { return g_hidden.load(); }
 
+void wotmWebPageSize(int &w, int &h)
+{
+    w = MAIN_THREAD_EM_ASM_INT({ return window.innerWidth; });
+    h = MAIN_THREAD_EM_ASM_INT({ return window.innerHeight; });
+}
+
 void wotmWebNetStall(double ms, const char *text)
 {
     std::lock_guard<std::mutex> lk(g_stallMu);

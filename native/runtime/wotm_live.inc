@@ -471,6 +471,14 @@ static void initPresentRate()
 // resolution (Res) is its own setting, scaled on present, so it never resizes the window. WOTM_WINDOW=<lines> caps the height (checks).
 static void fitWindow()
 {
+#ifdef __EMSCRIPTEN__
+    // the browser version fills the page, and raylib follows the page's resizes; the present letterboxes the game's frame either way
+    int pw = 0, ph = 0;
+    wotmWebPageSize(pw, ph);
+    SetWindowSize(pw, ph);
+    std::fprintf(stderr, "[native] window %dx%d (the page)\n", pw, ph);
+    return;
+#endif
     const float a = fixedAspect() ? fixedAspect() : 16.f / 9.f;
     static const int cap = [] { const char *e = std::getenv("WOTM_WINDOW"); return e ? std::max(0, std::atoi(e)) : 0; }();
     const int mon = GetCurrentMonitor(), mw = GetMonitorWidth(mon), mh = GetMonitorHeight(mon);

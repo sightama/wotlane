@@ -15,3 +15,6 @@ bool wotmWebHidden();
 // the online match has been waiting `ms` for the others (0: not waiting), with the on-screen text; after a long wait the page offers to
 // keep waiting or leave the match (web/stall.js)
 void wotmWebNetStall(double ms, const char *text);
+
+// the page's size in CSS pixels (window.innerWidth and innerHeight); any thread
+void wotmWebPageSize(int &w, int &h);
