@@ -1,5 +1,5 @@
 <!doctype html>
-<!-- ABOUTME: The browser version's page: the front panel (single player, or host or join an online lobby), the game canvas, a status -->
+<!-- ABOUTME: The browser version's page: the front panel (single player, host or join an online lobby, your creations), the game canvas, a status -->
 <!-- ABOUTME: line and the log (L button). boot.js sets up the Emscripten module; front.js runs the panel and loads the game on a choice. -->
 <html lang="en">
 <head>
@@ -42,6 +42,10 @@
   #members { margin: 0; padding-left: 18px; }
   #frontMsg { color: var(--dim); min-height: 1.4em; margin: 0; }
   hr { border: 0; border-top: 1px solid var(--line); margin: 0; width: 100%; }
+  #creations summary { cursor: pointer; color: var(--dim); }
+  #creationList { margin: 8px 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+  #creationList span { flex: 1; }
+  #creationsMsg { color: var(--dim); margin: 0; font-size: 12px; }
 </style>
 </head>
 <body>
@@ -80,6 +84,13 @@
       <div class="row"><button id="leave">Leave</button></div>
     </div>
     <p id="frontMsg"></p>
+    <details id="creations">
+      <summary>Your creations <span id="creationsCount"></span></summary>
+      <ul id="creationList"></ul>
+      <div class="row"><button id="importCreation">Import a zip</button>
+        <input type="file" id="importFile" accept=".zip,application/zip" hidden></div>
+      <p id="creationsMsg"></p>
+    </details>
   </div>
 </div>
 <pre id="log"></pre>
