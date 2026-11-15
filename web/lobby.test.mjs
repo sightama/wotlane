@@ -102,9 +102,13 @@ test('LobbyClient set, monster and start send the owner commands', async () => {
   assert.equal(ws.sent[1], 'SET stage=9 wins=2 mods=jump');
   ws.reply('SETTINGS QZXW stage=9 wins=2 mods=jump');
   assert.deepEqual(await set, { stage: '9', wins: '2', mods: 'jump' });
-  client.monster(7);
-  client.start();
+  const monster = client.monster(7);
+  ws.reply('MEMBERS QZXW Ana Ana:7');
+  await monster;
+  const start = client.start();
   assert.deepEqual(ws.sent.slice(2), ['MONSTER 7', 'START']);
+  ws.reply(MATCH_LINE);
+  await start;
 });
 
 test('LobbyClient fails pending requests when the connection closes', async () => {
@@ -117,11 +121,27 @@ test('LobbyClient fails pending requests when the connection closes', async () =
   assert.ok(closed);
 });
 
-test('LobbyClient reports an ERROR no request waits for (a refused MONSTER or START) to onError', async () => {
+test('LobbyClient: a refused START rejects the start itself', async () => {
+  const { ws, client } = await connected();
+  const start = client.start();
+  ws.reply('ERROR only the lobby owner can start the match');
+  await assert.rejects(start, /only the lobby owner/);
+});
+
+test('LobbyClient: a refused MONSTER is charged to the monster, not to a SET sent after it', async () => {
+  const { ws, client } = await connected();
+  const monster = client.monster(7);
+  const set = client.set({ mods: 'fast' });
+  ws.reply('ERROR monster has no free costume in the lobby (all its costumes are taken)');
+  ws.reply('SETTINGS QZXW stage=1 wins=0 mods=fast');
+  await assert.rejects(monster, /no free costume/);
+  assert.deepEqual(await set, { stage: '1', wins: '0', mods: 'fast' });
+});
+
+test('LobbyClient reports an ERROR no request waits for to onError', async () => {
   const { ws, client } = await connected();
   const errors = [];
   client.onError = (text) => errors.push(text);
-  client.start();
-  ws.reply('ERROR only the lobby owner can start the match');
-  assert.deepEqual(errors, ['only the lobby owner can start the match']);
+  ws.reply('ERROR the server is restarting');
+  assert.deepEqual(errors, ['the server is restarting']);
 });

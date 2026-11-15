@@ -650,8 +650,9 @@ namespace wotm_net
         case proto::Type::Away:
         {
             proto::Away a;
-            if (!m || !proto::decode(data, a))
+            if (!m || !proto::decode(data, a) || m->slots[static_cast<size_t>(si)].away == a.away)
                 break;
+            m->slots[static_cast<size_t>(si)].away = a.away;
             a.player = static_cast<uint8_t>(si);
             for (size_t q = 0; q < m->slots.size(); ++q)
                 if (static_cast<int>(q) != si && m->slots[q].peer && !m->slots[q].gone)

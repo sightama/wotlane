@@ -62,7 +62,7 @@ export class LobbyClient {
     this.onSettings = null;
     this.onMatch = null;
     this.onClose = null;
-    this.onError = null;   // an ERROR no request waits for (a refused MONSTER or START)
+    this.onError = null;   // an ERROR no request waits for
     // requests waiting for their replies, oldest first: {replies (commands still expected, in order), got (the first reply),
     // resolve, reject}. An ERROR refuses the oldest one
     this.waiting = [];
@@ -140,9 +140,10 @@ export class LobbyClient {
     return this.settings;
   }
 
-  monster(id) { this.socket.send(`MONSTER ${id}`); }
+  // the server answers a monster change with the members list, and START with the match (or an ERROR that refuses either)
+  monster(id) { return this.request(`MONSTER ${id}`, ['MEMBERS']); }
 
-  start() { this.socket.send('START'); }
+  start() { return this.request('START', ['MATCH']); }
 
   close() { this.socket.close(); }
 }

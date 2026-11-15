@@ -12,8 +12,8 @@ void wotmWebPresent();
 // the page's tab is hidden (boot.js passes visibilitychange to wotm_web_set_hidden); any thread
 bool wotmWebHidden();
 
-// the online match has been waiting `ms` for the others (0: not waiting), with the on-screen text; after a long wait the page offers to
-// keep waiting or leave the match (web/stall.js)
+// the online match has been waiting `ms` for the others (0: not waiting; negative: the match stopped), with the on-screen text; after a
+// long wait the page offers to keep waiting or leave the match, and a stopped match gets a way back to the front page (web/stall.js)
 void wotmWebNetStall(double ms, const char *text);
 
 // the page's size in CSS pixels (window.innerWidth and innerHeight); any thread

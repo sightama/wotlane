@@ -42,17 +42,33 @@ const cleanName = (s) => s.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 16);
 
 let lobby = null;
 let owner = false;
+let myName = '';
+let myMonster = 0;   // the monster the server last accepted
+
+// the owner picks the stage, wins and modifiers and starts; a guest sees them. The server hands the lobby on when the owner leaves
+function setOwner(isOwner) {
+  owner = isOwner;
+  $('ownerOnly').hidden = !isOwner;
+  $('guestSettings').hidden = isOwner;
+}
 
 function showLobby(code, isOwner) {
-  owner = isOwner;
+  setOwner(isOwner);
   $('choose').hidden = true;
   $('inLobby').hidden = false;
   $('code').textContent = code;
-  $('ownerOnly').hidden = !isOwner;
   say(isOwner ? 'Send the code to your friends. Start when everyone is in.' : 'Waiting for the owner to start.');
 }
 
 function showMembers(m) {
+  if (lobby && !$('inLobby').hidden && m.owner === myName && !owner) {
+    const s = lobby.settings;   // the controls start from what the lobby has
+    if (s.stage !== undefined) $('lobbyStage').value = s.stage;
+    if (s.wins !== undefined) $('wins').value = s.wins;
+    for (const mod of MODIFIERS) $('mod_' + mod).checked = (s.mods || '').split(',').includes(mod);
+    setOwner(true);
+    say('The owner left: you are the owner now. Start when everyone is in.');
+  }
   const list = $('members');
   list.replaceChildren(...m.members.map((p) => {
     const li = document.createElement('li');
@@ -67,7 +83,6 @@ async function connect(build) {
   const client = new LobbyClient(ws, build);
   client.onMembers = showMembers;
   client.onSettings = (s) => {
-    if (owner) return;
     const stage = STAGES.find(([id]) => String(id) === s.stage);
     $('guestSettings').textContent = `Stage: ${stage ? stage[1] : s.stage}, wins: ${s.wins === '0' ? 'endless' : s.wins}` +
       (s.mods ? `, modifiers: ${s.mods}` : '');
@@ -88,10 +103,14 @@ async function hostOrJoin(join) {
   if (!name) return say('Type a name first (letters, digits, - and _).');
   const monster = Number($('monster').value);
   remember('name', name);
+  myName = name;
+  myMonster = monster;
   remember('monster', monster);
   const code = $('joinCode').value.trim().toUpperCase();
   if (join && !/^[A-Z2-9]{4}$/.test(code)) return say('The code has 4 characters (letters and digits).');
   say(join ? 'Joining' : 'Creating a lobby');
+  const buttons = ['single', 'host', 'join'].map($);
+  for (const b of buttons) b.disabled = true;   // one connection per click
   try {
     const build = await buildId();
     lobby = await connect(build);
@@ -101,6 +120,7 @@ async function hostOrJoin(join) {
     say(e.message);
     lobby?.close();
     lobby = null;
+    for (const b of buttons) b.disabled = false;
   }
 }
 
@@ -149,10 +169,15 @@ function init() {
   for (const id of ['lobbyStage', 'wins', ...MODIFIERS.map((m) => 'mod_' + m)])
     $(id).addEventListener('change', () => lobby && owner && sendSettings());
   $('monster').addEventListener('change', () => {
-    remember('monster', $('monster').value);
-    lobby?.monster(Number($('monster').value));
+    const picked = Number($('monster').value);
+    remember('monster', picked);
+    if (!lobby) return;
+    lobby.monster(picked).then(() => { myMonster = picked; }, (e) => {
+      say(e.message);
+      $('monster').value = String(myMonster);   // the server kept the previous one
+    });
   });
-  $('start').addEventListener('click', () => lobby?.start());
+  $('start').addEventListener('click', () => lobby?.start().catch((e) => say(e.message)));
   $('leave').addEventListener('click', () => location.reload());
 }
 

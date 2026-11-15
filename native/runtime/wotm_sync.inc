@@ -487,6 +487,9 @@ namespace wotm_sync
     void netFail(const std::string &why)
     {
         std::fprintf(stderr, "[net] stopped: %s\n", why.c_str());
+#ifdef __EMSCRIPTEN__
+        wotmWebNetStall(-1, why.c_str());   // the page shows it with a way back to the front page
+#endif
         if (g_net && g_net->status() == wotm_net::MatchClient::Status::Desynced)
             netLogBlocks(g_net->desyncFrame());
         wotm_netstatus::setMessage(why + "  (close the window)");

@@ -80,9 +80,16 @@
     });
     document.getElementById('leaveMatch').addEventListener('click', () => location.reload());
     setInterval(() => {
-      const show = prompt.show(waitMs());
-      if (show && el.hidden)
-        document.getElementById('stallText').textContent = window.Module.UTF8ToString(window.Module._wotm_web_net_stall_text()) + '.';
+      const wait = waitMs();
+      const show = prompt.show(wait);
+      if (show && el.hidden) {
+        const text = window.Module.UTF8ToString(window.Module._wotm_web_net_stall_text());
+        const stopped = prompt.stopped(wait);   // refused, desync or connection lost: only the way back is left
+        document.getElementById('stallText').textContent = stopped ? `The match stopped: ${text}.` : text + '.';
+        document.getElementById('stallNote').hidden = stopped;
+        document.getElementById('keepWaiting').hidden = stopped;
+        document.getElementById('leaveMatch').textContent = stopped ? 'Back to the front page' : 'Leave the match';
+      }
       el.hidden = !show;
     }, 500);
   }

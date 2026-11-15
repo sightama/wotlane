@@ -93,6 +93,7 @@ namespace wotm_net
             std::string token, name;
             PeerRef peer;
             bool joined = false, gone = false;
+            bool away = false;               // the game is in the background (Away); only changes are passed on
             std::vector<uint32_t> need;   // per player, the first frame this client doesn't have yet
             uint32_t lastAckOwn = 0;
             Clock::time_point lastSend{};

@@ -30,3 +30,12 @@ test('a new wait after the match moved on starts from zero', () => {
   assert.equal(p.show(0), false);   // the wait ended
   assert.equal(p.show(60000), true);
 });
+
+test('a match that stopped (the game reports a negative wait) shows at once, and keep waiting does not hide it', () => {
+  const p = new StallPrompt(60000);
+  assert.equal(p.stopped(-1), true);
+  assert.equal(p.show(-1), true);
+  p.keepWaiting(-1);
+  assert.equal(p.show(-1), true);
+  assert.equal(p.stopped(5000), false);
+});
