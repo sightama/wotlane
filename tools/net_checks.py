@@ -5,6 +5,7 @@
 import argparse
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 CHECKS = {
@@ -46,6 +47,11 @@ CHECKS = {
                            'WOTM_ORBITMOUSE=300:900:4:1;PS2X_PAD=24:0.3:start', secs=50, expect=r'\[dialog\] 0 opened'),
     # 3 players with Turbo (2 fields per frame on top of the 30 Hz mode) and a pause by player 1
     'turbo_3p': dict(players=3, mods='turbo', player_env='1:PS2X_PAD=24:0.3:start', secs=45, expect=r'\[dialog\] 0 opened'),
+    # a skin made by the character creator in every PC's mods folder (the same folder) does not break the mods digest or the lockstep;
+    # the skin itself is not picked online (the lobby carries disc costumes only). Run the WOTM_CREATOR live check first
+    # (tools\live_checks.ps1 -Only creator_script): it creates the folder
+    'creator_skin_folder': dict(extra_env='WOTM_MODS=' + str(Path(tempfile.gettempdir()) / 'wotm_creator_mods'), secs=60,
+                                expect=r'\[mods\] skin togera/green .* = costume 4'),
 }
 
 

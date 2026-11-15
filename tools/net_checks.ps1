@@ -58,6 +58,11 @@ $checks = [ordered]@{
     # 3 players with Turbo (2 fields per frame on top of the 30 Hz mode) and a pause by player 1
     'turbo_3p'      = @{ Players = 3; Modifiers = 'turbo'; PlayerEnv = '1:PS2X_PAD=24:0.3:start'; Secs = 45
                          Expect = '\[dialog\] 0 opened' }
+    # a skin made by the character creator in every PC's mods folder (the same folder) does not break the mods digest or the
+    # lockstep; the skin itself is not picked online (the lobby carries disc costumes only, #14). Every log must have loaded it.
+    # Run the WOTM_CREATOR live check first (tools\live_checks.ps1 -Only creator_script): it creates the folder
+    'creator_skin_folder' = @{ ExtraEnv = "WOTM_MODS=$env:TEMP\wotm_creator_mods"; Secs = 60
+                         Expect = '\[mods\] skin togera/green .* = costume 4' }
 }
 
 $failed = @()

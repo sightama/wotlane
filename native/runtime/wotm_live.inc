@@ -2649,4 +2649,5 @@ void wotmPickupHighlights(const uint8_t *) {}
 void wotmPadSelInstall(PS2Runtime &) {}
 void wotmLevelSelInstall(PS2Runtime &) {}
 void wotmMainMenuInstall(PS2Runtime &) {}
+void wotmCreatorInstall() {}
 #endif
