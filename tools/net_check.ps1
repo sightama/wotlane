@@ -11,7 +11,7 @@
 #   -ExtraEnv "A=1;B=2": extra variables for all players (the same for everyone, otherwise the server rejects the configuration).
 #   -PlayerEnv "2:A=1;B=2|||3:C=1": variables for player N only (what differs on just one PC: mouse, this PC's options).
 #   -Expect "re1|||re2": regexes that must appear in every player's log ("2:re": in player 2's only). -Reject: ones that must not appear in any.
-#   -ExpectRefused "<regex>": the server must reject the match with this reason (configuration, build) and nobody may start.
+#   -ExpectRefused "<regex>": the server must refuse the match with this reason (configuration, build): every player is told, and nobody may start.
 #   Logs and hashes go to <runtime>\net\ (servidor.log, jogador<N>.err.log, jogador<N>.hash). Exits with 0 if everything matches.
 param(
     [int]$Players = 2,
@@ -139,14 +139,14 @@ $failed = $false
 function Fail([string]$why) { Write-Host "FAILED  $why" -ForegroundColor Red; $script:failed = $true }
 $srvLog = Get-Content (Join-Path $out 'servidor.log') -Raw
 if ($ExpectRefused) {
-    # the match must not start: some player gets the server's rejection with this reason, and none reaches the start
-    $refused = $false
+    # the match must not start: every player is told why (the refused one, and the others: "the match did not start: ..."), and none
+    # reaches the start
     for ($i = 1; $i -le $Players; $i++) {
         $log = Get-Content (Join-Path $out "jogador$i.err.log") -Raw
-        if ($log -match "\[net\] stopped: [^\r\n]*$ExpectRefused[^\r\n]*") { $refused = $true; Write-Host "ok      player ${i}: $($Matches[0])" }
+        if ($log -match "\[net\] stopped: [^\r\n]*$ExpectRefused[^\r\n]*") { Write-Host "ok      player ${i}: $($Matches[0])" }
+        else { Fail "player $i was not told the match was refused for '$ExpectRefused'" }
         if ($log -match "\[net\] start: player") { Fail "player $i started the match" }
     }
-    if (-not $refused) { Fail "nobody was rejected for '$ExpectRefused'" }
     if ($failed) { Write-Host 'FAILED'; exit 1 }
     Write-Host 'PASSED'
     exit 0
