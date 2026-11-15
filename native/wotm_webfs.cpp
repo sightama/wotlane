@@ -37,6 +37,11 @@ void wotmWebPresent() { wotm_web_wait_frame(); }
 
 bool wotmWebHidden() { return g_hidden.load(); }
 
+void wotmWebQuit()
+{
+    MAIN_THREAD_EM_ASM({ if (globalThis.wotmQuit) globalThis.wotmQuit(); });
+}
+
 void wotmWebPageSize(int &w, int &h)
 {
     w = MAIN_THREAD_EM_ASM_INT({ return window.innerWidth; });

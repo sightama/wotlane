@@ -16,5 +16,8 @@ bool wotmWebHidden();
 // long wait the page offers to keep waiting or leave the match, and a stopped match gets a way back to the front page (web/stall.js)
 void wotmWebNetStall(double ms, const char *text);
 
+// the game quit (its menu's quit game): the page goes back to its front panel (boot.js wotmQuit); any thread
+void wotmWebQuit();
+
 // the page's size in CSS pixels (window.innerWidth and innerHeight); any thread
 void wotmWebPageSize(int &w, int &h);

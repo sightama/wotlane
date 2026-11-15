@@ -4589,7 +4589,7 @@ index 8590f14..7e48d74 100644
      data[2] = static_cast<uint8_t>(btns & 0xFF);
      data[3] = static_cast<uint8_t>(btns >> 8);
 diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
-index 45cb9d2..f51ac7e 100644
+index 45cb9d2..c2e414c 100644
 --- a/ps2xRuntime/src/lib/ps2_runtime.cpp
 +++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
 @@ -1,3 +1,8 @@
@@ -5346,6 +5346,14 @@ index 45cb9d2..f51ac7e 100644
      }
  
      requestStop();
+@@ -2469,4 +2960,7 @@ void PS2Runtime::run()
+     CloseWindow();
+ 
+     RUNTIME_LOG("[run] exiting loop");
++#ifdef __EMSCRIPTEN__
++    wotmWebQuit();   // the browser has no window to close: the page goes back to its front panel
++#endif
+ }
 diff --git a/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp b/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp
 index b02c7ca..d7afc31 100644
 --- a/ps2xRuntime/src/lib/ps2_vif1_interpreter.cpp

@@ -67,6 +67,9 @@
     }, 250);
   }
 
+  // the game quit from its own menu (wotm_webfs.cpp wotmWebQuit): back to the front panel
+  window.wotmQuit = () => location.reload();
+
   // the game hears when the tab is hidden: an online match keeps running and tells the others why it may lag (wotm_webfs.cpp)
   function tellHidden() {
     window.Module._wotm_web_set_hidden?.(document.hidden ? 1 : 0);
