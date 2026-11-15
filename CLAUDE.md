@@ -30,6 +30,7 @@ Read before starting: `README.md` (setup), `docs/ANALYSIS.md` (what's known abou
 - `VU1CHECK.md`: the VU1 vs native check, corpus, the owner's photos, open bugs.
 - `RUNTIME.md`: the recompiled runtime on Windows (build, `PS2X_*`, keyboard, useful addresses). `FRONTEIRA.md` ("boundary"): what of the PS2 the port no longer emulates.
 - `FERRAMENTAS.md` (`tools/`, headers, difftest), `ARMADILHAS.md` (gcc 2.95 and NM build pitfalls), `ESPINHA.md` (game flow), `TESTE_PCSX2.md` (halfcpp in PCSX2).
+- `WEB.md`: the browser version (build_web.sh, the page, disc streaming, saves, the online front panel, wotm_server's WebSocket port, limits).
 - `MODS.md` (the `mods/` folder, PNG textures, `tools/modkit.py`), `MODELOS_3D.md` (animated monster straight from the disc), `VIEWER_WEB.md` (evaluation of the in-browser viewer; the viewer is live at https://yanm1103.github.io/wotm-model-museum/).
 - Dated investigations live in `docs/investigacoes/<date>/` ("investigations"). A closed one (what it asked for is already in the code) is deleted; whatever is still open moves to `TODO.md`, and references to it become `<commit>:docs/investigacoes/...` (read with `git show`).
 - `docs/FORMATOS.md`: the game's file formats (stage, monster, sound, movie, memory card save).

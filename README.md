@@ -102,7 +102,7 @@ Before committing changes to decompiled code, run `sh tools/wsl/gate.sh` (build 
 - `mods/` holds the project's own mods (the Goliath Prime custom monster, the "Recompiled" logo): JSON and original art only. Every launch mirrors them into
   `<runtime>\discroot\mods\` (`tools/sync_mods.ps1`), where the game reads mods from; your own mods live there too. See [docs/passos/MODS.md](docs/passos/MODS.md).
 
-Keyboard controls, environment variables and runtime details: [docs/passos/RUNTIME.md](docs/passos/RUNTIME.md) and [docs/passos/NATIVO.md](docs/passos/NATIVO.md).
+Keyboard controls, environment variables and runtime details: [docs/passos/RUNTIME.md](docs/passos/RUNTIME.md) and [docs/passos/NATIVO.md](docs/passos/NATIVO.md). The browser version: [docs/passos/WEB.md](docs/passos/WEB.md).
 
 ## Contributing
 See [CONTRIBUTING.md](CONTRIBUTING.md). The rules in [CLAUDE.md](CLAUDE.md) apply to humans too: no game files or game assembly in the repo, issues or PRs, and the ROM must keep matching
