@@ -42,6 +42,11 @@
 #include <set>
 #include <string>
 #include <vector>
+#ifdef _MSC_VER
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
 
 namespace
 {
@@ -82,6 +87,69 @@ namespace
     using wotm::M4;
 
     bool near(float a, float b, float eps = 1e-4f) { return std::fabs(a - b) <= eps * std::max(1.f, std::fabs(b)); }
+
+    // A digest that must be the same on every machine: printed only when it differs, with the value it should have
+    bool digestIs(const char *what, uint64_t got, uint64_t want)
+    {
+        if (got != want)
+            std::printf("  %s digest %016llx, want %016llx\n", what, static_cast<unsigned long long>(got), static_cast<unsigned long long>(want));
+        return got == want;
+    }
+
+    // What the code under test writes to stderr (the mods registry's [mods] and [stages] lines) while it lives, so the test asserts
+    // those lines instead of letting them into the test output
+    class StderrCapture
+    {
+      public:
+        StderrCapture()
+        {
+            std::fflush(stderr);
+            m_file = std::tmpfile();
+            m_saved = dupFd(fdOf(stderr));
+            if (m_file && m_saved >= 0)
+                dup2Fd(fdOf(m_file), fdOf(stderr));
+        }
+        ~StderrCapture() { restore(); }
+        // everything written so far; stderr goes back to the test output
+        std::string take()
+        {
+            restore();
+            std::string text;
+            if (!m_file)
+                return text;
+            std::rewind(m_file);
+            char buf[4096];
+            for (size_t n; (n = std::fread(buf, 1, sizeof buf, m_file)) > 0;)
+                text.append(buf, n);
+            std::fclose(m_file);
+            m_file = nullptr;
+            return text;
+        }
+
+      private:
+        void restore()
+        {
+            if (m_saved < 0)
+                return;
+            std::fflush(stderr);
+            dup2Fd(m_saved, fdOf(stderr));
+            closeFd(m_saved);
+            m_saved = -1;
+        }
+#ifdef _MSC_VER
+        static int fdOf(FILE *f) { return _fileno(f); }
+        static int dupFd(int fd) { return _dup(fd); }
+        static int dup2Fd(int from, int to) { return _dup2(from, to); }
+        static void closeFd(int fd) { _close(fd); }
+#else
+        static int fdOf(FILE *f) { return fileno(f); }
+        static int dupFd(int fd) { return dup(fd); }
+        static int dup2Fd(int from, int to) { return dup2(from, to); }
+        static void closeFd(int fd) { close(fd); }
+#endif
+        FILE *m_file = nullptr;
+        int m_saved = -1;
+    };
 
     // rotation around Z (row vectors: row 0 = image of the X axis), per-row scale and translation
     M4 rotZ(float deg, float sx = 1.f, float sy = 1.f, float sz = 1.f, float tx = 0.f, float ty = 0.f, float tz = 0.f)
@@ -774,8 +842,7 @@ TEST(detmath_same_bits_on_every_machine)
         mix(dm::atan2f(a[i], b[i + 1]));
         mix(dm::atan2f(b[i], b[i + 1]));
     }
-    std::printf("  detmath digest %016llx\n", static_cast<unsigned long long>(h));
-    CHECK(h == 0xa6c8104174bda8ccull);
+    CHECK(digestIs("detmath", h, 0xa6c8104174bda8ccull));
 }
 
 // The orbit (and the F5 free camera) write these axes into the game camera's matrix, which then decides culling, LOD and
@@ -920,7 +987,9 @@ TEST(mods_skin_owner)
     fs::create_directories(root / "Other" / "skins" / "green");
     { std::ofstream o(root / "Other" / "skins" / "green" / "skin.json"); o << wotm::creator::skinJson("togera", "green", "GREEN", 1); }
     wotm::mods::Registry reg;
+    StderrCapture err;
     reg.scan(root);
+    CHECK(err.take() == "[mods] skin togera/green (\"GREEN\", Other) = costume 4 (LIZARD4); base 1, 0 png\n");
     CHECK(reg.skinOwner(3, "green") == "Other");   // Togera's green belongs to Other
     CHECK(reg.skinOwner(3, "blue").empty());       // no such skin
     CHECK(reg.skinOwner(1, "green").empty());      // the same id on another monster is another skin
@@ -961,6 +1030,7 @@ TEST(mods_add_skin_after_scan)
         p << "not a real png";
     }
     wotm::mods::Registry reg;   // a fresh one, not get(): the singleton stays untouched
+    StderrCapture err;
     reg.scan(root / "nothing_here");   // ready, empty
     CHECK(reg.ready() && reg.skins().empty());
     std::string why;
@@ -985,6 +1055,10 @@ TEST(mods_add_skin_after_scan)
     CHECK(reg.aliasOf("MON/LIZARD5.TEX") == "MON/LIZARD2.TEX" && reg.aliasOf("MON/LIZARD4.TEX") == "MON/LIZARD1.TEX");
     fs::create_directories(root / "Creator" / "skins" / "bad");
     CHECK(!reg.addSkin(root / "Creator" / "skins" / "bad", why) && why.find("skin.json") != std::string::npos);
+    // one line per skin registered (green three times: added, overwritten, the same folder written another way); refusals only
+    // come back in `why`
+    const std::string green = "[mods] skin togera/green (\"GREEN TOGERA\", Creator) = costume 4 (LIZARD4); base 1, 1 png\n";
+    CHECK(err.take() == green + green + green + "[mods] skin togera/blue (\"BLUE\", Creator) = costume 5 (LIZARD5); base 2, 0 png\n");
     fs::remove_all(root);
 }
 
@@ -1013,7 +1087,13 @@ TEST(mods_scan_stages)
             {"node": "0x200", "turn": 90}, {"addpowerup": 1, "from": [0, 0, 0], "at": [1, 1, 1]}, {"copy": "0x100", "at": [4, 5, 6], "turn": 45}]})");
     put(root / "A" / "MON" / "LIZARD1.TEX", "tex");   // a real override, so the file list is not empty
     wotm::mods::Registry reg;
+    StderrCapture err;
     reg.scan(root);
+    const std::string printed = err.take();
+    std::string stageLines;   // the [stages] lines also go to the log, nothing else
+    for (const std::string &l : reg.stageLog())
+        stageLines += l + "\n";
+    CHECK(!stageLines.empty() && printed == stageLines);
     const std::vector<wotm::mods::Stage> st = reg.stages();
     CHECK(st.size() == 3);
     if (st.size() == 3)
@@ -1859,8 +1939,6 @@ TEST(stagemap_powerups_apply)
     };
     const std::vector<uint8_t> before = buf;
     sm::PowerUpResult r = sm::applyPowerUps(mem, kPoints, 4, edits);
-    for (const std::string &l : r.log)
-        std::printf("  %s\n", l.c_str());
     CHECK(r.moved == 2 && r.refused == 3 && r.log.size() == 3);
     CHECK((pos(1) == std::array<float, 3>{500.f, 600.f, 70.f}) && (pos(2) == std::array<float, 3>{-1.5f, 2.5f, 3.5f}));
     CHECK((pos(0) == std::array<float, 3>{0.f, -50.f, 40.f}) && (pos(3) == std::array<float, 3>{300.f, -50.f, 43.f}));
@@ -1928,8 +2006,6 @@ TEST(stagemap_powerups_append)
         };
         uint32_t count = 0;
         const sm::PowerUpResult r = sm::appendPowerUps(mem, kPoints, 3, adds, count);
-        for (const std::string &l : r.log)
-            std::printf("  %s\n", l.c_str());
         CHECK(count == 6 && r.moved == 3 && r.refused == 2 && r.log.size() == 2);
         CHECK(tailOf(3, 1) && tailOf(4, 1) && tailOf(5, 2) && buf[sm::kPointSize * 5 + 0x2C] == 3);
         CHECK((pos(3) == std::array<float, 3>{500.f, 600.f, 70.f}) && (pos(4) == std::array<float, 3>{-1.5f, 2.5f, 3.5f}) &&
@@ -2471,11 +2547,10 @@ TEST(stagemap_same_bits_on_every_machine)
     uint64_t h = sm::fnv1a(s.im.img.data(), s.im.img.size());
     for (uint8_t byte : s.im.res)
         h = (h ^ byte) * 0x100000001B3ull;
-    std::printf("  stagemap digest %016llx\n", static_cast<unsigned long long>(h));
     CHECK(r.applied == 3 && s.im.gridProblems(s.g) == 0);
     // 0x035d31e0eff6d986 with the 1 MB reserve at 0x3EFF000; the 4 MB reserve (0x3BFF000) changes only the 5 reserve pointers the
     // edits write (each 0x300000 lower), no float bit
-    CHECK(h == 0x7ebbfd393eca9736ull);
+    CHECK(digestIs("stagemap", h, 0x7ebbfd393eca9736ull));
 }
 
 // The same for copies: a step 1 move, turned and plain copies of a world piece (one past the grid's edge, so the clamp's bits are
@@ -2497,9 +2572,6 @@ TEST(stagemap_copy_same_bits_on_every_machine)
     uint64_t h = sm::fnv1a(s.im.img.data(), s.im.img.size());
     for (uint8_t byte : s.im.res)
         h = (h ^ byte) * 0x100000001B3ull;
-    std::printf("  stagemap copy digest %016llx\n", static_cast<unsigned long long>(h));
-    for (const std::string &l : r.log)
-        std::printf("  %s\n", l.c_str());
     CHECK(r.applied == 1 && r.copied == 6 && r.copyRefused == 0 && s.im.gridProblems(s.g) == 0);
     CHECK(logHas(r, "copy " + hexOff(s.off(s.tD)) + " (edit 6): kept inside the collision grid's edge, at "));
     // the ROTATE's copy is a ROTATE at its place with turned rows (wotm_stagemap.cpp's ROTATE root branch)
@@ -2510,7 +2582,7 @@ TEST(stagemap_copy_same_bits_on_every_machine)
     CHECK(rc && s.im.r32(rc) == s.im.r32(rB) && s.im.rf(rc + 0x40) == 210.5f && s.im.rf(rc + 0x44) == 590.25f &&
           s.im.rf(rc + 0x48) == 2.f && s.im.rf(rc + 0x10) != 0.6f && s.im.rf(rc + 0x18) == s.im.rf(rB + 0x18));
     // measured on Windows, MSVC x64; the Mac (clang, arm64) must print the same. 0x946f58d8ff7f329e before the ROTATE copy
-    CHECK(h == 0xe6ad18f1f1b154feull);
+    CHECK(digestIs("stagemap copy", h, 0xe6ad18f1f1b154feull));
 }
 
 TEST(stagemap_copy_set)
@@ -3531,9 +3603,6 @@ TEST(stagemap_copy_logs)
         CHECK(int(r.log.size()) == refused + 1);   // the refusals come last
         CHECK(r.copySummary == "copies: 2 applied, 1 refused; reserve " + kb(res.next - sm::kReserve) +
                                    " of 16 KB; interactives 17 of 17, destructibles 7 of 1400, pickup room 0 KB (no limit)");
-        for (const std::string &l : r.log)
-            std::printf("  %s\n", l.c_str());
-        std::printf("  %s\n", r.copySummary.c_str());
     }
     {
         CopyStage s;   // the edit number counts the piece edits written before the copies (write()'s order)
@@ -4630,8 +4699,7 @@ TEST(rtz_same_bits_on_every_machine)
         mix(bitsOfDouble(wotm::rtz::add((double)t.c, p)), 8);
         mix(bitsOfDouble(wotm::rtz::sub((double)t.c, p)), 8);
     }
-    std::printf("  rtz digest %016llx\n", static_cast<unsigned long long>(h));
-    CHECK(h == 0x4db21735e0cf6d5aull);
+    CHECK(digestIs("rtz", h, 0x4db21735e0cf6d5aull));
 }
 
 TEST(rtz_edges)
