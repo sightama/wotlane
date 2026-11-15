@@ -267,6 +267,7 @@ static void wotmBootPresent(uint32_t eePc, uint64_t vsync)
 #include "wotm_msaa.hpp"   // frame MSAA (ANTI-ALIASING option)
 #include "wotm_windowfit.hpp"   // window size at start (fitWindow)
 #include "wotm_personalpause.hpp"   // network match: Start opens this player's own menu (wotm_mainmenu.inc)
+#include "wotm_pauseview.hpp"   // network match: the local view held behind the fight's pause menu
 #include "wotm_preview.hpp"   // previews for the VIDEO tab options (wotm_mainmenu.inc)
 #include "wotm_cheats.h"   // debug menu (F1)
 #include "wotm_netstatus.h"   // network match: on-screen message, debug keys off
@@ -957,6 +958,7 @@ void wotmFontGlyph(const uint8_t *rdram, int font, int ch)
     if (rdram) wotm_live::g_font.glyph(wotm::Ram{rdram, PS2_RAM_SIZE}, font, ch);
     if (font == 0 || font == 1) g_lastFontIdx = font;
 }
+void wotmFontToEdge(bool on) { wotm_live::g_font.toEdge = on; }
 // Split screen: rtMain sends each view's text in its own fontDmaFontData (view 0, then 1, and 2 and 3 with 3 and 4 players). What is
 // published is all of them together: view 0 goes out with the others' latest text (one frame behind until each sends its own), so the
 // present never catches only part of the HUD. A view that hasn't sent text since the previous view 0 (dialog: only 0) gets none.
@@ -1338,6 +1340,7 @@ void wotmCaptureFadeStep(const uint8_t *rdram)
 }
 
 void wotmMainMenuLogoFrame(uint8_t *rdram);   // wotm_mainmenu.inc: big-screen logo only on "press start"
+bool wotmInPauseMenu();   // wotm_pausemenu.inc: the fight's pause dialog is up (EE thread)
 void wotmCaptureFrame(const uint8_t *rdram)
 {
     wotmMainMenuLogoFrame(const_cast<uint8_t *>(rdram));   // before collection: the frame already comes out without the logo
@@ -1491,6 +1494,7 @@ void wotmCaptureFrame(const uint8_t *rdram)
     sn.screenRects = std::move(rects);
     sn.screenPolys.insert(sn.screenPolys.end(), polys.begin(), polys.end());
     sn.anchors = std::move(anchors);
+    sn.paused = wotmInPauseMenu();
     wotm_trainview::capture(ram);   // training mode: this frame's body hulls and capsules and health
     sn.fields = ram.u32(wotm::addr::fieldsAtFrameStart);   // interpolation timestamp (Snapshot::fields/hostT)
     sn.hostT = wotm_live::hostNow();
@@ -2024,7 +2028,14 @@ static bool wotmDrawNative(const uint8_t *rdram)
         const int localView = wotm_live::localView();
         const bool chaseOk = localView >= 4 && S.snap.chase && S.snap.chase->valid && S.snap.chase->cam.ok;
         const bool ownView = localView > 0 && localView < 4 && viewOk[localView];
-        const wotm::Snapshot *own = chaseOk ? S.snap.chase.get() : ownView ? S.snap.views[localView - 1].get() : nullptr;
+        // in the fight's pause the game runs only view 0: behind the menu goes the local view from before the pause
+        // (wotm_pauseview.hpp); the free camera shows view 0 and leaves the held one alone
+        static wotm::pauseview::Held<wotm::Snapshot> s_pauseHeld;
+        wotm::Snapshot *viewOwn = nullptr;
+        if (!freeView.override)
+            viewOwn = wotm::pauseview::pick(s_pauseHeld, localView > 0 && localView < 4, S.snap.paused,
+                                            ownView ? S.snap.views[localView - 1] : std::shared_ptr<wotm::Snapshot>{});
+        const wotm::Snapshot *own = chaseOk ? S.snap.chase.get() : viewOwn;
         const wotm::Snapshot *ownPrev = chaseOk ? S.prev.chase.get() : ownView ? S.prev.views[localView - 1].get() : nullptr;
         const bool split = localView < 0 && (viewOk[1] || viewOk[2] || viewOk[3]);
         const bool quad = split && S.snap.vctx.h < 224.f;
@@ -2619,6 +2630,7 @@ void wotmFontInitPacket(uint32_t) {}
 void wotmFontSetTexId(const uint8_t *, uint32_t) {}
 void wotmFontColor(const uint8_t *, int) {}
 void wotmFontGlyph(const uint8_t *, int, int) {}
+void wotmFontToEdge(bool) {}
 void wotmFontDma(const uint8_t *) {}
 void wotmScreenPoly(const uint8_t *, int, int, int, uint32_t) {}
 bool wotmScreenPolyBox(const uint8_t *, int, int, int, uint32_t, float *) { return false; }

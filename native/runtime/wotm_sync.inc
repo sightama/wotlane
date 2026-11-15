@@ -67,7 +67,9 @@ namespace wotm_sync
     uint32_t g_inputDelay = 0;
     wotm_net::InputTimeline g_inputs(kControllers, 0);
     FILE *g_inputRec = nullptr;
+    bool g_inputRecHeader = false;   // the header goes in with the first fight's records, once its modifiers are latched
     std::vector<InputRecord> g_inputPlay;
+    int g_inputPlayMods = -1;        // gameplay modifiers of the recording being replayed (-1 = not recorded: this PC's apply)
     bool g_levelLoaded = false;   // a level has been loaded (recording and replay count its frames)
     uint32_t g_index = 0;         // frame since the level load
     int g_mods = 0;               // gameplay modifiers of the current fight (wotm::modifiers bits; wotm_modifiers.inc latches them)
@@ -465,9 +467,16 @@ namespace wotm_sync
             std::fclose(f);
         }
         std::string err;
-        if (!wotm_net::readInputRecords(bytes, g_inputPlay, err))
+        if (!wotm_net::readInputRecords(bytes, g_inputPlay, g_inputPlayMods, err))
             std::fprintf(stderr, "[sync] %s: %s\n", path, err.c_str());
-        std::fprintf(stderr, "[sync] recorded input: %zu records from %s\n", g_inputPlay.size(), path);
+        // an explicit WOTM_MODIFIERS wins over the recorded set: one recording replayed with each modifier off and on (modcheck)
+        if (const char *m = std::getenv("WOTM_MODIFIERS"); m && g_inputPlayMods >= 0)
+        {
+            std::fprintf(stderr, "[sync] WOTM_MODIFIERS=%s replaces the recording's modifiers\n", m);
+            g_inputPlayMods = -1;
+        }
+        std::fprintf(stderr, "[sync] recorded input: %zu records from %s, modifiers %s\n", g_inputPlay.size(), path,
+                     g_inputPlayMods < 0 ? "from this PC's settings" : ("\"" + wotm::modifiers::format(g_inputPlayMods) + "\"").c_str());
     }
 
     // ---- network match ----
@@ -708,11 +717,7 @@ namespace wotm_sync
             if ((g_origPadRead = runtime.lookupFunction(kPadRead)))
                 runtime.registerFunction(kPadRead, &padReadLatched);
             if (const char *r = std::getenv("WOTM_INPUTREC"); r && *r)
-                if ((g_inputRec = std::fopen(r, "wb")))
-                {
-                    const std::vector<uint8_t> header = wotm_net::encodeInputHeader();
-                    std::fwrite(header.data(), 1, header.size(), g_inputRec);
-                }
+                g_inputRec = std::fopen(r, "wb");
             if (const char *p = std::getenv("WOTM_INPUTPLAY"); p && *p)
                 loadInputPlay(p);
             if (const char *d = std::getenv("WOTM_INPUTDELAY"); d && *d)
@@ -775,6 +780,12 @@ namespace wotm_sync
             wotmSoundFrame(static_cast<unsigned>(wotm::modifiers::vsyncsPerFrame(g_fixedStep, g_mods)));
             if (g_inputRec && g_levelLoaded)
             {
+                if (!g_inputRecHeader)
+                {
+                    const std::vector<uint8_t> header = wotm_net::encodeInputHeader(g_mods);
+                    std::fwrite(header.data(), 1, header.size(), g_inputRec);
+                    g_inputRecHeader = true;
+                }
                 for (int c = 0; c < kControllers; ++c)
                 {
                     const std::vector<uint8_t> r = wotm_net::encodeInputRecord({g_index, static_cast<uint32_t>(c), inputFor(c, g_index)});

@@ -127,7 +127,8 @@ to the console) and starts once that many players are in; `--code <code> --name 
 - Start opens your own menu: the match keeps running for everyone and your monster stands still while it is open. **CONTINUE** goes
   back to the fight; **RECOMPILED OPTIONS** has your volume, video, camera and controls (the match-wide settings, lock-on toggle,
   close-up camera and modifiers, show "SET IN THE LOBBY"); **PAUSE MATCH FOR EVERYONE** opens the game's pause on every PC, where
-  RESTART and QUIT are, and that pause moves the same everywhere. The menu makes no sound (a sound would change the game's sound
+  RESTART and QUIT are, and that pause moves the same everywhere; behind it each PC shows its own player's view as it was when the
+  pause began. The menu makes no sound (a sound would change the game's sound
   state on your PC only).
 - Everyone plays with the game's default options (difficulty, volumes, controller layout): local saves are neither read nor written
   online, because they live in game memory and would make the PCs drift apart.
