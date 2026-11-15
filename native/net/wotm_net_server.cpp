@@ -1,6 +1,7 @@
 // ABOUTME: Netcode server implementation: lobby (text lines over TCP or WebSocket) and lockstep matches over ENet or WebSocket
 // ABOUTME: (input relay, delay from ping, state hashes, drops). No game code; runs in wotm_server and in the tests.
 #include "wotm_net_server.hpp"
+#include "wotm_confighash.hpp"
 #include "wotm_modifiers.hpp"
 #include "wotm_monsters.hpp"
 
@@ -681,7 +682,11 @@ namespace wotm_net
                 if (lobbies_[li].build != j.buildId && !lobbies_[li].build.empty())
                     return reject("different build (" + j.buildId + " vs " + lobbies_[li].build + ")");
                 if (!m->config.empty() && m->config != j.configHash)
-                    return reject("game configuration differs from the others (" + j.configHash + " vs " + m->config + ")");
+                {
+                    const std::string what = confighash::mismatch(j.configHash, m->config);
+                    return reject("game configuration differs from the others" + (what.empty() ? "" : ": " + what) + " (" +
+                                  j.configHash + " vs " + m->config + ")");
+                }
                 if (m->config.empty())
                     m->config = j.configHash;
                 s.joined = true;
