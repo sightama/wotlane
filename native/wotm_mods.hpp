@@ -157,11 +157,11 @@ inline uint64_t digest(const std::filesystem::path &dir) {
     std::sort(files.begin(), files.end());
     uint64_t h = 0xcbf29ce484222325ull;   // FNV-1a
     auto mix = [&h](const char *p, size_t n) { for (size_t i = 0; i < n; ++i) h = (h ^ uint8_t(p[i])) * 0x100000001b3ull; };
-    char buf[1 << 16];
+    std::vector<char> buf(1 << 16);   // on the heap: the browser build's test threads have small stacks
     for (const auto &[rel, host] : files) {
         mix(rel.c_str(), rel.size() + 1);
         std::ifstream in(host, std::ios::binary);
-        while (in.read(buf, sizeof buf) || in.gcount() > 0) mix(buf, size_t(in.gcount()));
+        while (in.read(buf.data(), std::streamsize(buf.size())) || in.gcount() > 0) mix(buf.data(), size_t(in.gcount()));
         mix("\0", 1);
     }
     return h ? h : 1;
