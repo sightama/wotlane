@@ -1,7 +1,7 @@
 // ABOUTME: The browser version's front panel: single player, or an online lobby on the game server (Host shows a 4-letter code,
 // ABOUTME: Join takes one). When the owner starts, every member's game loads with the match environment (boot.js wotmStart).
 import { LobbyClient, lobbySocketUrl, matchEnv } from './lobby.js';
-import { initCreations } from './creations_ui.js';
+import { initCreations, addLobbyChoices } from './creations_ui.js';
 
 const MONSTERS = [[1, 'Congar'], [2, 'Robo-47'], [3, 'Togera'], [4, 'Ultra V'], [5, 'Preytor'], [7, 'Kineticlops'], [8, 'Magmo'],
   [9, 'Raptros'], [10, 'Agamo'], [11, 'Zorgulon']];
@@ -74,7 +74,8 @@ function showMembers(m) {
   list.replaceChildren(...m.members.map((p) => {
     const li = document.createElement('li');
     const monster = MONSTERS.find(([id]) => id === p.monster);
-    li.textContent = `${p.name} (${monster ? monster[1] : 'monster ' + p.monster})${p.name === m.owner ? ', owner' : ''}`;
+    const skin = p.skin ? `, skin ${p.skin}` : '';
+    li.textContent = `${p.name} (${monster ? monster[1] : 'monster ' + p.monster}${skin})${p.name === m.owner ? ', owner' : ''}`;
     return li;
   }));
 }
@@ -84,8 +85,9 @@ async function connect(build) {
   const client = new LobbyClient(ws, build);
   client.onMembers = showMembers;
   client.onSettings = (s) => {
-    const stage = STAGES.find(([id]) => String(id) === s.stage);
-    $('guestSettings').textContent = `Stage: ${stage ? stage[1] : s.stage}, wins: ${s.wins === '0' ? 'endless' : s.wins}` +
+    // a saved map shows by its name when this browser has it (Your creations), else by its id
+    const stage = [...$('lobbyStage').options].find((o) => o.value === s.stage);
+    $('guestSettings').textContent = `Stage: ${stage ? stage.text : s.stage}, wins: ${s.wins === '0' ? 'endless' : s.wins}` +
       (s.mods ? `, modifiers: ${s.mods}` : '');
   };
   client.onError = say;
@@ -102,7 +104,7 @@ async function connect(build) {
 async function hostOrJoin(join) {
   const name = cleanName($('name').value);
   if (!name) return say('Type a name first (letters, digits, - and _).');
-  const monster = Number($('monster').value);
+  const monster = $('monster').value;   // "<monster>" or "<monster>:<skin id>"
   remember('name', name);
   myName = name;
   myMonster = monster;
@@ -161,6 +163,12 @@ function init() {
   fill($('monster'), MONSTERS, recall('monster', 5));
   fill($('lobbyStage'), STAGES, recall('stage', 1));
   fill($('wins'), [[0, 'Endless'], ...[1, 2, 3, 4, 5].map((n) => [n, String(n)])], recall('wins', 2));
+  addLobbyChoices($('monster'), $('lobbyStage')).then(() => {   // a remembered skin or map is picked again once it is listed
+    $('monster').value = recall('monster', 5);
+    if (!$('monster').value) $('monster').value = '5';
+    $('lobbyStage').value = recall('stage', 1);
+    if (!$('lobbyStage').value) $('lobbyStage').value = '1';
+  });
   $('single').addEventListener('click', async () => {
     front.hidden = true;
     window.wotmStart(null, await buildId());
@@ -171,7 +179,7 @@ function init() {
   for (const id of ['lobbyStage', 'wins', ...MODIFIERS.map((m) => 'mod_' + m)])
     $(id).addEventListener('change', () => lobby && owner && sendSettings());
   $('monster').addEventListener('change', () => {
-    const picked = Number($('monster').value);
+    const picked = $('monster').value;
     remember('monster', picked);
     if (!lobby) return;
     lobby.monster(picked).then(() => { myMonster = picked; }, (e) => {

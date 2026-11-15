@@ -1,6 +1,6 @@
 // ABOUTME: The front panel's "Your creations" section: lists the skins and maps saved in this browser, exports one as a zip to share,
 // ABOUTME: imports a friend's zip and deletes. Runs before the game starts (the game scans mods/ once, at boot).
-import { listCreations, exportCreation, importZip, deleteCreation } from './creations.js';
+import { listCreations, exportCreation, importZip, deleteCreation, lobbyChoices } from './creations.js';
 
 const $ = (id) => document.getElementById(id);
 const KIND_LABEL = { skins: 'skin', stages: 'map' };
@@ -27,6 +27,19 @@ function download(fileName, bytes) {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+// The online lobby's pickers get this browser's creations: each skin after the stock monsters ("Togera: GREEN (skin)", value
+// "3:green") and each map after the stock stages (value: its id). Players need the same creations (the server compares the mods)
+export async function addLobbyChoices(monsterSelect, stageSelect) {
+  let list = [];
+  try { list = await listCreations(await modsFolder()); } catch { return; }
+  const { skins, maps } = lobbyChoices(list);
+  for (const s of skins) {
+    const base = [...monsterSelect.options].find((o) => o.value === String(s.monster));
+    monsterSelect.add(new Option(`${base ? base.text : 'Monster ' + s.monster}: ${s.label}`, s.value));
+  }
+  for (const m of maps) stageSelect.add(new Option(m.label, m.value));
 }
 
 export function initCreations() {

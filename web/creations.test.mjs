@@ -2,7 +2,7 @@
 // ABOUTME: handle calls creations.js uses): listing, export, import with its path checks, and delete. Run: node --test web/*.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseCreationPath, listCreations, exportCreation, importZip, deleteCreation } from './creations.js';
+import { parseCreationPath, listCreations, exportCreation, importZip, deleteCreation, lobbyChoices } from './creations.js';
 import { zip, unzip } from './zip.js';
 
 const text = (s) => new TextEncoder().encode(s);
@@ -73,7 +73,7 @@ test('creation paths: mod/skins/<id>/<file> and mod/stages/<id>/<file> only', ()
 
 test('the list has every skin and map with its display name, and nothing else', async () => {
   assert.deepEqual(await listCreations(await sample()), [
-    { mod: 'Creator', kind: 'skins', id: 'green', name: 'GREEN' },
+    { mod: 'Creator', kind: 'skins', id: 'green', name: 'GREEN', monster: 'togera' },
     { mod: 'Maps', kind: 'stages', id: 't1', name: 'DOWNTOWN MESS' },
   ]);
   assert.deepEqual(await listCreations(new Dir()), []);
@@ -84,7 +84,7 @@ test('an exported creation imports into another browser as the same files', asyn
   assert.equal(fileName, 'green.zip');
   assert.deepEqual((await unzip(bytes)).map((e) => e.name), ['Creator/skins/green/skin.json', 'Creator/skins/green/t0004.png']);
   const other = new Dir();
-  assert.deepEqual(await importZip(other, bytes), [{ mod: 'Creator', kind: 'skins', id: 'green', name: 'GREEN' }]);
+  assert.deepEqual(await importZip(other, bytes), [{ mod: 'Creator', kind: 'skins', id: 'green', name: 'GREEN', monster: 'togera' }]);
   assert.deepEqual(await get(other, 'Creator/skins/green/t0004.png'), new Uint8Array([137, 80, 78, 71]));
 });
 
@@ -121,6 +121,20 @@ test('a zip aimed at a built-in mod folder (any letter case) is refused: the nex
   assert.equal(mods.items.size, 0);
   const ok = await zip([{ name: 'Creator/skins/x/skin.json', data: text('{"monster": "togera"}') }]);
   assert.equal((await importZip(mods, ok, { builtin: ['Goliath Prime'] })).length, 1);
+});
+
+test('lobby choices: a skin is "<monster number>:<id>", a map is its id; what the lobby cannot carry is left out', () => {
+  const list = [
+    { mod: 'Creator', kind: 'skins', id: 'green', name: 'GREEN', monster: 'togera' },
+    { mod: 'Creator', kind: 'skins', id: 'chrome', name: 'CHROME', monster: 'Robo-47' },
+    { mod: 'Creator', kind: 'skins', id: '2fast', name: 'FAST', monster: 'togera' },   // a leading digit reads as a disc costume
+    { mod: 'Creator', kind: 'skins', id: 'odd', name: 'ODD', monster: 'nobody' },      // not a playable monster
+    { mod: 'Maps', kind: 'stages', id: 't1', name: 'DOWNTOWN MESS' },
+  ];
+  assert.deepEqual(lobbyChoices(list), {
+    skins: [{ value: '3:green', monster: 3, label: 'GREEN (skin)' }, { value: '2:chrome', monster: 2, label: 'CHROME (skin)' }],
+    maps: [{ value: 't1', label: 'DOWNTOWN MESS (map)' }],
+  });
 });
 
 test('delete removes only that creation', async () => {

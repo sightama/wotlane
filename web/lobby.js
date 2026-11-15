@@ -1,7 +1,7 @@
 // ABOUTME: The browser version's lobby client: wotm_server's lobby lines over a WebSocket (/lobby), and the game environment for a
 // ABOUTME: MATCH line (the same mapping as tools/net_lobby.py's match_env, with the match WebSocket as WOTM_NET).
 
-export const PROTOCOL = 4;   // native/net/wotm_net_proto.hpp kProtocol
+export const PROTOCOL = 5;   // native/net/wotm_net_proto.hpp kProtocol (5: map ids as the stage, <monster>:<skin> members)
 
 // one lobby line: the command, its words, and its key=value words as fields (MATCH, SETTINGS); `rest` is everything after the command
 export function parseLine(line) {
@@ -18,12 +18,12 @@ export function parseLine(line) {
   return { cmd, rest, words, fields };
 }
 
-// MEMBERS <code> <owner or -> <name:monster,... or ->
+// MEMBERS <code> <owner or -> <name:monster[:skin],... or -> (names have no ':')
 export function parseMembers(parsed) {
   const [code = '', owner = '-', list = '-'] = parsed.words;
   const members = list === '-' ? [] : list.split(',').map((m) => {
-    const colon = m.lastIndexOf(':');
-    return { name: m.slice(0, colon), monster: Number(m.slice(colon + 1)) };
+    const [name, monster, skin = ''] = m.split(':');
+    return { name, monster: Number(monster), skin };
   });
   return { code, owner: owner === '-' ? '' : owner, members };
 }
