@@ -1,5 +1,5 @@
 // ABOUTME: Map creator, pure part: stage.json, the image hash, the stage hierarchy walk, pieces and the edits (move, turn,
-// ABOUTME: remove) with collision-grid relink and sphere widening, on a Mem view of guest memory (tested without the game).
+// ABOUTME: remove, copy, power-up places added) with collision-grid relink and sphere widening, on a Mem view of guest memory.
 #pragma once
 #include <cstdint>
 #include <cstring>
@@ -8,7 +8,8 @@
 #include <vector>
 
 // The rules mirror tools/stage_map.py (its docstring lists them; keep both in step): the children table, the walk (first
-// parent), the piece rule, the grid coverage rule and the FNV-1a 64 hash. Spec: docs/superpowers/specs/2026-11-09-map-creator-design.md.
+// parent), the piece rule, the grid coverage rule and the FNV-1a 64 hash. Specs: docs/superpowers/specs/2026-11-09-map-creator-design.md,
+// and docs/superpowers/specs/2026-11-09-map-copy-design.md for the copies and the power-up places added.
 //
 // The functions are defined in wotm_stagemap.cpp, compiled on its own with strict float rules like wotm_detmath.cpp: what they
 // compute is written to guest RAM, so every build and every machine must get the same bits (a caller built with /fp:fast must
@@ -16,8 +17,8 @@
 namespace wotm::stagemap {
 
 constexpr uint32_t kBase = 0xA00000;                    // the stage image (file zero), as linked
-constexpr uint32_t kReserve = 0x4000000 - 0x101000;     // PS2_RAM_SIZE - 0x101000: 1 MB for list nodes and ROTATEs (spec 1d)
-constexpr uint32_t kReserveSize = 0x100000;
+constexpr uint32_t kReserve = 0x4000000 - 0x401000;     // PS2_RAM_SIZE - 0x401000: 4 MB for list nodes, ROTATEs and copies
+constexpr uint32_t kReserveSize = 0x400000;
 constexpr uint32_t kMaxNode = 0x2000000 - kBase;        // a node offset stays inside the 32 MB the game sees
 constexpr int kNameLen = 17;                            // GameLevelLongNames[][18]
 
@@ -46,9 +47,14 @@ struct Edit { uint32_t node = 0; bool remove = false; bool move = false; float p
 struct PowerUpEdit { uint32_t index = 0; float from[3] = {0, 0, 0}; float at[3] = {0, 0, 0}; };
 constexpr uint32_t kMaxPoints = 256;     // PointToolKit::points[256]
 constexpr uint32_t kPointSize = 0x40;    // a point: position (_fvector) at +0, power-up type +0x2C, arg +0x2D
-// id and dir come from the folder (mods/<mod>/stages/<id>/), the rest from stage.json. stage.json has one "edits" list; the
-// power-up edits ({"powerup": i, ...}) are kept apart from the piece edits, in file order, and written after them.
-struct Map { std::string id, name, base, dir; uint64_t baseHash = 0; std::vector<Edit> edits; std::vector<PowerUpEdit> powerups; };
+// A copy of a piece: `node` the source's offset (as in the file), `at` the copy's world position (absolute), `turn` degrees about Z
+// added to the source's rotation, about `at`. Built from the source's disc state (apply()).
+struct Copy { uint32_t node = 0; float at[3] = {0, 0, 0}; float turn = 0; };
+// id and dir come from the folder (mods/<mod>/stages/<id>/), the rest from stage.json. stage.json has one "edits" list (at most
+// 4096 entries of all kinds); the copies ({"copy": "0x..", ...}), the power-up moves ({"powerup": i, ...}) and the power-up places
+// added ({"addpowerup": i, ...}) are kept apart from the piece edits, each in file order, and written after them in that order.
+struct Map { std::string id, name, base, dir; uint64_t baseHash = 0; std::vector<Edit> edits; std::vector<PowerUpEdit> powerups;
+             std::vector<Copy> copies; std::vector<PowerUpEdit> addPowerUps; };
 
 // 64-bit FNV-1a, the same as stage_map.py's baseHash
 inline uint64_t fnv1a(const uint8_t *p, size_t n)
@@ -60,7 +66,7 @@ inline uint64_t fnv1a(const uint8_t *p, size_t n)
 }
 
 // Reads stage.json; false with `why` (plain English) when a field is missing or wrong. Unknown top-level keys are ignored,
-// unknown keys in an edit are refused, and so is a second power-up edit of the same index.
+// unknown keys in an edit are refused, and so is a second power-up move of the same index (additions may repeat an index).
 bool parse(const std::string &json, Map &out, std::string &why);
 // stage.json text for a map; parse() reads it back to the same values (floats bit for bit, -0 included)
 std::string write(const Map &m);
@@ -158,8 +164,93 @@ bool isPiece(const Mem &m, const std::map<uint32_t, uint32_t> &par, uint32_t nod
 // place + offset (doPickupHat, LevelPickups::hatCheck); the offset is added unrotated, so a turn turns it (apply()).
 std::vector<uint32_t> hatActions(const Mem &m, uint32_t n);
 
-// relinked: grid list nodes linked for moved paths; fromReserve: how many of them came from the reserve
-struct Result { int applied = 0, refused = 0, relinked = 0, fromReserve = 0; std::vector<std::string> log; };
+// ---------------------------------------------------------------- copies (spec 2026-11-09-map-copy-design.md)
+
+constexpr uint32_t kOpEmitter = 22, kOpScriptAction = 41;
+constexpr uint16_t kActAnim = 2, kActDomino = 8, kActCinema = 9, kActPlayerPos = 11, kActRunScript = 12, kActAiNavigation = 13,
+                   kActGenericEvent = 14;   // ACT_DOMINO {state +8, target +0xC}
+constexpr int kInteractivesCap = 1000, kDestructiblesCap = 1400, kMonsterSlots = 8;
+// MemoryStack::global bytes the runtime keeps out of the pickup room (Limits::pickupRoom = free room at dbInitDb entry minus
+// this): what the load takes from the stack after dbInitDb's entry besides the level pickups (PedGroups, the monsters' .ptr
+// reads, loadPoints, the BoxFormations, TheGame's mark), plus 64 KB. Measured in the spec's PR 2 checks, 2g (CENTRAL, METRO,
+// VEGAS, ISLAND, 8 monsters: at most 133300 bytes, rounded up to 144 KB, plus 64 KB; it also covers the largest monster .ptr read,
+// 164376 bytes, with the PedGroups allocated before it).
+constexpr uint32_t kGlobalKeep = 0x34000;
+// ACT_DEBRIS {numChunks +8, chunks[] +0x10 of 0x30 bytes}; a chunk's pickup type (ePickupType, 0 none) is bits 5..9 of its u16
+// at +0xE (src/game/Debris.cpp ActDebrisChunk; retail 0x12f744: ld +8, dsrl32 21, andi 0x1F). Debris::Activate uses 32 chunks
+// at most.
+constexpr uint16_t kActDebris = 3;
+constexpr uint32_t kDebrisChunks = 32;
+
+// MemoryStack::global bytes LevelPickups::createPickup takes for a pickup of type `type` (id1 = type + 0x1388): its object
+// (src/game/Pickup.cpp:1098-1160, the largest of the game modes and flags) and its 0xC list node, each 16-aligned; 0 for a
+// type that creates nothing (0, 0x138D's 5)
+uint32_t debrisPickupBytes(uint32_t type);
+// The same for a level pickup node of id1 `id1` (0x12C0..0x13EB): dbProcInteractive calls createPickup with type 0, which takes
+// the type from the id1 (type = id1 - 0x1388, src/game/Pickup.cpp:1094-1095), so the size is debrisPickupBytes(id1 - 0x1388):
+// 0x170 + 0x10 for the ids up to 0x1388 (0x1388 too: type 0 there means "from the id1", and the switch's default case makes a
+// Pickup) and the plain types, more for vehicles and rigid bodies, 0 for 0x138D
+uint32_t levelPickupBytes(uint32_t id1);
+
+// What copying piece `node` takes: `why` is "" when it can be copied, else the reason (logged as is). `nodes` is the copy set in
+// preorder (the root first): the root, the per-instance nodes of its subtree (INTERACTIVE_STATE, DESTRUCTIBLE, SWITCH,
+// PARTICLE_EMITTER, SCRIPT_ACTION, a level pickup node) and their ancestors inside the piece; the rest is shared. `bytes` their
+// 16-aligned sizes (an unturned copy, without actions, paths and grid nodes); the counts are what each copy adds to the
+// Interactives and Destructibles tables and to the level pickups, a node counted once per path from the root to it (the game
+// registers it on each visit). `optionGroup`: a GROUP above the piece with collision-option
+// flags (flags & 0xFF00: a query with that option stops at the original, not at its copies), 0 when none; logged by apply().
+//
+// Refused: not a piece; part of a destructible's state (a DESTRUCTIBLE or INTERACTIVE_STATE above it: a copy would outlive its
+// building); under a mode-masked GROUP (flags & 0xB0: a copy would show in modes that blank the original); animated (ANIM_XFORM,
+// CHAR_INSTANCE, SKEL_BONE or ANIM_SCALE in the subtree, an ANIM_XFORM, SKEL_BONE or ANIM_SCALE above, a CHAR_INSTANCE above
+// when an OBJECT of the piece reads an animation channel, an ACT_ANIM in its destructibles' actions); a script action
+// (ACT_CINEMA, ACT_PLAYERPOS, ACT_RUNSCRIPT, ACT_AINAVIGATION, ACT_GENERICEVENT); an action tree past 20 levels or 256 actions
+// in a group (not read in part); a special id on a node dbsTraverse hands to dbProcInteractive (world, sky, font, monsters,
+// pedestrians, weapons, effects, power-ups, particle textures, HUD, scripts, end points); an id1 of a fixed table on an
+// INTERACTIVE_STATE or DESTRUCTIBLE (SanFran saves, CANYON2 and CAPITOL pillars, the 3-MILE vent and stacks); an emitter with a
+// locator id (0x1D4C..0x1D6B, one fx per id); a shared node inside the piece holding a copied one (the copy set follows first
+// parents: the copy would reach the original's state through it); a node in the copy set that nodeSize() gives 0 for. A level
+// pickup id1 on any dispatched kind makes the node per-instance (a pickup id on an OBJECT therefore refuses the piece).
+//
+// `debrisPickups`, `debrisBytes` (amendment A4): the debris chunks with a pickup type in the ACT_DEBRIS actions of the copied
+// DESTRUCTIBLEs, and the pickup memory they take (debrisPickupBytes()). A chunk turns into a level pickup when it settles or
+// its slot dies in the fight (Debris.cpp:294, 412, 442), which registers an interactive and allocates from
+// MemoryStack::global. Counted per state that reaches the action (each state's actions fire when the destructible enters it)
+// and per path to the DESTRUCTIBLE, as `destructibles`: an upper bound. Not part of `interactives` and `pickups`.
+// `pickupBytes`: the MemoryStack::global bytes of the level pickups (levelPickupBytes() each, per path).
+struct CopySet { std::string why; std::vector<uint32_t> nodes; uint32_t bytes = 0;
+                 int interactives = 0, destructibles = 0, pickups = 0, debrisPickups = 0;
+                 uint64_t debrisBytes = 0, pickupBytes = 0;
+                 uint32_t optionGroup = 0; };
+CopySet copySet(const Mem &m, const std::map<uint32_t, uint32_t> &par, uint32_t node);
+// Size in bytes of a node of the copy set (include/hieri_types.h), 0 for a kind a copy cannot hold, for a node not wholly mapped
+// and for a child count past what slots() reads (4096; a LOD's 16)
+uint32_t nodeSize(const Mem &m, uint32_t n);
+// The domino actions of DESTRUCTIBLE n's states (as hatActions())
+std::vector<uint32_t> dominoActions(const Mem &m, uint32_t n);
+// The stage's own entries, from the image as it is in `m` (after step 1 edits; a NULL ends a branch): Interactives =
+// INTERACTIVE_STATE + level pickup + HomingBug nodes, Destructibles = DESTRUCTIBLE + dispatched nodes with a destructible id1,
+// level pickups. Each node counts once per path from the header roots to it (dbsTraverse has no visited set), so a node held
+// twice counts twice. An upper bound of what the load registers (masked GROUPs and empty nodes counted too). Call it before
+// copies are linked in: it would count them as well. `debrisPickups`, `debrisBytes`: the stage's debris pickups, as CopySet's;
+// `pickupBytes`: its level pickups' memory (levelPickupBytes() each, per path).
+struct StageCounts { int interactives = 0, destructibles = 0, pickups = 0, debrisPickups = 0; uint64_t debrisBytes = 0, pickupBytes = 0; };
+StageCounts stageCounts(const Mem &m, const std::map<uint32_t, uint32_t> &par);
+
+// What copies may add to the game's tables: the Interactives and Destructibles caps, and the room left in MemoryStack::global
+// for level pickups (bytes; the runtime measures it at dbInitDb entry)
+struct Limits { int interactives = kInteractivesCap, destructibles = kDestructiblesCap; uint32_t pickupRoom = 0xFFFFFFFFu; };
+// One applied copy, as guest addresses: its source and root, its first DESTRUCTIBLE (preorder) and the INTERACTIVE_STATE that
+// holds it (with no DESTRUCTIBLE, its first INTERACTIVE_STATE), and the source's INTERACTIVE_STATE that one copies (0: none)
+struct CopyInfo { uint32_t source = 0, root = 0, istate = 0, destructible = 0, sourceIstate = 0; };
+// applied, refused: piece edits; relinked: grid list nodes linked for moved paths; fromReserve: how many of them came from the
+// reserve (copies' list nodes are not counted here: the "copied" log lines give them). copied, copyRefused: copies;
+// interactives, destructibles, pickupBytes: the estimates after the copies (Limits). copySummary: one line, for a map with
+// copies only ("copies: N applied, M refused; reserve U of T KB; interactives I of cap, destructibles D of cap, pickup room
+// P of R KB")
+struct Result { int applied = 0, refused = 0, relinked = 0, fromReserve = 0; std::vector<std::string> log;
+                int copied = 0, copyRefused = 0, interactives = 0, destructibles = 0; uint32_t pickupBytes = 0;
+                std::vector<CopyInfo> copies; std::string copySummary; };
 
 // Applies a map's edits to the stage image in `m` (imageSize bytes at kBase), taking grid nodes and ROTATEs from `res`. A turn
 // also turns the offsets of the hat pickup actions of the destructibles under the piece (hatActions(); one that a destructible
@@ -167,7 +258,25 @@ struct Result { int applied = 0, refused = 0, relinked = 0, fromReserve = 0; std
 // edit is checked first, in file order (the first edit of a node stands); then the removes run, in file order, and their
 // paths' list nodes go to a pool; then the moves and turns, in file order, take list nodes from the pool before the reserve.
 // A move or turn is planned whole before anything is written: one that can't be done writes nothing and is logged.
-Result apply(const Mem &m, uint32_t imageSize, const Map &map, Reserve &res);
+//
+// Then the copies, in file order, each built in the reserve from the image as it was on entry (a snapshot taken before any
+// edit: a copy of a removed, moved or turned source is a copy of its disc state). A copy is its source's copy set (copySet())
+// with every child slot that held a copied node pointing at that node's copy (one copy per node, whatever holds it), its root
+// at the copy's place (a turned TRANSLATE becomes a ROTATE, as in a turn), hung under a wrapper GROUP in the last child slot
+// of the header root above its source: one wrapper per root (the world root, each pickup root), reserved before the first
+// copy, holding the slot's old child first and linked by the first copy that applies. The wrapper keeps the root's ctx, flags
+// and sphere centre, with ids 0; its radius covers its children, and the root's radius grows to cover the copies (centre
+// kept). Each collision path through the source becomes a path [header root, wrapper, the source's path from the piece root
+// down with copied nodes replaced] with its box moved (and turned) as the piece, listed with the grid rule, taking list nodes
+// left by the removes and moves first, then the reserve. Caps (Limits) are checked before a copy takes anything: the
+// Interactives estimate (slot 0, the monster slots, stageCounts() of the image after the piece edits, the applied copies;
+// debris pickups included), the Destructibles one and the pickup memory (levelPickupBytes() per level pickup, debrisPickupBytes()
+// per debris pickup); a copy that would pass one is refused.
+// A copy is planned whole before anything is written: one that can't be done writes no byte of the image or the reserve and
+// takes no list node. Logs: a copy kept inside the grid's edge (one line each), what each source loses under the wrapper and
+// its domino notes (once per source), then "copied <source> xN (K KB, G grid nodes)" per source and "copy <source> xN
+// refused: <why>" per source and reason, in order of first appearance.
+Result apply(const Mem &m, uint32_t imageSize, const Map &map, Reserve &res, const Limits &lim = Limits{});
 
 // moved: power-up edits written; refused: edits left out (logged)
 struct PowerUpResult { int moved = 0, refused = 0; std::vector<std::string> log; };
@@ -177,5 +286,29 @@ struct PowerUpResult { int moved = 0, refused = 0; std::vector<std::string> log;
 // the same points), within 0.01 on each axis; an index past numPoints, a point elsewhere or a second edit of an index is refused
 // and logged, and the rest apply. Writes are absolute, so calling it again on the same points changes nothing.
 PowerUpResult applyPowerUps(const Mem &m, uint32_t points, uint32_t numPoints, const std::vector<PowerUpEdit> &edits);
+
+// The game creates at most this many power-ups (PowerUps::CreatePowerUp returns -1 once m_count >= 100, src/game/PowerUps.cpp:243;
+// m_powerUps[100]); points past it create nothing
+constexpr uint32_t kMaxPowerUps = 100;
+
+// Appends a copy of point `index` at `at` for each addition, in order, after the stock points (`numPoints` of them at `points`):
+// the whole 64-byte point is copied and its position set; an index past the stock count, a stock point not at `from` (0.01) or
+// a 257th point is refused and logged. Returns the result; `count` gets the new point count.
+// Runs before applyPowerUps() (the step 1 moves), so `from` is the disc place. moved: points appended. Past kMaxPowerUps points
+// it adds the note "added N power-ups (M places: the game creates 100 at most)" after the refusals.
+PowerUpResult appendPowerUps(const Mem &m, uint32_t points, uint32_t numPoints, const std::vector<PowerUpEdit> &adds, uint32_t &count);
+
+// A map's power-up edits at one PowerUpTool::exportPoints entry, in the only safe order (the hook calls this, nothing else):
+//   1. the additions (appendPowerUps()), only when the points are the stock ones (numPoints == stock: the first exportPoints
+//      after loadPoints); their "from" is then the disc place, before any move. With numPoints != stock (a second exportPoints
+//      on points that already hold the additions) nothing is appended and nothing is logged for them;
+//   2. step 1's moves (applyPowerUps()) against the stock count only (min(stock, numPoints)), never the count after the
+//      additions: a move cannot reach an added point, and one of an index the map also adds moves the original while the copy
+//      keeps the place its addition gave it.
+// `stock` is the stock point count the hook saw at the first exportPoints of this load. `count` gets the point count to write
+// back (numPoints when nothing was appended).
+struct PointEditsResult { PowerUpResult added, moved; };
+PointEditsResult applyPointEdits(const Mem &m, uint32_t points, uint32_t numPoints, uint32_t stock, const std::vector<PowerUpEdit> &adds,
+                                 const std::vector<PowerUpEdit> &moves, uint32_t &count);
 
 } // namespace wotm::stagemap

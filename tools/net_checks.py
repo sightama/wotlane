@@ -3,6 +3,8 @@
 # ABOUTME: with 2 players (3 where it says so) and checks identical state on every frame plus the log. Exit 1 if any fail.
 """Usage: python3 tools/net_checks.py [--only <name>] [--list]"""
 import argparse
+import hashlib
+import json
 import shutil
 import subprocess
 import sys
@@ -25,7 +27,55 @@ def make_map():
                     '--move', '0x2d85a0=768.1,499.6,74.1', '--turn', '0x4da6b0=90', '--move', '0x5c95a0=400,-100,11.9'], check=True)
 
 
-# Entry keys: net_check.py's options, and setup (optional: a function run before the match; an error fails the entry)
+# map copies (docs/superpowers/specs/2026-11-09-map-copy-design.md): live_checks.ps1's c1 (the Apcomm tower 0x165a70 removed, the
+# low building 0x2d85a0 copied onto player 1's start point and 0x18a410 into the park, with their riders and power-ups 5 and 15)
+# plus 50 copies of 0x2d85a0 without riders on a 10 x 5 lattice from (-1300, -1100), 260 and 440 apart, at its disc z 74.1.
+# make's --no-riders applies to a whole map, so the lattice is made as a second map and its copies are spliced into c1's edits
+# after c1's own copies (the loader's file order: piece edits, copies, power-up moves, power-up additions).
+COPY_DUMPS = Path(tempfile.gettempdir()) / 'wotm_net_c1'
+
+
+def make_copy_map():
+    for f in COPY_DUMPS.parent.glob(COPY_DUMPS.name + '_*.bin*'):   # no stale dumps from an earlier run
+        f.unlink()
+    lattice = Path(tempfile.gettempdir()) / 'wotm_map_net_lattice'
+    for d in (MAP_MODS, lattice):
+        shutil.rmtree(d, ignore_errors=True)
+        d.mkdir(parents=True)
+    stage_map = [sys.executable, str(TOOLS / 'stage_map.py'), 'make', '--base', 'CENTRAL']
+    subprocess.run(stage_map + ['--id', 'c1', '--name', 'COPY TEST', '--out', str(MAP_MODS / 'Maps' / 'stages'), '--remove', '0x165a70',
+                                '--copy', '0x2d85a0=768.1,499.6,74.1', '--copy', '0x18a410=400,-100,-0.8'], check=True)
+    copies = []
+    for i in range(50):
+        copies += ['--copy', f'0x2d85a0={-1300 + 260 * (i % 10)},{-1100 + 440 * (i // 10)},74.1']
+    subprocess.run(stage_map + ['--id', 'lattice', '--name', 'LATTICE', '--out', str(lattice), '--no-riders'] + copies, check=True,
+                   stdout=subprocess.DEVNULL)
+    file = MAP_MODS / 'Maps' / 'stages' / 'c1' / 'stage.json'
+    doc = json.loads(file.read_text(encoding='utf-8'))
+    extra = json.loads((lattice / 'lattice' / 'stage.json').read_text(encoding='utf-8'))['edits']
+    edits = doc['edits']
+    last = max((i for i, e in enumerate(edits) if 'copy' in e), default=-1)
+    if last < 0 or len(extra) != 50:
+        raise RuntimeError(f'unexpected maps: c1 copies end at {last}, lattice has {len(extra)} edits')
+    doc['edits'] = edits[:last + 1] + extra + edits[last + 1:]
+    file.write_text(json.dumps(doc, indent=2), encoding='utf-8')
+    shutil.rmtree(lattice)
+    print(f"        c1: {len(doc['edits'])} edits ({len(extra)} lattice copies after edit {last})")
+
+
+def same_copy_dumps():
+    """Both PCs' stage image and map reserve dumps match byte for byte."""
+    same = True
+    for ext in ('.bin', '.bin.reserve'):
+        a, b = (Path(f'{COPY_DUMPS}_{n}{ext}') for n in (1, 2))
+        ha, hb = (hashlib.sha256(p.read_bytes()).hexdigest() for p in (a, b))
+        print(f"        {ext} : {a.stat().st_size} / {b.stat().st_size} bytes, {'same SHA256 ' + ha if ha == hb else 'DIFFERENT'}")
+        same = same and a.stat().st_size > 0 and ha == hb
+    return same
+
+
+# Entry keys: net_check.py's options, setup (optional: a function run before the match; an error fails the entry) and after
+# (optional: a function run after a passing match; a false result or an error fails the entry)
 CHECKS = {
     # mouse on one PC only (WOTM_ORBITMOUSE: mouse-like movement from input frame 300 on), modern camera on both: the motion travels in
     # player 2's input with player 2's own sensitivity and inversion, so both PCs turn that camera alike
@@ -77,13 +127,21 @@ CHECKS = {
     # the second PC without the map's folder: the mods digest differs and the server refuses the match (as different_mods)
     'map_online_missing': dict(setup=make_map, extra_env=f'WOTM_MODS={MAP_MODS}', player_env=f'2:WOTM_MODS={NO_MAP}', stage='t1',
                                secs=30, expect_refused='game configuration differs'),
+    # map copies online: c1 plus 50 lattice copies applied on both PCs, same state on every frame. The per-frame state hash covers
+    # only the low 32 MB of guest RAM and the copies' nodes live in the map reserve above it, so each PC also dumps its stage image
+    # and reserve (WOTM_STAGE_DUMP) and both pairs must match byte for byte
+    'map_copy_online': dict(setup=make_copy_map, after=same_copy_dumps, extra_env=f'WOTM_MODS={MAP_MODS}', stage='c1', secs=60,
+                            player_env=f'1:WOTM_STAGE_DUMP={COPY_DUMPS}_1.bin|||2:WOTM_STAGE_DUMP={COPY_DUMPS}_2.bin',
+                            expect=r'\[stages\] c1: copies: 58 applied, 0 refused',
+                            reject=r'does not match|||nothing applied|||not found in mods|||Interactives table full|||'
+                                   r'MemoryStack::global has \d+ bytes free'),
 }
 
 
 def args_for(check):
     out = []
     for key, value in check.items():
-        if key == 'setup':
+        if key in ('setup', 'after'):
             continue
         out += ['--' + key.replace('_', '-'), str(value)]
     return out
@@ -114,6 +172,16 @@ def main():
                 continue
         if subprocess.run([sys.executable, str(Path(__file__).with_name('net_check.py'))] + args_for(check)).returncode != 0:
             failed.append(name)
+            continue
+        if 'after' in check:
+            try:
+                ok = check['after']()
+            except Exception as e:   # noqa: BLE001 (any error after the match fails the entry)
+                print(f'FAILED  after the match: {e}')
+                ok = False
+            if not ok:
+                print(f'FAILED  {name} (after the match)')
+                failed.append(name)
     print(f"Failed: {', '.join(failed)}" if failed else 'All passed')
     return 1 if failed else 0
 

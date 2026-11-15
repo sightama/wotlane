@@ -37,6 +37,7 @@ $server = Join-Path $repo 'native\net\build\wotm_server.exe'
 $serverStale = (Test-Path $server) -and ((Get-ChildItem "$repo\native\net\*.cpp", "$repo\native\net\*.hpp" | Measure-Object LastWriteTime -Maximum).Maximum -gt (Get-Item $server).LastWriteTime)
 if (-not (Test-Path $server) -or $serverStale) { & cmd /c "`"$repo\tools\build_net.bat`" notest" | Out-Null }
 if (-not (Test-Path $server)) { throw "wotm_server.exe did not build (tools\build_net.bat)" }
+if (-not $env:WOTM_BACKGROUND) { $env:WOTM_BACKGROUND = '1' }   # the game windows open without taking the focus
 $exes = @(if ($Exe) { $Exe -split ',' } else { Join-Path $runtime 'build_dev\ps2xRuntime\wotm.exe' })
 $disc = Join-Path $runtime 'discroot'
 $elf = Join-Path $disc 'SCUS_971.97'
