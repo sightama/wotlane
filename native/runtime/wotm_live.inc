@@ -284,6 +284,7 @@ bool wotmHoldGame(bool hold);  // wotm_foto.inc: holds the EE thread at the fram
 #include <deque>
 #include <filesystem>
 #include "wotm_freecam.inc"   // debug free camera (F5)
+#include "wotm_mapedit_view.inc"   // map editor (WOTM_MAPEDIT, F10): keys, markers and panel
 #include "wotm_prompts.inc"   // 2D button icons (Kenney) in place of the game's 3D ones
 #include "wotm_trainview.inc"   // training mode: volumes, attack spheres, damage panel and HUD numbers
 #define WOTM_HAVE_NATIVE 1
@@ -1887,6 +1888,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
         return false;
     // paused free camera: the show already gets the pose (back-face eye, fog, sprites), and the scene drops what follows the game camera
     // photo mode (F9, L3 + R3) takes the place of the debug free camera while it's on
+    wotm_mapedit_view::update(S.snap.cam);   // map editor: turns the free camera on while it's open
     wotm_freecam::View freeView = wotm_photo::update(S.snap.cam);
     if (!freeView.on)
         freeView = wotm_freecam::update(S.snap.cam);
@@ -2341,6 +2343,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
             wotm_gamescreens::frame(S.scene, ram, c3, RW, RH);   // mouse on the game's screens: each item's rectangle
             wotm_optscreen::drawOnBoard(S.scene, ram, c3);   // the game's options screen
             wotm_trainview::draw3d();   // training mode: on top of the scene, no depth test
+            wotm_mapedit_view::draw3d();   // map editor: the picked piece, copies and removed pieces
             wotm_live::g_stage = "idle";
             wotm::endMode3DInTexture();
         }
@@ -2554,6 +2557,8 @@ static bool wotmDrawNative(const uint8_t *rdram)
         }
     }
 
+
+    wotm_mapedit_view::draw2d();   // map editor: crosshair and panel
 
     if (wotm_netstatus::g_active)
     {   // network match: ping and delay in the corner; when waiting for someone or stopped, the message in the center

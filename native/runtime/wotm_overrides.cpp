@@ -143,8 +143,11 @@ WotmFreeCamPose g_wotmFreeCamPose;
 #include "wotm_training.inc"
 // The game's sine and cosine against retail, bit for bit (WOTM_TRIGCHECK): what a Windows vs Mac match needs
 #include "wotm_trigcheck.inc"
+#include "wotm_mapedit_live.h"   // map editor state shared with the window (wotm_mapedit_view.inc)
 // Map creator: stage image hash at LoadLevelDB, the active map's edits at dbInitDb (WOTM_MATCH's map id, WOTM_STAGE_DUMP)
 #include "wotm_stagemap.inc"
+// Map editor: a session over the stock stage on screen, its live preview and its save (WOTM_MAPEDIT)
+#include "wotm_mapedit.inc"
 
 namespace
 {
@@ -771,6 +774,8 @@ namespace
             }
             if (slot == 0)
                 wotm_stagemap::tick(rdram, ctx, runtime);   // WOTM_STAGE_BREAK (test only): breaks a map copy mid-fight
+            if (slot == 0)
+                wotm_mapedit_rt::tick(rdram);   // map editor: commands, live preview, save
             if (slot == 0 && g_wotmCheatWin.exchange(false))
             {
                 const int32_t ais = static_cast<int32_t>(READ32(kGame + 0x1203E0));   // m_numAIs
@@ -2616,6 +2621,7 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
     wotmPadSelInstall(runtime);
     wotmLevelSelInstall(runtime);
     wotm_stagemap::install(runtime);
+    wotm_mapedit_rt::init();
     wotmMainMenuInstall(runtime);
     wotm_menu::install(runtime);
     if ((g_origEnableHighlights = runtime.lookupFunction(kEnableHighlights)))
