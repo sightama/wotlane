@@ -49,7 +49,7 @@
   #controlsTable td + td { color: var(--dim); }
   #creationList { margin: 8px 0; padding: 0; list-style: none; display: grid; gap: 6px; }
   #creationList span { flex: 1; }
-  #creationsMsg { color: var(--dim); margin: 0; font-size: 12px; }
+  #creationsMsg, #supported { color: var(--dim); margin: 0; font-size: 12px; }
 </style>
 </head>
 <body>
@@ -101,6 +101,7 @@
         <select id="editorStage" aria-label="Stage to start from"></select><button id="openEditor">Open</button></div>
       <p id="creationsMsg"></p>
     </details>
+    <p id="supported">Works in Chrome, Firefox and Edge on a computer.</p>
   </div>
 </div>
 <pre id="log"></pre>

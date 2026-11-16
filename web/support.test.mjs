@@ -18,8 +18,8 @@ test('Firefox with JSPI runs it (on range reads); without JSPI it asks to update
   assert.match(supportProblem({ ...firefox, jspi: false }), /update Firefox/);
 });
 
-test('Safari: says which browsers work', () => {
-  assert.match(supportProblem(safari), /Chrome, Edge or Firefox/);
+test('an unsupported browser (Safari): says which browsers work', () => {
+  assert.match(supportProblem(safari), /Chrome, Firefox or Edge on a computer/);
 });
 
 test('the disc and saves read on the main thread everywhere but Chromium (which keeps its proven worker backends)', () => {

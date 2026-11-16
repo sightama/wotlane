@@ -2,6 +2,7 @@
 
 What is left to do, and only that. Bug reports go first. A finished item leaves this file: the story goes into the commit message and what now exists goes into the reference doc (in the present tense). Doc rules: `CLAUDE.md`, "Documentation".
 
+**Direction: browser first.** The browser version is the release. Mac-native features, Mac friends zips and browser-versus-Mac cross-play runs are not release gates; the native build and its tests stay in CI because the browser game is built from the same code (`docs/passos/WEB.md`).
 ## Order
 | # | Item | Depends on | Cost |
 |---|---|---|---|
@@ -35,8 +36,7 @@ How it works today: `docs/passos/MODS.md` ("Skins", "Custom monsters").
 - **Off the critical path:** an oracle for functions with calls; coverage with gameplay to feed back into `boot_coverage_asm.csv` (`57d4afd:docs/investigacoes/2026-10-19/pendencias_oracle_cobertura.md`, sections 2 and 3).
 
 ## Out of order (until the owner chooses)
-- **Browser version in Safari:** unsupported (`docs/passos/WEB.md`, "Limits"). Start: Safari 27 or later (JSPI) with `web/support.js` `mainThreadFiles` on, which reads the disc and saves on the main thread as in Firefox; if WebKit still stalls, move the game off the main thread (`-sPROXY_TO_PTHREAD`, OffscreenCanvas).
-- **Firefox online on two computers:** Firefox x Chrome stays in sync on one Mac, but there the covered window gets throttled and slows the match; check pace with each browser on its own computer (`docs/passos/WEB.md`).
+- **Firefox online on two computers:** on one Mac Firefox x Firefox and Firefox x Chrome stay in sync but run at 50 to 56 fps against 59.7 for Chrome x Chrome (machine load and a covered window confound it; issue #91); check pace with each browser on its own computer (`docs/passos/WEB.md`).
 - **Browser audio on an AudioWorklet:** raylib's web audio uses the deprecated ScriptProcessorNode; miniaudio supports AudioWorklets (`-sAUDIO_WORKLET`, `-sWASM_WORKERS`). Measure glitches before and after.
 - **Movies in the browser:** skipped today (no FFmpeg); the browser's own video decoding could play them.
 - **4 players always at 60:** with 4 views, ~80% of frames come out at 60 and the rest at 30; what holds it back is the EE (median ~14 ms, p90 ~17.5 ms). Candidates, from the profile of the EE samples (`PS2X_HOSTPROF=2` + `_RAW=1`, resolved with the `wotm.map` of the same build): the translated VU0 wrapper (`executeVU0Microprogram` copies ~1 KB of state each way, ~3%) and the out-of-line `checkpointDue` (~3%), both PS2Recomp seams; the VU1 packet assembly that `wotm.exe` discards (`pktAddVu1ObjAsm`, ~4%, risky: item G3 of `723b110:docs/investigacoes/2026-10-23/performance_vistas.md`). In the window, the particles still in rlgl's immediate mode (~0.6 ms per view). Compare by alternating within the same run (an AI vs AI fight does not repeat).

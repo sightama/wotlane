@@ -4,6 +4,10 @@ The whole port (the recompiled game, the PS2Recomp runtime and `native/`) built 
 page in `web/`. It runs in desktop Chrome, Edge and Firefox. The disc is never part of the build or the repo: the page reads it from a `data/`
 folder its server provides.
 
+**Direction: browser first.** The browser version is the product. Mac-native features, Mac friends zips and browser-versus-Mac cross-play
+runs are not release gates. The native build and its tests stay in CI because the browser game is built from the same code. Chrome and
+Firefox on a computer are supported (Edge works too); Safari is not a goal.
+
 ## Build
 `sh tools/build_web.sh` configures `<runtime>/build_web` once (the same game flags as `build_dev`, raylib's web platform on WebGL2, no
 FFmpeg), builds `wotm` and assembles `<runtime>/web_dist`:
@@ -24,7 +28,7 @@ For online play start `wotm_server --ws-port <port>`; a page opened from `localh
 ## In the page
 - **Disc:** `/disc` is a WASMFS fetch backend over `data/`: the game's reads become 1 MiB range requests, each fetched once
   (`native/wotm_webfs.cpp`). `web/data_retry.js` retries network and 5xx failures in every thread and reports each chunk, which
-  `web/loading.js` shows as "Downloading game data 34%" over the game.
+  `web/loading.js` shows as "Downloading game data 34% (9 of 27 MB). Only the first visit downloads this much." over the game.
 - **Disc cache:** `web/disc_cache.js` (loaded by the page with a script tag and, in the game's workers, by `data_retry.js`; it is not in the `--pre-js` list, so a change to it leaves the build id alone) keeps the disc's
   1 MiB chunks in the browser's Cache API, one cache per disc file and version (its ETag), each chunk stored with its SHA-256 and checked
   before use; a chunk missing or failing the check comes from the network. Nothing is stored when the Cache API is missing, the HEAD
@@ -52,9 +56,10 @@ For online play start `wotm_server --ws-port <port>`; a page opened from `localh
 - **Graphics:** the native layer's GL calls go to WebGL2 (`native/wotm_glad_web.cpp`); its GLSL 330 shaders become GLSL ES 3.00
   (`native/wotm_glsl.hpp`). Lens flares are off (`WOTM_NOFLARE`: WebGL2 can't read the depth buffer back). The canvas fills the page and
   the game letterboxes its own frame.
-- **Address switches:** only `WOTM_MATCH`, `WOTM_AIVSAI`, `PS2X_STATS` and `WOTM_MAPEDIT` (the front panel's "Map editor" under Your creations opens the page with it, on a stock stage) are read from the page address; the disc, save and renderer
+- **Address switches** (`web/pageenv.js`, tested in `pageenv.test.mjs`): only `WOTM_MATCH`, `WOTM_AIVSAI`, `PS2X_STATS` and `WOTM_MAPEDIT` (the front panel's "Map editor" under Your creations opens the page with it, on a stock stage) are read from the page address; the disc, save and renderer
   settings always win.
-- **Browser check:** `web/support.js` gives Safari, browsers without JSPI and phones a plain message and disables the play buttons.
+- **Browser check:** `web/support.js` gives Safari, browsers without JSPI and phones a plain message and disables the play buttons; the front panel says Chrome, Firefox and Edge on a computer work.
+- **Controls card:** the front panel lists the default keyboard layout (`web/controls.js`); `controls.test.mjs` reads `native/wotm_settings.hpp` and fails when a default key is missing from the card.
 
 ## Online
 The front panel (`web/front.js`, `web/lobby.js`) speaks the lobby protocol over a WebSocket at `/lobby` (one line per text frame):
@@ -62,7 +67,7 @@ Host creates a lobby and shows its code, Join takes one, the owner sets stage, w
 game's environment with the same mapping as `tools/net_lobby.py` `match_env`, with `WOTM_NET` the WebSocket at `/match`, and the build id
 from `version.json` in `WOTM_BUILDID`.
 
-A refusal from the server (name taken, no such lobby, lobby full, lobby in a match, build differs) stays on the message line: the page's own
+A refusal from the server (name taken, no such lobby, lobby full, lobby in a match, build differs) stays on the message line, as a plain sentence (`web/messages.js` maps every ERROR the lobby sends; a test reads them from `wotm_net_server.cpp`, and an unknown text is shown as it is). The live server runs with `--lobbies 4`: a fifth lobby creator reads "All 4 lobbies are busy. Try again soon." Leave sends `LEAVE` and returns to Host/Join without a reload (`LobbyClient.leave()`). The page's own
 `LobbyClient.close()` silences `onClose`, which only reports a connection that dropped. The panel is a flex column that scrolls
 (`#front` has `overflow-y: auto`, its card `margin: auto`), so a card taller than the window (8 members, a zoomed page) keeps Start
 reachable. After a match (or Leave the match, which reloads the page) the panel asks the server for its lobbies (`LIST`, over a short-lived
@@ -82,8 +87,7 @@ During a match:
 - after 60 s waiting for a player the page offers Keep waiting (asks again 60 s later) or Leave the match (`web/stall.js`);
 - a match that stops (refused, desync, connection lost) shows the reason with a way back to the front panel, the lobby code filled in.
 
-- **Safari:** not supported yet. Safari before 27 lacks JSPI; Safari 27 is untested: the main-thread disc and saves (above) are the path to try there.
-- **Safari:** not supported yet. Safari before 27 lacks JSPI; with it, the main-thread disc and saves (above) are the path to try.
+- **Safari:** not supported, and not a goal (Safari before 27 lacks JSPI). The page says so in a plain message; the front panel names Chrome, Firefox and Edge on a computer as the supported browsers.
 - **Firefox:** the game takes more CPU per frame than in Chrome (it keeps 60 frames per second). The save folder in memory is also synced
   when the tab is hidden and on `pagehide`, and the game's own quit waits for the writes; a tab closed right after a save can lose it.
 - **Movies:** skipped (no FFmpeg in the browser build).
