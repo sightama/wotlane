@@ -72,6 +72,7 @@ ENet, and the server measures browser round trips with WebSocket pings. Browser,
 is reliable and ordered, so the server sends a browser each input once (an ENet player gets what it lacks again every 16 ms): a browser
 whose network stops is sent only pings, not a growing pile of repeats. A browser that comes back sends everything it queued at once; the
 server reads a connection 64 KB at a time, so any burst is fine (only a lobby line over 64 KB closes the connection).
+A Mac or Windows build that plays the site must be built from `wip/browser`: its build id (a hash of `native/`) differs from `wotlane/mac`'s, and the server refuses a different build.
 
 During a match:
 - a hidden tab sends `Away` (and its return); the others' "Waiting for" message adds "(their game tab is in the background)";
