@@ -2020,6 +2020,33 @@ std::string kbOf(uint64_t bytes) { return std::to_string((bytes + 512) / 1024); 
 
 } // namespace
 
+bool pieceBounds(const Mem &m, uint32_t node, float centre[3], float &radius)
+{
+    std::vector<Sphere> sph;
+    std::set<uint32_t> seen;
+    spheres(m, node, Xf{}, 0, seen, sph);
+    if (sph.empty())
+        return false;
+    double lo[3], hi[3];
+    for (int k = 0; k < 3; ++k)
+        lo[k] = sph[0].c[k] - sph[0].r, hi[k] = sph[0].c[k] + sph[0].r;
+    for (const Sphere &s : sph)
+        for (int k = 0; k < 3; ++k)
+            lo[k] = std::min(lo[k], s.c[k] - s.r), hi[k] = std::max(hi[k], s.c[k] + s.r);
+    double c[3], r = 0;
+    for (int k = 0; k < 3; ++k)
+        c[k] = (lo[k] + hi[k]) * 0.5;
+    for (const Sphere &s : sph)
+    {
+        const double dx = s.c[0] - c[0], dy = s.c[1] - c[1], dz = s.c[2] - c[2];
+        r = std::max(r, std::sqrt(dx * dx + dy * dy + dz * dz) + s.r);
+    }
+    for (int k = 0; k < 3; ++k)
+        centre[k] = float(c[k]);
+    radius = float(r);
+    return true;
+}
+
 Result apply(const Mem &m, uint32_t imageSize, const Map &map, Reserve &res, const Limits &lim)
 {
     Result out;

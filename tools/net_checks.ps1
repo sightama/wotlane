@@ -68,7 +68,7 @@ $checks = [ordered]@{
     # pause by player 1, screen while paused: the pause's viewGrappleConfig (gUseUnifiedView on) copied view 2's _cs into view 0, and with
     # one view per player there is no view 2: view 0 had no camera, every paused frame was dropped and the screen went black on every PC.
     # A WOTM_SHOTS photo is written only when the window draws a frame, so both PCs must write the one taken while paused
-    'pause_screen'  = @{ ExtraEnv = 'WOTM_SHOTS=30'; PlayerEnv = '1:PS2X_PAD=24:0.3:start'; Secs = 40
+    'pause_screen'  = @{ ExtraEnv = 'WOTM_SHOTS=30'; PlayerEnv = '1:PS2X_PAD=24:0.3:start;25:0.3:up;26:0.3:cross'; Secs = 40
                          Expect = '\[dialog\] 0 opened|||\[shot\] shot_30\.png' }
     # 1-win target: the "vencer" cheat (timed by g_frame, the same on both) knocks out player 2, dialog 5 opens on both PCs and player 1's
     # X picks PLAY AGAIN (the cursor starts there; the dialog accepts any player's d-pad, so player 2 stays still): round 2 starts and
@@ -87,18 +87,18 @@ $checks = [ordered]@{
     'different_mods' = @{ PlayerEnv = '2:WOTM_MODS=0'; Secs = 30; ExpectRefused = 'game configuration differs' }
     # training on one PC only: it is outside the configuration hash and changes the game state (the pause menu gets two more rows, the
     # dummy, the refills), so online it is ignored; player 1 pauses to prove the menu stays equal
-    'training_online' = @{ PlayerEnv = '1:WOTM_TRAINING=1;PS2X_PAD=24:0.3:start'; Secs = 40
+    'training_online' = @{ PlayerEnv = '1:WOTM_TRAINING=1;PS2X_PAD=24:0.3:start;25:0.3:up;26:0.3:cross'; Secs = 40
                            Expect = '1:\[training\] WOTM_TRAINING ignored|||\[dialog\] 0 opened' }
     # 3 players (the game's 30 Hz mode: fixed step 2, quadrant views, wotm_split4's grapple hook), modern camera on everyone, player 2
     # pauses (the pause menu, the FIELD-bit fix of rtReturnToShell and the paused HUD all in lockstep)
-    'pause_3p'      = @{ Players = 3; PlayerEnv = '1:WOTM_CAMERA=1|||2:WOTM_CAMERA=1;PS2X_PAD=24:0.3:start|||3:WOTM_CAMERA=1'; Secs = 50
+    'pause_3p'      = @{ Players = 3; PlayerEnv = '1:WOTM_CAMERA=1|||2:WOTM_CAMERA=1;PS2X_PAD=24:0.3:start;25:0.3:up;26:0.3:cross|||3:WOTM_CAMERA=1'; Secs = 50
                          Expect = '\[dialog\] 0 opened' }
     # 3 players, player 3 (camera 2, the one the orbit code special-cases in the unified view) with the mouse orbit, its own sensitivity
     # and inversion, and the pause: the motion travels in its input, so every PC turns that camera alike across the pause
-    'pause_3p_mouse' = @{ Players = 3; PlayerEnv = '1:WOTM_CAMERA=1|||2:WOTM_CAMERA=1|||3:WOTM_CAMERA=1;WOTM_CAMSENS=8;WOTM_CAMINVERT=1;WOTM_ORBITMOUSE=300:900:4:1;PS2X_PAD=24:0.3:start'
+    'pause_3p_mouse' = @{ Players = 3; PlayerEnv = '1:WOTM_CAMERA=1|||2:WOTM_CAMERA=1|||3:WOTM_CAMERA=1;WOTM_CAMSENS=8;WOTM_CAMINVERT=1;WOTM_ORBITMOUSE=300:900:4:1;PS2X_PAD=24:0.3:start;25:0.3:up;26:0.3:cross'
                           Secs = 50; Expect = '\[dialog\] 0 opened' }
     # 3 players with Turbo (2 fields per frame on top of the 30 Hz mode) and a pause by player 1
-    'turbo_3p'      = @{ Players = 3; Modifiers = 'turbo'; PlayerEnv = '1:PS2X_PAD=24:0.3:start'; Secs = 45
+    'turbo_3p'      = @{ Players = 3; Modifiers = 'turbo'; PlayerEnv = '1:PS2X_PAD=24:0.3:start;25:0.3:up;26:0.3:cross'; Secs = 45
                          Expect = '\[dialog\] 0 opened' }
     # a skin made by the character creator in every PC's mods folder (the same folder) does not break the mods digest or the
     # lockstep; the skin itself is not picked online (the lobby carries disc costumes only, #14). Every log must have loaded it.

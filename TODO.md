@@ -28,6 +28,8 @@ How it works today: `docs/passos/MODS.md` ("Skins", "Custom monsters").
 - The campaign is for 1 player: the game mode (`m_gameMode`), the cinematics and the stages with bosses (extra slots 0x1C0/0x1E0 in the Capitol, 0x1A0) need to be revisited.
 
 ## Gaps (cheap, at any time)
+- **Map editor:** the session's lock is held during a save and during the per-frame `toMap` (`wotm_mapedit.inc`, `tick`), so the window can stall for a moment; the "SAVED" message stays after later unsaved edits; map ids such as `con` or `nul` pass the id check but are reserved device names on Windows; F5 does nothing while the editor is open (it keeps the free camera on); `parseScript`, `reset` on a copy and the id check have no tests.
+- **Character creator (#42):** the next steps are parked, not dropped. Step 2 (custom monster: HUD name, announcer line, camera, `ai`) adds little over created skins, which already travel online (lobby protocol 5); step 3 (parts and shapes) needs the `.NGP`/`.PTR` writer that map creator step 3 (#10) would build first.
 
 ## Ongoing
 - **Off the critical path:** an oracle for functions with calls; coverage with gameplay to feed back into `boot_coverage_asm.csv` (`57d4afd:docs/investigacoes/2026-10-19/pendencias_oracle_cobertura.md`, sections 2 and 3).

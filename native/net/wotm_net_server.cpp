@@ -690,16 +690,19 @@ namespace wotm_net
         }
     }
 
+    void Server::refuse(PeerRef peer, const std::string &why)
+    {
+        send(peer, proto::kControl, proto::encode(proto::Reject{why}), true);
+        if (peer.enet)
+            enet_peer_disconnect_later(peer.enet, 0);
+        else
+            peer.ws->link->close();   // serviceWebSockets drops it on the next pass
+        log("match: rejected (%s)", why.c_str());
+    }
+
     void Server::onJoin(PeerRef peer, const proto::Join &j)
     {
-        auto reject = [&](const std::string &why) {
-            send(peer, proto::kControl, proto::encode(proto::Reject{why}), true);
-            if (peer.enet)
-                enet_peer_disconnect_later(peer.enet, 0);
-            else
-                peer.ws->link->close();   // serviceWebSockets drops it on the next pass
-            log("match: rejected (%s)", why.c_str());
-        };
+        auto reject = [&](const std::string &why) { refuse(peer, why); };
         if (j.protocol != proto::kProtocol)
             return reject("different protocol");
         if (dataOf(peer))
@@ -716,13 +719,19 @@ namespace wotm_net
                     continue;
                 if (s.joined)
                     return reject("token already used");
+                // a seat that can't play this match: refused, and remembered so the match never starts with it neutral
+                auto refuseSeat = [&](const std::string &why) {
+                    if (m->refusal.empty())
+                        m->refusal = s.name + " could not join (" + why + ")";
+                    reject(why);
+                };
                 if (lobbies_[li].build != j.buildId && !lobbies_[li].build.empty())
-                    return reject("different build (" + j.buildId + " vs " + lobbies_[li].build + ")");
+                    return refuseSeat("different build (" + j.buildId + " vs " + lobbies_[li].build + ")");
                 if (!m->config.empty() && m->config != j.configHash)
                 {
                     const std::string what = confighash::mismatch(j.configHash, m->config);
-                    return reject("game configuration differs from the others" + (what.empty() ? "" : ": " + what) + " (" +
-                                  j.configHash + " vs " + m->config + ")");
+                    return refuseSeat("game configuration differs from the others" + (what.empty() ? "" : ": " + what) + " (" +
+                                      j.configHash + " vs " + m->config + ")");
                 }
                 if (m->config.empty())
                     m->config = j.configHash;
@@ -834,6 +843,22 @@ namespace wotm_net
             Match *m = l.match.get();
             if (!m)
                 continue;
+            if (!m->started && !m->refusal.empty())
+            {
+                // a refused seat: nobody plays this match; everyone already in hears who and why, and the lobby waits again
+                log("lobby %s: match cancelled, %s", l.code.c_str(), m->refusal.c_str());
+                for (Slot &s : m->slots)
+                    if (s.peer && !s.gone)
+                    {
+                        dataOf(s.peer) = nullptr;
+                        refuse(s.peer, "the match did not start: " + m->refusal);
+                    }
+                const int li = m->lobby;
+                l.match.reset();
+                if (!closeIfEmpty(li))
+                    sendMembers(li);
+                continue;
+            }
             if (!m->started)
             {
                 bool all = true;

@@ -20,6 +20,8 @@
 #include "wotm_tint.hpp"
 #include "wotm_creator.hpp"
 #include "wotm_stagemap.hpp"
+#include "wotm_mapedit.hpp"
+#include "wotm_mapedit_live.h"
 #include "net/wotm_camsettings.hpp"
 #include "net/wotm_inputfile.hpp"
 #include "net/wotm_confighash.hpp"
@@ -44,6 +46,18 @@
 #include <set>
 #include <string>
 #include <vector>
+#if defined(_MSC_VER)   // the SSE intrinsics, the way the runtime's ps2_runtime_macros.h includes them
+#include <intrin.h>
+#elif defined(USE_SSE2NEON)
+#include "sse2neon.h"
+#else
+#include <immintrin.h>
+#endif
+#ifdef _MSC_VER
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
 
 namespace
 {
@@ -84,6 +98,69 @@ namespace
     using wotm::M4;
 
     bool near(float a, float b, float eps = 1e-4f) { return std::fabs(a - b) <= eps * std::max(1.f, std::fabs(b)); }
+
+    // A digest that must be the same on every machine: printed only when it differs, with the value it should have
+    bool digestIs(const char *what, uint64_t got, uint64_t want)
+    {
+        if (got != want)
+            std::printf("  %s digest %016llx, want %016llx\n", what, static_cast<unsigned long long>(got), static_cast<unsigned long long>(want));
+        return got == want;
+    }
+
+    // What the code under test writes to stderr (the mods registry's [mods] and [stages] lines) while it lives, so the test asserts
+    // those lines instead of letting them into the test output
+    class StderrCapture
+    {
+      public:
+        StderrCapture()
+        {
+            std::fflush(stderr);
+            m_file = std::tmpfile();
+            m_saved = dupFd(fdOf(stderr));
+            if (m_file && m_saved >= 0)
+                dup2Fd(fdOf(m_file), fdOf(stderr));
+        }
+        ~StderrCapture() { restore(); }
+        // everything written so far; stderr goes back to the test output
+        std::string take()
+        {
+            restore();
+            std::string text;
+            if (!m_file)
+                return text;
+            std::rewind(m_file);
+            char buf[4096];
+            for (size_t n; (n = std::fread(buf, 1, sizeof buf, m_file)) > 0;)
+                text.append(buf, n);
+            std::fclose(m_file);
+            m_file = nullptr;
+            return text;
+        }
+
+      private:
+        void restore()
+        {
+            if (m_saved < 0)
+                return;
+            std::fflush(stderr);
+            dup2Fd(m_saved, fdOf(stderr));
+            closeFd(m_saved);
+            m_saved = -1;
+        }
+#ifdef _MSC_VER
+        static int fdOf(FILE *f) { return _fileno(f); }
+        static int dupFd(int fd) { return _dup(fd); }
+        static int dup2Fd(int from, int to) { return _dup2(from, to); }
+        static void closeFd(int fd) { _close(fd); }
+#else
+        static int fdOf(FILE *f) { return fileno(f); }
+        static int dupFd(int fd) { return dup(fd); }
+        static int dup2Fd(int from, int to) { return dup2(from, to); }
+        static void closeFd(int fd) { close(fd); }
+#endif
+        FILE *m_file = nullptr;
+        int m_saved = -1;
+    };
 
     // rotation around Z (row vectors: row 0 = image of the X axis), per-row scale and translation
     M4 rotZ(float deg, float sx = 1.f, float sy = 1.f, float sz = 1.f, float tx = 0.f, float ty = 0.f, float tz = 0.f)
@@ -483,6 +560,20 @@ namespace
         CHECK(!o.neutral && !o.start);
     }
 
+    // The list also follows this PC's sampled pad (where scripted input, PS2X_PAD, arrives; the devices are read apart): up and down
+    // move, X acts, triangle and O go back
+    TEST(personal_pause_list_follows_the_sampled_pad)
+    {
+        namespace pp = wotm::personalpause;
+        const pp::ListKeys idle = pp::listKeys(0xFFFF);
+        CHECK(!idle.up && !idle.down && !idle.ok && !idle.back);
+        CHECK(pp::listKeys(0xFFFF & ~0x0010).up && pp::listKeys(0xFFFF & ~0x0040).down);
+        CHECK(pp::listKeys(0xFFFF & ~0x4000).ok);
+        CHECK(pp::listKeys(0xFFFF & ~0x1000).back && pp::listKeys(0xFFFF & ~0x2000).back);
+        const pp::ListKeys start = pp::listKeys(0xFFFF & ~pp::kStart);   // Start has its own edge (it closes the menu)
+        CHECK(!start.up && !start.down && !start.ok && !start.back);
+    }
+
     // A game dialog appearing while the menu is open (the match ends, someone else pauses for everyone) closes it: the game's own
     // screen needs this player's input
     TEST(personal_pause_closes_when_the_game_takes_over)
@@ -855,8 +946,51 @@ TEST(detmath_same_bits_on_every_machine)
         mix(dm::atan2f(a[i], b[i + 1]));
         mix(dm::atan2f(b[i], b[i + 1]));
     }
-    std::printf("  detmath digest %016llx\n", static_cast<unsigned long long>(h));
-    CHECK(h == 0xa6c8104174bda8ccull);
+    CHECK(digestIs("detmath", h, 0xa6c8104174bda8ccull));
+}
+
+// The translated game's VU0 macro ops use raw SSE intrinsics (PS2Recomp's vu_translation_helpers.cpp): VMINI/VMAX as _mm_min_ps
+// and _mm_max_ps, VFTOI as _mm_cvttps_epi32 after scaling, VITOF as _mm_cvtepi32_ps. x86 runs them natively, the browser through
+// Emscripten's SSE emulation and ARM through sse2neon, included the way ps2_runtime_macros.h includes them. Their edges (+-0, NaN,
+// infinities, values out of int range) must give the same bits everywhere, or the PCs desync. The expected digests are x86's.
+TEST(vu_simd_edges_same_bits_on_every_machine)
+{
+    const uint32_t edges[] = {
+        0x00000000u, 0x80000000u, 0x00000001u, 0x80000001u, 0x00800000u, 0x80800000u, 0x3F800000u, 0xBF800000u, 0x3FC00000u,
+        0xBFC00000u, 0x3F000000u, 0xC0200000u, 0x4EFFFFFFu, 0x4F000000u, 0xCF000000u, 0xCF000001u, 0x4F32D05Eu, 0xCF32D05Eu,
+        0x477FFF80u, 0x7F7FFFFFu, 0xFF7FFFFFu, 0x7F800000u, 0xFF800000u, 0x7FC00000u, 0xFFC00000u, 0x7F800001u, 0x7FFFFFFFu,
+        0xFFFFFFFFu, 0x0000FFFFu, 0x12345678u, 0xDEADBEEFu, 0x46FFFE00u};
+    const size_t n = sizeof(edges) / sizeof(edges[0]);
+    auto load = [](uint32_t a, uint32_t b, uint32_t c, uint32_t d) { return _mm_castsi128_ps(_mm_set_epi32(int(d), int(c), int(b), int(a))); };
+    auto mix = [](uint64_t &h, __m128 v) {   // FNV-1a over the result bits
+        alignas(16) uint32_t u[4];
+        _mm_store_si128(reinterpret_cast<__m128i *>(u), _mm_castps_si128(v));
+        for (uint32_t w : u)
+            for (int k = 0; k < 4; ++k)
+                h = (h ^ ((w >> (8 * k)) & 0xFFu)) * 1099511628211ull;
+    };
+    uint64_t hMin = 1469598103934665603ull, hMax = hMin, hFtoi = hMin, hItof = hMin;
+    for (size_t i = 0; i < n; ++i)   // every pair, in both operand orders
+        for (size_t j = 0; j < n; j += 2)
+        {
+            const __m128 a = load(edges[i], edges[i], edges[j], edges[j + 1]);
+            const __m128 b = load(edges[j], edges[j + 1], edges[i], edges[i]);
+            mix(hMin, _mm_min_ps(a, b));
+            mix(hMax, _mm_max_ps(a, b));
+        }
+    const float ftoiScales[] = {1.f, 16.f, 4096.f, 32768.f}, itofScales[] = {1.f, 1.f / 16.f, 1.f / 4096.f, 1.f / 32768.f};
+    for (size_t i = 0; i < n; i += 4)
+    {
+        const __m128 v = load(edges[i], edges[i + 1], edges[i + 2], edges[i + 3]);
+        for (float s : ftoiScales)
+            mix(hFtoi, _mm_castsi128_ps(_mm_cvttps_epi32(_mm_mul_ps(v, _mm_set1_ps(s)))));
+        for (float s : itofScales)
+            mix(hItof, _mm_mul_ps(_mm_cvtepi32_ps(_mm_castps_si128(v)), _mm_set1_ps(s)));
+    }
+    CHECK(digestIs("VMINI", hMin, 0xea74e6914d9010abull));
+    CHECK(digestIs("VMAX", hMax, 0xf14e6293080b6b4full));
+    CHECK(digestIs("VFTOI", hFtoi, 0xed114ca969162d63ull));
+    CHECK(digestIs("VITOF", hItof, 0xeb6bcbf76bcf5095ull));
 }
 
 // The orbit (and the F5 free camera) write these axes into the game camera's matrix, which then decides culling, LOD and
@@ -1001,7 +1135,9 @@ TEST(mods_skin_owner)
     fs::create_directories(root / "Other" / "skins" / "green");
     { std::ofstream o(root / "Other" / "skins" / "green" / "skin.json"); o << wotm::creator::skinJson("togera", "green", "GREEN", 1); }
     wotm::mods::Registry reg;
+    StderrCapture err;
     reg.scan(root);
+    CHECK(err.take() == "[mods] skin togera/green (\"GREEN\", Other) = costume 4 (LIZARD4); base 1, 0 png\n");
     CHECK(reg.skinOwner(3, "green") == "Other");   // Togera's green belongs to Other
     CHECK(reg.skinOwner(3, "blue").empty());       // no such skin
     CHECK(reg.skinOwner(1, "green").empty());      // the same id on another monster is another skin
@@ -1042,6 +1178,7 @@ TEST(mods_add_skin_after_scan)
         p << "not a real png";
     }
     wotm::mods::Registry reg;   // a fresh one, not get(): the singleton stays untouched
+    StderrCapture err;
     reg.scan(root / "nothing_here");   // ready, empty
     CHECK(reg.ready() && reg.skins().empty());
     std::string why;
@@ -1066,6 +1203,10 @@ TEST(mods_add_skin_after_scan)
     CHECK(reg.aliasOf("MON/LIZARD5.TEX") == "MON/LIZARD2.TEX" && reg.aliasOf("MON/LIZARD4.TEX") == "MON/LIZARD1.TEX");
     fs::create_directories(root / "Creator" / "skins" / "bad");
     CHECK(!reg.addSkin(root / "Creator" / "skins" / "bad", why) && why.find("skin.json") != std::string::npos);
+    // one line per skin registered (green three times: added, overwritten, the same folder written another way); refusals only
+    // come back in `why`
+    const std::string green = "[mods] skin togera/green (\"GREEN TOGERA\", Creator) = costume 4 (LIZARD4); base 1, 1 png\n";
+    CHECK(err.take() == green + green + green + "[mods] skin togera/blue (\"BLUE\", Creator) = costume 5 (LIZARD5); base 2, 0 png\n");
     fs::remove_all(root);
 }
 
@@ -1094,7 +1235,13 @@ TEST(mods_scan_stages)
             {"node": "0x200", "turn": 90}, {"addpowerup": 1, "from": [0, 0, 0], "at": [1, 1, 1]}, {"copy": "0x100", "at": [4, 5, 6], "turn": 45}]})");
     put(root / "A" / "MON" / "LIZARD1.TEX", "tex");   // a real override, so the file list is not empty
     wotm::mods::Registry reg;
+    StderrCapture err;
     reg.scan(root);
+    const std::string printed = err.take();
+    std::string stageLines;   // the [stages] lines also go to the log, nothing else
+    for (const std::string &l : reg.stageLog())
+        stageLines += l + "\n";
+    CHECK(!stageLines.empty() && printed == stageLines);
     const std::vector<wotm::mods::Stage> st = reg.stages();
     CHECK(st.size() == 3);
     if (st.size() == 3)
@@ -1940,8 +2087,6 @@ TEST(stagemap_powerups_apply)
     };
     const std::vector<uint8_t> before = buf;
     sm::PowerUpResult r = sm::applyPowerUps(mem, kPoints, 4, edits);
-    for (const std::string &l : r.log)
-        std::printf("  %s\n", l.c_str());
     CHECK(r.moved == 2 && r.refused == 3 && r.log.size() == 3);
     CHECK((pos(1) == std::array<float, 3>{500.f, 600.f, 70.f}) && (pos(2) == std::array<float, 3>{-1.5f, 2.5f, 3.5f}));
     CHECK((pos(0) == std::array<float, 3>{0.f, -50.f, 40.f}) && (pos(3) == std::array<float, 3>{300.f, -50.f, 43.f}));
@@ -2009,8 +2154,6 @@ TEST(stagemap_powerups_append)
         };
         uint32_t count = 0;
         const sm::PowerUpResult r = sm::appendPowerUps(mem, kPoints, 3, adds, count);
-        for (const std::string &l : r.log)
-            std::printf("  %s\n", l.c_str());
         CHECK(count == 6 && r.moved == 3 && r.refused == 2 && r.log.size() == 2);
         CHECK(tailOf(3, 1) && tailOf(4, 1) && tailOf(5, 2) && buf[sm::kPointSize * 5 + 0x2C] == 3);
         CHECK((pos(3) == std::array<float, 3>{500.f, 600.f, 70.f}) && (pos(4) == std::array<float, 3>{-1.5f, 2.5f, 3.5f}) &&
@@ -2552,11 +2695,10 @@ TEST(stagemap_same_bits_on_every_machine)
     uint64_t h = sm::fnv1a(s.im.img.data(), s.im.img.size());
     for (uint8_t byte : s.im.res)
         h = (h ^ byte) * 0x100000001B3ull;
-    std::printf("  stagemap digest %016llx\n", static_cast<unsigned long long>(h));
     CHECK(r.applied == 3 && s.im.gridProblems(s.g) == 0);
     // 0x035d31e0eff6d986 with the 1 MB reserve at 0x3EFF000; the 4 MB reserve (0x3BFF000) changes only the 5 reserve pointers the
     // edits write (each 0x300000 lower), no float bit
-    CHECK(h == 0x7ebbfd393eca9736ull);
+    CHECK(digestIs("stagemap", h, 0x7ebbfd393eca9736ull));
 }
 
 // The same for copies: a step 1 move, turned and plain copies of a world piece (one past the grid's edge, so the clamp's bits are
@@ -2578,9 +2720,6 @@ TEST(stagemap_copy_same_bits_on_every_machine)
     uint64_t h = sm::fnv1a(s.im.img.data(), s.im.img.size());
     for (uint8_t byte : s.im.res)
         h = (h ^ byte) * 0x100000001B3ull;
-    std::printf("  stagemap copy digest %016llx\n", static_cast<unsigned long long>(h));
-    for (const std::string &l : r.log)
-        std::printf("  %s\n", l.c_str());
     CHECK(r.applied == 1 && r.copied == 6 && r.copyRefused == 0 && s.im.gridProblems(s.g) == 0);
     CHECK(logHas(r, "copy " + hexOff(s.off(s.tD)) + " (edit 6): kept inside the collision grid's edge, at "));
     // the ROTATE's copy is a ROTATE at its place with turned rows (wotm_stagemap.cpp's ROTATE root branch)
@@ -2591,7 +2730,7 @@ TEST(stagemap_copy_same_bits_on_every_machine)
     CHECK(rc && s.im.r32(rc) == s.im.r32(rB) && s.im.rf(rc + 0x40) == 210.5f && s.im.rf(rc + 0x44) == 590.25f &&
           s.im.rf(rc + 0x48) == 2.f && s.im.rf(rc + 0x10) != 0.6f && s.im.rf(rc + 0x18) == s.im.rf(rB + 0x18));
     // measured on Windows, MSVC x64; the Mac (clang, arm64) must print the same. 0x946f58d8ff7f329e before the ROTATE copy
-    CHECK(h == 0xe6ad18f1f1b154feull);
+    CHECK(digestIs("stagemap copy", h, 0xe6ad18f1f1b154feull));
 }
 
 TEST(stagemap_copy_set)
@@ -3612,9 +3751,6 @@ TEST(stagemap_copy_logs)
         CHECK(int(r.log.size()) == refused + 1);   // the refusals come last
         CHECK(r.copySummary == "copies: 2 applied, 1 refused; reserve " + kb(res.next - sm::kReserve) +
                                    " of 16 KB; interactives 17 of 17, destructibles 7 of 1400, pickup room 0 KB (no limit)");
-        for (const std::string &l : r.log)
-            std::printf("  %s\n", l.c_str());
-        std::printf("  %s\n", r.copySummary.c_str());
     }
     {
         CopyStage s;   // the edit number counts the piece edits written before the copies (write()'s order)
@@ -3817,6 +3953,210 @@ namespace
 // Per stage: the C++ coverage rule gives exactly the stock cells, the C++ pieces equal stage_map.py's, and a realistic edit
 // set (a destructible removed, a piece moved across cells, a TRANSLATE turned 90, a ROTATE turned 15) all applies and leaves
 // the grid rule holding.
+// Map editor core (wotm_mapedit.hpp) on the stagemap tests' Stage: pieces tA (TRANSLATE 100,100,0, a GROUP of radius 20 under it),
+// rB (ROTATE 30 degrees at 500,100,0, an OBJECT of radius 10) and tC (TRANSLATE 700,700,0, an OBJECT of radius 10)
+namespace
+{
+    namespace me = wotm::mapedit;
+    int pieceIndex(const std::vector<me::Piece> &ps, uint32_t node)
+    {
+        for (size_t i = 0; i < ps.size(); ++i)
+            if (ps[i].node == node)
+                return int(i);
+        return -1;
+    }
+}
+
+TEST(mapedit_pieces_and_pick)
+{
+    Stage s;
+    const std::vector<me::Piece> ps = me::pieces(s.im.mem());
+    CHECK(ps.size() == 3);
+    const int a = pieceIndex(ps, s.tA), b = pieceIndex(ps, s.rB), c = pieceIndex(ps, s.tC);
+    CHECK(a >= 0 && b >= 0 && c >= 0);
+    if (a < 0 || b < 0 || c < 0)
+        return;
+    CHECK(ps[a].pos[0] == 100.f && ps[a].pos[1] == 100.f && ps[a].pos[2] == 0.f);
+    CHECK(ps[b].pos[0] == 500.f && ps[b].pos[1] == 100.f);
+    CHECK(near(ps[a].centre[0], 100.f) && near(ps[a].centre[1], 100.f) && near(ps[a].radius, 20.f));
+    CHECK(near(ps[c].centre[0], 700.f) && near(ps[c].radius, 10.f));
+    // straight down onto tA; down onto empty ground; along X from the left: tA (x 100) is hit before rB (x 500)
+    const float down[3] = {0, 0, -1}, east[3] = {1, 0, 0};
+    const float overA[3] = {100, 105, 500}, overNothing[3] = {300, 600, 500}, west[3] = {-100, 100, 0};
+    CHECK(me::pick(ps, overA, down) == a);
+    CHECK(me::pick(ps, overNothing, down) == -1);
+    CHECK(me::pick(ps, west, east) == a);
+    const float behind[3] = {1000, 100, 0};   // looking further east from past every piece: nothing in front
+    CHECK(me::pick(ps, behind, east) == -1);
+}
+
+TEST(mapedit_session_edits_round_trip)
+{
+    Stage s;
+    const std::vector<me::Piece> ps = me::pieces(s.im.mem());
+    const int a = pieceIndex(ps, s.tA), b = pieceIndex(ps, s.rB), c = pieceIndex(ps, s.tC);
+    me::Session ses("CENTRAL", 0x0123456789abcdefull, ps);
+    CHECK(ses.toMap("m1", "EMPTY").edits.empty() && !ses.undo());   // nothing done yet: no edits, nothing to undo
+    ses.selectPiece(a);
+    ses.move(50, 0, 0);
+    ses.turn(90);
+    ses.selectPiece(b);
+    ses.remove();
+    ses.selectPiece(c);
+    ses.copy(100, 0);            // the copy is selected: the next move moves it, not tC
+    ses.move(0, 0, 5);
+    float at[3];
+    CHECK(ses.position(at) && at[0] == 800.f && at[1] == 700.f && at[2] == 5.f);
+    sm::Map m = ses.toMap("m1", "TEST MAP");
+    CHECK(m.id == "m1" && m.name == "TEST MAP" && m.base == "CENTRAL" && m.baseHash == 0x0123456789abcdefull);
+    CHECK(m.edits.size() == 2 && m.copies.size() == 1);
+    if (m.edits.size() == 2 && m.copies.size() == 1)
+    {
+        CHECK(m.edits[0].node == s.off(s.tA) && m.edits[0].move && m.edits[0].pos[0] == 150.f && m.edits[0].turn == 90.f);
+        CHECK(m.edits[1].node == s.off(s.rB) && m.edits[1].remove);
+        CHECK(m.copies[0].node == s.off(s.tC) && m.copies[0].at[0] == 800.f && m.copies[0].at[2] == 5.f);
+    }
+    sm::Map back;
+    std::string why;
+    CHECK(sm::parse(sm::write(m), back, why) && sm::write(back) == sm::write(m));
+    // the edit list applies through the loader: the move and turn of tA and the removal of rB
+    Stage fresh;
+    sm::Reserve res = fresh.im.reserve();
+    const sm::Result r = sm::apply(fresh.im.mem(), uint32_t(fresh.im.img.size()), m, res);
+    CHECK(r.applied == 2 && r.refused == 0 && r.copied + r.copyRefused == 1);
+    // undo walks back one step at a time: the copy's move, the copy, the removal
+    CHECK(ses.undo() && ses.undo() && ses.toMap("m1", "X").copies.empty());
+    CHECK(ses.undo() && ses.toMap("m1", "X").edits.size() == 1);
+    // reset puts the selected piece back where the disc has it
+    ses.selectPiece(a);
+    ses.reset();
+    CHECK(ses.toMap("m1", "X").edits.empty());
+}
+
+TEST(mapedit_pick_finds_items_where_they_stand_now)
+{
+    Stage s;
+    const std::vector<me::Piece> ps = me::pieces(s.im.mem());
+    me::Session ses("CENTRAL", 1, ps);
+    const int a = pieceIndex(ps, s.tA), c = pieceIndex(ps, s.tC);
+    const float down[3] = {0, 0, -1}, overA[3] = {100, 100, 500}, newA[3] = {300, 300, 500}, overC[3] = {700, 700, 500},
+                besideC[3] = {700, 500, 500};
+    ses.selectPiece(a);
+    ses.move(200, 200, 0);
+    CHECK(ses.pickItem(overA, down) == -1);   // tA no longer stands at its disc place
+    CHECK(ses.pickItem(newA, down) == a);
+    ses.selectPiece(c);
+    ses.copy(0, -200);                        // a copy of tC at (700, 500): picked there, as its own item
+    const int copyItem = ses.selected();
+    CHECK(copyItem >= int(ps.size()) && ses.selectedIsCopy() && ses.pieceOf() == c);
+    CHECK(ses.pickItem(besideC, down) == copyItem);
+    ses.remove();                             // a removed copy is gone from the map and from picking
+    CHECK(ses.pickItem(besideC, down) == -1 && ses.toMap("m", "M").copies.empty());
+    ses.selectPiece(c);
+    ses.remove();
+    CHECK(ses.pickItem(overC, down) == -1);
+    // the view lists every item as it stands: the stock pieces first, then the copies; the drawing and the preview read it
+    const std::vector<me::ItemView> v = ses.view();
+    CHECK(v.size() == ps.size() + 1);
+    if (v.size() == ps.size() + 1)
+    {
+        CHECK(v[size_t(a)].pos[0] == 300.f && !v[size_t(a)].copy && !v[size_t(a)].removed && v[size_t(a)].node == s.tA);
+        CHECK(v[size_t(c)].removed && v.back().copy && v.back().removed && near(v[size_t(a)].centre[0], 300.f) && v[size_t(a)].radius > 0);
+    }
+}
+
+// WOTM_MAPEDIT_TEST: the editor's commands as text, run on a session (the runtime check drives the editor this way)
+TEST(mapedit_script_commands)
+{
+    std::vector<me::Command> cmds;
+    std::string why;
+    CHECK(me::parseScript("select 0x100; move 50 0 0 ;turn 90;copy 10 -20; remove; undo; reset;save", cmds, why) && cmds.size() == 8);
+    CHECK(!me::parseScript("select zz", cmds, why) && why.find("select") != std::string::npos);
+    CHECK(!me::parseScript("move 1 2", cmds, why) && why.find("move") != std::string::npos);
+    CHECK(!me::parseScript("fly 3", cmds, why) && why.find("fly") != std::string::npos);
+    CHECK(!me::parseScript("move 1e9 0 0", cmds, why));   // a place the loader would refuse (+-1000000)
+
+    Stage s;
+    const std::vector<me::Piece> ps = me::pieces(s.im.mem());
+    me::Session ses("CENTRAL", 1, ps);
+    char text[160];
+    std::snprintf(text, sizeof text, "select 0x%x; move 50 0 0; turn 90; select 0x%x; copy 100 0; select 0x%x; remove; save", s.off(s.tA),
+                  s.off(s.tC), s.off(s.rB));
+    CHECK(me::parseScript(text, cmds, why));
+    int saves = 0;
+    for (const me::Command &c : cmds)
+        saves += me::run(ses, c) ? 1 : 0;   // run() says true for a save: the caller writes the file
+    CHECK(saves == 1);
+    const sm::Map m = ses.toMap("ed", "ED");
+    CHECK(m.edits.size() == 2 && m.copies.size() == 1);
+    CHECK(!m.edits.empty() && m.edits[0].node == s.off(s.tA) && m.edits[0].pos[0] == 150.f && m.edits[0].turn == 90.f);
+    CHECK(!m.copies.empty() && m.copies[0].node == s.off(s.tC) && m.copies[0].at[0] == 800.f);
+}
+
+TEST(mapedit_slide_follows_the_camera)
+{
+    Stage s;
+    const std::vector<me::Piece> ps = me::pieces(s.im.mem());
+    me::Session ses("CENTRAL", 1, ps);
+    ses.selectPiece(pieceIndex(ps, s.tA));
+    float at[3];
+    ses.slide(10, 0, 0.f);     // camera looking along +X: forward is +X
+    CHECK(ses.position(at) && near(at[0], 110.f) && near(at[1], 100.f));
+    ses.slide(10, 0, 90.f);    // looking along +Y
+    CHECK(ses.position(at) && near(at[0], 110.f) && near(at[1], 110.f));
+    ses.slide(0, 10, 90.f);    // right of +Y is +X
+    CHECK(ses.position(at) && near(at[0], 120.f) && near(at[1], 110.f));
+    ses.selectPiece(-1);       // nothing selected: moves do nothing
+    ses.slide(10, 0, 0.f);
+    CHECK(!ses.position(at));
+}
+
+
+TEST(mapedit_pick_ignores_spheres_around_the_eye_and_prefers_the_piece_inside)
+{
+    const auto sphere = [](float x, float r) { me::Piece p; p.centre[0] = x, p.radius = r; return p; };
+    const float east[3] = {1, 0, 0}, eye[3] = {0, 0, 0}, outside[3] = {-500, 0, 0};
+    // the eye stands inside a big piece's sphere (the ground): aiming at nothing picks nothing, not the sphere's far side
+    CHECK(me::pick({sphere(0, 1000)}, eye, east) == -1);
+    // ... and a small piece in front inside that sphere is the one picked
+    CHECK(me::pick({sphere(0, 1000), sphere(300, 10)}, eye, east) == 1);
+    // from outside, a small piece wholly inside the nearer big sphere is picked rather than the big one
+    CHECK(me::pick({sphere(0, 100), sphere(20, 10)}, outside, east) == 1);
+    // a small piece behind a big one, not inside it, stays hidden behind it
+    CHECK(me::pick({sphere(0, 100), sphere(300, 10)}, outside, east) == 0);
+    // two pieces inside the big sphere, both on the ray: the nearer one, whatever their order
+    CHECK(me::pick({sphere(0, 100), sphere(30, 10), sphere(-30, 10)}, outside, east) == 2);
+    CHECK(me::pick({sphere(0, 100), sphere(-30, 10), sphere(30, 10)}, outside, east) == 1);
+    // the same rules for a session's items
+    me::Session ses("CENTRAL", 1, {sphere(0, 100), sphere(20, 10)});
+    CHECK(ses.pickItem(outside, east) == 1);
+}
+
+TEST(mapedit_undo_keeps_the_last_steps_only)
+{
+    Stage s;
+    const std::vector<me::Piece> ps = me::pieces(s.im.mem());
+    me::Session ses("CENTRAL", 1, ps);
+    ses.selectPiece(pieceIndex(ps, s.tA));
+    for (int i = 0; i < me::kUndoSteps + 50; ++i)
+        ses.move(1, 0, 0);
+    int undone = 0;
+    while (ses.undo())
+        ++undone;
+    CHECK(undone == me::kUndoSteps);
+    float at[3];
+    CHECK(ses.position(at) && near(at[0], 100.f + 50.f));   // the 50 oldest steps are gone for good
+}
+
+TEST(mapedit_window_commands_wait_in_a_bounded_queue)
+{
+    WotmMapEdit live;
+    me::Command c;
+    c.kind = me::Command::Undo;
+    for (int i = 0; i < WotmMapEdit::kMaxQueued + 40; ++i)
+        live.push(c);
+    CHECK(int(live.cmds.size()) == WotmMapEdit::kMaxQueued);
+}
 TEST(stagemap_stock_grid_rule)
 {
     const std::vector<std::string> stages = envList("WOTM_TEST_STAGE"), pieceFiles = envList("WOTM_TEST_PIECES");
@@ -4711,8 +5051,7 @@ TEST(rtz_same_bits_on_every_machine)
         mix(bitsOfDouble(wotm::rtz::add((double)t.c, p)), 8);
         mix(bitsOfDouble(wotm::rtz::sub((double)t.c, p)), 8);
     }
-    std::printf("  rtz digest %016llx\n", static_cast<unsigned long long>(h));
-    CHECK(h == 0x4db21735e0cf6d5aull);
+    CHECK(digestIs("rtz", h, 0x4db21735e0cf6d5aull));
 }
 
 TEST(rtz_edges)

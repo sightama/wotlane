@@ -932,11 +932,18 @@ static void pauseDialogEnd()
     g_where = InMenu;
     publishPause();
 }
+// The devices plus this PC's sampled pad (scripted input, PS2X_PAD, only reaches the pad), for the personal list
+static void readPersonalList(bool out[kPanelActs], uint16_t buttons)
+{
+    readPanel(out);
+    const wotm::personalpause::ListKeys k = wotm::personalpause::listKeys(buttons);
+    out[PUp] |= k.up, out[PDown] |= k.down, out[POk] |= k.ok, out[PBack] |= k.back;
+}
 // The personal list's frame: up/down pick the row (the mouse too), X acts, triangle or O (or Start) is CONTINUE
-static void personalListInput(bool startEdge)
+static void personalListInput(bool startEdge, uint16_t buttons)
 {
     bool now[kPanelActs], e[kPanelActs];
-    readPanel(now);
+    readPersonalList(now, buttons);
     for (int i = 0; i < kPanelActs; ++i)
         e[i] = now[i] && !g_panelPrev[i];
     std::copy(now, now + kPanelActs, g_panelPrev);
@@ -1000,7 +1007,7 @@ static bool personalFrame(uint16_t buttons, bool &start)
         g_personalOptions = false;
         g_pauseTraining = g_pauseMoves = false;
         g_showPreview = true;
-        readPanel(g_panelPrev);
+        readPersonalList(g_panelPrev, buttons);
         wotm::mouse::takeClick(wotm::mouse::g_clickL);
         std::fprintf(stderr, "[pause] personal menu opened (the match keeps running; this player's input is neutral)\n");
         panelSfx(nullptr, nullptr, nullptr, 8);
@@ -1010,7 +1017,7 @@ static bool personalFrame(uint16_t buttons, bool &start)
         wotm_pad::markMenuFrame();
         wotm::mouse::gameMenu();
         if (!g_personalOptions)
-            personalListInput(startEdge);
+            personalListInput(startEdge, buttons);
         else if (panelInput(nullptr, nullptr, nullptr))
             g_personalOptions = false;   // back to the list
     }

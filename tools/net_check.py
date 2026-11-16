@@ -8,7 +8,7 @@
   --drop S      closes the last player after S seconds and checks that the others carry on.
   --extra-env   variables for every player.   --player-env  variables for player N only (what differs on just one PC).
   --expect      regexes every player's log must have ("2:re": player 2's only).   --reject  regexes no log may have.
-  --expect-refused  the server must reject the match with this reason, and nobody may start it.
+  --expect-refused  the server must refuse the match with this reason: every player is told, and nobody may start it.
 Logs and hashes go to <runtime>/net/ (server.log, player<N>.err.log, player<N>.hash). Exit 0 when everything matches.
 """
 import argparse
@@ -47,16 +47,15 @@ def verdict(a, out, server_log):
     fails = []
     logs = {i: gamecheck.read_log(out / f'player{i}.err.log') for i in range(1, a.players + 1)}
     if a.expect_refused:
-        refused = False
+        # every player is told why (the refused one, and the others: "the match did not start: ..."), and none reaches the start
         for i, log in logs.items():
             m = re.search(r'\[net\] stopped: [^\r\n]*' + a.expect_refused + r'[^\r\n]*', log)
             if m:
-                refused = True
                 gamecheck.say(True, f'player {i}: {m.group(0)}')
+            else:
+                fails.append(f"player {i} was not told the match was refused for '{a.expect_refused}'")
             if '[net] start: player' in log:
                 fails.append(f'player {i} started the match')
-        if not refused:
-            fails.append(f"nobody was rejected for '{a.expect_refused}'")
         return fails
     m = re.search(r'DESYNC[^\r\n]*', server_log)
     if m:

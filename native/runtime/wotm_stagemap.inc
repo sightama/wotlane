@@ -87,7 +87,8 @@ PS2Runtime::RecompiledFunction g_origLoadLevelDB = nullptr, g_origZip = nullptr,
                                g_origExportPoints = nullptr, g_origAddInteractive = nullptr, g_origCreatePickup = nullptr;
 
 std::string g_active;          // map id (Registry::stages()), or empty: no map
-bool g_hashed = false;         // g_hash is the hash of the last LoadLevelDB's image (taken only with a map active)
+bool g_hashed = false;         // g_hash is the hash of the last LoadLevelDB's image (taken with a map active or the map editor on)
+uint32_t g_loads = 0;          // completed LoadLevelDB calls (the map editor builds one session per load)
 uint64_t g_hash = 0;
 uint32_t g_size = 0;           // that image's exact size (zipInflateAll's return)
 std::string g_stage;           // its stage file name, upper case ("CENTRAL"), from whichLevel
@@ -211,7 +212,8 @@ void loadLevelDBTapped(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
         g_stage = upper(std::string(w, strnlen(w, 15)));
     }
     g_pending = true;
-    if (!g_active.empty())   // the map is chosen before the load (WOTM_MATCH, the stage selection's confirm)
+    ++g_loads;
+    if (!g_active.empty() || g_wotmMapEdit.enabled)   // the map is chosen before the load (WOTM_MATCH, the stage selection's confirm)
     {
         g_hash = sm::fnv1a(rdram + sm::kBase, g_size);
         g_hashed = true;

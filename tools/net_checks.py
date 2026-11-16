@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # ABOUTME: Network match checks on one computer (macOS, Linux or Windows; same table as tools\net_checks.ps1): each runs net_check.py
 # ABOUTME: with 2 players (3 where it says so) and checks identical state on every frame plus the log. Exit 1 if any fail.
-"""Usage: python3 tools/net_checks.py [--only <name>] [--list]"""
+"""Usage: python3 tools/net_checks.py [--only <name>] [--list] [--port 7811]
+  --port: the local server's port (another wotm_server on this computer may hold the default)."""
 import argparse
 import hashlib
 import json
@@ -101,7 +102,7 @@ CHECKS = {
     'pause_panel': dict(player_env='1:PS2X_PAD=24:0.3:start;26:0.2:down;27:0.2:down;28:0.3:cross;31:0.3:start;33:3:up;37:1:square', secs=50,
                         reject=r'\[pause\] panel opened'),
     # pause by player 1, screen while paused: both PCs must write the photo taken while paused (it is written only when a frame is drawn)
-    'pause_screen': dict(extra_env='WOTM_SHOTS=30', player_env='1:PS2X_PAD=24:0.3:start', secs=40,
+    'pause_screen': dict(extra_env='WOTM_SHOTS=30', player_env='1:PS2X_PAD=24:0.3:start;25:0.3:up;26:0.3:cross', secs=40,
                          expect=r'\[dialog\] 0 opened|||\[shot\] shot_30\.png'),
     # 1-win target: "vencer" knocks out player 2, dialog 5 opens on both PCs, player 1's X picks PLAY AGAIN; round 2 plays the same on both
     'wins_target': dict(wins=1, extra_env='WOTM_CHEATS=vencer=8', player_env='1:PS2X_PAD=34:0.3:cross|||2:PS2X_PAD=12:0.3:square', secs=60,
@@ -116,16 +117,16 @@ CHECKS = {
     # different mods (player 2 without the repo's mods): the mods digest is part of the configuration hash and the server rejects it
     'different_mods': dict(player_env='2:WOTM_MODS=0', secs=30, expect_refused='game configuration differs'),
     # training on one PC only: outside the configuration hash and it changes the game state, so online it is ignored
-    'training_online': dict(player_env='1:WOTM_TRAINING=1;PS2X_PAD=24:0.3:start', secs=40,
+    'training_online': dict(player_env='1:WOTM_TRAINING=1;PS2X_PAD=24:0.3:start;25:0.3:up;26:0.3:cross', secs=40,
                             expect=r'1:\[training\] WOTM_TRAINING ignored|||\[dialog\] 0 opened'),
     # 3 players (the game's 30 Hz mode, quadrant views), modern camera on everyone, player 2 pauses
-    'pause_3p': dict(players=3, player_env='1:WOTM_CAMERA=1|||2:WOTM_CAMERA=1;PS2X_PAD=24:0.3:start|||3:WOTM_CAMERA=1', secs=50,
+    'pause_3p': dict(players=3, player_env='1:WOTM_CAMERA=1|||2:WOTM_CAMERA=1;PS2X_PAD=24:0.3:start;25:0.3:up;26:0.3:cross|||3:WOTM_CAMERA=1', secs=50,
                      expect=r'\[dialog\] 0 opened'),
     # 3 players, player 3 (camera 2, special-cased by the orbit code) with the mouse orbit, its own sensitivity and inversion, and the pause
     'pause_3p_mouse': dict(players=3, player_env='1:WOTM_CAMERA=1|||2:WOTM_CAMERA=1|||3:WOTM_CAMERA=1;WOTM_CAMSENS=8;WOTM_CAMINVERT=1;'
-                           'WOTM_ORBITMOUSE=300:900:4:1;PS2X_PAD=24:0.3:start', secs=50, expect=r'\[dialog\] 0 opened'),
+                           'WOTM_ORBITMOUSE=300:900:4:1;PS2X_PAD=24:0.3:start;25:0.3:up;26:0.3:cross', secs=50, expect=r'\[dialog\] 0 opened'),
     # 3 players with Turbo (2 fields per frame on top of the 30 Hz mode) and a pause by player 1
-    'turbo_3p': dict(players=3, mods='turbo', player_env='1:PS2X_PAD=24:0.3:start', secs=45, expect=r'\[dialog\] 0 opened'),
+    'turbo_3p': dict(players=3, mods='turbo', player_env='1:PS2X_PAD=24:0.3:start;25:0.3:up;26:0.3:cross', secs=45, expect=r'\[dialog\] 0 opened'),
     # a skin made by the character creator in every PC's mods folder (the same folder) does not break the mods digest or the lockstep
     # (nobody picks it: creator_skin_online does). Run the WOTM_CREATOR live check first (tools\live_checks.ps1 -Only creator_script):
     # it creates the folder
@@ -165,6 +166,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--only', default='')
     ap.add_argument('--list', action='store_true')
+    ap.add_argument('--port', type=int, default=7811)
     a = ap.parse_args()
     if a.list:
         print('\n'.join(CHECKS))
@@ -184,7 +186,7 @@ def main():
                 print(f'FAILED  setup: {e}')
                 failed.append(name)
                 continue
-        if subprocess.run([sys.executable, str(Path(__file__).with_name('net_check.py'))] + args_for(check)).returncode != 0:
+        if subprocess.run([sys.executable, str(Path(__file__).with_name('net_check.py'))] + args_for(check) + ['--port', str(a.port)]).returncode != 0:
             failed.append(name)
             continue
         if 'after' in check:
