@@ -1,3 +1,18 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index c7c7af5..d856c02 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -54,7 +54,9 @@ if(PS2X_IS_ARM_TARGET)
+     FetchContent_MakeAvailable(sse2neon)
+ 
+     include_directories(${sse2neon_SOURCE_DIR})
+-    add_compile_definitions(USE_SSE2NEON)
++    # WotM: min/max pick the operand x86 picks on +-0 and NaN (VMINI/VMAX in the translated VU0 code), so ARM computes the same
++    # game state as x86 and the browser (online play across machines; vu_simd_edges_same_bits_on_every_machine in native/tests)
++    add_compile_definitions(USE_SSE2NEON SSE2NEON_PRECISE_MINMAX=1)
+ 
+     if(PS2X_IS_AARCH64_TARGET AND APPLE)
+         # macOS ARM64 already uses optimal defaults
 diff --git a/ps2xIOP/CMakeLists.txt b/ps2xIOP/CMakeLists.txt
 index f8d3e44..e5d71e0 100644
 --- a/ps2xIOP/CMakeLists.txt
