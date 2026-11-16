@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
-const { supportProblem, mainThreadFiles, fileSize } = createRequire(import.meta.url)('./support.js');
+const { supportProblem, mainThreadFiles, fileSize, guardPointerLock } = createRequire(import.meta.url)('./support.js');
 const chrome = { chromium: true, firefox: false, jspi: true, isolated: true, mobile: false };
 const firefox = { ...chrome, chromium: false, firefox: true };
 const safari = { ...chrome, chromium: false, firefox: false };
@@ -18,8 +18,8 @@ test('Firefox with JSPI runs it (on range reads); without JSPI it asks to update
   assert.match(supportProblem({ ...firefox, jspi: false }), /update Firefox/);
 });
 
-test('Safari: says which browsers work', () => {
-  assert.match(supportProblem(safari), /Chrome, Edge or Firefox/);
+test('an unsupported browser (Safari): says which browsers work', () => {
+  assert.match(supportProblem(safari), /Chrome, Firefox or Edge on a computer/);
 });
 
 test('the disc and saves read on the main thread everywhere but Chromium (which keeps its proven worker backends)', () => {
@@ -46,4 +46,28 @@ test('a disc file size from a HEAD content-length, else from a range probe conte
   assert.equal(fileSize(null, 'bytes 0-0/*'), null);
   assert.equal(fileSize(null, null), null);
   assert.equal(fileSize('abc', null), null);
+});
+
+test('a pointer lock request on a tab that is not focused neither throws (Firefox) nor leaves a rejected promise (Chrome)', async () => {
+  const calls = [];
+  const throwing = { requestPointerLock(...a) { calls.push(a); throw new Error('WrongDocumentError'); } };
+  guardPointerLock(throwing);
+  assert.equal(throwing.requestPointerLock({ unadjustedMovement: true }), undefined);
+  assert.deepEqual(calls, [[{ unadjustedMovement: true }]]);
+
+  const rejecting = { requestPointerLock() { return Promise.reject(new Error('NotAllowedError')); } };
+  guardPointerLock(rejecting);
+  await rejecting.requestPointerLock();   // would be an unhandled rejection without the guard
+});
+
+test('a pointer lock request that works keeps its result and its this', () => {
+  const el = { requestPointerLock() { return this === el ? 'locked' : 'wrong this'; } };
+  guardPointerLock(el);
+  assert.equal(el.requestPointerLock(), 'locked');
+});
+
+test('an element without pointer lock is left alone', () => {
+  const el = {};
+  guardPointerLock(el);
+  assert.equal('requestPointerLock' in el, false);
 });

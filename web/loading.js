@@ -21,8 +21,12 @@ class LoadingProgress {
   text(now) {
     if (this.lastChunkAt !== null && now - this.lastChunkAt > this.quietMs) this.done = true;
     if (this.done) return null;
-    const percent = Math.min(99, Math.floor((this.bytes / this.expectedBytes) * 100));
-    return `Downloading game data ${percent}%`;
+    const MB = 1 << 20;
+    const raw = Math.floor((this.bytes / this.expectedBytes) * 100);
+    const total = Math.floor(this.expectedBytes / MB);
+    const mb = Math.min(total, Math.floor(this.bytes / MB));
+    const firstVisit = raw < 100 ? ' Only the first visit downloads this much.' : '';
+    return `Downloading game data ${Math.min(99, raw)}% (${mb} of ${total} MB).${firstVisit}`;
   }
 }
 

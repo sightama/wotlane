@@ -43,10 +43,13 @@
   #members { margin: 0; padding-left: 18px; }
   #frontMsg { color: var(--dim); min-height: 1.4em; margin: 0; }
   hr { border: 0; border-top: 1px solid var(--line); margin: 0; width: 100%; }
-  #creations summary { cursor: pointer; color: var(--dim); }
+  #creations summary, #controls summary { cursor: pointer; color: var(--dim); }
+  #controlsTable { border-collapse: collapse; margin-top: 8px; font-size: 13px; width: 100%; }
+  #controlsTable td { padding: 3px 8px 3px 0; vertical-align: top; }
+  #controlsTable td + td { color: var(--dim); }
   #creationList { margin: 8px 0; padding: 0; list-style: none; display: grid; gap: 6px; }
   #creationList span { flex: 1; }
-  #creationsMsg { color: var(--dim); margin: 0; font-size: 12px; }
+  #creationsMsg, #supported { color: var(--dim); margin: 0; font-size: 12px; }
 </style>
 </head>
 <body>
@@ -85,6 +88,10 @@
       <div class="row"><button id="leave">Leave</button></div>
     </div>
     <p id="frontMsg"></p>
+    <details id="controls">
+      <summary>Controls</summary>
+      <table id="controlsTable"></table>
+    </details>
     <details id="creations">
       <summary>Your creations <span id="creationsCount"></span></summary>
       <ul id="creationList"></ul>
@@ -94,6 +101,7 @@
         <select id="editorStage" aria-label="Stage to start from"></select><button id="openEditor">Open</button></div>
       <p id="creationsMsg"></p>
     </details>
+    <p id="supported">Works in Chrome, Firefox and Edge on a computer.</p>
   </div>
 </div>
 <pre id="log"></pre>
@@ -103,6 +111,9 @@
 <script src="loading.js"></script>
 <script src="builtin_mods.js"></script>
 <script src="stall.js"></script>
+<script src="messages.js"></script>
+<script src="pageenv.js"></script>
+<script src="controls.js"></script>
 <script src="boot.js"></script>
 <script type="module" src="front.js"></script>
 </body>

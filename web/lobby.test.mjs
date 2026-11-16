@@ -195,3 +195,18 @@ test('LobbyClient: a refused HELLO closes the socket quietly, so the refusal sta
   assert.equal(ws.readyState, 3);
   assert.equal(closed, false);
 });
+
+test('leave() sends LEAVE and resolves with the code on LEFT', async () => {
+  const { ws, client } = await connected();
+  const left = client.leave();
+  assert.equal(ws.sent[1], 'LEAVE');
+  ws.reply('LEFT QZXW');
+  assert.equal(await left, 'QZXW');
+});
+
+test('leave() is refused with the server reason', async () => {
+  const { ws, client } = await connected();
+  const left = client.leave();
+  ws.reply('ERROR join a lobby first');
+  await assert.rejects(left, /join a lobby first/);
+});

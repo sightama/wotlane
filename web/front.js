@@ -90,7 +90,7 @@ async function connect(build) {
     $('guestSettings').textContent = `Stage: ${stage ? stage.text : s.stage}, wins: ${s.wins === '0' ? 'endless' : s.wins}` +
       (s.mods ? `, modifiers: ${s.mods}` : '');
   };
-  client.onError = say;
+  client.onError = (text) => say(friendlyError(text));
   client.onClose = () => { if (!front.hidden) say('Lost the connection to the game server. Reload the page to try again.'); };
   client.onMatch = (match) => {
     try { sessionStorage.setItem('wotlane.lobby', client.code); } catch { /* private window: not kept */ }
@@ -120,7 +120,7 @@ async function hostOrJoin(join) {
     showLobby(join ? await lobby.join(code, name, monster) : await lobby.create(name, monster), !join);
     if (!join) await sendSettings();
   } catch (e) {
-    say(e.message);
+    say(friendlyError(e.message));
     lobby?.close();
     lobby = null;
     for (const b of buttons) b.disabled = false;
@@ -134,7 +134,7 @@ async function sendSettings() {
   try {
     await lobby.set({ stage: $('lobbyStage').value, wins: $('wins').value, mods });
   } catch (e) {
-    say(e.message);
+    say(friendlyError(e.message));
   }
 }
 
@@ -168,6 +168,11 @@ function init() {
     return;
   }
   initCreations(STAGES);
+  $('controlsTable').replaceChildren(...controlRows().map((cells) => {
+    const tr = document.createElement('tr');
+    tr.replaceChildren(...cells.map((text) => Object.assign(document.createElement('td'), { textContent: text })));
+    return tr;
+  }));
   if (window.wotmDirect) {
     front.hidden = true;
     buildId().then((b) => window.wotmStart(null, b));
@@ -198,12 +203,22 @@ function init() {
     remember('monster', picked);
     if (!lobby) return;
     lobby.monster(picked).then(() => { myMonster = picked; }, (e) => {
-      say(e.message);
+      say(friendlyError(e.message));
       $('monster').value = String(myMonster);   // the server kept the previous one
     });
   });
-  $('start').addEventListener('click', () => lobby?.start().catch((e) => say(e.message)));
-  $('leave').addEventListener('click', () => location.reload());
+  $('start').addEventListener('click', () => lobby?.start().catch((e) => say(friendlyError(e.message))));
+  $('leave').addEventListener('click', async () => {
+    const leaving = lobby;
+    lobby = null;   // a second click has nothing to leave
+    // LEFT only comes when the server still has the player in a lobby: a second of waiting is enough
+    try { await Promise.race([leaving?.leave(), new Promise((r) => setTimeout(r, 1000))]); } catch { /* the connection is closed next either way */ }
+    leaving?.close();
+    $('inLobby').hidden = true;
+    $('choose').hidden = false;
+    for (const id of ['single', 'host', 'join']) $(id).disabled = false;
+    say('');
+  });
 }
 
 init();
