@@ -407,7 +407,8 @@ namespace wotm_net::proto
     // the input goes to the server and from there to every other player, so its path is half its own round trip plus half the
     // slowest other player's, plus kDelayMarginMs for sending and handling. Clamped to 1..15.
     constexpr double kDelayMarginMs = 3.0;
-    inline uint32_t playerDelay(const std::vector<uint32_t> &rttMs, size_t player, double frameMs)
+    // the path in frames (0 when nobody else is there to reach)
+    inline double pathFrames(const std::vector<uint32_t> &rttMs, size_t player, double frameMs)
     {
         uint32_t other = 0;
         bool alone = true;
@@ -415,10 +416,22 @@ namespace wotm_net::proto
             if (q != player)
                 other = std::max(other, rttMs[q]), alone = false;
         if (alone || player >= rttMs.size())
-            return 1u;
-        const double ms = (rttMs[player] + other) / 2.0 + kDelayMarginMs;
-        const double frames = std::ceil(ms / frameMs - 1e-9);
-        return static_cast<uint32_t>(std::clamp(frames, 1.0, 15.0));
+            return 0.0;
+        return ((rttMs[player] + other) / 2.0 + kDelayMarginMs) / frameMs;
+    }
+    inline uint32_t framesFor(double frames) { return static_cast<uint32_t>(std::clamp(std::ceil(frames - 1e-9), 1.0, 15.0)); }
+    inline uint32_t playerDelay(const std::vector<uint32_t> &rttMs, size_t player, double frameMs)
+    {
+        return framesFor(pathFrames(rttMs, player, frameMs));
+    }
+
+    // The delay to advise a player whose delay is `current` during the match: it rises as soon as the path needs another frame, but
+    // only falls when the lower delay leaves half a frame to spare, so a ping sitting on a frame boundary does not flap
+    inline uint32_t adviseDelay(uint32_t current, const std::vector<uint32_t> &rttMs, size_t player, double frameMs)
+    {
+        const double frames = pathFrames(rttMs, player, frameMs);
+        const uint32_t up = framesFor(frames), down = framesFor(frames + 0.5);
+        return up >= current ? up : std::min(current, down);
     }
 
     // the delay everyone starts with (the frames before it are neutral for every player): the largest player's

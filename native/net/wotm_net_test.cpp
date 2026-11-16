@@ -428,6 +428,18 @@ namespace
         CHECK(p::startDelay({20, 20, 120, 120}, f30) == 4u);       // everyone starts at the largest
     }
 
+    // the advice rises as soon as the path needs another frame, but only falls with half a frame to spare, so a ping sitting on a
+    // frame boundary does not move the delay back and forth
+    TEST(proto_advice_rises_at_once_and_falls_with_half_a_frame_to_spare)
+    {
+        const double f60 = 1000.0 / 60.0;
+        CHECK(p::adviseDelay(2, {32, 32}, 0, f60) == 3u);   // 35 ms = 2.1 frames: rises
+        CHECK(p::adviseDelay(3, {29, 29}, 0, f60) == 3u);   // 32 ms = 1.9 frames: 2 would fit, but not with half a frame spare
+        CHECK(p::adviseDelay(3, {20, 20}, 0, f60) == 2u);   // 23 ms = 1.4 frames: falls
+        CHECK(p::adviseDelay(9, {20, 20}, 0, f60) == 2u);   // a large fall goes straight to the target
+        CHECK(p::adviseDelay(3, {40}, 0, f60) == 1u);       // nobody else to reach
+    }
+
     TEST(proto_rtt_window_keeps_the_highest_recent_round_trip)
     {
         p::RttWindow w;

@@ -618,7 +618,7 @@ namespace wotm_net
         for (size_t i = 0; i < m.slots.size(); ++i)
         {
             Slot &s = m.slots[i];
-            const uint32_t d = proto::playerDelay(highs, i, frame);
+            const uint32_t d = proto::adviseDelay(s.advised, highs, i, frame);
             if (!s.peer || s.gone || d == s.advised)
                 continue;
             log("lobby %s: %s's delay %u -> %u frame(s) (ping ms, high end: %u)", l.code.c_str(), s.name.c_str(), s.advised, d, highs[i]);
