@@ -87,6 +87,44 @@ async function lobbyLeave(run, n, spare, players, code) {
     `joined: ${inOk}; the choice is back: ${back}; no reload: ${sameDocument}; the others saw it go: ${outOk}; buttons usable again: ${reset}`);
 }
 
+// "Copy invite link" gives this page's address with the lobby's code; a friend who opens it finds the code filled in and joins (a new
+// browser profile types a name first, one that remembers a name joins by itself), and the address no longer carries the code
+async function inviteLink(run, n, players, code) {
+  const host = players[0];
+  const count = (k) => host.page.waitForFunction((want) => document.querySelectorAll('#members li').length === want, k, { timeout: 15000 }).then(() => true, () => false);
+  const guests = [];
+  try {
+    await host.context.grantPermissions(['clipboard-read', 'clipboard-write']).catch(() => {});
+    await host.page.click('#copyInvite');
+    const link = await host.page.evaluate(async () => {
+      const box = document.getElementById('inviteLink');
+      return box.hidden ? navigator.clipboard.readText() : box.value;
+    }).catch(() => '');
+    const base = new URL(run.target.pageUrl);
+    const linkOk = link === `${base.origin}/?join=${code}`;
+
+    const fresh = await run.openPlayer(n, n + 1, { name: 'Invitee', monster: 5, check: 'match', invite: code });
+    guests.push(fresh);
+    const prefilled = (await fresh.page.inputValue('#joinCode')) === code && /invited/.test(await fresh.frontMsg());
+    const urlClean = await fresh.page.evaluate(() => !location.search.includes('join='));
+    await fresh.page.fill('#name', 'Invitee');
+    await fresh.page.click('#join');
+    const freshJoin = await fresh.settle();
+    const freshIn = freshJoin.joined && await count(n + 1);
+
+    const known = await run.openPlayer(n, n + 2, { name: 'Remember', monster: 5, check: 'match', invite: code, remembered: true });
+    guests.push(known);
+    const knownIn = await known.page.waitForFunction(() => !document.getElementById('inLobby').hidden, null, { timeout: 15000 }).then(() => true, () => false) && await count(n + 2);
+
+    run.report.add(n, 'invite_link', linkOk && prefilled && urlClean && freshIn && knownIn ? 'pass' : 'fail',
+      `link ${JSON.stringify(link)} right: ${linkOk}; code filled in with a message: ${prefilled}; address cleaned: ${urlClean}; new profile joined after typing a name: ${freshIn} (${JSON.stringify(freshJoin.msg)}); profile with a name joined by itself: ${knownIn}`);
+  } finally {
+    for (const g of guests) await g.page.click('#leave').catch(() => {});
+    await run.closeAll(guests);
+    await count(n);
+  }
+}
+
 // a ninth player at a full lobby: the front panel says so and the others are untouched
 async function capCheck(run, n, spare, code, players) {
   await spare.page.fill('#name', 'P9');
@@ -168,6 +206,7 @@ export async function matchSession(run, n) {
     await lobbyErrors(run, n, spare, code);
     if (n === run.opts.maxPlayers) await capCheck(run, n, spare, code, players);
     else await lobbyLeave(run, n, spare, players, code);
+    if (n + 2 <= run.opts.maxPlayers) await inviteLink(run, n, players, code);
     await picks(run, n, players);
 
     const started = await startMatch(players);

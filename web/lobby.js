@@ -50,6 +50,11 @@ export function lobbySocketUrl(location, path) {
   return (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + path;
 }
 
+// the address a friend opens to land in the lobby `code`: this page with only the code
+export function inviteLink(location, code) {
+  return `${location.origin}${location.pathname}?join=${code}`;
+}
+
 // One lobby connection. Requests wait for their reply (or the ERROR that refuses them), in order; MEMBERS, SETTINGS and MATCH can
 // arrive at any time and go to onMembers, onSettings and onMatch. `socket` is a WebSocket (or anything with send, close and the
 // on* handlers).

@@ -67,6 +67,8 @@ Host creates a lobby and shows its code, Join takes one, the owner sets stage, w
 game's environment with the same mapping as `tools/net_lobby.py` `match_env`, with `WOTM_NET` the WebSocket at `/match`, and the build id
 from `version.json` in `WOTM_BUILDID`.
 
+**Invite link:** in a lobby, Copy invite link puts `<page>/?join=CODE` on the clipboard (a page that may not use the clipboard shows the link selected instead). A page opened with `?join=CODE` (`web/pageenv.js` `inviteCode`: only a valid 4-character lobby code counts, and it never reaches the game's environment) fills the code in and removes it from the address; a browser that remembers a name joins at once, any other asks for a name first. The site's password prompt comes before the page, so the link works after it.
+
 A refusal from the server (name taken, no such lobby, lobby full, lobby in a match, build differs) stays on the message line, as a plain sentence (`web/messages.js` maps every ERROR the lobby sends; a test reads them from `wotm_net_server.cpp`, and an unknown text is shown as it is). The live server runs with `--lobbies 4`: a fifth lobby creator reads "All 4 lobbies are busy. Try again soon." Leave sends `LEAVE` and returns to Host/Join without a reload (`LobbyClient.leave()`). The page's own
 `LobbyClient.close()` silences `onClose`, which only reports a connection that dropped. The panel is a flex column that scrolls
 (`#front` has `overflow-y: auto`, its card `margin: auto`), so a card taller than the window (8 members, a zoomed page) keeps Start
