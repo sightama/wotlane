@@ -8,12 +8,12 @@ import { parseArgs } from 'node:util';
 import { loadPlaywright, startLocal, startLive, launchBrowsers, launchFirefox, REPO } from './lib/infra.mjs';
 import { Report } from './lib/report.mjs';
 import { Run } from './lib/session.mjs';
-import { matchSession, roundSession, stallSession, creationsSession, singleSession, savesSession } from './lib/checks.mjs';
+import { matchSession, roundSession, stallSession, creationsSession, singleSession, savesSession, moviesSession } from './lib/checks.mjs';
 
 const USAGE = `Usage: node tools/browser_mp_test/run.mjs [options]
   --target local|live      local: start wotm_server and tools/serve_web.py here (default); live: the site at --url
   --players 1,2,...,8      player counts to test (default 1-8; the ninth-player refusal runs with 8)
-  --checks a,b,...         sessions: match, round, stall, creations, single, saves (default all; stall and creations only at --deep-n)
+  --checks a,b,...         sessions: match, round, stall, creations, single, saves, movies (default all; stall and creations only at --deep-n)
   --deep-n 2,4,8           player counts that also run stall (and 2,4 creations) (default 2,4,8)
   --site <dir>             local: a built web_dist (default <runtime>/web_dist)
   --data <dir>             local: a folder with game.iso and SCUS_971.97 (default <runtime>/web_data)
@@ -31,7 +31,7 @@ Exit code 0 when no row failed.
 const { values: v } = parseArgs({
   options: {
     target: { type: 'string', default: 'local' }, players: { type: 'string', default: '1,2,3,4,5,6,7,8' },
-    checks: { type: 'string', default: 'match,round,stall,creations,single,saves' }, 'deep-n': { type: 'string', default: '2,4,8' },
+    checks: { type: 'string', default: 'match,round,stall,creations,single,saves,movies' }, 'deep-n': { type: 'string', default: '2,4,8' },
     site: { type: 'string' }, data: { type: 'string' }, server: { type: 'string' }, disc: { type: 'string' },
     url: { type: 'string', default: 'https://playwotm.com/' }, password: { type: 'string', default: process.env.WOTM_SITE_PASSWORD ?? '' },
     browser: { type: 'string', default: 'chromium' }, headed: { type: 'boolean', default: false }, isolation: { type: 'string', default: 'context' },
@@ -80,6 +80,7 @@ console.log(`Browser multiplayer test: ${report.meta.target} (build ${target.bui
 try {
   if (sessions.has('single') && counts.includes(1)) { console.log('== single player'); await singleSession(run); }
   if (sessions.has('saves') && counts.includes(1)) { console.log('== saves tab'); await savesSession(run); }
+  if (sessions.has('movies') && counts.includes(1)) { console.log('== startup movies'); await moviesSession(run); }
   for (const n of counts) {
     console.log(`== N=${n}`);
     if (sessions.has('match')) await matchSession(run, n);

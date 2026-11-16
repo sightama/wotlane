@@ -9,9 +9,12 @@ const SAVED = 'Saved as you change them. Changes apply the next time you press P
 
 const root = () => navigator.storage.getDirectory();
 
-function optionRow(option, text, onChange) {
+// the value a page option keeps in the browser's own storage, under its lowercase key
+export const pageKey = (option) => option.key.toLowerCase();
+
+function optionRow(option, text, onChange, recall) {
   const id = 'opt_' + option.key;
-  const { value, custom } = choiceFor(option, text);
+  const { value, custom } = option.page ? { value: recall(pageKey(option), option.def), custom: false } : choiceFor(option, text);
   const select = Object.assign(document.createElement('select'), { id });
   for (const [v, label] of option.choices) select.add(new Option(label, v, false, v === value));
   if (custom) select.add(new Option(`Custom (${value})`, value, true, true));
@@ -69,6 +72,10 @@ export function initSettings({ remember, recall }) {
   let editable = false;
 
   async function save(option, select) {
+    if (option.page) {
+      remember(pageKey(option), select.value);
+      return say(SAVED);
+    }
     const before = choiceFor(option, text).value;
     if (select.value === before) return;   // the file's own value, picked again
     try {
@@ -84,7 +91,7 @@ export function initSettings({ remember, recall }) {
     for (const tab of TABS) {
       const holder = $('panel-' + tab.id).querySelector('.options');
       if (!holder) continue;
-      holder.replaceChildren(...groupedRows(optionsOf(tab.id).map((o) => optionRow(o, text, save))));
+      holder.replaceChildren(...groupedRows(optionsOf(tab.id).map((o) => optionRow(o, text, save, recall))));
     }
     for (const select of card.querySelectorAll('.options select')) select.disabled = !editable;
   }

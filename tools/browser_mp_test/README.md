@@ -32,6 +32,7 @@ logs only (the server-side DESYNC and "left the match" checks are local only).
 | `stall` | `stall_detected`, `away_note` (hidden tab), `stall_prompt` (60 s), `keep_waiting`, `stall_recovery`, `connection_lost`, `reconnect` |
 | `creations` | a created map and skin imported in every tab, picked in the lobby and played (N=2 and 4); `creations_missing`: one tab without them is refused with an explanation |
 | `saves` | the Settings card's Saves tab on seeded saves, without booting the game: `saves_list`, `saves_backup` (a zip download), `saves_delete` (with its automatic backup), `saves_restore`, `saves_refused` (a zip that is not a save changes nothing) |
+| `movies` | the startup movies on Single player: `movie_plays_during_boot` (the movie shows while the game's boot runs), `movie_skippable` (Esc skips each of the two), `movie_game_runs`, `movie_original` (keys do nothing), `movie_off` (no movie file requested); skipped without `data/movies/` (`tools/web_movies.py`) |
 | `single` | `settings_page` (Resolution and Anti-aliasing set on the Settings page reach the game's log) and `single_player` (the front panel's Single player button boots the game) |
 
 `stall` and `creations` run only at the `--deep-n` player counts (default 2, 4, 8).
