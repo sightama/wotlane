@@ -535,6 +535,27 @@ namespace wotm_net
         }
     }
 
+    // well-formed UTF-8 (a browser closes a WebSocket that carries a text frame that isn't)
+    static bool validUtf8(const std::string &s)
+    {
+        size_t i = 0;
+        while (i < s.size())
+        {
+            const unsigned char b = static_cast<unsigned char>(s[i]);
+            const size_t more = b < 0x80 ? 0 : b >= 0xC2 && b <= 0xDF ? 1 : b >= 0xE0 && b <= 0xEF ? 2 : b >= 0xF0 && b <= 0xF4 ? 3 : SIZE_MAX;
+            if (more == SIZE_MAX || i + more >= s.size())
+                return false;
+            for (size_t k = 1; k <= more; ++k)
+                if ((static_cast<unsigned char>(s[i + k]) & 0xC0) != 0x80)
+                    return false;
+            if (b == 0xE0 && static_cast<unsigned char>(s[i + 1]) < 0xA0 || b == 0xED && static_cast<unsigned char>(s[i + 1]) > 0x9F ||
+                b == 0xF0 && static_cast<unsigned char>(s[i + 1]) < 0x90 || b == 0xF4 && static_cast<unsigned char>(s[i + 1]) > 0x8F)
+                return false;
+            i += more + 1;
+        }
+        return true;
+    }
+
     void Server::chat(int ci, const std::string &line)
     {
         Conn &c = *conns_[static_cast<size_t>(ci)];
@@ -548,14 +569,20 @@ namespace wotm_net
         for (size_t i = 4; i < line.size(); ++i)
             if (static_cast<unsigned char>(line[i]) >= 0x20 && static_cast<unsigned char>(line[i]) != 0x7f)
                 text += line[i];
-        const size_t first = text.find_first_not_of(' '), last = text.find_last_not_of(' ');
-        text = first == std::string::npos ? "" : text.substr(first, last - first + 1);
+        if (!validUtf8(text))
+            return void(c.link->sendLine("ERROR chat text is not valid text"));
+        const auto trim = [&text] {
+            const size_t first = text.find_first_not_of(' '), last = text.find_last_not_of(' ');
+            text = first == std::string::npos ? "" : text.substr(first, last - first + 1);
+        };
+        trim();
         if (text.size() > proto::kMaxChatBytes)
         {
             size_t cut = proto::kMaxChatBytes;
             while (cut > 0 && (static_cast<unsigned char>(text[cut]) & 0xC0) == 0x80)
                 --cut;
             text.resize(cut);
+            trim();
         }
         if (text.empty())
             return;

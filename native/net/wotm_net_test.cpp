@@ -1388,6 +1388,10 @@ namespace
         CHECK(readUntil(a, "CHAT ") == "CHAT " + code + " Ana hello  there");
         a.sendLine("CHAT " + std::string(p::kMaxChatBytes + 50, 'x'));
         CHECK(readUntil(b, "CHAT ") == "CHAT " + code + " Ana " + std::string(p::kMaxChatBytes, 'x'));
+        a.sendLine("CHAT bad \xff\xfe bytes");   // not UTF-8: a browser would close its connection on it
+        CHECK(readUntil(a, "ERROR").rfind("ERROR chat text is not valid text", 0) == 0);
+        a.sendLine("CHAT caf\xc3\xa9");
+        CHECK(readUntil(b, "CHAT ") == "CHAT " + code + " Ana caf\xc3\xa9");
         a.sendLine("CHAT    ");   // nothing to say: nothing sent, nothing counted
         for (int i = 0; i < p::kChatBurst; ++i)
             a.sendLine("CHAT burst");
