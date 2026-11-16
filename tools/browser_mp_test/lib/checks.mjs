@@ -285,7 +285,7 @@ export async function roundSession(run, n) {
   }
 }
 
-// after the match every tab is back on the front panel with the old code filled in; what Join does is what the player gets
+// after the match every tab is back on the front panel; a note naming the old code is a promise, and Join must keep it
 async function rejoinAfterMatch(run, n, players, code) {
   const msgs = await Promise.all(players.map((p) => p.frontMsg().catch(() => '')));
   const promised = msgs.every((m) => m.includes(code));

@@ -23,7 +23,7 @@ const USAGE = `Usage: node tools/browser_mp_test/run.mjs [options]
   --browser chromium|chrome  chromium: headless shell with software GL (default); chrome: the installed Chrome (real GPU)
   --headed                 show the browser windows            --isolation context|browser  one shared browser or one per player
   --firefox K              the last K players of each lobby use Playwright's Firefox (mixed lobbies; needs a build with Firefox support)
-  --play-secs 45  --warmup-secs 20  --padlog-frames 480  --width 640  --height 400  --lobby-height 900 (the lobby card needs a tall window)
+  --play-secs 45  --warmup-secs 20  --padlog-frames 480  --width 640  --height 400  --lobby-height 900 (the lobby window; the card scrolls when it is taller)
   --video                  record a video per tab (webm)       --out <dir>  results folder (default <repo>/runtime/browser_mp_test/<time>)
 Exit code 0 when no row failed.
 `;

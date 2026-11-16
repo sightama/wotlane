@@ -47,6 +47,6 @@ logs only (the server-side DESYNC and "left the match" checks are local only).
   when the machine itself is the limit (fps under 50 with the browser using over 75% of the cores).
 - Chromium (headless shell, software GL) is the default; `--browser chrome` uses the installed Chrome with the GPU, `--headed` shows the
   windows. `--isolation browser` starts one browser per player. `--firefox K` makes the last K players of every lobby use Playwright's Firefox
-  (a mixed lobby; needs a build with Firefox support). The lobby gets a tall window (`--lobby-height`, the card is taller than 400 px with 8
-  members) and the game its own size (`--height`).
+  (a mixed lobby; needs a build with Firefox support). The lobby gets its own window height (`--lobby-height`; the card is taller than 400 px with 8
+  members and scrolls) and the game its own size (`--height`).
 - `PS2X_PAD` scripted pads are not used: in the browser build `GetTime()` is a wall-clock time, so a script's seconds never match.
