@@ -190,3 +190,60 @@ test('prettyName shows the names the save keeps as words', () => {
   assert.equal(prettyName('ultra-v'), 'Ultra-V');
   assert.equal(prettyName('undefined'), 'Undefined');
 });
+
+test('a backup made now is never the one trimmed, even when its stamp sorts first', async () => {
+  const root = new Dir();
+  for (let i = 1; i <= AUTO_BACKUPS; i++) await keepAutoBackup(root, enc(`zip${i}`), `2026120${i}-000000`);
+  const name = await keepAutoBackup(root, enc('fresh'), '20260101-000000');   // the clock went back
+  assert.equal(dec(await readAutoBackup(root, name)), 'fresh');
+  assert.equal((await listAutoBackups(root)).length, AUTO_BACKUPS);
+});
+
+test('two backups in the same second keep both', async () => {
+  const root = new Dir();
+  const a = await keepAutoBackup(root, enc('one'), '20260101-000000');
+  const b = await keepAutoBackup(root, enc('two'), '20260101-000000');
+  assert.notEqual(a, b);
+  assert.equal(dec(await readAutoBackup(root, a)), 'one');
+  assert.equal(dec(await readAutoBackup(root, b)), 'two');
+});
+
+test('a clear that fails half way puts the old saves back', async () => {
+  const root = await fullRoot();
+  const before = names((await readSaves(root)).entries);
+  const real = root.removeEntry.bind(root);
+  root.removeEntry = async (name, o) => { if (name === 'mc0') throw new DOMException('busy', 'NoModificationAllowedError'); return real(name, o); };
+  await assert.rejects(replaceSaves(root, [{ name: 'save.json', data: enc('{"battleTokens": 5}') }]), /busy/);
+  root.removeEntry = real;
+  assert.deepEqual(names((await readSaves(root)).entries), before);
+  assert.equal(dec((await readSaves(root)).entries.find((e) => e.name === 'save.json').data), SAVE);
+});
+
+test('a rollback that fails says the saves are in the backup', async () => {
+  const root = await fullRoot();
+  const real = root.getFileHandle.bind(root);
+  root.getFileHandle = async (name, o) => { if (o?.create) throw new DOMException('full', 'QuotaExceededError'); return real(name, o); };
+  await assert.rejects(replaceSaves(root, [{ name: 'save.json', data: enc('{"battleTokens": 5}') }]), /could not be put back/);
+});
+
+test('a zip from Finder with __MACOSX and .DS_Store still restores from inside its folder', async () => {
+  const bytes = await zip([{ name: 'saves/save.json', data: enc(SAVE) }, { name: '__MACOSX/saves/._save.json', data: enc('x') }, { name: 'saves/.DS_Store', data: enc('x') }]);
+  assert.deepEqual(names((await readBackup(bytes)).entries), ['save.json']);
+});
+
+test('a stray file where a card folder belongs does not stop the tab, and delete removes it', async () => {
+  const root = new Dir();
+  await put(root, 'save.json', SAVE);
+  await put(root, 'mc0', 'a file, not a folder');
+  assert.deepEqual(names((await readSaves(root)).entries), ['save.json']);
+  await clearSaves(root);
+  assert.equal(await exists(root, 'mc0'), false);
+});
+
+test('summarize shows only slots that name a monster and a level, and at most 99', () => {
+  const slots = Array.from({ length: 300 }, (_, i) => (i === 0 ? { monster: 'congar', level: 'ufo', lives: 1, score: 2 } : i === 1 ? {} : i === 2 ? [] : null));
+  const s = summarize([{ name: 'save.json', data: enc(JSON.stringify({ saves: slots })) }]);
+  assert.deepEqual(s.slots, [{ slot: 1, monster: 'congar', level: 'ufo', lives: 1, score: 2 }]);
+  const many = summarize([{ name: 'save.json', data: enc(JSON.stringify({ saves: Array.from({ length: 300 }, () => ({ monster: 'a', level: 'b' })) })) }]);
+  assert.equal(many.slots.length, 99);
+});

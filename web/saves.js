@@ -5,15 +5,17 @@ import { zip, unzip } from './zip.js';
 const JSON_FILE = 'save.json';
 const CARDS = ['mc0', 'mc1'];
 const BACKUP_DIR = 'backups';
-const BACKUP_NAME = /^saves-\d{8}-\d{6}\.zip$/;
+const BACKUP_NAME = /^saves-\d{8}-\d{6}(-\d+)?\.zip$/;
 const SEGMENT = /^[A-Za-z0-9][A-Za-z0-9 _.-]{0,63}$/;
 const MAX_FILES = 40;
 const MAX_JSON = 1 << 20;
+const MAX_SLOTS = 99;   // the game's own limit (docs/passos/NATIVO.md, Save in JSON)
 const MAX_UNPACKED = 8 << 20;
 
 export const AUTO_BACKUPS = 5;
 
-const notFound = (e) => e?.name === 'NotFoundError';
+// a missing entry, or one of the wrong kind (a file where a folder belongs): either way there is nothing of that name to read
+const notFound = (e) => e?.name === 'NotFoundError' || e?.name === 'TypeMismatchError';
 const text = new TextDecoder();
 
 async function fileBytes(handle) {
@@ -61,8 +63,8 @@ export function summarize(entries) {
     return out;
   }
   if (typeof save.battleTokens === 'number') out.tokens = save.battleTokens;
-  (save.saves ?? []).forEach((s, i) => {
-    if (s && typeof s === 'object') out.slots.push({ slot: i + 1, monster: String(s.monster), level: String(s.level), lives: Number(s.lives), score: Number(s.score) });
+  (save.saves ?? []).slice(0, MAX_SLOTS).forEach((s, i) => {
+    if (plain(s) && typeof s.monster === 'string' && typeof s.level === 'string') out.slots.push({ slot: i + 1, monster: String(s.monster), level: String(s.level), lives: Number(s.lives), score: Number(s.score) });
   });
   return out;
 }
@@ -95,7 +97,10 @@ const isSavePath = (name) => {
 // A backup zip (or a zip of the save folder) as the entries it restores and the names it leaves out. Everything is checked before
 // anything is written: names, sizes, and that save.json is a save. Throws an Error with a plain sentence
 export async function readBackup(bytes) {
-  const all = await unzip(bytes, { maxEntries: 64, maxBytes: MAX_UNPACKED });
+  const unpacked = await unzip(bytes, { maxEntries: 64, maxBytes: MAX_UNPACKED });
+  // what Finder and Explorer add to a zipped folder is not part of it
+  const junk = (n) => n.startsWith('__MACOSX/') || n.split('/').at(-1) === '.DS_Store' || n.split('/').at(-1) === 'Thumbs.db';
+  const all = unpacked.filter((e) => !junk(e.name));
   if (all.some((e) => !cleanPath(e.name))) throw new Error('The zip has file names that could reach outside the saves, so it was not used.');
   // a zip of the folder itself holds everything inside one folder: look inside it
   const tops = new Set(all.map((e) => e.name.split('/')[0]));
@@ -145,15 +150,19 @@ export async function clearSaves(root) {
 }
 
 // The saves swapped for `entries`: the current ones go first, since a save.json restored over old card files would bring their
-// adventures back. A write that fails puts the old saves back and throws
+// adventures back. A step that fails puts the old saves back and throws; if even that fails the error says so
 export async function replaceSaves(root, entries) {
   const { entries: old } = await readSaves(root);
-  await clearSaves(root);
   try {
+    await clearSaves(root);
     await writeEntries(root, entries);
   } catch (e) {
-    await clearSaves(root).catch(() => {});
-    await writeEntries(root, old).catch(() => {});
+    try {
+      await clearSaves(root).catch(() => {});   // the old files are written over whatever is left
+      await writeEntries(root, old);
+    } catch {
+      throw new Error(`${e.message}. The old saves could not be put back; they are in the automatic backup.`);
+    }
     throw e;
   }
 }
@@ -182,16 +191,21 @@ export async function listAutoBackups(root) {
     const file = await handle.getFile();
     out.push({ name, size: file.size, modified: file.lastModified });
   }
-  return out.sort((a, b) => (a.name < b.name ? 1 : -1));
+  return out.sort((a, b) => b.modified - a.modified || (a.name < b.name ? 1 : -1));
 }
 
-// A zip of the saves a restore or a delete is about to replace, kept in the browser (the newest AUTO_BACKUPS stay)
+// A zip of the saves a restore or a delete is about to replace, kept in the browser; returns its name. The newest AUTO_BACKUPS stay (by the
+// time they were written, never the one just made), and a second backup in the same second gets its own name
 export async function keepAutoBackup(root, bytes, when) {
   const dir = await backupFolder(root, true);
-  const writable = await (await dir.getFileHandle(`saves-${when}.zip`, { create: true })).createWritable();
+  const taken = new Set((await listAutoBackups(root)).map((b) => b.name));
+  let name = `saves-${when}.zip`;
+  for (let n = 2; taken.has(name); n++) name = `saves-${when}-${n}.zip`;
+  const writable = await (await dir.getFileHandle(name, { create: true })).createWritable();
   await writable.write(bytes);
   await writable.close();
-  for (const old of (await listAutoBackups(root)).slice(AUTO_BACKUPS)) await dir.removeEntry(old.name);
+  for (const old of (await listAutoBackups(root)).filter((b) => b.name !== name).slice(AUTO_BACKUPS - 1)) await dir.removeEntry(old.name);
+  return name;
 }
 
 export async function readAutoBackup(root, name) {

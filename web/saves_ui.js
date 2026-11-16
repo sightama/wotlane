@@ -82,10 +82,19 @@ export function initSaves() {
   async function keepCurrent() {
     const { entries } = await readSaves(await root());
     if (!entries.length) return null;
-    const name = stamp(new Date());
-    await keepAutoBackup(await root(), await backupZip(entries), name);
-    return `saves-${name}.zip`;
+    return keepAutoBackup(await root(), await backupZip(entries), stamp(new Date()));
   }
+
+  // what a failed restore or delete tells: the backup made first is where the saves are
+  const withBackup = async (work) => {
+    const kept = await keepCurrent();
+    try {
+      await work();
+    } catch (e) {
+      throw new Error(`${e.message}${kept ? ` Your previous saves are kept as ${kept}.` : ''}`);
+    }
+    return kept;
+  };
 
   // a restore or a delete changes files the game writes itself, so it is refused while another tab runs the game
   async function guard() {
@@ -123,8 +132,7 @@ export function initSaves() {
         ok: 'Restore',
         run: async () => {
           if (!(await guard())) return;
-          const kept = await keepCurrent();
-          await replaceSaves(await root(), incoming.entries);
+          const kept = await withBackup(async () => replaceSaves(await root(), incoming.entries));
           say(`Restored ${plural(incoming.entries.length, 'file', 'files')}.${kept ? ` Your previous saves are kept as ${kept}.` : ''}`);
         },
       });
@@ -142,8 +150,7 @@ export function initSaves() {
       ok: 'Delete',
       run: async () => {
         if (!(await guard())) return;
-        const kept = await keepCurrent();
-        await clearSaves(await root());
+        const kept = await withBackup(async () => clearSaves(await root()));
         say(`Deleted.${kept ? ` Kept as ${kept}.` : ''}`);
       },
     });
@@ -154,7 +161,8 @@ export function initSaves() {
     settle();
     if (!action) return;
     try {
-      await action.run();
+      // one restore or delete at a time across this browser's Settings tabs
+      await (navigator.locks ? navigator.locks.request('wotlane-saves', () => action.run()) : action.run());
     } catch (e) {
       say(`Did not finish: ${e.message}`);
     }
