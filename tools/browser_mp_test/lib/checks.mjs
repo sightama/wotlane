@@ -387,6 +387,9 @@ export async function stallSession(run, n) {
       `after the socket dropped: prompt ${JSON.stringify(p2.text)}, button ${JSON.stringify(p2.leave)}`);
     await victim.page.click('#leaveMatch');
     await victim.page.waitForFunction(() => !document.getElementById('front').hidden, null, { timeout: 15000 });
+    // the last-lobby note comes from a LIST to the server after the panel shows: Join before it lands would take the note for the
+    // server's answer to the Join
+    await victim.page.waitForFunction(() => document.getElementById('frontMsg').textContent !== '', null, { timeout: 10000 }).catch(() => {});
     const msg = await victim.frontMsg();
     const rejoin = await victim.join(code);
     noteRefusal(run, 'rejoin after dropped connection', rejoin);
