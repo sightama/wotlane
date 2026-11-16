@@ -2,7 +2,7 @@
 // ABOUTME: tools/net_lobby.py's match_env) and the lobby client's requests and replies over a fake WebSocket. Run: node --test web/
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { PROTOCOL, parseLine, parseMembers, matchEnv, lobbySocketUrl, LobbyClient } from './lobby.js';
+import { PROTOCOL, parseLine, parseMembers, matchEnv, lobbySocketUrl, lastLobbyNotice, LobbyClient } from './lobby.js';
 
 const MATCH_LINE = 'MATCH lobby=QZXW players=2 stage=9 wins=2 mods=jump,turbo monsters=5,1 names=Ana,Bia ' +
   'seed=12345 step=1 you=1 token=00aa11bb22cc33dd port=7777';
@@ -156,4 +156,19 @@ test('LobbyClient reports an ERROR no request waits for to onError', async () =>
   client.onError = (text) => errors.push(text);
   ws.reply('ERROR the server is restarting');
   assert.deepEqual(errors, ['the server is restarting']);
+});
+
+test('LobbyClient: closing it on purpose does not report a lost connection', async () => {
+  const { ws, client } = await connected();
+  let closed = false;
+  client.onClose = () => { closed = true; };
+  client.close();
+  assert.equal(closed, false);
+  assert.equal(ws.readyState, 3);
+});
+
+test('lastLobbyNotice names the lobby without promising it is still open', () => {
+  assert.match(lastLobbyNotice('ABCD'), /ABCD/);
+  assert.match(lastLobbyNotice('ABCD'), /still open/);
+  assert.doesNotMatch(lastLobbyNotice('ABCD'), /puts you back/);
 });

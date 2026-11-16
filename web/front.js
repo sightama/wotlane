@@ -1,6 +1,6 @@
 // ABOUTME: The browser version's front panel: single player, or an online lobby on the game server (Host shows a 4-letter code,
 // ABOUTME: Join takes one). When the owner starts, every member's game loads with the match environment (boot.js wotmStart).
-import { LobbyClient, lobbySocketUrl, matchEnv } from './lobby.js';
+import { LobbyClient, lastLobbyNotice, lobbySocketUrl, matchEnv } from './lobby.js';
 import { initCreations, addLobbyChoices } from './creations_ui.js';
 
 const MONSTERS = [[1, 'Congar'], [2, 'Robo-47'], [3, 'Togera'], [4, 'Ultra V'], [5, 'Preytor'], [7, 'Kineticlops'], [8, 'Magmo'],
@@ -153,12 +153,12 @@ function init() {
     return;
   }
   $('name').value = recall('name', '');
-  // back from a match (Leave the match reloads the page): Join puts the player back in the same lobby
+  // back from a match (Leave the match reloads the page): the code is offered again, though the lobby may have closed
   let lastLobby = null;
   try { lastLobby = sessionStorage.getItem('wotlane.lobby'); } catch { /* private window */ }
   if (lastLobby) {
     $('joinCode').value = lastLobby;
-    say(`Your last lobby was ${lastLobby}: Join puts you back in it.`);
+    say(lastLobbyNotice(lastLobby));
   }
   fill($('monster'), MONSTERS, recall('monster', 5));
   fill($('lobbyStage'), STAGES, recall('stage', 1));

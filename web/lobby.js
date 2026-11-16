@@ -145,5 +145,14 @@ export class LobbyClient {
 
   start() { return this.request('START', ['MATCH']); }
 
-  close() { this.socket.close(); }
+  // the page's own close: it is not a lost connection, so onClose stays quiet
+  close() {
+    this.onClose = null;
+    this.socket.close();
+  }
+}
+
+// what the front panel says about the lobby of the last match; a finished match empties the lobby, so it may be gone
+export function lastLobbyNotice(code) {
+  return `Your last lobby was ${code}. If it is still open, Join takes you back in.`;
 }
