@@ -545,6 +545,7 @@ namespace wotm_net
             s.token = hex64(rng_());
             s.name = c.name;
             s.need.assign(static_cast<size_t>(players), 0u);
+            s.sent.assign(static_cast<size_t>(players), 0u);
             m->slots.push_back(std::move(s));
         }
         for (int i = 0; i < players; ++i)
@@ -567,8 +568,6 @@ namespace wotm_net
     {
         if (!peer)
             return;
-        if (!reliable && cfg_.dropInputPercent > 0 && static_cast<int>(rng_() % 100u) < cfg_.dropInputPercent)
-            return;
         if (peer.ws)
         {
             // WebSocket is reliable and ordered: one binary message per packet, the channel in front
@@ -579,6 +578,9 @@ namespace wotm_net
             peer.ws->link->sendPacket(packet);
             return;
         }
+        // the test's packet loss: only ENet loses packets (a WebSocket is sent each input once)
+        if (!reliable && cfg_.dropInputPercent > 0 && static_cast<int>(rng_() % 100u) < cfg_.dropInputPercent)
+            return;
         ENetPacket *p = enet_packet_create(data.data(), data.size(), reliable ? ENET_PACKET_FLAG_RELIABLE : 0);
         enet_peer_send(peer.enet, channel, p);
     }
@@ -911,7 +913,7 @@ namespace wotm_net
                         continue;
                     bool behind = m->inputs.nextMissing(static_cast<int>(i)) != s.lastAckOwn;
                     for (size_t q = 0; q < m->slots.size(); ++q)
-                        behind = behind || (q != i && s.need[q] < m->inputs.nextMissing(static_cast<int>(q)));
+                        behind = behind || (q != i && s.sendFrom(q) < m->inputs.nextMissing(static_cast<int>(q)));
                     if (s.dirty || (behind && now - s.lastSend > std::chrono::milliseconds(16)))
                         sendInputs(*m, static_cast<int>(i));
                 }
@@ -946,9 +948,10 @@ namespace wotm_net
         {
             if (static_cast<int>(q) == si)
                 continue;
-            const uint32_t from = s.need[q], to = std::min(m.inputs.nextMissing(static_cast<int>(q)), from + static_cast<uint32_t>(proto::kMaxRun));
+            const uint32_t from = s.sendFrom(q), to = std::min(m.inputs.nextMissing(static_cast<int>(q)), from + static_cast<uint32_t>(proto::kMaxRun));
             if (from >= to)
                 continue;
+            s.sent[q] = to;
             proto::InputRun r;
             r.player = static_cast<uint8_t>(q);
             r.first = from;

@@ -95,9 +95,13 @@ namespace wotm_net
             bool joined = false, gone = false;
             bool away = false;               // the game is in the background (Away); only changes are passed on
             std::vector<uint32_t> need;   // per player, the first frame this client doesn't have yet
+            std::vector<uint32_t> sent;   // per player, the first frame not sent to this client yet
             uint32_t lastAckOwn = 0;
             Clock::time_point lastSend{};
             bool dirty = false;
+            // per player, the first frame to send next: what the client lacks, except that a WebSocket (reliable and ordered) delivers
+            // everything sent, so nothing goes twice (a silent browser isn't sent the same frames every tick until its buffers fill)
+            uint32_t sendFrom(size_t player) const { return peer.ws ? std::max(need[player], sent[player]) : need[player]; }
         };
 
         struct Match
