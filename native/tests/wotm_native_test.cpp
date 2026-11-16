@@ -5346,8 +5346,8 @@ static void checkInflateTo(uint32_t dest)
     CHECK(same);
     CHECK(s.outBuf == dest + data.size());
     CHECK(s.outSize == 0);
-    std::vector<uint8_t> copy(64u << 20);
-    std::memcpy(&copy[0x10], data.data(), std::min<size_t>(data.size(), copy.size() - 0x10));
+    std::vector<uint8_t> copy(data.size() + 0x10);
+    std::memcpy(&copy[0x10], data.data(), data.size());
     CHECK(s.crc == wotm::zip::crc32(tab.data(), 0, copy.data(), 0x10, int64_t(data.size())));
     CHECK(s.windowPos == data.size() % z::kWindow);
 }

@@ -29,4 +29,5 @@ if(target_arch MATCHES "arm64|aarch64|ARM64" AND NOT EMSCRIPTEN)
     target_compile_definitions(wotm_native_test PRIVATE USE_SSE2NEON SSE2NEON_PRECISE_MINMAX=1)
 elseif(EMSCRIPTEN)
     target_compile_options(wotm_native_test PRIVATE -msimd128 -msse4.1)
+    target_link_options(wotm_native_test PRIVATE -sALLOW_MEMORY_GROWTH=1)   # the zip tests hold a 64 MB guest RAM, as the runtime does
 endif()
