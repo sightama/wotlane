@@ -1392,6 +1392,81 @@ namespace
         CHECK(readUntil(good, "WELCOME") == "WELCOME 0");
     }
 
+    // a browser whose traffic was held up (a stalled tab, a network that stopped and came back) sends everything it queued at once:
+    // hundreds of KB of small input messages in one go must not cost it the connection
+    TEST(ws_burst_of_queued_messages_keeps_the_connection)
+    {
+        using namespace wotm_net::ws;
+        ServerConfig cfg = wsTestConfig();
+        RunningServer rs(cfg);
+        auto ms = formMatch(cfg.port, {"Ana", "Bia"}, {3, 1});
+        LineSocket raw;
+        CHECK(raw.connect("127.0.0.1", cfg.wsPort, 2000));
+        const std::string req = handshakeRequest("127.0.0.1", "/match", "dGhlIHNhbXBsZSBub25jZQ==");
+        raw.sendBytes(req.data(), req.size());
+        auto frame = [](uint8_t channel, const std::vector<uint8_t> &body) {
+            std::vector<uint8_t> packet{channel};
+            packet.insert(packet.end(), body.begin(), body.end());
+            return encode(kBinary, packet.data(), packet.size(), true);
+        };
+        // about a minute of an 8-player client's input messages (acks for every player, a few frames of its own), then its Join
+        p::Input in;
+        in.acks.assign(8, 300u);
+        in.own.player = 7, in.own.first = 300, in.own.states.assign(2, PadState{});
+        const std::vector<uint8_t> one = frame(p::kInputs, p::encode(in));
+        std::vector<uint8_t> burst;
+        while (burst.size() < 256u * 1024u)
+            burst.insert(burst.end(), one.begin(), one.end());
+        p::Join j;
+        j.token = ms[0]->match["token"], j.buildId = "b1", j.configHash = "cfg", j.name = "Ana";
+        const std::vector<uint8_t> join = frame(p::kControl, p::encode(j));
+        burst.insert(burst.end(), join.begin(), join.end());
+        CHECK(raw.sendBytes(burst.data(), burst.size()));
+        std::string head;
+        FrameParser parser(false);
+        bool welcomed = false, alive = true;
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        while (alive && !welcomed && std::chrono::steady_clock::now() < until)
+        {
+            alive = raw.pump();
+            const std::string in = raw.takeReceived();
+            if (head.find("\r\n\r\n") == std::string::npos)
+            {
+                head += in;
+                const size_t end = head.find("\r\n\r\n");
+                if (end != std::string::npos)
+                    parser.feed(reinterpret_cast<const uint8_t *>(head.data()) + end + 4, head.size() - end - 4);
+            }
+            else
+                parser.feed(reinterpret_cast<const uint8_t *>(in.data()), in.size());
+            Frame f;
+            while (parser.next(f) == FrameParser::Result::Ok)
+                welcomed = welcomed || (f.opcode == kBinary && f.payload.size() > 1 &&
+                                        p::typeOf(std::vector<uint8_t>(f.payload.begin() + 1, f.payload.end())) == p::Type::Welcome);
+            raw.waitReadable(10);
+        }
+        CHECK(welcomed);
+    }
+
+    // a lobby connection that sends 64 KB without ending a line is dropped
+    TEST(lobby_line_without_end_closes_the_connection)
+    {
+        ServerConfig cfg = testConfig();
+        RunningServer rs(cfg);
+        LineSocket s;
+        CHECK(hello(s, cfg.port) == "WELCOME 0");
+        const std::string junk(70000, 'a');
+        s.sendBytes(junk.data(), junk.size());
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        bool closed = false;
+        while (!closed && std::chrono::steady_clock::now() < until)
+        {
+            closed = !s.pump();
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        CHECK(closed);
+    }
+
     TEST(ws_unknown_path_is_refused)
     {
         ServerConfig cfg = wsTestConfig();
