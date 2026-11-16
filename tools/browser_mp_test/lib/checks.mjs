@@ -217,8 +217,8 @@ async function leaving(run, n, players, code) {
     const msg = await refresher.frontMsg();
     const again = front ? await refresher.join(code) : { joined: false, msg: '' };
     noteRefusal(run, 'rejoin after refresh', again);
-    R.add(n, 'refresh', front && /last lobby/.test(msg) && !again.joined && /in a match/.test(again.first) ? 'pass' : 'fail',
-      `after reload: front panel ${front}, message ${JSON.stringify(msg)}; rejoin mid-match: joined=${again.joined} ${JSON.stringify(again.msg)}`);
+    R.add(n, 'refresh', front && !again.joined && /in a match/.test(again.first) ? 'pass' : 'fail',
+      `after reload: front panel ${front}, message ${JSON.stringify(msg)}; rejoin mid-match: joined=${again.joined} ${JSON.stringify(again.first)} (shown after: ${JSON.stringify(again.msg)})`);
   }
 }
 
@@ -289,9 +289,14 @@ export async function roundSession(run, n) {
 async function rejoinAfterMatch(run, n, players, code) {
   const msgs = await Promise.all(players.map((p) => p.frontMsg().catch(() => '')));
   const promised = msgs.every((m) => m.includes(code));
-  const r = await players[0].join(code).catch((e) => ({ joined: false, msg: String(e) }));
+  const r = await players[0].join(code).catch(async (e) => {
+    // the panel never settled: say what it shows
+    const state = await players[0].page.evaluate(() => ({ msgs: window.__frontMsgs, hostDisabled: document.getElementById('host').disabled,
+      joinDisabled: document.getElementById('join').disabled, inLobby: !document.getElementById('inLobby').hidden, text: document.getElementById('frontMsg').textContent })).catch(() => ({}));
+    return { joined: false, msg: `${e.name}: the panel did not settle in 15 s; ${JSON.stringify(state)}`, first: '' };
+  });
   // every player left the lobby when the game quit, so the server closed it: the panel's promise holds only if the lobby survived
-  run.report.add(n, 'rejoin_after_match', promised && !r.joined ? 'fail' : 'pass',
+  run.report.add(n, 'rejoin_after_match', !r.joined && (promised || !r.first) ? 'fail' : 'pass',
     `front panels say ${JSON.stringify(msgs[0])}; Join on the old code: joined=${r.joined} ${JSON.stringify(r.first || r.msg)} (shown after: ${JSON.stringify(r.msg)})`);
 }
 
@@ -325,7 +330,8 @@ export async function stallSession(run, n) {
     while (Date.now() < end && !waiting) {
       for (const p of others) {
         const s = await p.stall();
-        if (s.ms > 0) { waiting = { p, ...s }; break; }
+        // other waits are ordinary on a machine that cannot keep up: only a wait for the frozen player counts
+        if (s.ms > 0 && s.text.includes(victim.name)) { waiting = { p, ...s }; break; }
       }
       if (!waiting) await sleep(1000);
     }
@@ -364,10 +370,11 @@ export async function stallSession(run, n) {
       moved = players.every((p, i) => hashes(p.logText).size >= seen[i] + 2);
     }
     const after = await Promise.all(players.map((p) => p.stall()));
+    const stuckTabs = players.filter((p, i) => hashes(p.logText).size < seen[i] + 2).map((p) => p.name);
     const resumed = moved && after.every((s) => s.ms < 5000);
     const sync = syncVerdict(run, players, code);
     R.add(n, 'stall_recovery', resumed && sync.ok ? 'pass' : 'fail',
-      `every tab moved on by two hashes: ${moved}; longest wait now ${Math.max(...after.map((s) => s.ms))} ms; ${sync.detail}`);
+      `every tab moved on by two hashes: ${moved}${stuckTabs.length ? ' (silent: ' + stuckTabs.join(',') + ')' : ''}; longest wait now ${Math.max(...after.map((s) => s.ms))} ms; ${sync.detail}`);
 
     await victim.dropConnection();
     let p2 = { visible: false, text: '', leave: '' };

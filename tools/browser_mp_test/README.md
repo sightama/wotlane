@@ -38,13 +38,15 @@ logs only (the server-side DESYNC and "left the match" checks are local only).
 ## How it works
 
 - `lib/player.mjs` is one player: a context, the front panel's buttons, the page log (`window.wotmLog`, which the game's stdout and stderr
-  fill), the keyboard (the game reads it as pad 1), a held network (`freezeNetwork`), a hidden tab (`hide`) and a dropped connection.
-  A test-only `Module` setter adds `WOTM_PADLOG`, `WOTM_CHEATS` to the game's environment: nothing in `web/` changes.
+  fill), the keyboard (the game's default layout: arrows d-pad, WASD stick, Space X, E circle; it reads it as pad 1), a held network (`freezeNetwork`), a hidden tab (`hide`) and a dropped connection.
+  A test-only `Module` setter adds `WOTM_PADLOG` and `WOTM_CHEATS` to the game's environment: nothing in `web/` changes.
 - Sync: the game prints `[net] hash of frame N` for one in 16 of its state hashes (all 32 MB of guest RAM); every tab must print the same
   hash for a frame. On a local server `wotm_server`'s own DESYNC line is checked as well.
 - Frame rate: the slope of those hash lines' frame index over time. A lockstep match runs at the slowest tab's pace, so one number
   describes all tabs. CPU: cumulative CPU time of every browser process (`SystemInfo.getProcessInfo`) over the play window; `perf` says
   when the machine itself is the limit (fps under 50 with the browser using over 75% of the cores).
 - Chromium (headless shell, software GL) is the default; `--browser chrome` uses the installed Chrome with the GPU, `--headed` shows the
-  windows. `--isolation browser` starts one browser per player. Firefox and Safari do not run the game yet (`web/support.js`).
+  windows. `--isolation browser` starts one browser per player. `--firefox K` makes the last K players of every lobby use Playwright's Firefox
+  (a mixed lobby; needs a build with Firefox support). The lobby gets a tall window (`--lobby-height`, the card is taller than 400 px with 8
+  members) and the game its own size (`--height`).
 - `PS2X_PAD` scripted pads are not used: in the browser build `GetTime()` is a wall-clock time, so a script's seconds never match.

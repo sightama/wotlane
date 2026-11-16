@@ -26,6 +26,7 @@ function frontMessageHistory() {
   window.__frontMsgs = [];
   document.addEventListener('DOMContentLoaded', () => {
     const el = document.getElementById('frontMsg');
+    if (!el) return;   // the init script also runs in the blank tab that hides a player's tab
     new MutationObserver(() => window.__frontMsgs.push(el.textContent)).observe(el, { childList: true, characterData: true, subtree: true });
   });
 }
