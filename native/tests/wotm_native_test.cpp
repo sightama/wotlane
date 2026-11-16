@@ -19,6 +19,7 @@
 #include "wotm_creator.hpp"
 #include "wotm_stagemap.hpp"
 #include "wotm_mapedit.hpp"
+#include "wotm_mapedit_live.h"
 #include "net/wotm_camsettings.hpp"
 #include "net/wotm_inputfile.hpp"
 #include "net/wotm_confighash.hpp"
@@ -3964,6 +3965,49 @@ TEST(mapedit_slide_follows_the_camera)
     CHECK(!ses.position(at));
 }
 
+
+TEST(mapedit_pick_ignores_spheres_around_the_eye_and_prefers_the_piece_inside)
+{
+    const auto sphere = [](float x, float r) { me::Piece p; p.centre[0] = x, p.radius = r; return p; };
+    const float east[3] = {1, 0, 0}, eye[3] = {0, 0, 0}, outside[3] = {-500, 0, 0};
+    // the eye stands inside a big piece's sphere (the ground): aiming at nothing picks nothing, not the sphere's far side
+    CHECK(me::pick({sphere(0, 1000)}, eye, east) == -1);
+    // ... and a small piece in front inside that sphere is the one picked
+    CHECK(me::pick({sphere(0, 1000), sphere(300, 10)}, eye, east) == 1);
+    // from outside, a small piece wholly inside the nearer big sphere is picked rather than the big one
+    CHECK(me::pick({sphere(0, 100), sphere(20, 10)}, outside, east) == 1);
+    // a small piece behind a big one, not inside it, stays hidden behind it
+    CHECK(me::pick({sphere(0, 100), sphere(300, 10)}, outside, east) == 0);
+    // the same rules for a session's items
+    me::Session ses("CENTRAL", 1, {sphere(0, 100), sphere(20, 10)});
+    CHECK(ses.pickItem(outside, east) == 1);
+}
+
+TEST(mapedit_undo_keeps_the_last_steps_only)
+{
+    Stage s;
+    const std::vector<me::Piece> ps = me::pieces(s.im.mem());
+    me::Session ses("CENTRAL", 1, ps);
+    ses.selectPiece(pieceIndex(ps, s.tA));
+    for (int i = 0; i < me::kUndoSteps + 50; ++i)
+        ses.move(1, 0, 0);
+    int undone = 0;
+    while (ses.undo())
+        ++undone;
+    CHECK(undone == me::kUndoSteps);
+    float at[3];
+    CHECK(ses.position(at) && near(at[0], 100.f + 50.f));   // the 50 oldest steps are gone for good
+}
+
+TEST(mapedit_window_commands_wait_in_a_bounded_queue)
+{
+    WotmMapEdit live;
+    me::Command c;
+    c.kind = me::Command::Undo;
+    for (int i = 0; i < WotmMapEdit::kMaxQueued + 40; ++i)
+        live.push(c);
+    CHECK(int(live.cmds.size()) == WotmMapEdit::kMaxQueued);
+}
 TEST(stagemap_stock_grid_rule)
 {
     const std::vector<std::string> stages = envList("WOTM_TEST_STAGE"), pieceFiles = envList("WOTM_TEST_PIECES");

@@ -43,7 +43,8 @@ inline std::vector<Piece> pieces(const sm::Mem &m)
     return out;
 }
 
-// Distance along the ray (eye + t * dir, dir of any length) to the sphere's near side; -1 when the ray misses it or it is behind
+// Distance along the ray (eye + t * dir, dir of any length) to the sphere's near side; -1 when the ray misses it, it is behind, or
+// the eye is inside it (a sphere around the eye, such as the ground's, is never what the crosshair is on)
 inline float hitDistance(const float eye[3], const float dir[3], const float c[3], float r)
 {
     const float len = std::sqrt(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]);
@@ -51,27 +52,55 @@ inline float hitDistance(const float eye[3], const float dir[3], const float c[3
         return -1;
     const float d[3] = {dir[0] / len, dir[1] / len, dir[2] / len};
     const float o[3] = {c[0] - eye[0], c[1] - eye[1], c[2] - eye[2]};
+    const float dist2 = o[0] * o[0] + o[1] * o[1] + o[2] * o[2];
     const float along = o[0] * d[0] + o[1] * d[1] + o[2] * d[2];
-    const float off2 = o[0] * o[0] + o[1] * o[1] + o[2] * o[2] - along * along;
-    if (off2 > r * r)
+    if (dist2 < r * r || along < 0 || dist2 - along * along > r * r)
         return -1;
-    const float half = std::sqrt(r * r - off2), t = along - half >= 0 ? along - half : along + half;
-    return t >= 0 ? t : -1;
+    return along - std::sqrt(r * r - (dist2 - along * along));
 }
 
-// The piece whose sphere the ray reaches first; -1 for none
-inline int pick(const std::vector<Piece> &ps, const float eye[3], const float dir[3])
+// One sphere a ray may pick (centre, radius)
+struct Sphere { float c[3]; float r; };
+
+// The sphere the ray reaches first, or, when that one wholly contains other spheres the ray also reaches, the smallest of those
+// (a piece standing inside a bigger piece's sphere is the one aimed at); -1 for none
+inline int nearestSphere(const std::vector<Sphere> &ss, const float eye[3], const float dir[3])
 {
+    std::vector<float> t(ss.size());
     int best = -1;
-    float bestT = 0;
-    for (size_t i = 0; i < ps.size(); ++i)
+    for (size_t i = 0; i < ss.size(); ++i)
     {
-        const float t = hitDistance(eye, dir, ps[i].centre, ps[i].radius);
-        if (t >= 0 && (best < 0 || t < bestT))
-            best = int(i), bestT = t;
+        t[i] = hitDistance(eye, dir, ss[i].c, ss[i].r);
+        if (t[i] >= 0 && (best < 0 || t[i] < t[size_t(best)]))
+            best = int(i);
+    }
+    for (bool again = best >= 0; again;)
+    {
+        again = false;
+        const Sphere &o = ss[size_t(best)];
+        for (size_t i = 0; i < ss.size(); ++i)
+        {
+            const float dx = ss[i].c[0] - o.c[0], dy = ss[i].c[1] - o.c[1], dz = ss[i].c[2] - o.c[2];
+            if (t[i] >= 0 && ss[i].r < o.r && std::sqrt(dx * dx + dy * dy + dz * dz) + ss[i].r <= o.r)
+                best = int(i), again = true;
+            if (again)
+                break;
+        }
     }
     return best;
 }
+
+// The piece whose sphere the ray reaches first (see nearestSphere); -1 for none
+inline int pick(const std::vector<Piece> &ps, const float eye[3], const float dir[3])
+{
+    std::vector<Sphere> ss;
+    for (const Piece &p : ps)
+        ss.push_back({{p.centre[0], p.centre[1], p.centre[2]}, p.radius});
+    return nearestSphere(ss, eye, dir);
+}
+
+// How many steps a session can undo (the oldest are dropped; each step holds a copy of every item)
+constexpr int kUndoSteps = 100;
 
 // An item as it stands now (Session::view): the piece's node (a copy: its source's), its place and turn, its sphere carried along
 struct ItemView { uint32_t node = 0; bool copy = false, removed = false; float pos[3] = {0, 0, 0}; float turn = 0; float centre[3] = {0, 0, 0};
@@ -109,18 +138,14 @@ public:
     // the item the ray reaches first, the copies included and the removed left out, as it stands now; selects it and returns it
     int pickItem(const float eye[3], const float dir[3])
     {
-        int best = -1;
-        float bestT = 0;
+        std::vector<Sphere> ss(items_.size());
         for (size_t i = 0; i < items_.size(); ++i)
         {
-            if (items_[i].removed)
-                continue;
-            float c[3];
-            centreOf(items_[i], c);
-            const float t = hitDistance(eye, dir, c, pieces_[size_t(items_[i].piece)].radius);
-            if (t >= 0 && (best < 0 || t < bestT))
-                best = int(i), bestT = t;
+            Sphere &sp = ss[i];
+            centreOf(items_[i], sp.c);
+            sp.r = items_[i].removed ? 0 : pieces_[size_t(items_[i].piece)].radius;   // a removed item has no sphere to pick
         }
+        const int best = nearestSphere(ss, eye, dir);
         sel_ = best;
         return best;
     }
@@ -260,7 +285,12 @@ private:
     struct Item { int piece = 0; bool copy = false, removed = false; float pos[3] = {0, 0, 0}; float turn = 0; };
 
     bool live() const { return sel_ >= 0 && sel_ < int(items_.size()) && !items_[size_t(sel_)].removed; }
-    void save() { undo_.push_back({items_, sel_}); }
+    void save()
+    {
+        undo_.push_back({items_, sel_});
+        if (int(undo_.size()) > kUndoSteps)
+            undo_.erase(undo_.begin());
+    }
     // the item's sphere centre: the disc one, carried by the item's move (turns are about the piece's place: the centre turns too)
     void centreOf(const Item &it, float out[3]) const
     {

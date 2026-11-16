@@ -371,6 +371,14 @@ A move shows at once (the piece is drawn at its new place); turns, copies, remov
 played (`WOTM_MATCH=3,<id>`, or the stage selection after a restart). Removed pieces and copies show as red and cyan spheres.
 The editor starts from the stock stage: to change a saved map, edit its `stage.json` or remake it.
 
+Picking works on one sphere per piece: the nearest sphere the crosshair's ray enters wins, unless that sphere wholly contains a
+smaller one the ray also enters (a piece standing inside a bigger piece's sphere is the one picked); a sphere around the camera
+(the ground's) is never picked. A session undoes its last 100 steps (`kUndoSteps`). The window queues at most 64 commands for the
+game thread (`WotmMapEdit::kMaxQueued`), so a key held while the game is paused doesn't pile up. In the browser version the front
+panel's "Your creations" has a Map editor row (map id, stage, Open) that reloads the page with `?WOTM_MATCH=3,<stage>&WOTM_MAPEDIT=<id>`
+(`web/creations.js` `mapEditorQuery`); F4 saves into the browser's `mods/` like any creation, and a file system without `rename` saves
+by copy.
+
 **Making one with `tools/stage_map.py`** (reads the extracted disc in `disc/`, or `--disc`):
 
 ```
