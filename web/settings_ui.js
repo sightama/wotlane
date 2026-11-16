@@ -2,6 +2,7 @@
 // ABOUTME: and apply the next time the game starts, plus the Controls card, your creations and the player's name.
 import { TABS, OPTIONS, optionsOf, choiceFor, readSettings, updateSetting } from './settings.js';
 import { gameRunningElsewhere } from './gamelock.js';
+import { initSaves } from './saves_ui.js';
 
 const $ = (id) => document.getElementById(id);
 const SAVED = 'Saved as you change them. Changes apply the next time you press Play.';
@@ -63,6 +64,7 @@ function groupedRows(rows) {
 export function initSettings({ remember, recall }) {
   const home = $('home'), card = $('settings');
   const say = (text) => { $('settingsMsg').textContent = text; };
+  const saves = initSaves();
   let text = '';
   let editable = false;
 
@@ -102,6 +104,7 @@ export function initSettings({ remember, recall }) {
       say(`This browser's saved settings could not be read (${e.message}), so they cannot be changed here.`);
     }
     fill();
+    saves.refresh();
   }
 
   function close() {
