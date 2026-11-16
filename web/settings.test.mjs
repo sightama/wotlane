@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { Dir } from './fakefs.mjs';
 import {
-  OPTIONS, TABS, parseIni, setIni, setOption, choiceFor, readSettings, updateSetting, optionsOf,
+  OPTIONS, TABS, parseIni, setIni, setOption, choiceFor, readSettings, updateSetting, settingsSaved, optionsOf,
 } from './settings.js';
 
 const hpp = readFileSync(new URL('../native/wotm_settings.hpp', import.meta.url), 'utf8');
@@ -77,6 +77,21 @@ test('parseIni reads KEY=value lines, last one wins, comments and CRLF ignored',
   assert.equal(ini.get('WOTM_RES'), '1440');
   assert.equal(ini.get('KB_UP'), 'UP,W');
   assert.equal(ini.size, 2);
+});
+
+test('parseIni skips the spaces before a value, as the game does', () => {
+  assert.equal(parseIni('WOTM_RES= 1080\n').get('WOTM_RES'), '1080');
+  assert.deepEqual(choiceFor(OPTIONS.find((o) => o.key === 'WOTM_RES'), 'WOTM_RES=  1080\n'), { value: '1080', custom: false });
+});
+
+test('settingsSaved waits for the changes made so far', async () => {
+  const root = new Dir();
+  updateSetting(root, 'WOTM_MSAA', '4');
+  updateSetting(root, 'WOTM_RES', '1080');
+  await settingsSaved();
+  const ini = parseIni(await readSettings(root));
+  assert.equal(ini.get('WOTM_MSAA'), '4');
+  assert.equal(ini.get('WOTM_RES'), '1080');
 });
 
 test('setIni changes the line in place and keeps every other line', () => {

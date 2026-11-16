@@ -133,6 +133,8 @@
   window.wotmStart = function (matchEnv, build) {
     if (started) return;
     started = true;
+    // held for as long as this tab lives: another tab's Settings and Saves see that a game is running (web/gamelock.js)
+    navigator.locks?.request('wotlane-game', { mode: 'shared' }, () => new Promise(() => {}));
     Object.assign(env, pageEnv(params, fixed, matchEnv, build));
     window.Module = {
       canvas,

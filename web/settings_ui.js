@@ -1,6 +1,7 @@
 // ABOUTME: The front panel's Settings card: tabs of options (web/settings.js) that are saved to settings.ini the moment they change
 // ABOUTME: and apply the next time the game starts, plus the Controls card, your creations and the player's name.
 import { TABS, OPTIONS, optionsOf, choiceFor, readSettings, updateSetting } from './settings.js';
+import { gameRunningElsewhere } from './gamelock.js';
 
 const $ = (id) => document.getElementById(id);
 const SAVED = 'Saved as you change them. Changes apply the next time you press Play.';
@@ -63,10 +64,11 @@ export function initSettings({ remember, recall }) {
   const home = $('home'), card = $('settings');
   const say = (text) => { $('settingsMsg').textContent = text; };
   let text = '';
-  let readable = false;
+  let editable = false;
 
   async function save(option, select) {
     const before = choiceFor(option, text).value;
+    if (select.value === before) return;   // the file's own value, picked again
     try {
       text = await updateSetting(await root(), option.key, select.value);
       say(SAVED);
@@ -82,20 +84,21 @@ export function initSettings({ remember, recall }) {
       if (!holder) continue;
       holder.replaceChildren(...groupedRows(optionsOf(tab.id).map((o) => optionRow(o, text, save))));
     }
-    for (const select of card.querySelectorAll('.options select')) select.disabled = !readable;
+    for (const select of card.querySelectorAll('.options select')) select.disabled = !editable;
   }
 
   async function open() {
     home.hidden = true;
     card.hidden = false;
     $('settingsName').value = $('name').value || recall('name', '');
+    $('settingsTabs').querySelector('[aria-selected="true"]').focus();
     try {
       text = await readSettings(await root());
-      readable = true;
-      say(SAVED);
+      editable = !(await gameRunningElsewhere(navigator.locks));
+      say(editable ? SAVED : 'A game is running in another tab of this browser. Close it to change settings here.');
     } catch (e) {
       text = '';
-      readable = false;
+      editable = false;
       say(`This browser's saved settings could not be read (${e.message}), so they cannot be changed here.`);
     }
     fill();
@@ -104,6 +107,7 @@ export function initSettings({ remember, recall }) {
   function close() {
     card.hidden = true;
     home.hidden = false;
+    $('openSettings').focus();
   }
 
   function showTab(id) {
@@ -144,5 +148,6 @@ export function initSettings({ remember, recall }) {
   showTab(TABS[0].id);
   $('openSettings').addEventListener('click', open);
   $('closeSettings').addEventListener('click', close);
-  card.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+  // Esc also closes an open list or leaves a text field: only an Esc that nothing else used closes the card
+  card.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !['SELECT', 'INPUT'].includes(e.target.tagName)) close(); });
 }

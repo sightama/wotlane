@@ -83,7 +83,7 @@ export function parseIni(text) {
     const line = raw.replace(/\r$/, '');
     const eq = line.indexOf('=');
     if (!line || line[0] === '#' || eq < 0) continue;
-    out.set(line.slice(0, eq), line.slice(eq + 1));
+    out.set(line.slice(0, eq), line.slice(eq + 1).replace(/^ +/, ''));   // the game skips the spaces before a value
   }
   return out;
 }
@@ -146,3 +146,6 @@ export function updateSetting(root, key, value) {
   queue = result.catch(() => {});
   return result;
 }
+
+// Resolves once every change made so far is in the file (the game must not start before that)
+export const settingsSaved = () => queue;

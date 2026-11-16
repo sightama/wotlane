@@ -72,6 +72,8 @@ For online play start `wotm_server --ws-port <port>`; a page opened from `localh
   from the game. The Mods tab holds Your creations and the Map editor row; the Controls tab lists the default keyboard layout
   (`web/controls.js`; `controls.test.mjs` fails when a default key is missing from it). `browser_mp_test`'s `single` session sets two
   options through the page and checks the game's log for them (`settings_page`).
+  A tab whose game runs holds a shared Web Lock (`wotlane-game`, taken in `boot.js`, read by `web/gamelock.js`); another tab's Settings
+  turns its options off while it is held, because a running game writes `settings.ini` and the saves again from its own memory.
 
 ## Online
 The front panel (`web/front.js`, `web/lobby.js`) speaks the lobby protocol over a WebSocket at `/lobby` (one line per text frame):
