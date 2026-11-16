@@ -27,6 +27,21 @@ function fileSize(contentLength, contentRange) {
   return total ? Number(total[1]) : null;
 }
 
+// A tab that isn't focused can't take the pointer: Firefox throws from requestPointerLock and Chrome rejects its promise. The game asks
+// again later, so the refusal is dropped instead of surfacing as an uncaught error
+function guardPointerLock(el) {
+  const request = el.requestPointerLock;
+  if (typeof request !== 'function') return;
+  el.requestPointerLock = function (...args) {
+    try {
+      const result = request.apply(this, args);
+      return typeof result?.catch === 'function' ? result.catch(() => {}) : result;
+    } catch (e) {
+      return undefined;
+    }
+  };
+}
+
 // the facts above, read from this browser
 function browserFacts() {
   const brands = navigator.userAgentData?.brands ?? [];
@@ -39,9 +54,10 @@ function browserFacts() {
   };
 }
 
-if (typeof module !== 'undefined' && module.exports) module.exports = { supportProblem, mainThreadFiles, fileSize };
+if (typeof module !== 'undefined' && module.exports) module.exports = { supportProblem, mainThreadFiles, fileSize, guardPointerLock };
 else {
   globalThis.wotmSupportProblem = () => supportProblem(browserFacts());
   globalThis.wotmMainThreadFiles = () => mainThreadFiles(browserFacts());
   globalThis.wotmFileSize = fileSize;
+  globalThis.wotmGuardPointerLock = guardPointerLock;
 }

@@ -7,6 +7,7 @@
   const logEl = document.getElementById('log');
   const statusEl = document.getElementById('status');
   const canvas = document.getElementById('canvas');
+  wotmGuardPointerLock(canvas);
   const lines = [];
   window.wotmLog = lines;
 
