@@ -32,7 +32,8 @@ For online play start `wotm_server --ws-port <port>`; a page opened from `localh
   of other versions and fetches in parallel the chunks every boot reads (`web/boot_chunks.json`, written by
   `python3 tools/web_boot_chunks.py <boot log> <SCUS_971.97>` from a boot to the title); the game starts once they are in. In Firefox
   the game's own reads from worker threads are synchronous XHR (below), which the Cache API can't serve: there only the prefetched
-  chunks and the main thread's reads are kept.
+  chunks and the main thread's reads are kept. The page also fetches `wotm.wasm` from its load on, into the HTTP cache (served with an
+  ETag and `no-cache`), so `wotm.js`'s own request only revalidates it.
 - **Saves and settings:** `/save` is the browser's private file system (OPFS) and the game's working folder (`WOTM_SAVEDIR=/save`), so
   `settings.ini`, the memory card and `mods/` survive a reload.
 - **Disc and saves outside Chromium:** the WASMFS fetch and OPFS backends hand each read to a worker while the game's main thread waits;
@@ -67,13 +68,20 @@ During a match:
 - after 60 s waiting for a player the page offers Keep waiting (asks again 60 s later) or Leave the match (`web/stall.js`);
 - a match that stops (refused, desync, connection lost) shows the reason with a way back to the front panel, the lobby code filled in.
 
-## Limits
+- **Safari:** not supported yet. Safari before 27 lacks JSPI; Safari 27 is untested: the main-thread disc and saves (above) are the path to try there.
 - **Safari:** not supported yet. Safari before 27 lacks JSPI; with it, the main-thread disc and saves (above) are the path to try.
 - **Firefox:** the game takes more CPU per frame than in Chrome (it keeps 60 frames per second). The save folder in memory is also synced
   when the tab is hidden and on `pagehide`, and the game's own quit waits for the writes; a tab closed right after a save can lose it.
 - **Movies:** skipped (no FFmpeg in the browser build).
 - **Audio:** raylib's web audio uses a ScriptProcessorNode, which Chrome reports as deprecated.
 - **Loading counter:** two game tabs of the same site on one computer count each other's chunks.
+
+## Startup time
+Measured from the page's navigation to the game log's `[boot] ... ready:` line, in a new browser profile (cold: nothing cached) and
+again in the same profile (warm), to the title (the front panel's Single player) and to a direct fight
+(`?WOTM_MATCH=3,1,1&WOTM_AIVSAI=1`), on the real network and throttled (Chrome's DevTools network emulation), counting the bytes of
+each kind of request (page, mods, wasm, disc). The `[boot] disc: LSN ...` lines give each disc read's time; the gaps between reads
+are the game's own pacing, the same natively (issue #80).
 
 ## Tests
 - `node --test web/` (the page scripts, with a fake WebSocket and an in-memory file system);
