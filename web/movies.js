@@ -112,7 +112,7 @@ export async function playStartupMovies({
     overlay.hidden = false;
     if (hint) hint.hidden = !skippable;
     hold.hold(true);
-    for (const k of keys) win.addEventListener(k, swallow, true);
+    for (const k of keys) win.addEventListener(k, swallow, { capture: true });
     overlay.addEventListener('pointerdown', onPointer);
     try { pads = holdGamepads(nav); } catch { /* no gamepad API here */ }
     newGamepadPress(look(), seenPads);   // a button already down is not a press
@@ -151,7 +151,7 @@ export async function playStartupMovies({
   } finally {
     watching = false;
     pads.release();
-    for (const k of keys) win.removeEventListener(k, swallow, true);
+    for (const k of keys) win.removeEventListener(k, swallow, { capture: true });
     overlay.removeEventListener('pointerdown', onPointer);
     overlay.hidden = true;
     video.removeAttribute('src');
