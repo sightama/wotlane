@@ -42,14 +42,8 @@
     WOTM_NOFLARE: '1',
     WOTM_SAVEDIR: '/save',
   };
-  // a few harmless switches from the address, for tests and direct matches (?WOTM_MATCH=5,1,9&WOTM_AIVSAI=1). Nothing that names a
-  // file, a server or a cheat: a link someone sends must not be able to point the game elsewhere. The fixed values above always win.
-  const fromAddress = ['WOTM_MATCH', 'WOTM_AIVSAI', 'PS2X_STATS', 'WOTM_MAPEDIT'];
   const params = new URLSearchParams(location.search);
-  const allowed = {};
-  for (const key of fromAddress)
-    if (params.has(key)) allowed[key] = params.get(key);
-  const fixed = { ...env };
+  const fixed = { ...env };   // pageEnv() keeps these over anything from the address or an online match
 
   // the text over the game while the disc streams in (data_retry.js reports each chunk from the worker that fetches it)
   function showLoading(expectedBytes) {
@@ -138,7 +132,7 @@
   window.wotmStart = function (matchEnv, build) {
     if (started) return;
     started = true;
-    Object.assign(env, allowed, matchEnv || {}, build ? { WOTM_BUILDID: build } : {}, fixed);
+    Object.assign(env, pageEnv(params, fixed, matchEnv, build));
     window.Module = {
       canvas,
       arguments: ['/disc/SCUS_971.97'],
