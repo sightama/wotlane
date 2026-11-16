@@ -71,6 +71,16 @@ class WebMoviesTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             web_movies.pss_audio(data)
 
+    def test_a_movie_cut_short_gives_what_it_has_or_none(self):
+        full = pss(48000, bytes(range(16)), bytes(range(100, 116)))
+        self.assertIsNone(web_movies.pss_audio(full[:30]))   # cut inside the header
+        self.assertIsNotNone(web_movies.pss_audio(full[:-3] + b'\x00\x00\x01\xbd'))   # a packet header cut off at the end: no crash
+        self.assertIsNotNone(web_movies.pss_audio(full[:-20]))   # cut in the data: the blocks that came whole
+
+    def test_an_absurd_sample_rate_is_refused(self):
+        with self.assertRaises(ValueError):
+            web_movies.pss_audio(pss(1, bytes(8), bytes(8)))
+
     def test_a_file_is_found_in_an_iso_by_its_path_whatever_the_case(self):
         with tempfile.TemporaryDirectory() as d:
             iso = Path(d, 'game.iso')

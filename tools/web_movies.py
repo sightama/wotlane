@@ -86,6 +86,8 @@ def pss_audio(data):
         elif sid < 0xBB:
             i += 4
         else:
+            if i + 6 > n:
+                break   # cut off in a packet header
             ln = struct.unpack_from('>H', data, i + 4)[0]
             pes = data[i + 6:i + 6 + ln]
             if sid == 0xBD and len(pes) >= 3:
@@ -97,7 +99,9 @@ def pss_audio(data):
     header = struct.unpack_from('<I', stream, 4)[0]
     kind, rate, channels, interleave = struct.unpack_from('<4I', stream, 8)
     body = 8 + header
-    if kind != 1 or channels not in (1, 2) or interleave == 0 or stream[body:body + 4] != b'SSbd':
+    if stream[body:body + 4] != b'SSbd':
+        return None   # truncated or not the layout the game reads: no audio, as in native/wotm_fmv.hpp
+    if kind != 1 or channels not in (1, 2) or not 8000 <= rate <= 96000 or not 0 < interleave <= 0x10000:
         raise ValueError(f'unsupported movie audio (type {kind}, {channels} channels, interleave {interleave})')
     pcm = bytes(stream[body + 8:])
     left, right = bytearray(), bytearray()
@@ -150,6 +154,7 @@ def main(argv=None):
     a = ap.parse_args(argv)
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
+    (out / 'movies.json').unlink(missing_ok=True)   # the page plays no movie rather than a mix of old and new files
     files = []
     for name in BOOT_MOVIES:
         target = out / f'{name.lower()}.webm'

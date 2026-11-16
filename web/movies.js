@@ -47,23 +47,34 @@ export function installAudioHold(win) {
       super(...args);
       contexts.push(this);
       this.resume = (...a) => (held ? Promise.resolve() : proto.resume.apply(this, a));
-      if (held) proto.suspend.call(this);
+      if (held) Promise.resolve(proto.suspend.call(this)).catch(() => {});
     }
   };
   win.AudioContext = Held;
   return {
     hold(on) {
       held = on;
-      for (const c of contexts) (on ? proto.suspend : proto.resume).call(c);
+      for (const c of contexts) {
+        try { Promise.resolve((on ? proto.suspend : proto.resume).call(c)).catch(() => {}); } catch { /* a closed context */ }
+      }
     },
   };
+}
+
+// While a movie plays the game's own gamepad polling (raylib reads navigator.getGamepads) sees no pads, so a button meant for the movie
+// never reaches it; the page's own reads go through `read`. `release()` puts the browser's function back.
+export function holdGamepads(nav) {
+  const original = nav.getGamepads;
+  if (!original) return { read: () => [], release() {} };
+  nav.getGamepads = () => [];
+  return { read: () => original.call(nav), release() { nav.getGamepads = original; } };
 }
 
 // Plays the startup movies in `overlay`'s `video`, one after the other. Resolves to what happened to each ('ended', 'skipped',
 // 'failed'), or to 'off' (nothing was fetched) or 'unavailable' (no movie files on the server). Never rejects.
 export async function playStartupMovies({
-  mode, base = 'data/movies/', fetchImpl = (...a) => fetch(...a), overlay, video, hint, win = window,
-  pads = () => navigator.getGamepads?.() ?? [], audio, log = () => {}, startTimeoutMs = 15000, stallTimeoutMs = 20000,
+  mode, base = 'data/movies/', fetchImpl = (...a) => fetch(...a), overlay, video, hint, win = window, nav = win.navigator,
+  audio, log = () => {}, startTimeoutMs = 15000, stallTimeoutMs = 20000,
 }) {
   mode = normalizeMode(mode);
   if (mode === 'off') return 'off';
@@ -88,26 +99,31 @@ export async function playStartupMovies({
   const onPointer = () => { if (skippable) skip('skipped'); };
   const seenPads = new Map();
   let watching = true;
+  let pads = { read: () => [], release() {} };
+  const look = () => { try { return pads.read() ?? []; } catch { return []; } };   // a page that may not read pads has none
   const watchPads = () => {
     if (!watching) return;
-    if (skippable && newGamepadPress(pads(), seenPads)) skip('skipped');
+    if (skippable && newGamepadPress(look(), seenPads)) skip('skipped');
     win.requestAnimationFrame?.(watchPads);
   };
 
-  overlay.hidden = false;
-  if (hint) hint.hidden = !skippable;
-  hold.hold(true);
-  for (const k of keys) win.addEventListener(k, swallow, true);
-  overlay.addEventListener('pointerdown', onPointer);
-  newGamepadPress(pads(), seenPads);   // a button already down is not a press
-  watchPads();
-
   const outcomes = [];
   try {
+    overlay.hidden = false;
+    if (hint) hint.hidden = !skippable;
+    hold.hold(true);
+    for (const k of keys) win.addEventListener(k, swallow, true);
+    overlay.addEventListener('pointerdown', onPointer);
+    try { pads = holdGamepads(nav); } catch { /* no gamepad API here */ }
+    newGamepadPress(look(), seenPads);   // a button already down is not a press
+    watchPads();
     for (const movie of list) {
       outcomes.push(await new Promise((resolve) => {
         let timer;
+        let over = false;
         const finish = (how) => {
+          if (over) return;   // a late event or a rejected play() of a movie that is already over
+          over = true;
           clearTimeout(timer);
           for (const ev of Object.keys(on)) video.removeEventListener(ev, on[ev]);
           skip = () => {};
@@ -129,11 +145,12 @@ export async function playStartupMovies({
         arm(startTimeoutMs, 'start');
         video.src = `${base}${movie.file}`;
         // a browser that refuses sound without a gesture still plays the picture
-        Promise.resolve(video.play()).catch(() => { video.muted = true; return video.play(); }).catch(() => finish('failed'));
+        Promise.resolve(video.play()).catch(() => { if (over) return; video.muted = true; return video.play(); }).catch(() => finish('failed'));
       }));
     }
   } finally {
     watching = false;
+    pads.release();
     for (const k of keys) win.removeEventListener(k, swallow, true);
     overlay.removeEventListener('pointerdown', onPointer);
     overlay.hidden = true;

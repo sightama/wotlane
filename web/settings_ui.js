@@ -16,6 +16,7 @@ function optionRow(option, text, onChange, recall) {
   const id = 'opt_' + option.key;
   const { value, custom } = option.page ? { value: recall(pageKey(option), option.def), custom: false } : choiceFor(option, text);
   const select = Object.assign(document.createElement('select'), { id });
+  if (option.page) select.dataset.page = '1';   // kept by the page itself: it never clashes with a running game's files
   for (const [v, label] of option.choices) select.add(new Option(label, v, false, v === value));
   if (custom) select.add(new Option(`Custom (${value})`, value, true, true));
   select.addEventListener('change', () => onChange(option, select));
@@ -93,7 +94,7 @@ export function initSettings({ remember, recall }) {
       if (!holder) continue;
       holder.replaceChildren(...groupedRows(optionsOf(tab.id).map((o) => optionRow(o, text, save, recall))));
     }
-    for (const select of card.querySelectorAll('.options select')) select.disabled = !editable;
+    for (const select of card.querySelectorAll('.options select')) select.disabled = !editable && !select.dataset.page;
   }
 
   async function open() {
