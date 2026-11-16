@@ -18,6 +18,14 @@ struct WotmMapEdit {
     int edits = 0, copies = 0;
     std::string msg;        // the last result (SAVED ..., MODS ARE OFF, ...)
     std::vector<wotm::mapedit::Command> cmds;     // window -> EE thread, run on the next game frame
+    static constexpr int kMaxQueued = 64;         // while the game is held nothing drains the queue: later commands are dropped
+
+    void push(const wotm::mapedit::Command &c)
+    {
+        std::lock_guard<std::mutex> lk(m);
+        if (int(cmds.size()) < kMaxQueued)
+            cmds.push_back(c);
+    }
 };
 
 extern WotmMapEdit g_wotmMapEdit;

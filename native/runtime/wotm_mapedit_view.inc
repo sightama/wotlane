@@ -13,11 +13,7 @@ namespace me = wotm::mapedit;
 
 static bool g_shown = false;   // what update() decided this frame (draw3d and draw2d follow it)
 
-static void send(const me::Command &c)
-{
-    std::lock_guard<std::mutex> lk(g_wotmMapEdit.m);
-    g_wotmMapEdit.cmds.push_back(c);
-}
+static void send(const me::Command &c) { g_wotmMapEdit.push(c); }
 
 static bool pressed(int key) { return IsKeyPressed(key) || IsKeyPressedRepeat(key); }
 
