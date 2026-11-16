@@ -146,7 +146,7 @@ function init() {
     for (const id of ['single', 'host', 'join']) $(id).disabled = true;
     return;
   }
-  initCreations();
+  initCreations(STAGES);
   if (window.wotmDirect) {
     front.hidden = true;
     buildId().then((b) => window.wotmStart(null, b));
