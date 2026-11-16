@@ -153,6 +153,107 @@ namespace
         CHECK(!t.has(0, 3));
     }
 
+    // ---- local delay schedule: the delay moves one frame at a time and every frame still gets exactly one input ----
+    using wotm_net::LocalSchedule;
+    using Fills = std::vector<std::pair<uint32_t, PadState>>;
+
+    PadState moved(uint16_t mask, int16_t mx)
+    {
+        PadState s = pressed(mask);
+        s.mouseX = mx;
+        return s;
+    }
+
+    TEST(schedule_puts_each_sample_delay_frames_ahead)
+    {
+        LocalSchedule s(3);
+        CHECK(s.delay() == 3u);
+        CHECK(s.push(pressed(1)) == Fills({{3u, pressed(1)}}));
+        CHECK(s.push(pressed(2)) == Fills({{4u, pressed(2)}}));
+    }
+
+    TEST(schedule_grows_on_a_steady_sample_by_repeating_the_last_frame_without_its_mouse)
+    {
+        LocalSchedule s(3);
+        s.push(moved(1, 5));
+        s.setTarget(4);
+        CHECK(s.push(moved(2, 0)) == Fills({{4u, moved(2, 0)}}));   // input changed: no step yet
+        CHECK(s.delay() == 3u);
+        CHECK(s.push(moved(2, 7)) == Fills({{5u, moved(2, 0)}, {6u, moved(2, 7)}}));   // the same buttons: steps
+        CHECK(s.delay() == 4u);
+        CHECK(s.push(moved(2, 0)) == Fills({{7u, moved(2, 0)}}));
+    }
+
+    TEST(schedule_shrinks_on_a_steady_sample_by_skipping_it_and_keeps_its_mouse)
+    {
+        LocalSchedule s(4);
+        s.push(pressed(1));
+        s.setTarget(3);
+        CHECK(s.push(moved(1, 9)).empty());   // the same buttons as frame 4: skipped, frame 5 comes from the next sample
+        CHECK(s.delay() == 3u);
+        CHECK(s.push(moved(1, 1)) == Fills({{5u, moved(1, 10)}}));   // the skipped sample's mouse motion is not lost
+        CHECK(s.push(pressed(1)) == Fills({{6u, pressed(1)}}));
+    }
+
+    TEST(schedule_never_shrinks_while_the_input_changes)
+    {
+        LocalSchedule s(4);
+        s.setTarget(2);
+        for (uint32_t i = 0; i < 200; ++i)
+            CHECK(s.push(pressed(static_cast<uint16_t>(i + 1))).size() == 1u);
+        CHECK(s.delay() == 4u);
+    }
+
+    TEST(schedule_grows_anyway_after_waiting_long_enough)
+    {
+        LocalSchedule s(3);
+        s.setTarget(4);
+        uint32_t i = 0;
+        while (s.delay() == 3u && i < 1000u)
+        {
+            s.push(pressed(static_cast<uint16_t>(i + 1)));
+            ++i;
+        }
+        CHECK(s.delay() == 4u && i == LocalSchedule::kForceGrowAfter + 1u);
+    }
+
+    TEST(schedule_steps_one_frame_at_a_time_with_a_gap)
+    {
+        LocalSchedule s(2);
+        s.setTarget(5);
+        std::vector<uint32_t> stepAt;
+        for (uint32_t i = 0; i < 100; ++i)
+        {
+            const uint32_t before = s.delay();
+            s.push(PadState{});
+            CHECK(s.delay() <= before + 1u);
+            if (s.delay() != before)
+                stepAt.push_back(i);
+        }
+        CHECK(s.delay() == 5u && stepAt.size() == 3u);
+        for (size_t k = 1; k < stepAt.size(); ++k)
+            CHECK(stepAt[k] - stepAt[k - 1] >= LocalSchedule::kStepGap);
+    }
+
+    // random inputs and targets: the frames filled are exactly delay, delay + 1, ... with no gap and no repeat
+    TEST(schedule_fills_every_frame_once_whatever_the_targets)
+    {
+        LocalSchedule s(3);
+        uint32_t next = 3, seed = 7;
+        bool contiguous = true;
+        for (uint32_t i = 0; i < 5000; ++i)
+        {
+            seed = seed * 1103515245u + 12345u;
+            if ((seed >> 16) % 97u == 0u)
+                s.setTarget(1u + (seed >> 8) % 15u);
+            const PadState in = pressed(static_cast<uint16_t>((seed >> 20) % 4u));
+            for (const auto &f : s.push(in))
+                contiguous = contiguous && f.first == next++;
+            contiguous = contiguous && next == i + 1u + s.delay();
+        }
+        CHECK(contiguous);
+    }
+
     // ---- protocol ----
     namespace p = wotm_net::proto;
 
@@ -280,14 +381,43 @@ namespace
         CHECK(!p::decode(bytes, j));   // wrong type
     }
 
-    TEST(proto_delay_covers_the_relay_path)
+    TEST(proto_player_delay_covers_its_path_to_the_slowest_other)
     {
-        // delay = one-way trip slowest player -> server plus server -> second slowest, in frames, plus 1 frame of slack
-        CHECK(p::pickDelay({10, 10}, 16) == 2u);
-        CHECK(p::pickDelay({100, 60}, 16) == 6u);    // (100 + 60) / 2 = 80 ms = 5 frames + 1
-        CHECK(p::pickDelay({60, 100, 20}, 33) == 4u);   // 4 players, 33 ms frame
-        CHECK(p::pickDelay({2000, 2000}, 16) == 15u);   // ceiling
-        CHECK(p::pickDelay({0}, 16) == 2u);             // floor
+        // a player's input goes to the server and from there to each other player: half its own round trip plus half the slowest
+        // other's, plus a few ms of margin, in frames
+        const double f60 = 1000.0 / 60.0, f30 = 1000.0 / 30.0;
+        CHECK(p::playerDelay({20, 20}, 0, f60) == 2u);     // 20 + 3 = 23 ms = 1.4 frames
+        CHECK(p::playerDelay({60, 60}, 1, f60) == 4u);     // 63 ms = 3.8 frames
+        CHECK(p::playerDelay({120, 120}, 0, f60) == 8u);   // 123 ms = 7.4 frames
+        CHECK(p::playerDelay({100, 60}, 0, f60) == 5u);    // (100 + 60) / 2 + 3 = 83 ms
+        // with two slow players, the fast ones only wait for the slow path
+        CHECK(p::playerDelay({20, 20, 120, 120}, 0, f30) == 3u);   // 73 ms
+        CHECK(p::playerDelay({20, 20, 120, 120}, 2, f30) == 4u);   // 123 ms
+        CHECK(p::playerDelay({0, 0}, 0, f60) == 1u);               // floor
+        CHECK(p::playerDelay({2000, 2000}, 0, f60) == 15u);        // ceiling
+        CHECK(p::playerDelay({40}, 0, f60) == 1u);                 // nobody else to reach
+        CHECK(p::startDelay({20, 20, 120, 120}, f30) == 4u);       // everyone starts at the largest
+    }
+
+    TEST(proto_rtt_window_keeps_the_highest_recent_round_trip)
+    {
+        p::RttWindow w;
+        CHECK(w.high() == 0u);
+        w.add(40);
+        w.add(90);
+        w.add(50);
+        CHECK(w.high() == 90u);
+        for (size_t i = 0; i < p::RttWindow::kSamples; ++i)
+            w.add(30);
+        CHECK(w.high() == 30u);   // the spike left the window
+    }
+
+    TEST(proto_pace_roundtrip)
+    {
+        p::Pace a{7};
+        p::Pace b;
+        CHECK(p::decode(p::encode(a), b) && b.delay == 7u);
+        CHECK(p::typeOf(p::encode(a)) == p::Type::Pace);
     }
 
     TEST(lobby_lines_split_words_and_key_values)
@@ -967,7 +1097,7 @@ namespace
         CHECK(b.start(clientFor(cfg.port, *ms[1]), err));
         CHECK(a.waitStarted(5000) && b.waitStarted(5000));
         CHECK(a.localPlayer() == 0 && b.localPlayer() == 1 && a.players() == 2);
-        CHECK(a.delay() >= 2u && a.delay() == b.delay());
+        CHECK(a.delay() >= 1u && a.delay() == b.delay());
         CHECK(a.names() == std::vector<std::string>({"Ana", "Bia"}));
         exchange(a, b, 100);
         CHECK(a.status() == Status::Running && b.status() == Status::Running);
@@ -1008,6 +1138,62 @@ namespace
                 for (auto &c : cs)
                     same = same && c->input(p, f) == pressed(static_cast<uint16_t>((p << 8) | (f - d)));
         CHECK(same);
+    }
+
+    // The server re-picks each player's delay from the round trips while the match runs and the clients follow it one frame at a time;
+    // every frame still has exactly one input per player, the same on both PCs
+    TEST(match_delay_follows_the_ping_without_losing_a_frame)
+    {
+        ServerConfig cfg = testConfig();
+        cfg.paceMs = 20;
+        RunningServer rs(cfg);
+        auto ms = formMatch(cfg.port, {"Ana", "Bia"}, {3, 1});
+        MatchClient a, b;
+        std::string err;
+        CHECK(a.start(clientFor(cfg.port, *ms[0]), err));
+        CHECK(b.start(clientFor(cfg.port, *ms[1]), err));
+        CHECK(a.waitStarted(5000) && b.waitStarted(5000));
+        MatchClient *cs[2] = {&a, &b};
+        // a held button state that changes every 20 samples (steady most of the time, so the delay can step), counting down
+        const auto sample = [](int player, uint32_t i) {
+            PadState s;
+            s.buttons = static_cast<uint16_t>(0x7000u - 0x1000u * static_cast<uint32_t>(player) - i / 20u);
+            return s;
+        };
+        uint32_t i = 0, most = 0;
+        bool ok = true, same = true, ordered = true;
+        PadState last[2];
+        const auto run = [&](uint32_t samples) {
+            for (const uint32_t end = i + samples; i < end && ok; ++i)
+            {
+                for (int p = 0; p < 2; ++p)
+                    cs[p]->pushSample(sample(p, i));
+                for (MatchClient *c : cs)
+                    ok = ok && c->waitFrame(i, 5000);
+                most = std::max({most, a.delay(), b.delay()});
+                // both PCs see the same input on every frame, and each player's frames are their samples in order: a step repeats or
+                // skips only a steady sample, so the value never jumps over one
+                for (int p = 0; p < 2 && ok; ++p)
+                {
+                    const PadState x = a.input(p, i);
+                    same = same && x == b.input(p, i);
+                    if (last[p] != PadState{})
+                        ordered = ordered && x.buttons <= last[p].buttons && last[p].buttons - x.buttons <= 1;
+                    last[p] = x;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            }
+        };
+        run(60);
+        const uint32_t low = a.delay();
+        rs.server.setTestRtt(150);   // 150 ms everywhere: (150 + 150) / 2 + 3 = 153 ms = 10 frames (more on a loaded machine)
+        run(400);
+        CHECK(ok && a.delay() >= 10u && b.delay() >= 10u);
+        rs.server.setTestRtt(0);
+        run(600);
+        CHECK(ok && a.delay() <= low + 1u && b.delay() <= low + 1u && most >= 10u);   // back down (the local ping may wander by a frame)
+        CHECK(same && ordered);
+        CHECK(a.status() == Status::Running && b.status() == Status::Running);
     }
 
     TEST(match_survives_lost_input_packets)

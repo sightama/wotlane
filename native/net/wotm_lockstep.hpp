@@ -1,10 +1,11 @@
-// ABOUTME: Lockstep input timeline: per player and per frame, the pad, mouse and camera settings state (12 bytes) every PC applies.
+// ABOUTME: Lockstep input timeline (per player and per frame, the pad, mouse and camera settings state every PC applies) and the delay schedule.
 // ABOUTME: No dependency on the game or the network; used by the client (wotm.exe) and the server.
 #pragma once
 
 #include <algorithm>
 #include <cstdint>
 #include <map>
+#include <utility>
 #include <vector>
 
 namespace wotm_net
@@ -143,5 +144,73 @@ namespace wotm_net
 
         uint32_t delay_;
         std::vector<Player> players_;
+    };
+
+    // This PC's own input delay, which may change during the match (the server's advice, proto::Pace). The sample taken at frame S
+    // fills frame S + delay. Growing by one repeats the previous frame (with no mouse motion) and shrinking by one skips a sample (its
+    // mouse motion goes into the next), so every frame of this player still gets exactly one input, whenever and however often the
+    // delay moves: the other PCs only see a value per frame, and stay in sync. A step waits for a sample with the same buttons and
+    // sticks as the previous one, so it neither repeats nor drops a press; growing goes ahead anyway after kForceGrowAfter samples
+    // (a delay that is too short stalls everyone). Steps are kStepGap samples apart.
+    class LocalSchedule
+    {
+    public:
+        static constexpr uint32_t kStepGap = 8, kForceGrowAfter = 30;
+
+        explicit LocalSchedule(uint32_t delay = 0) : delay_(delay), target_(delay), next_(delay) {}
+
+        uint32_t delay() const { return delay_; }
+        uint32_t target() const { return target_; }
+        void setTarget(uint32_t t) { target_ = t; }
+
+        // the frames the next sample fills, in order (none when it is skipped)
+        std::vector<std::pair<uint32_t, PadState>> push(PadState s)
+        {
+            std::vector<std::pair<uint32_t, PadState>> out;
+            const bool steady = sameControls(s, prev_);
+            const bool canStep = sinceStep_ >= kStepGap;
+            ++sinceStep_;
+            if (target_ > delay_ && canStep && (steady || waiting_ >= kForceGrowAfter))
+            {
+                PadState repeat = prev_;
+                repeat.mouseX = repeat.mouseY = 0;
+                out.push_back({next_++, repeat});
+                ++delay_;
+                step();
+            }
+            else if (target_ < delay_ && canStep && steady && delay_ > 1u)
+            {
+                carryX_ += s.mouseX;
+                carryY_ += s.mouseY;
+                --delay_;
+                step();
+                return out;
+            }
+            else if (target_ != delay_)
+                ++waiting_;
+            s.mouseX = clampMouse(s.mouseX + carryX_);
+            s.mouseY = clampMouse(s.mouseY + carryY_);
+            carryX_ = carryY_ = 0;
+            out.push_back({next_++, s});
+            prev_ = s;
+            return out;
+        }
+
+    private:
+        static bool sameControls(const PadState &a, const PadState &b)
+        {
+            return a.buttons == b.buttons && a.lx == b.lx && a.ly == b.ly && a.rx == b.rx && a.ry == b.ry;
+        }
+        static int16_t clampMouse(int v) { return static_cast<int16_t>(std::clamp(v, -32768, 32767)); }
+        void step()
+        {
+            sinceStep_ = 0;
+            waiting_ = 0;
+        }
+
+        uint32_t delay_, target_, next_;
+        PadState prev_;   // the state of frame next_ - 1 (the frames before the first delay are neutral)
+        uint32_t sinceStep_ = kStepGap, waiting_ = 0;
+        int carryX_ = 0, carryY_ = 0;
     };
 }

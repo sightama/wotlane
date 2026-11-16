@@ -1,5 +1,5 @@
 // ABOUTME: Network match client implementation: a thread that joins with the token over the match transport (ENet or WebSocket),
-// ABOUTME: relays inputs with acks and redundancy, applies drops and stops on desync. The game only calls pushLocal/waitFrame/input.
+// ABOUTME: relays inputs with acks and redundancy, applies drops and stops on desync. The game only calls pushSample/waitFrame/input.
 #include "wotm_net_client.hpp"
 
 #include <algorithm>
@@ -120,12 +120,12 @@ namespace wotm_net
             proto::Start s;
             if (proto::decode(data, s) && local_ >= 0)
             {
-                delay_ = s.delay;
+                schedule_ = LocalSchedule(s.delay);
                 names_ = s.names;
-                inputs_ = InputTimeline(players_, delay_);
+                inputs_ = InputTimeline(players_, s.delay);
                 for (const auto &d : drops_)
                     inputs_.drop(d.first, d.second);
-                serverAck_ = delay_;
+                serverAck_ = s.delay;
                 sentAcks_.assign(static_cast<size_t>(players_), 0u);
                 setStatus(Status::Running, "match in progress");
             }
@@ -175,6 +175,13 @@ namespace wotm_net
                     away_.resize(a.player + 1u, false);
                 away_[a.player] = a.away;
             }
+            break;
+        }
+        case proto::Type::Pace:
+        {
+            proto::Pace p;
+            if (proto::decode(data, p) && status_ == Status::Running)
+                schedule_.setTarget(p.delay);
             break;
         }
         case proto::Type::Desync:
@@ -271,7 +278,7 @@ namespace wotm_net
     uint32_t MatchClient::delay() const
     {
         std::lock_guard<std::mutex> lk(mu_);
-        return delay_;
+        return schedule_.delay();
     }
 
     std::vector<std::string> MatchClient::names() const
@@ -286,6 +293,16 @@ namespace wotm_net
         if (status_ != Status::Running || local_ < 0)
             return;
         inputs_.set(local_, frame, s);
+        dirty_ = true;
+    }
+
+    void MatchClient::pushSample(const PadState &s)
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        if (status_ != Status::Running || local_ < 0)
+            return;
+        for (const auto &f : schedule_.push(s))
+            inputs_.set(local_, f.first, f.second);
         dirty_ = true;
     }
 

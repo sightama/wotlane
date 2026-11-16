@@ -191,11 +191,11 @@ namespace wotm_sync
                 if (start)
                     s.buttons &= static_cast<uint16_t>(~wotm::personalpause::kStart);
             }
-            g_net->pushLocal(index + g_inputDelay, s);
+            g_net->pushSample(s);   // fills frame index + this player's current delay (the delay may step: LocalSchedule)
             if (!g_loggedLocal && !idle(s))
             {
                 g_loggedLocal = true;
-                std::fprintf(stderr, "[sync] first local input: sample of frame %u applies at frame %u\n", index, index + g_inputDelay);
+                std::fprintf(stderr, "[sync] first local input: sample of frame %u applies at frame %u\n", index, index + g_net->delay());
             }
             return;
         }
@@ -585,12 +585,17 @@ namespace wotm_sync
             std::fprintf(stderr, "[net] frame %u: %u waits for the network, %.0f ms in total\n", frame, g_netStalls, g_netStallMs);
     }
 
-    // Every 600 frames: this player's input delay, ping and the stalls of the window, the numbers the felt lag comes from
-    // (tools/net_check.py sums them up per player)
+    // Every frame: notes a change of this player's input delay (the server's Pace advice). Every 600 frames: the delay, ping and the
+    // stalls of the window, the numbers the felt lag comes from (tools/net_check.py sums them up per player)
     constexpr uint32_t kPaceFrames = 600u;
 
     void netPace(uint32_t frame)
     {
+        if (const uint32_t d = g_net->delay(); d != wotm_netstatus::g_delay.load())
+        {
+            std::fprintf(stderr, "[net] delay %u -> %u frames at frame %u\n", wotm_netstatus::g_delay.load(), d, frame);
+            wotm_netstatus::g_delay = d;
+        }
         if (frame == 0u || frame % kPaceFrames != 0u)
             return;
         std::fprintf(stderr, "[net] pace: frame %u, delay %u, ping %u ms, %u stalls (%.1f ms) in the last %u frames\n", frame,
