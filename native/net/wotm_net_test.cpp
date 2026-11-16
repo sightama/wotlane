@@ -1448,6 +1448,65 @@ namespace
         CHECK(welcomed);
     }
 
+    // a browser whose network stopped: over a WebSocket (reliable and ordered) the server sends it each input once, not again every
+    // tick while it doesn't answer, so a long outage neither fills the connection's buffers (the server would block on it, then drop the
+    // player) nor leaves the player a minute of repeats to chew through when it comes back. Only the server's pings keep going.
+    TEST(ws_silent_player_is_not_sent_repeats)
+    {
+        using namespace wotm_net::ws;
+        ServerConfig cfg = wsTestConfig();
+        RunningServer rs(cfg);
+        const std::vector<std::string> names = {"P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8"};
+        auto ms = formMatch(cfg.port, names, {3, 1, 2, 5, 4, 7, 8, 9});
+        std::vector<std::unique_ptr<MatchClient>> cs;
+        std::string err;
+        for (size_t i = 0; i + 1 < ms.size(); ++i)
+        {
+            cs.push_back(std::make_unique<MatchClient>());
+            CHECK(cs.back()->start(clientFor(cfg.port, *ms[i]), err));
+        }
+        LineSocket raw;
+        CHECK(raw.connect("127.0.0.1", cfg.wsPort, 2000));
+        const std::string req = handshakeRequest("127.0.0.1", "/match", "dGhlIHNhbXBsZSBub25jZQ==");
+        raw.sendBytes(req.data(), req.size());
+        p::Join j;
+        j.token = ms[7]->match["token"], j.buildId = "b1", j.configHash = "cfg", j.name = "P8";
+        std::vector<uint8_t> packet{p::kControl};
+        const std::vector<uint8_t> body = p::encode(j);
+        packet.insert(packet.end(), body.begin(), body.end());
+        const std::vector<uint8_t> join = encode(kBinary, packet.data(), packet.size(), true);
+        raw.sendBytes(join.data(), join.size());
+        bool started = true;
+        for (auto &c : cs)
+            started = started && c->waitStarted(5000);
+        CHECK(started);
+        if (!started)
+            return;
+        // the seven play a second ahead; P8 never answers, so they end up waiting for it
+        const uint32_t d = cs[0]->delay();
+        for (uint32_t f = 0; f < 30; ++f)
+            for (auto &c : cs)
+                c->pushLocal(f + d, pressed(1));
+        auto drain = [&] {
+            size_t total = 0;
+            for (bool alive = true; alive;)
+            {
+                alive = raw.pump();
+                const size_t got = raw.takeReceived().size();
+                total += got;
+                if (!got)
+                    break;
+            }
+            return total;
+        };
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        drain();
+        std::this_thread::sleep_for(std::chrono::seconds(2));
+        const size_t silent = drain();
+        CHECK(silent < 1024u);   // 2 s of pings (20 of 10 bytes); the inputs already went
+        CHECK(raw.open());
+    }
+
     // a lobby connection that sends 64 KB without ending a line is dropped
     TEST(lobby_line_without_end_closes_the_connection)
     {

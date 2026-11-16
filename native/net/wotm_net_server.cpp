@@ -545,6 +545,7 @@ namespace wotm_net
             s.token = hex64(rng_());
             s.name = c.name;
             s.need.assign(static_cast<size_t>(players), 0u);
+            s.sent.assign(static_cast<size_t>(players), 0u);
             m->slots.push_back(std::move(s));
         }
         for (int i = 0; i < players; ++i)
@@ -911,7 +912,7 @@ namespace wotm_net
                         continue;
                     bool behind = m->inputs.nextMissing(static_cast<int>(i)) != s.lastAckOwn;
                     for (size_t q = 0; q < m->slots.size(); ++q)
-                        behind = behind || (q != i && s.need[q] < m->inputs.nextMissing(static_cast<int>(q)));
+                        behind = behind || (q != i && s.sendFrom(q) < m->inputs.nextMissing(static_cast<int>(q)));
                     if (s.dirty || (behind && now - s.lastSend > std::chrono::milliseconds(16)))
                         sendInputs(*m, static_cast<int>(i));
                 }
@@ -946,9 +947,10 @@ namespace wotm_net
         {
             if (static_cast<int>(q) == si)
                 continue;
-            const uint32_t from = s.need[q], to = std::min(m.inputs.nextMissing(static_cast<int>(q)), from + static_cast<uint32_t>(proto::kMaxRun));
+            const uint32_t from = s.sendFrom(q), to = std::min(m.inputs.nextMissing(static_cast<int>(q)), from + static_cast<uint32_t>(proto::kMaxRun));
             if (from >= to)
                 continue;
+            s.sent[q] = to;
             proto::InputRun r;
             r.player = static_cast<uint8_t>(q);
             r.first = from;
