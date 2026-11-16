@@ -69,7 +69,6 @@ namespace wotm_net
             int lobby = -1;
             std::string name;
             proto::Pick pick;   // monster and skin for the next match
-            Clock::time_point lastPing{};   // while its lobby waits
         };
 
         // a browser in a match (WebSocket /match)
