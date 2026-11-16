@@ -2,12 +2,14 @@
 // ABOUTME: render loop on requestAnimationFrame (JSPI suspends it between frames), and shares the tab and network state with the page.
 #ifdef __EMSCRIPTEN__
 #include "wotm_web.h"
+#include "wotm_discchunks.hpp"
 
 #include <emscripten.h>
 #include <emscripten/wasmfs.h>
 
 #include <atomic>
 #include <cstdio>
+#include <cstdlib>
 #include <mutex>
 #include <string>
 #include <unistd.h>
@@ -72,15 +74,28 @@ extern "C"
 
 void wotmWebMount()
 {
-    const backend_t disc = wasmfs_create_fetch_backend("data", kDiscChunkBytes);
-    if (wasmfs_create_directory("/disc", 0555, disc) != 0)
-        std::fprintf(stderr, "[web] couldn't mount /disc\n");
-    for (const char *name : kDiscFiles)
+    // WOTM_DISC_SIZES (the page sets it where a worker's fetch stalls while the main thread waits: Firefox): range reads that
+    // never block the main thread (wotm_webdisc.cpp). Otherwise the WASMFS fetch backend
+    uint64_t sizes[2] = {};
+    if (wotm::discchunks::parseSizes(std::getenv("WOTM_DISC_SIZES"), kDiscFiles, 2, sizes))
     {
-        char path[64];
-        std::snprintf(path, sizeof path, "/disc/%s", name);
-        if (wasmfs_create_file(path, 0444, disc) < 0)
-            std::fprintf(stderr, "[web] couldn't create %s\n", path);
+        if (!wotmWebMountRangeDisc("/disc", kDiscFiles, sizes, 2))
+            std::fprintf(stderr, "[web] couldn't mount /disc (range reads)\n");
+        else
+            std::fprintf(stderr, "[web] /disc: range reads\n");
+    }
+    else
+    {
+        const backend_t disc = wasmfs_create_fetch_backend("data", kDiscChunkBytes);
+        if (wasmfs_create_directory("/disc", 0555, disc) != 0)
+            std::fprintf(stderr, "[web] couldn't mount /disc\n");
+        for (const char *name : kDiscFiles)
+        {
+            char path[64];
+            std::snprintf(path, sizeof path, "/disc/%s", name);
+            if (wasmfs_create_file(path, 0444, disc) < 0)
+                std::fprintf(stderr, "[web] couldn't create %s\n", path);
+        }
     }
     if (wasmfs_create_directory("/save", 0777, wasmfs_create_opfs_backend()) != 0)
         std::fprintf(stderr, "[web] couldn't mount /save (saves won't persist)\n");

@@ -4,15 +4,27 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
-const { supportProblem } = createRequire(import.meta.url)('./support.js');
-const chrome = { chromium: true, jspi: true, isolated: true, mobile: false };
+const { supportProblem, rangeDisc } = createRequire(import.meta.url)('./support.js');
+const chrome = { chromium: true, firefox: false, jspi: true, isolated: true, mobile: false };
+const firefox = { ...chrome, chromium: false, firefox: true };
+const safari = { ...chrome, chromium: false, firefox: false };
 
 test('desktop Chrome or Edge with everything: no message', () => {
   assert.equal(supportProblem(chrome), null);
 });
 
-test('Firefox or Safari: says which browsers work', () => {
-  assert.match(supportProblem({ ...chrome, chromium: false }), /Chrome or Edge/);
+test('Firefox with JSPI runs it (on range reads); without JSPI it asks to update', () => {
+  assert.equal(supportProblem(firefox), null);
+  assert.match(supportProblem({ ...firefox, jspi: false }), /update Firefox/);
+});
+
+test('Safari: says which browsers work', () => {
+  assert.match(supportProblem(safari), /Chrome, Edge or Firefox/);
+});
+
+test('range reads for the disc everywhere but Chromium (which keeps its proven fetch backend)', () => {
+  assert.equal(rangeDisc(chrome), false);
+  assert.equal(rangeDisc(firefox), true);
 });
 
 test('a phone or tablet: says it needs a computer', () => {

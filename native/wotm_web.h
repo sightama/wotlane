@@ -2,9 +2,14 @@
 // ABOUTME: whether the tab is hidden, and a long network wait the page offers to leave.
 #pragma once
 
+#include <cstdint>
+
 // /disc streams the disc from the page's data/ folder (HTTP range requests, fetched as the game reads), /save keeps settings and saves
 // in the browser's private file system (OPFS) and becomes the current folder, where the native layer writes them
 void wotmWebMount();
+
+// /disc read in byte ranges without blocking the main thread (wotm_webdisc.cpp): `names` under the page's data/, with their sizes
+bool wotmWebMountRangeDisc(const char *dir, const char *const *names, const uint64_t *sizes, int count);
 
 // waits for the browser's next animation frame, so the page stays responsive and the frame reaches the screen
 void wotmWebPresent();

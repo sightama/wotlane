@@ -122,13 +122,29 @@
     document.addEventListener('visibilitychange', tellHidden);
     if (matchEnv) watchStalls();
     // the game reads its mods at start, so the repo's built-in mods are in place first
-    syncMods().finally(() => {
+    Promise.all([syncMods(), discSizes()]).finally(() => {
       const script = document.createElement('script');
       script.src = 'wotm.js';
       document.body.appendChild(script);
     });
     canvas.focus();
   };
+
+  // where a worker's fetch stalls while the main thread waits (support.js rangeDisc: Firefox), the game reads the disc in ranges
+  // itself (native/wotm_webdisc.cpp) and needs each file's size first
+  async function discSizes() {
+    if (!window.wotmRangeDisc()) return;
+    try {
+      const sizes = await Promise.all(['SCUS_971.97', 'game.iso'].map(async (name) => {
+        const r = await fetch('data/' + name, { method: 'HEAD' });
+        if (!r.ok) throw new Error(`data/${name}: HTTP ${r.status}`);
+        return `${name}:${r.headers.get('content-length')}`;
+      }));
+      env.WOTM_DISC_SIZES = sizes.join(',');   // copied into the game's environment when it loads (preRun)
+    } catch (e) {
+      out('[web] could not read the disc sizes: ' + e.message);
+    }
+  }
 
   // mirrors the built-in mods served with the page into the browser's mods folder (web/builtin_mods.js); a failure is logged and
   // the game starts anyway (with whatever mods are there)

@@ -197,7 +197,7 @@ index 0000000..9095b52
 +    }
 +}
 diff --git a/ps2xRuntime/CMakeLists.txt b/ps2xRuntime/CMakeLists.txt
-index 589d768..eef2717 100644
+index 589d768..0cf7eb7 100644
 --- a/ps2xRuntime/CMakeLists.txt
 +++ b/ps2xRuntime/CMakeLists.txt
 @@ -393,6 +393,7 @@ add_library(ps2_runtime STATIC
@@ -317,7 +317,7 @@ index 589d768..eef2717 100644
  
      if(WIN32 AND NOT PS2X_SHOW_WINDOWS_CONSOLE)
          if(MSVC)
-@@ -608,3 +645,110 @@ endif()
+@@ -608,3 +645,114 @@ endif()
  install(DIRECTORY include/
      DESTINATION include
  )
@@ -351,7 +351,11 @@ index 589d768..eef2717 100644
 +# (wotm_webfs.cpp), pthreads on SharedArrayBuffer, wasm exceptions and JSPI (the frame loop waits on requestAnimationFrame);
 +# web/data_retry.js retries the disc's requests in every thread
 +if(EMSCRIPTEN)
-+    target_sources(ps2_runtime PRIVATE "${WOTM_NATIVE_DIR}/wotm_glad_web.cpp" "${WOTM_NATIVE_DIR}/wotm_webfs.cpp")
++    target_sources(ps2_runtime PRIVATE "${WOTM_NATIVE_DIR}/wotm_glad_web.cpp" "${WOTM_NATIVE_DIR}/wotm_webfs.cpp"
++        "${WOTM_NATIVE_DIR}/wotm_webdisc.cpp")
++    # wotm_webdisc.cpp implements a WASMFS file (its internal headers)
++    set_source_files_properties("${WOTM_NATIVE_DIR}/wotm_webdisc.cpp" PROPERTIES
++        INCLUDE_DIRECTORIES "${EMSCRIPTEN_ROOT_PATH}/system/lib/wasmfs" SKIP_UNITY_BUILD_INCLUSION TRUE)
 +    target_link_options(ps2EntryRunner PRIVATE -pthread -fwasm-exceptions -sJSPI -sWASMFS -sUSE_GLFW=3 -sUSE_WEBGL2=1
 +        -sMIN_WEBGL_VERSION=2 -sFULL_ES3=1 -sINITIAL_MEMORY=512MB -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=2GB -sPTHREAD_POOL_SIZE=8
 +        -sSTACK_SIZE=8MB -sDEFAULT_PTHREAD_STACK_SIZE=8MB -sEXIT_RUNTIME=0 -sEXPORTED_RUNTIME_METHODS=ENV,HEAPF32,UTF8ToString

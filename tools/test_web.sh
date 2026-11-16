@@ -30,8 +30,9 @@ grep -v '^ok ' "$build/test.log" || true   # failures and the totals line; the f
 [ "$status" -eq 0 ] || fail "native tests failed under wasm"
 
 step 'browser-only sources compile'
-for f in native/net/wotm_net_transport_web.cpp native/wotm_glad_web.cpp native/wotm_webfs.cpp; do
-    em++ -std=c++20 -pthread -fsyntax-only -Wall -Werror -I"$REPO/native" -I"$REPO/native/net" "$REPO/$f" || fail "$f does not compile"
+wasmfs=$(em-config EMSCRIPTEN_ROOT)/system/lib/wasmfs   # wotm_webdisc.cpp implements a WASMFS file
+for f in native/net/wotm_net_transport_web.cpp native/wotm_glad_web.cpp native/wotm_webfs.cpp native/wotm_webdisc.cpp; do
+    em++ -std=c++20 -pthread -fsyntax-only -Wall -Werror -I"$REPO/native" -I"$REPO/native/net" -I"$wasmfs" "$REPO/$f" || fail "$f does not compile"
     echo "ok      $f"
 done
 

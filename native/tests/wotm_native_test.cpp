@@ -4,6 +4,7 @@
 #include "wotm_settings.hpp"
 #include "wotm_snd.hpp"
 #include "wotm_windowfit.hpp"
+#include "wotm_discchunks.hpp"
 #include "wotm_personalpause.hpp"
 #include "wotm_pauseview.hpp"
 #include "wotm_mods.hpp"
@@ -663,6 +664,46 @@ namespace
         fs::rename(b / "skin" / "MON" / "LIZARD1.NGP", b / "skin" / "MON" / "LIZARD2.NGP");
         CHECK(wotm::mods::digest(b) != base);
         fs::remove_all(root);
+    }
+
+    // The browser's disc range reads (wotm_webdisc.cpp): which 1 MiB chunks a read needs, clamped to the file, and the copy out of them
+    TEST(disc_chunks_cover_a_read_and_clamp_at_the_end)
+    {
+        namespace dc = wotm::discchunks;
+        const dc::Span one = dc::span(10, 20, 1000, 100);
+        CHECK(one.first == 0 && one.count == 1 && one.len == 20);
+        const dc::Span two = dc::span(90, 20, 1000, 100);
+        CHECK(two.first == 0 && two.count == 2 && two.len == 20);
+        const dc::Span tail = dc::span(990, 50, 1000, 100);   // past the end: only the 10 bytes there are
+        CHECK(tail.first == 9 && tail.count == 1 && tail.len == 10);
+        CHECK(dc::span(1000, 5, 1000, 100).len == 0 && dc::span(1000, 5, 1000, 100).count == 0);
+        CHECK(dc::span(0, 0, 1000, 100).count == 0);
+        // chunk i holds bytes [i*100, i*100+100); the last one is short (bytes 200..249)
+        std::vector<std::vector<uint8_t>> chunks(3);
+        for (int i = 0; i < 3; ++i)
+            for (int b = 0; b < (i == 2 ? 50 : 100); ++b)
+                chunks[static_cast<size_t>(i)].push_back(static_cast<uint8_t>(i * 100 + b));
+        uint8_t out[120] = {};
+        const dc::Span s = dc::span(95, 120, 250, 100);
+        CHECK(s.len == 120);
+        dc::copyOut(out, 95, s.len, 100, [&](uint64_t i) -> const std::vector<uint8_t> & { return chunks[i]; });
+        bool same = true;
+        for (int k = 0; k < 120; ++k)
+            same = same && out[k] == static_cast<uint8_t>(95 + k);
+        CHECK(same);
+    }
+
+    // WOTM_DISC_SIZES from the page: "name:bytes,..." gives each disc file's size; a missing or malformed one refuses the whole text
+    TEST(disc_sizes_parse_each_file)
+    {
+        namespace dc = wotm::discchunks;
+        const char *names[] = {"SCUS_971.97", "game.iso"};
+        uint64_t sizes[2] = {};
+        CHECK(dc::parseSizes("game.iso:1258815488,SCUS_971.97:7414808", names, 2, sizes));
+        CHECK(sizes[0] == 7414808u && sizes[1] == 1258815488ull);
+        CHECK(!dc::parseSizes("SCUS_971.97:7414808", names, 2, sizes));        // game.iso missing
+        CHECK(!dc::parseSizes("SCUS_971.97:x,game.iso:5", names, 2, sizes));   // not a number
+        CHECK(!dc::parseSizes("", names, 2, sizes));
     }
 
     // The digest's value is fixed by its definition (each file's path inside the mods folder, then its contents), whatever form the
