@@ -62,13 +62,21 @@ static std::string save(const me::Session &s, const std::string &id)
     {
         std::ofstream out(tmp, std::ios::binary);
         out << sm::write(map);
-        if (!out)
+        out.close();
+        if (out.fail())
         {
             std::fprintf(stderr, "[mapedit] cannot write %s\n", tmp.string().c_str());
             return "CANNOT WRITE";
         }
     }
     fs::rename(tmp, file, ec);
+    if (ec)   // a file system without rename (the browser's private one): write the file itself
+    {
+        ec.clear();
+        fs::copy_file(tmp, file, fs::copy_options::overwrite_existing, ec);
+        std::error_code ignored;
+        fs::remove(tmp, ignored);
+    }
     if (ec)
     {
         std::fprintf(stderr, "[mapedit] cannot write %s: %s\n", file.string().c_str(), ec.message().c_str());

@@ -173,7 +173,7 @@ static void draw2d()
     int w = 0;
     for (int i = 0; i < nl; ++i)
         w = std::max(w, MeasureText(lines[i], fs));
-    const int x = 12, top = sh - nl * (fs + 4) - 16;
+    const int x = 12, top = sh - nl * (fs + 4) - sh / 8;   // above the free camera's legend strip
     DrawRectangle(x - 6, top - 6, w + 12, nl * (fs + 4) + 8, Color{0, 0, 0, 170});
     for (int i = 0; i < nl; ++i)
         DrawText(lines[i], x, top + i * (fs + 4), fs, i == 0 ? YELLOW : RAYWHITE);
