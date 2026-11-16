@@ -2541,7 +2541,7 @@ namespace
             runtime->lookupFunction(wotm::fn::fileReads__FPcPvUi)(rdram, ctx, runtime);
             *ctx = saved;
         };
-        const int r = wotm::zip::inflateCodes(rdram, zipCrcTable(rdram), reinterpret_cast<const uint16_t *>(rdram + s::mask_bits), st,
+        const int r = wotm::zip::inflateCodes(rdram, zipCrcTable(rdram), s::mask_bits, st,
                                               GPR_U32(ctx, 4), GPR_U32(ctx, 5), static_cast<int32_t>(GPR_U32(ctx, 6)),
                                               static_cast<int32_t>(GPR_U32(ctx, 7)), refill);
 

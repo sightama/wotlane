@@ -75,9 +75,10 @@ functions, `zipInflateCodes` and `zipCrc32`, are host code (`native/wotm_zip.hpp
 writes, same globals and results as the byte-matched C in `src/common/zip.cpp`, at about 15 ms per block instead of about 90 ms translated
 (the gap between a load's disc reads). The guest RAM mask is the runtime's 64 MB one: the unzip writes above 32 MB. When the read window runs
 out, the hook calls the game's `fileReads` itself, with its stack frame where the game's would be; that is safe because `fileReads` never
-waits for a frame (see the modal function rule above). The only RAM difference from the translated code is dead stack the host code doesn't
-write (the spills of `zipInflateCodes`' prologue and `zipGetChar`'s saved `ra`), the same on every machine; `WOTM_STATEHASH` shows it in one
-block (79 in the stage-1 framehash fight). Tests: `zip_*` in `native/tests`.
+waits for a frame (see the modal function rule above). The only RAM difference from the translated code is dead stack below the loader:
+the game's `zipInflateCodes` prologue spills and saved `ra`s are never written, and `fileReads`' frame saves the hook caller's registers.
+It is the same on every machine; `WOTM_STATEHASH` shows it in one block (79 in the stage-1 framehash fight). Tests: `zip_*` in
+`native/tests`.
 
 ## Runtime: freeze and pace watchdog
 On by default, in the presentation loop (`ps2_runtime.cpp`, next to `PS2X_DUMP_RAM`). `g_frame` (0x6F7E38) increments on every frame of the fight (`rtMain`) and of the menu (`ShellRtLoop::endField`, which also covers the pause dialog). If it stays still for `WOTM_WATCHDOG` seconds (default 8; 0 disables) while the screen keeps drawing, the logic has frozen. A movie (`movieIsPlaying`, 0x6F8650) does not count. This happens once per stop: `[watchdog] FROZE` lines with the EE threads (pc/ra to look up in `symbol_addrs.txt`) and the semaphores in `live.err.log`, plus `ram_vigia_<g_frame>.bin` and `vram_vigia_<g_frame>.bin` in the disc folder (`discroot`), which is the cwd. When the game moves again, `[watchdog] g_frame is moving again` is printed. The legitimate stops measured (menu and stage loads: `zipBuildHuffmanTable`, `Shell::FadeScreen`) last 1.3 to 2.5 s. Pace: 2 s windows with the game running below `WOTM_MINFPS` frames/s (default 25) produce `[watchdog] SLOW` and then `back to normal pace` with the duration and the minimum, without a dump. Windows with a gap of more than 1 s between frames are loading and are left out.

@@ -44,17 +44,18 @@ inline void flush(const uint8_t *ram, const uint64_t *table, State &s, uint32_t 
     s.outSize -= w;
 }
 
-// zipInflateCodes(tl, td, bl, bd): decodes one deflate block with the Huffman tables at guest addresses tl/td (struct huft, 8 bytes:
-// e, b, then v.n or v.t at +4). `refill` is zipGetChar's read of the next 512 KB block into kReadBuf (fileReads with whichHalfMeg++);
-// fileBuf goes back to kReadBuf after it. Returns 1 on an invalid code (leaving the bit state and window position unsaved, as the
-// game does) and 0 at the end of the block.
-inline int inflateCodes(uint8_t *ram, const uint64_t *crcTable, const uint16_t *maskBits, State &s, uint32_t tl, uint32_t td, int bl,
+// zipInflateCodes(tl, td, bl, bd): decodes one deflate block with the Huffman tables at guest addresses tl/td (struct huft, 8 bytes: e, b,
+// then v.n or v.t at +4) and the game's mask_bits at guest address maskBits. `refill` is zipGetChar's read of the next 512 KB block
+// into kReadBuf (fileReads with whichHalfMeg++); fileBuf goes back to kReadBuf after it. Returns 1 on an invalid code (leaving the
+// bit state and window position unsaved, as the game does) and 0 at the end of the block.
+inline int inflateCodes(uint8_t *ram, const uint64_t *crcTable, uint32_t maskBits, State &s, uint32_t tl, uint32_t td, int bl,
                         int bd, const std::function<void()> &refill)
 {
     auto u8 = [ram](uint32_t a) { return ram[a & kRamMask]; };
     // little-endian, byte by byte so that an entry at the end of RAM wraps like the guest's reads do
     auto u16 = [&u8](uint32_t a) { return static_cast<uint16_t>(u8(a) | u8(a + 1) << 8); };
     auto u32 = [&u8](uint32_t a) { return static_cast<uint32_t>(u8(a) | u8(a + 1) << 8 | u8(a + 2) << 16 | uint32_t(u8(a + 3)) << 24); };
+    auto maskBit = [&](uint32_t n) -> uint32_t { return u16(maskBits + 2u * n); };   // mask_bits[n]
     auto nextByte = [&]() -> uint64_t {
         if (s.fileBuf >= kReadBuf + kReadBufSize)
         {
@@ -69,12 +70,12 @@ inline int inflateCodes(uint8_t *ram, const uint64_t *crcTable, const uint16_t *
     auto needBits = [&](uint32_t n) {
         while (k < n)
         {
-            b |= nextByte() << k;
+            b |= nextByte() << (k & 63);   // 64-bit shifts take the low 6 bits of the count, as on the EE
             k += 8;
         }
     };
     auto dumpBits = [&](uint32_t n) {
-        b >>= n;
+        b >>= n & 63;
         k -= n;
     };
     // a table lookup with its sub-tables (e > 16); false on the invalid code 99
@@ -87,13 +88,13 @@ inline int inflateCodes(uint8_t *ram, const uint64_t *crcTable, const uint16_t *
             dumpBits(u8(t + 1));
             e -= 16;
             needBits(e);
-            t = u32(t + 4) + 8u * (static_cast<uint32_t>(b) & maskBits[e]);
+            t = u32(t + 4) + 8u * (static_cast<uint32_t>(b) & maskBit(e));
         }
         dumpBits(u8(t + 1));
         return true;
     };
 
-    const uint32_t ml = maskBits[bl], md = maskBits[bd];
+    const uint32_t ml = maskBit(static_cast<uint32_t>(bl)), md = maskBit(static_cast<uint32_t>(bd));
     uint32_t e, t;
     for (;;)
     {
@@ -115,13 +116,13 @@ inline int inflateCodes(uint8_t *ram, const uint64_t *crcTable, const uint16_t *
 
         // a length, then its distance
         needBits(e);
-        uint32_t n = u16(t + 4) + (static_cast<uint32_t>(b) & maskBits[e]);
+        uint32_t n = u16(t + 4) + (static_cast<uint32_t>(b) & maskBit(e));
         dumpBits(e);
         needBits(static_cast<uint32_t>(bd));
         if (!decode(td, md, t, e))
             return 1;
         needBits(e);
-        uint32_t d = w - u16(t + 4) - (static_cast<uint32_t>(b) & maskBits[e]);
+        uint32_t d = w - u16(t + 4) - (static_cast<uint32_t>(b) & maskBit(e));
         dumpBits(e);
 
         // the copy; the window before the current one sits right below outBuf

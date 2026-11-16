@@ -5059,23 +5059,26 @@ TEST(hud_edge_shift_reaches_the_window_edge)
 }
 
 // Inflate (wotm_zip.hpp): a fixed-Huffman deflate stream, as the game's zipInflateBlockFixed hands it to zipInflateCodes, in a fake
-// 32 MB guest RAM. The tables are built in the guest layout by gzip's huft_build (the game's zipBuildHuffmanTable).
+// 64 MB guest RAM. The tables are built in the guest layout by gzip's huft_build (the game's zipBuildHuffmanTable).
 namespace zipt
 {
     namespace z = wotm::zip;
+
+    const uint16_t kMask[17] = {0x0000, 0x0001, 0x0003, 0x0007, 0x000f, 0x001f, 0x003f, 0x007f, 0x00ff,
+                                0x01ff, 0x03ff, 0x07ff, 0x0fff, 0x1fff, 0x3fff, 0x7fff, 0xffff};
+    constexpr uint32_t kMaskAddr = 0x006F4E28u;
 
     struct Ram
     {
         std::vector<uint8_t> m = std::vector<uint8_t>(64u << 20);   // the runtime's guest RAM (PS2_RAM_SIZE)
         uint32_t heap = 0x01000000u;   // bump allocator for the tables
+        Ram() { std::memcpy(&m[kMaskAddr], kMask, sizeof kMask); }   // mask_bits where the game has it
         uint32_t alloc(uint32_t bytes) { const uint32_t a = heap; heap += (bytes + 15u) & ~15u; return a; }
         void put8(uint32_t a, uint8_t v) { m[a] = v; }
         void put16(uint32_t a, uint16_t v) { std::memcpy(&m[a], &v, 2); }
         void put32(uint32_t a, uint32_t v) { std::memcpy(&m[a], &v, 4); }
     };
 
-    const uint16_t kMask[17] = {0x0000, 0x0001, 0x0003, 0x0007, 0x000f, 0x001f, 0x003f, 0x007f, 0x00ff,
-                                0x01ff, 0x03ff, 0x07ff, 0x0fff, 0x1fff, 0x3fff, 0x7fff, 0xffff};
     const uint16_t kLens[31] = {3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258, 0, 0};
     const uint16_t kLext[31] = {0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0, 99, 99};
     const uint16_t kDist[30] = {1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073,
@@ -5335,7 +5338,7 @@ static void checkInflateTo(uint32_t dest)
     s.bitBucket = ram.m[z::kReadBuf] >> 3;
     s.bitCount = 5;
     s.fileBuf++;
-    CHECK(z::inflateCodes(ram.m.data(), tab.data(), zipt::kMask, s, tl, td, bl, bd, refill) == 0);
+    CHECK(z::inflateCodes(ram.m.data(), tab.data(), zipt::kMaskAddr, s, tl, td, bl, bd, refill) == 0);
     CHECK(s.outWindow == s.outBuf || s.outWindow == s.outBuf - z::kWindow);   // where the last copy read from
     z::flush(ram.m.data(), tab.data(), s, s.windowPos);   // zipInflateAll's last zipFlush
 
@@ -5378,7 +5381,10 @@ TEST(zip_inflate_codes_stops_on_an_invalid_code)
     s.bitBucket = 0x5;
     s.bitCount = 3;
     s.windowPos = 0x1234;
-    CHECK(z::inflateCodes(ram.m.data(), tab.data(), zipt::kMask, s, tl, tl, 1, 1, [] {}) == 1);
+    CHECK(z::inflateCodes(ram.m.data(), tab.data(), zipt::kMaskAddr, s, tl, tl, 1, 1, [] {}) == 1);
+    CHECK(s.bitBucket == 0x5 && s.bitCount == 3 && s.windowPos == 0x1234);
+    // bl is a guest register: mask_bits + 2 * bl is a 32-bit guest address, here the halfword before the table (0: entry 0)
+    CHECK(z::inflateCodes(ram.m.data(), tab.data(), zipt::kMaskAddr, s, tl, tl, 0x7FFFFFFF, 1, [] {}) == 1);
     CHECK(s.bitBucket == 0x5 && s.bitCount == 3 && s.windowPos == 0x1234);
 }
 
