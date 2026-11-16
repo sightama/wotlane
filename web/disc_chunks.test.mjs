@@ -136,6 +136,7 @@ test('requests that are not for a listed disc file pass through untouched', asyn
   const f = make(net);
   assert.equal(await (await f('http://x/page.html')).text(), 'page');
   assert.equal(await (await f('http://x/data/other.bin', range(0, 3))).text(), 'page');
+  assert.equal(await (await f('http://x/data/constructor', range(0, 3))).text(), 'page');   // not a property of the index object
   assert.equal(net.chunkCalls().length, 0);
 });
 

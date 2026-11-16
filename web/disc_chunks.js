@@ -43,6 +43,8 @@
     return json;
   }
 
+  const entryOf = (index, file) => (index && Object.hasOwn(index.files, file) ? index.files[file] : null);
+
   // the manifest of a version must say what the index says, and have one hash for each chunk
   function parseManifest(json, entry, name) {
     const ok = json && json.size === entry.size && Number.isSafeInteger(json.chunkBytes) && json.chunkBytes > 0 && Array.isArray(json.sha256) &&
@@ -171,7 +173,7 @@
       if (!found) return baseFetch(url, init);
       const path = { base: absolute(found.base), file: found.file };
       const index = await getIndex(path.base);
-      const entry = index?.files[path.file];
+      const entry = entryOf(index, path.file);
       if (!entry) return baseFetch(url, init);
 
       const headers = { 'accept-ranges': 'bytes', etag: discEtag(entry), 'content-type': 'application/octet-stream' };
@@ -246,7 +248,7 @@
       const found = discPath(url);
       const path = found && { base: absolute(found.base), file: found.file };
       const index = path && getIndex(path.base);
-      const entry = index?.files[path.file];
+      const entry = entryOf(index, path.file);
       if (!entry || start >= Math.min(end, entry.size)) return null;
       const manifest = getManifest(path.base, path.file, entry);
       const last = Math.min(end, entry.size) - 1;

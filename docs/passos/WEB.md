@@ -21,7 +21,9 @@ pthreads, WebGL2, `web/data_retry.js` as a `--pre-js`) live in the PS2Recomp sea
 
 ## Run locally
 `python3 tools/serve_web.py --site <runtime>/web_dist --data <folder with SCUS_971.97 and game.iso>` serves the page with the
-cross-origin isolation headers (COOP `same-origin`, COEP `require-corp`) that SharedArrayBuffer needs, and byte ranges for the disc.
+cross-origin isolation headers (COOP `same-origin`, COEP `require-corp`) that SharedArrayBuffer needs, and the disc both as numbered chunk
+files (below; the hashes of each file are computed on first use, a few seconds for the ISO) and as whole files with byte ranges.
+`--chunks only` serves no whole files, as the site does once split; `--chunks off` has no chunk files, as a site that is not split yet.
 For online play start `wotm_server --ws-port <port>`; a page opened from `localhost` or `127.0.0.1` takes `?server=ws://127.0.0.1:<port>`
 (a public page always uses its own host). Use one browser profile per player: tabs of the same profile share the saves.
 
@@ -41,6 +43,23 @@ For online play start `wotm_server --ws-port <port>`; a page opened from `localh
   answers, and after a read that went to the network hands it the bytes to keep. A helper that doesn't answer within 300 ms is left
   alone for 2 s and the read goes to the network, as it did before the helper. The page also fetches `wotm.wasm` from its load on, into the HTTP cache (served with an
   ETag and `no-cache`), so `wotm.js`'s own request only revalidates it.
+- **Disc chunks:** a split site serves the disc as 1 MiB files, so that a CDN caches all of it (Cloudflare Free caches no object over
+  512 MB, and the ISO is 1.2 GiB): `/data/index.json` (`{chunkBytes, files: {name: {digest, size}}}`, the digest being the first 16 hex
+  digits of the file's SHA-256), `/data/<digest>/manifest.json` (`name`, `size`, `chunkBytes`, `chunks`, `sha256[]`) and
+  `/data/<digest>/<n>.bin` (a plain 200, the last chunk shorter, cacheable for good because a new disc is a new digest). The game, the
+  fetch backend and `native/wotm_webdisc.cpp` know nothing of this: they still send HEAD and Range requests for `data/<file>`, and
+  `web/disc_chunks.js` (a script tag in the page; the workers import it from `disc_cache.js`; like it, it is outside the `--pre-js` list, so
+  the build id stays) answers them: a HEAD from the index (the size, `Accept-Ranges` and an ETag of `"<digest>"`), a range GET from the
+  chunk files that cover it, fetched in parallel (12 at a time in a thread) and each checked against `sha256[n]` before use. A chunk that
+  fails its check, or comes the wrong length, is asked for again from `<n>.bin?retry=1` (another URL, so a bad copy kept by the edge or
+  the HTTP cache is not served twice), three tries in all, and then the read fails. The Cache API layer above keeps its caches by the
+  digest instead of the ETag. A 404 for `index.json` means the server is not split: every request goes to the whole-file URL as it does
+  without this layer. An index that fails any other way is an error, not a fallback, so that a broken split is not hidden. Chunks are 1 MiB
+  because the game reads the disc in 1 MiB aligned ranges (`kDiscChunkBytes`), the cache keeps 1 MiB blocks and `boot_chunks.json` lists
+  them: a boot to the title is 27 requests of 1 MiB. Firefox's synchronous XHR path asks the helper first and reads the chunk files
+  itself, one after another with synchronous XHR, when the helper doesn't have the range; it checks them with a JavaScript SHA-256
+  (`sha256Sync`, because SubtleCrypto can't be awaited there) and hands the helper the bytes to keep. The loading counter counts each
+  chunk that arrives, as it counts a range.
 - **Saves and settings:** `/save` is the browser's private file system (OPFS) and the game's working folder (`WOTM_SAVEDIR=/save`), so
   `settings.ini`, the memory card and `mods/` survive a reload.
 - **Disc and saves outside Chromium:** the WASMFS fetch and OPFS backends hand each read to a worker while the game's main thread waits;
