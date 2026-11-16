@@ -1,0 +1,149 @@
+// ABOUTME: Where the checks run: a local wotm_server plus tools/serve_web.py on free ports (heavy runs), or the live site behind its
+// ABOUTME: password. Also launches the browser(s) and samples the browsers' CPU through the DevTools SystemInfo domain.
+import { spawn } from 'node:child_process';
+import { createServer } from 'node:net';
+import { openSync, existsSync, readFileSync, mkdirSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import os from 'node:os';
+import { createRequire } from 'node:module';
+
+export const REPO = resolve(new URL('../../..', import.meta.url).pathname);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// playwright from this folder's node_modules, else the global npm root (`npm root -g`)
+export async function loadPlaywright() {
+  try {
+    return await import('playwright');
+  } catch { /* not installed here */ }
+  const root = process.env.NODE_PATH || '/opt/homebrew/lib/node_modules';
+  return createRequire(join(root, 'x.js'))('playwright');
+}
+
+function freePort() {
+  return new Promise((res, rej) => {
+    const s = createServer();
+    s.listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => res(port)); });
+    s.on('error', rej);
+  });
+}
+
+async function waitHttp(url, ms = 15000) {
+  const end = Date.now() + ms;
+  while (Date.now() < end) {
+    try { if ((await fetch(url)).ok) return; } catch { /* not up yet */ }
+    await sleep(200);
+  }
+  throw new Error(`${url} did not come up`);
+}
+
+// Local target. `site` is a built web_dist folder, `data` a folder with game.iso and SCUS_971.97, `server` the wotm_server binary
+// (native/net/build/wotm_server, built by `sh tools/test_net.sh notest`).
+export async function startLocal({ site, data, server, outDir, maxPlayers = 8 }) {
+  for (const [what, p] of [['site', join(site, 'index.html')], ['data', join(data, 'game.iso')], ['server', server]])
+    if (!existsSync(p)) throw new Error(`local target: ${what} not found at ${p}`);
+  mkdirSync(outDir, { recursive: true });
+  const [tcp, ws, web] = [await freePort(), await freePort(), await freePort()];
+  const serverLogPath = join(outDir, 'server.log');
+  const serverLog = openSync(serverLogPath, 'w');
+  const children = [];
+  const run = (cmd, args, log) => {
+    const c = spawn(cmd, args, { stdio: ['ignore', log, log] });
+    children.push(c);
+    return c;
+  };
+  run(server, ['--port', String(tcp), '--ws-port', String(ws), '--players', String(maxPlayers), '--lobbies', '64'], serverLog);
+  run('python3', [join(REPO, 'tools/serve_web.py'), '--port', String(web), '--site', site, '--data', data], 'ignore');
+  await waitHttp(`http://127.0.0.1:${web}/version.json`);
+  const pageUrl = `http://127.0.0.1:${web}/?server=ws://127.0.0.1:${ws}`;
+  return {
+    kind: 'local',
+    pageUrl,
+    serverLogPath,
+    serverLog: () => (existsSync(serverLogPath) ? readFileSync(serverLogPath, 'utf8') : ''),
+    buildId: JSON.parse(readFileSync(join(site, 'version.json'), 'utf8')).build,
+    async stop() {
+      for (const c of children) c.kill('SIGTERM');
+      await sleep(300);
+    },
+  };
+}
+
+// Live target: the site's login form sets a cookie; every player's context gets it. The server's log is not reachable from here, so
+// the client logs are the only witness.
+export async function startLive({ url, password }) {
+  const base = url.replace(/\/$/, '');
+  const login = await fetch(`${base}/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ password, confirm: 'on' }),
+    redirect: 'manual',
+  });
+  const raw = login.headers.getSetCookie?.() ?? [];
+  if (!raw.length) throw new Error(`live target: login at ${base}/login gave HTTP ${login.status} and no cookie (wrong password?)`);
+  const host = new URL(base).hostname;
+  const cookies = raw.map((c) => {
+    const [pair, ...attrs] = c.split(';').map((s) => s.trim());
+    const eq = pair.indexOf('=');
+    return { name: pair.slice(0, eq), value: pair.slice(eq + 1), domain: host, path: '/', secure: base.startsWith('https'),
+      httpOnly: attrs.some((a) => a.toLowerCase() === 'httponly') };
+  });
+  const version = await (await fetch(`${base}/version.json`, { headers: { cookie: cookies.map((c) => `${c.name}=${c.value}`).join('; ') } })).json();
+  return { kind: 'live', pageUrl: `${base}/`, cookies, serverLog: () => '', buildId: version.build, async stop() {} };
+}
+
+// Browsers: one shared by all players (separate contexts, so separate storage) or one per player (`isolation: 'browser'`).
+export async function launchBrowsers(pw, { n, browser = 'chromium', headed = false, isolation = 'context' }) {
+  const opts = { headless: !headed, args: ['--enable-unsafe-swiftshader', '--use-gl=angle', '--use-angle=swiftshader', '--ignore-gpu-blocklist',
+    '--autoplay-policy=no-user-gesture-required'] };
+  if (browser === 'chrome') {
+    opts.channel = 'chrome';
+    opts.args = ['--autoplay-policy=no-user-gesture-required'];   // the real GPU
+  }
+  const count = isolation === 'browser' ? n : 1;
+  const list = [];
+  for (let i = 0; i < count; i++) list.push(await pw.chromium.launch(opts));
+  return list;
+}
+
+// CPU of every browser process (renderers, GPU, network...) from SystemInfo.getProcessInfo: cumulative seconds, so a sample is the
+// difference of two reads over the time between them
+export class CpuMeter {
+  constructor(browsers) { this.browsers = browsers; this.sessions = []; }
+
+  async start() {
+    for (const b of this.browsers) this.sessions.push(await b.newBrowserCDPSession());
+    this.t0 = Date.now();
+    this.base = await this.read();
+  }
+
+  async read() {
+    const out = [];
+    for (const s of this.sessions) {
+      const { processInfo } = await s.send('SystemInfo.getProcessInfo');
+      out.push(...processInfo);
+    }
+    return out;
+  }
+
+  // {seconds, byType: {renderer: cores, gpu: cores, ...}, totalCores, perRenderer: [cores...]} since start()
+  async stop() {
+    const end = await this.read();
+    const seconds = (Date.now() - this.t0) / 1000;
+    const before = new Map(this.base.map((p) => [p.id, p.cpuTime]));
+    const byType = {};
+    const perRenderer = [];
+    let total = 0;
+    for (const p of end) {
+      const cores = (p.cpuTime - (before.get(p.id) ?? 0)) / seconds;
+      byType[p.type] = (byType[p.type] ?? 0) + cores;
+      if (p.type === 'renderer') perRenderer.push(cores);
+      total += cores;
+    }
+    return { seconds, byType, totalCores: total, perRenderer, hostCores: os.cpus().length, loadAvg: os.loadavg() };
+  }
+}
+
+// Firefox for the mixed lobbies (`--firefox K`: the last K players of every lobby): Playwright's own Firefox build
+export async function launchFirefox(pw, { headed = false }) {
+  return pw.firefox.launch({ headless: !headed });
+}
