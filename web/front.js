@@ -106,6 +106,8 @@ async function connect(build) {
 const LIST_EVERY_MS = 5000;
 let watcher = null;
 let watchTimer = 0;
+let watching = 0;
+let refreshingFor = 0;
 
 function showLobbyList(lobbies) {
   $('lobbyList').hidden = false;
@@ -125,32 +127,43 @@ function showLobbyList(lobbies) {
   $('lobbies').replaceChildren(...rows);
 }
 
+// `watching` counts the starts and stops of the watching: a refresh that began before the latest stop or start does nothing with its answer
 async function refreshLobbies() {
+  const mine = watching;
+  if (refreshingFor === mine) return;   // one LIST at a time
+  refreshingFor = mine;
+  let client = null;
   try {
     if (!watcher) {
-      const client = new LobbyClient(new WebSocket(serverUrl('/lobby')), await buildId());
+      client = new LobbyClient(new WebSocket(serverUrl('/lobby')), await buildId());
       client.onClose = () => { if (watcher === client) watcher = null; };
       await client.ready;
-      if (!watchTimer) return client.close();   // the panel moved on while it connected
+      if (mine !== watching) return client.close();   // the panel moved on while it connected
       watcher = client;
     }
     const lobbies = await watcher.list();
-    if (watcher) showLobbyList(lobbies);
+    if (mine === watching) showLobbyList(lobbies);
   } catch {   // the server is out of reach or refused this build: the list stays hidden, Host and Join still show why
-    watcher?.close();
+    if (mine !== watching) return;
+    (client ?? watcher)?.close();
     watcher = null;
     $('lobbyList').hidden = true;
+  } finally {
+    if (refreshingFor === mine) refreshingFor = 0;
   }
 }
 
 function startWatchingLobbies() {
   stopWatchingLobbies();
+  watching++;
   const tick = () => { if (!document.hidden) refreshLobbies(); };
   tick();
   watchTimer = setInterval(tick, LIST_EVERY_MS);
 }
 
 function stopWatchingLobbies() {
+  watching++;
+  $('lobbyList').hidden = true;   // no Join while a join is under way
   clearInterval(watchTimer);
   watchTimer = 0;
   watcher?.close();

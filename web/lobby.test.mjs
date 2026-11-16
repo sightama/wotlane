@@ -219,6 +219,18 @@ test('inviteLink gives the page address with only the lobby code', () => {
   assert.equal(inviteLink({ origin: 'https://x.example', pathname: '/play/' }, 'QZ2W'), 'https://x.example/play/?join=QZ2W');
 });
 
+test('LobbyClient.list reads a lobby with no owner and no names', async () => {
+  const { ws, client } = await connected();
+  const list = client.list();
+  ws.reply('LOBBY ABCD waiting 0/8 open Ana - -');
+  ws.reply('END');
+  assert.deepEqual(await list, [{ code: 'ABCD', playing: false, count: 0, max: 8, locked: false, name: 'Ana', host: '', names: [] }]);
+});
+
+test('lobbyRow names the lobby after its name when it has no owner', () => {
+  assert.equal(lobbyRow({ code: 'ABCD', playing: false, count: 0, max: 8, locked: false, name: 'Ana', host: '', names: [] }).text, 'Ana: 0/8 (), waiting');
+});
+
 test('lobbyRow says who hosts, how full it is and whether Join works', () => {
   const open = { code: 'ABCD', playing: false, count: 2, max: 8, locked: false, name: 'Ana', host: 'Ana', names: ['Ana', 'Bo'] };
   assert.deepEqual(lobbyRow(open), { text: 'Ana: 2/8 (Ana, Bo), waiting', joinable: true });
