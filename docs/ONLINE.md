@@ -103,7 +103,8 @@ Advanced mode:
    The line under the buttons lists who is in the lobby, the host, the stage, the wins and the modifiers. If the host leaves, the next
    player becomes the host (and the lobby takes the new host's settings). An empty lobby closes.
 4. When everyone is in, the host presses **Start match**. The game opens on every PC, loads the stage and waits until everyone has
-   arrived; the server measures the ping and picks the input delay. The launcher minimizes and stays in the lobby.
+   arrived; the server measures the ping and picks the input delay (and keeps adjusting it during the match). The launcher minimizes
+   and stays in the lobby.
 5. In the game: your controller (or keyboard) drives your monster; the screen shows only your view. Top right: ping and input delay in
    frames. A "Waiting for <name>" message means someone's input is late (everyone pauses together, nobody desyncs).
 6. With a wins target, the first to reach it gets the winner's screen: **PLAY AGAIN** (same stage, everyone respawns), **REBUILD LEVEL**
@@ -142,8 +143,10 @@ to the console) and starts once that many players are in; `--code <code> --name 
 - Mods: everyone needs the same active mods (same files, same contents), skins and maps made in game included. Otherwise the server
   refuses the join with "game configuration differs from the others: the mods (creations) differ".
 - Debug keys that change the game or pause it are off: F1 (cheats), F5 (free camera), F6/F7/F8 (pause, step, photo).
-- Input delay: 2 frames on a LAN, about 4 to 6 over the internet (each frame is 16.7 ms; 33 ms with 3 or more players, where the game
-  runs its own 30 Hz mode). It is fixed for the whole match.
+- Input delay: 1 frame on a LAN, about 3 to 8 over the internet (each frame is 16.7 ms; 33 ms with 3 or more players, where the game
+  runs its own 30 Hz mode). Each player has their own: the time their input takes to reach the slowest other player (half their ping
+  plus half that player's, at the high end of the last few seconds). The server re-measures every half second and the game moves the
+  delay one frame at a time, on a frame where your buttons and sticks did not change, so a press is never lost or doubled.
 - **5 to 8 players:** the game itself only has 4 player slots and 4 cameras. Players 5 to 8 drive monsters in the computer-player slots
   (same controls and moves as players 1 to 4), and their screen uses a camera made by wotlane that follows from behind and above, since
   the game has no camera for them. It does not avoid buildings like the game's camera does, which is why it stays high. Every PC
@@ -170,4 +173,6 @@ to the console) and starts once that many players are in; `--code <code> --name 
   `powershell -File tools\net_checks.ps1` runs the online checks (per-PC settings, mouse, photo mode, pause, wins target, mods).
   On macOS and Linux (and on Windows too) the same checks are `python3 tools/net_check.py` and `python3 tools/net_checks.py [--only
   <name>]`, with `tools/live_check.py` and `tools/determinism_check.py` for the single-game ones; their shared part is
-  `tools/gamecheck.py` (tested by `tools/test_gamecheck.py`).
+  `tools/gamecheck.py` (tested by `tools/test_gamecheck.py`). `net_check.py --rtt 20,60 --jitter 10` puts `tools/net_lagproxy.py` between
+  the games and the server (a round trip per player, the last value covering the rest), so the server's ping sees it; every 600 frames
+  each game logs `[net] pace:` (its delay, ping and stalls) and the check prints each player's average delay and stalls.
