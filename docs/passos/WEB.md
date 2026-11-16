@@ -25,6 +25,14 @@ For online play start `wotm_server --ws-port <port>`; a page opened from `localh
 - **Disc:** `/disc` is a WASMFS fetch backend over `data/`: the game's reads become 1 MiB range requests, each fetched once
   (`native/wotm_webfs.cpp`). `web/data_retry.js` retries network and 5xx failures in every thread and reports each chunk, which
   `web/loading.js` shows as "Downloading game data 34%" over the game.
+- **Disc cache:** `web/disc_cache.js` (loaded by the page and, after `data_retry.js`, as a `--pre-js` in every thread) keeps the disc's
+  1 MiB chunks in the browser's Cache API, one cache per disc file and version (its ETag), each chunk stored with its SHA-256 and checked
+  before use; a chunk missing or failing the check comes from the network. Nothing is stored when the Cache API is missing, the HEAD
+  gave no ETag or storage is 90% full. From the page's load, while the player is on the front panel, `web/boot.js` drops the caches
+  of other versions and fetches in parallel the chunks every boot reads (`web/boot_chunks.json`, written by
+  `python3 tools/web_boot_chunks.py <boot log> <SCUS_971.97>` from a boot to the title); the game starts once they are in. In Firefox
+  the game's own reads from worker threads are synchronous XHR (below), which the Cache API can't serve: there only the prefetched
+  chunks and the main thread's reads are kept.
 - **Saves and settings:** `/save` is the browser's private file system (OPFS) and the game's working folder (`WOTM_SAVEDIR=/save`), so
   `settings.ini`, the memory card and `mods/` survive a reload.
 - **Disc and saves outside Chromium:** the WASMFS fetch and OPFS backends hand each read to a worker while the game's main thread waits;
@@ -71,5 +79,5 @@ During a match:
 - `node --test web/` (the page scripts, with a fake WebSocket and an in-memory file system);
 - `sh tools/test_web.sh` (the native tests built with Emscripten and run under node, the browser-only sources with `-Werror`, then the
   page scripts);
-- `python3 tools/test_serve_web.py` and `python3 tools/test_web_mods.py`;
+- `python3 tools/test_serve_web.py`, `python3 tools/test_web_mods.py` and `python3 tools/test_web_boot_chunks.py`;
 - the WebSocket listener and transport: `sh tools/test_net.sh` (`ws_*` tests).

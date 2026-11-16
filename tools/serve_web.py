@@ -84,6 +84,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             start, end = 0, size - 1
         self.send_response(status)
         self.send_header('Accept-Ranges', 'bytes')
+        st = target.stat()   # the file's version, as the site's Caddy names it (web/disc_cache.js keys by it)
+        self.send_header('ETag', f'"{st.st_mtime_ns:x}-{st.st_size:x}"')
         self.send_header('Content-Type', 'application/octet-stream')
         self.send_header('Content-Length', str(end - start + 1))
         if status == 206:

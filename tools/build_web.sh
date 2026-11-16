@@ -42,7 +42,7 @@ step 'assemble web_dist'
 dist=$rt/web_dist
 rm -rf "$dist"
 mkdir -p "$dist"
-cp "$REPO"/web/*.html "$REPO"/web/*.js "$dist/"
+cp "$REPO"/web/*.html "$REPO"/web/*.js "$REPO"/web/*.json "$dist/"
 python3 "$REPO/tools/web_mods.py" "$REPO/mods" "$dist/mods" || fail "web_mods.py failed"   # the repo's mods, as natively
 cp "$bdir/ps2xRuntime/wotm.js" "$bdir/ps2xRuntime/wotm.wasm" "$dist/"
 if command -v shasum >/dev/null 2>&1; then wasm_sha=$(shasum -a 256 "$dist/wotm.wasm" | cut -d' ' -f1)

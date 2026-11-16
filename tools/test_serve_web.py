@@ -65,6 +65,14 @@ class ServeWebTest(unittest.TestCase):
         self.assertEqual(r.getheader('Accept-Ranges'), 'bytes')
         self.assertEqual(body, b'')
 
+    def test_data_has_an_etag_that_names_the_file_version(self):
+        # web/disc_cache.js keys its cached chunks by it, as it does with the site's Caddy
+        r, _ = self.get('/data/game.iso', method='HEAD')
+        etag = r.getheader('ETag')
+        self.assertTrue(etag and etag.startswith('"'))
+        r2, _ = self.get('/data/game.iso', headers={'Range': 'bytes=0-9'})
+        self.assertEqual(r2.getheader('ETag'), etag)
+
     def test_range_returns_206_and_exact_bytes(self):
         r, body = self.get('/data/game.iso', headers={'Range': 'bytes=1000-1999'})
         self.assertEqual(r.status, 206)

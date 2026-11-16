@@ -111,6 +111,23 @@
     }, 500);
   }
 
+  // from the page's load on, while the player is on the front panel: the disc chunks every boot reads (boot_chunks.json, from
+  // tools/web_boot_chunks.py) come down in parallel into the disc cache (disc_cache.js), whose other versions are dropped first.
+  // The game starts once this is done; a failure only means the game reads those chunks itself
+  const discWarm = (async () => {
+    const dc = window.wotmDiscCache;
+    if (!dc) return;
+    try {
+      const files = ['SCUS_971.97', 'game.iso'];
+      const heads = await Promise.all(files.map((f) => fetch('data/' + f, { method: 'HEAD' })));
+      if (window.caches) await dc.evictOld(window.caches, Object.fromEntries(files.map((f, i) => [f, heads[i].headers.get('etag')])));
+      const list = await (await fetch('boot_chunks.json')).json();
+      await Promise.all(files.map((f) => dc.prefetch(fetch, 'data/' + f, list[f] || [])));
+    } catch (e) {
+      out('[web] disc prefetch skipped: ' + e.message);
+    }
+  })();
+
   // loads the game once (front.js calls it for single player, or with a lobby's match environment); `build` is version.json's
   // build id, which the server compares with the lobby's
   let started = false;
@@ -133,7 +150,7 @@
     window.addEventListener('pagehide', syncSaves);
     if (matchEnv) watchStalls();
     // the game reads its mods at start, so the repo's built-in mods are in place first
-    Promise.all([syncMods(), mainThreadFiles()]).finally(() => {
+    Promise.all([syncMods(), mainThreadFiles(), discWarm]).finally(() => {
       const script = document.createElement('script');
       script.src = 'wotm.js';
       document.body.appendChild(script);
