@@ -62,8 +62,9 @@ from `version.json` in `WOTM_BUILDID`.
 A refusal from the server (name taken, no such lobby, lobby full, lobby in a match, build differs) stays on the message line: the page's own
 `LobbyClient.close()` silences `onClose`, which only reports a connection that dropped. The panel is a flex column that scrolls
 (`#front` has `overflow-y: auto`, its card `margin: auto`), so a card taller than the window (8 members, a zoomed page) keeps Start
-reachable. After a match the panel offers the last lobby's code again with "If it is still open, Join takes you back in": a finished
-match empties the lobby and the server closes it, so the code may be dead.
+reachable. After a match (or Leave the match, which reloads the page) the panel asks the server for its lobbies (`LIST`, over a short-lived
+`LobbyClient`) and offers the last lobby's code only while that lobby is listed: a finished match empties it and the server closes it.
+A lobby still in a match is named as such; one that is gone gets no note and no prefilled code.
 
 `wotm_server --ws-port <port> [--ws-bind <address>]` (default bind `127.0.0.1`, behind a web server that terminates HTTPS) takes these
 connections: `/lobby` behaves as a TCP lobby connection, `/match` carries binary frames of one channel byte and the same datagram as

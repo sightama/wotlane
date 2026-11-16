@@ -167,10 +167,21 @@ test('LobbyClient: closing it on purpose does not report a lost connection', asy
   assert.equal(ws.readyState, 3);
 });
 
-test('lastLobbyNotice names the lobby without promising it is still open', () => {
-  assert.match(lastLobbyNotice('ABCD'), /ABCD/);
-  assert.match(lastLobbyNotice('ABCD'), /still open/);
-  assert.doesNotMatch(lastLobbyNotice('ABCD'), /puts you back/);
+test('lastLobbyNotice speaks only of a lobby the server still lists', () => {
+  const lobbies = [{ code: 'ABCD', playing: false }, { code: 'WXYZ', playing: true }];
+  assert.match(lastLobbyNotice('ABCD', lobbies), /ABCD.*Join/);
+  assert.match(lastLobbyNotice('WXYZ', lobbies), /in a match/);
+  assert.equal(lastLobbyNotice('QQQQ', lobbies), '');
+});
+
+test('LobbyClient.list reads the LOBBY lines up to END', async () => {
+  const { ws, client } = await connected();
+  const list = client.list();
+  assert.equal(ws.sent.at(-1), 'LIST');
+  ws.reply('LOBBY ABCD waiting 1/8 open Ana Ana Ana');
+  ws.reply('LOBBY WXYZ playing 2/8 locked Bob Bob Bob,Cy');
+  ws.reply('END');
+  assert.deepEqual(await list, [{ code: 'ABCD', playing: false }, { code: 'WXYZ', playing: true }]);
 });
 
 test('LobbyClient: a refused HELLO closes the socket quietly, so the refusal stays on screen', async () => {

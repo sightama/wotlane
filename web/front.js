@@ -138,6 +138,25 @@ async function sendSettings() {
   }
 }
 
+// back from a match (Leave the match reloads the page): the code is offered again only while the server still holds that lobby
+// (a finished match empties it and the server closes it)
+async function offerLastLobby() {
+  let code = null;
+  try { code = sessionStorage.getItem('wotlane.lobby'); } catch { /* private window */ }
+  if (!code) return;
+  let probe;
+  try {
+    probe = new LobbyClient(new WebSocket(serverUrl('/lobby')), await buildId());
+    await probe.ready;
+    const notice = lastLobbyNotice(code, await probe.list());
+    if (notice) {
+      $('joinCode').value = code;
+      say(notice);
+    }
+  } catch { /* server out of reach: nothing to offer */ }
+  probe?.close();
+}
+
 function init() {
   // a browser that can't run the game gets a plain message instead of a page that freezes
   const problem = window.wotmSupportProblem();
@@ -153,13 +172,7 @@ function init() {
     return;
   }
   $('name').value = recall('name', '');
-  // back from a match (Leave the match reloads the page): the code is offered again, though the lobby may have closed
-  let lastLobby = null;
-  try { lastLobby = sessionStorage.getItem('wotlane.lobby'); } catch { /* private window */ }
-  if (lastLobby) {
-    $('joinCode').value = lastLobby;
-    say(lastLobbyNotice(lastLobby));
-  }
+  offerLastLobby();
   fill($('monster'), MONSTERS, recall('monster', 5));
   fill($('lobbyStage'), STAGES, recall('stage', 1));
   fill($('wins'), [[0, 'Endless'], ...[1, 2, 3, 4, 5].map((n) => [n, String(n)])], recall('wins', 2));

@@ -93,6 +93,8 @@ export class LobbyClient {
       this.onMembers?.(parseMembers(p));
     } else if (p.cmd === 'MATCH') {
       this.onMatch?.(p.fields);
+    } else if (p.cmd === 'LOBBY') {
+      this.lobbies?.push({ code: p.words[0], playing: p.words[1] === 'playing' });
     } else if (p.cmd === 'JOINED') {
       this.code = p.words[0];
     }
@@ -146,6 +148,13 @@ export class LobbyClient {
 
   start() { return this.request('START', ['MATCH']); }
 
+  // the lobbies the server holds: [{code, playing}]
+  async list() {
+    this.lobbies = [];
+    await this.request('LIST', ['END']);
+    return this.lobbies;
+  }
+
   // the page's own close: it is not a lost connection, so onClose stays quiet
   close() {
     this.onClose = null;
@@ -154,6 +163,9 @@ export class LobbyClient {
 }
 
 // what the front panel says about the lobby of the last match; a finished match empties the lobby, so it may be gone
-export function lastLobbyNotice(code) {
-  return `Your last lobby was ${code}. If it is still open, Join takes you back in.`;
+export function lastLobbyNotice(code, lobbies) {
+  const found = lobbies.find((l) => l.code === code);
+  if (!found) return '';
+  return found.playing ? `Your last lobby ${code} is in a match: Join works once it ends.`
+    : `Your last lobby was ${code}: Join puts you back in it.`;
 }
