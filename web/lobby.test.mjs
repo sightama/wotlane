@@ -2,7 +2,7 @@
 // ABOUTME: tools/net_lobby.py's match_env) and the lobby client's requests and replies over a fake WebSocket. Run: node --test web/
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { PROTOCOL, parseLine, parseMembers, matchEnv, lobbySocketUrl, lastLobbyNotice, inviteLink, LobbyClient } from './lobby.js';
+import { PROTOCOL, parseLine, parseMembers, matchEnv, lobbySocketUrl, lastLobbyNotice, inviteLink, lobbyRow, LobbyClient } from './lobby.js';
 
 const MATCH_LINE = 'MATCH lobby=QZXW players=2 stage=9 wins=2 mods=jump,turbo monsters=5,1 names=Ana,Bia ' +
   'seed=12345 step=1 you=1 token=00aa11bb22cc33dd port=7777';
@@ -181,7 +181,10 @@ test('LobbyClient.list reads the LOBBY lines up to END', async () => {
   ws.reply('LOBBY ABCD waiting 1/8 open Ana Ana Ana');
   ws.reply('LOBBY WXYZ playing 2/8 locked Bob Bob Bob,Cy');
   ws.reply('END');
-  assert.deepEqual(await list, [{ code: 'ABCD', playing: false }, { code: 'WXYZ', playing: true }]);
+  assert.deepEqual(await list, [
+    { code: 'ABCD', playing: false, count: 1, max: 8, locked: false, name: 'Ana', host: 'Ana', names: ['Ana'] },
+    { code: 'WXYZ', playing: true, count: 2, max: 8, locked: true, name: 'Bob', host: 'Bob', names: ['Bob', 'Cy'] },
+  ]);
 });
 
 test('LobbyClient: a refused HELLO closes the socket quietly, so the refusal stays on screen', async () => {
@@ -214,4 +217,24 @@ test('leave() is refused with the server reason', async () => {
 test('inviteLink gives the page address with only the lobby code', () => {
   assert.equal(inviteLink({ origin: 'https://x.example', pathname: '/' }, 'ABCD'), 'https://x.example/?join=ABCD');
   assert.equal(inviteLink({ origin: 'https://x.example', pathname: '/play/' }, 'QZ2W'), 'https://x.example/play/?join=QZ2W');
+});
+
+test('LobbyClient.list reads a lobby with no owner and no names', async () => {
+  const { ws, client } = await connected();
+  const list = client.list();
+  ws.reply('LOBBY ABCD waiting 0/8 open Ana - -');
+  ws.reply('END');
+  assert.deepEqual(await list, [{ code: 'ABCD', playing: false, count: 0, max: 8, locked: false, name: 'Ana', host: '', names: [] }]);
+});
+
+test('lobbyRow names the lobby after its name when it has no owner', () => {
+  assert.equal(lobbyRow({ code: 'ABCD', playing: false, count: 0, max: 8, locked: false, name: 'Ana', host: '', names: [] }).text, 'Ana: 0/8 (), waiting');
+});
+
+test('lobbyRow says who hosts, how full it is and whether Join works', () => {
+  const open = { code: 'ABCD', playing: false, count: 2, max: 8, locked: false, name: 'Ana', host: 'Ana', names: ['Ana', 'Bo'] };
+  assert.deepEqual(lobbyRow(open), { text: 'Ana: 2/8 (Ana, Bo), waiting', joinable: true });
+  assert.deepEqual(lobbyRow({ ...open, playing: true }), { text: 'Ana: 2/8 (Ana, Bo), in a match', joinable: false });
+  assert.deepEqual(lobbyRow({ ...open, count: 8 }), { text: 'Ana: 8/8 (Ana, Bo), full', joinable: false });
+  assert.deepEqual(lobbyRow({ ...open, locked: true }), { text: 'Ana: 2/8 (Ana, Bo), waiting, needs a password', joinable: false });
 });

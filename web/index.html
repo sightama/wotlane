@@ -41,6 +41,8 @@
   #joinCode { width: 6em; text-transform: uppercase; letter-spacing: .2em; }
   #code { font: 700 28px/1 ui-monospace, monospace; letter-spacing: .25em; color: var(--accent); }
   #members { margin: 0; padding-left: 18px; }
+  #lobbies { margin: 8px 0 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+  #lobbies li { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
   #frontMsg { color: var(--dim); min-height: 1.4em; margin: 0; }
   hr { border: 0; border-top: 1px solid var(--line); margin: 0; width: 100%; }
   #creations summary, #controls summary { cursor: pointer; color: var(--dim); }
@@ -73,6 +75,10 @@
       <div class="row"><button id="host">Host online</button>
         <span style="color:var(--dim)">or</span>
         <input id="joinCode" maxlength="4" placeholder="CODE" aria-label="Lobby code"><button id="join">Join</button></div>
+      <div id="lobbyList" hidden>
+        <div class="row"><span style="color:var(--dim)">Open lobbies</span><button id="refreshLobbies">Refresh</button></div>
+        <ul id="lobbies"></ul>
+      </div>
     </div>
     <div id="inLobby" hidden style="display:grid;gap:12px">
       <div class="row">Lobby code <span id="code"></span><button id="copyInvite">Copy invite link</button></div>

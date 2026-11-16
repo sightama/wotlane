@@ -87,6 +87,33 @@ async function lobbyLeave(run, n, spare, players, code) {
     `joined: ${inOk}; the choice is back: ${back}; no reload: ${sameDocument}; the others saw it go: ${outOk}; buttons usable again: ${reset}`);
 }
 
+// a player on the Host/Join choice sees the lobby in the open-lobby list (host, n/8, waiting) and Join on its row works, unless it is full
+async function lobbyList(run, n, spare, players, code) {
+  const full = n === run.opts.maxPlayers;
+  const row = () => spare.page.evaluate(() => [...document.querySelectorAll('#lobbies li')].map((li) => ({ text: li.querySelector('span')?.textContent ?? li.textContent, join: li.querySelector('button')?.disabled === false })));
+  let rows = [];
+  const deadline = Date.now() + 15000;
+  while (Date.now() < deadline) {
+    rows = await row();
+    if (rows.some((r) => r.text.startsWith(`${players[0].name}: ${n}/`))) break;
+    await sleep(500);
+  }
+  const mine = rows.find((r) => r.text.startsWith(`${players[0].name}: ${n}/`));
+  const listed = Boolean(mine) && mine.join === !full;
+  let joinedFromList = true;
+  if (!full && mine) {
+    await spare.page.fill('#name', 'Lister');
+    await spare.page.evaluate(() => { window.__frontMsgs = []; });
+    await spare.page.click('#lobbies li button:not([disabled])');
+    joinedFromList = (await spare.settle()).joined && await players[0].page.waitForFunction((k) => document.querySelectorAll('#members li').length === k, n + 1, { timeout: 10000 }).then(() => true, () => false);
+    await spare.page.click('#leave').catch(() => {});
+    await spare.page.waitForSelector('#choose', { state: 'visible', timeout: 10000 }).catch(() => {});
+  }
+  await spare.page.fill('#name', 'P1');
+  run.report.add(n, 'lobby_list', listed && joinedFromList ? 'pass' : 'fail',
+    `rows: ${JSON.stringify(rows)}; listed with the right Join state: ${listed}; Join from the list worked: ${joinedFromList}`);
+}
+
 // "Copy invite link" gives this page's address with the lobby's code; a friend who opens it finds the code filled in and joins (a new
 // browser profile types a name first, one that remembers a name joins by itself), and the address no longer carries the code
 async function inviteLink(run, n, players, code) {
@@ -204,6 +231,7 @@ export async function matchSession(run, n) {
     spare = await run.openPlayer(n, n, { name: 'P1', monster: 5, check });
     spare.name = 'Spare';   // it types P1 (a duplicate name) but its logs and screenshots must not overwrite P1's
     await lobbyErrors(run, n, spare, code);
+    await lobbyList(run, n, spare, players, code);
     if (n === run.opts.maxPlayers) await capCheck(run, n, spare, code, players);
     else await lobbyLeave(run, n, spare, players, code);
     if (n + 2 <= run.opts.maxPlayers) await inviteLink(run, n, players, code);
