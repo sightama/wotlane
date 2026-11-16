@@ -16,6 +16,7 @@
 namespace wotm_sync
 {
     constexpr uint32_t kGuestRam = 32u * 1024u * 1024u, kBlocks = 256u, kBlockSize = kGuestRam / kBlocks;
+    namespace snapbench { extern bool g_on; }
 
     struct FrameHash
     {
@@ -798,7 +799,7 @@ namespace wotm_sync
         std::vector<uint8_t> g_shadow, g_slot;
         std::vector<uint32_t> g_lastDirty;
         uint32_t g_frames = 0;
-        double g_sum[7] = {}, g_max[7] = {};
+        double g_sum[8] = {}, g_max[8] = {};
         std::chrono::steady_clock::time_point g_lastEnd;
         uint64_t g_lastIdleUs = 0;
         double g_lastBenchMs = 0.0;
@@ -817,7 +818,7 @@ namespace wotm_sync
             const uint64_t idleUs = g_wotmIdleUs.load(std::memory_order_relaxed);
             if (g_shadow.empty())
             {
-                g_shadow.assign(rdram, rdram + kGuestRam);
+                g_shadow.assign(rdram, rdram + 2u * kGuestRam);   // the host RAM is 64 MB: the WotM hooks load monsters above 32 MB
                 g_slot.resize(kGuestRam);
                 g_lastDirty.assign(kPages, 0xFFFFFFFFu);
                 g_lastEnd = t0;
@@ -826,7 +827,7 @@ namespace wotm_sync
                 return;
             }
             const double busy = ms(g_lastEnd, t0) - (idleUs - g_lastIdleUs) / 1000.0 - g_lastBenchMs;
-            uint32_t dirty = 0, dirty64 = 0, window = 0;
+            uint32_t dirty = 0, dirty64 = 0, window = 0, upper = 0;
             bool group = false;
             for (uint32_t p = 0; p < kPages; ++p)
             {
@@ -846,6 +847,15 @@ namespace wotm_sync
                 if (g_lastDirty[p] != 0xFFFFFFFFu && index - g_lastDirty[p] < kWindow)
                     ++window;
             }
+            for (uint32_t p = kPages; p < 2u * kPages; ++p)
+            {
+                const size_t at = static_cast<size_t>(p) * kPage;
+                if (std::memcmp(rdram + at, g_shadow.data() + at, kPage) != 0)
+                {
+                    std::memcpy(g_shadow.data() + at, rdram + at, kPage);
+                    ++upper;
+                }
+            }
             const auto t1 = clk::now();
             std::memcpy(g_slot.data(), rdram, kGuestRam);
             const auto t2 = clk::now();
@@ -858,15 +868,16 @@ namespace wotm_sync
             add(4, dirty64);
             add(5, window);
             add(6, busy);
+            add(7, upper);
             if (++g_frames == 300u)
             {
                 const double n = g_frames;
                 std::fprintf(stderr,
                              "[snapbench] frame %u, 300 frames avg/max: compare+copy dirty %.2f/%.2f ms, full copy %.2f/%.2f ms, "
                              "full restore %.2f/%.2f ms, dirty 4K pages %.0f/%.0f, dirty 64K blocks %.0f/%.0f, 4K pages dirty in last %u "
-                             "frames %.0f/%.0f, EE busy %.2f/%.2f ms\n",
+                             "frames %.0f/%.0f, EE busy %.2f/%.2f ms, dirty 4K pages above 32 MB %.0f/%.0f\n",
                              index, g_sum[0] / n, g_max[0], g_sum[1] / n, g_max[1], g_sum[2] / n, g_max[2], g_sum[3] / n, g_max[3],
-                             g_sum[4] / n, g_max[4], kWindow, g_sum[5] / n, g_max[5], g_sum[6] / n, g_max[6]);
+                             g_sum[4] / n, g_max[4], kWindow, g_sum[5] / n, g_max[5], g_sum[6] / n, g_max[6], g_sum[7] / n, g_max[7]);
                 g_frames = 0;
                 std::fill(std::begin(g_sum), std::end(g_sum), 0.0);
                 std::fill(std::begin(g_max), std::end(g_max), 0.0);

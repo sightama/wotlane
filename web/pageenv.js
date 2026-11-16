@@ -3,7 +3,7 @@
 'use strict';
 
 // harmless switches for tests and direct matches (?WOTM_MATCH=5,1,9&WOTM_AIVSAI=1); nothing that names a file, a server or a cheat
-const FROM_ADDRESS = ['WOTM_MATCH', 'WOTM_AIVSAI', 'PS2X_STATS', 'WOTM_MAPEDIT'];
+const FROM_ADDRESS = ['WOTM_MATCH', 'WOTM_AIVSAI', 'PS2X_STATS', 'WOTM_MAPEDIT', 'WOTM_SNAPBENCH', 'WOTM_FIXEDSTEP', 'WOTM_SEED'];
 
 // `searchParams`: the address's URLSearchParams; `fixed`: values nothing may override; `matchEnv`: what an online match adds (or
 // null); `build`: the build id, the only source of WOTM_BUILDID
