@@ -159,6 +159,9 @@ std::vector<uint32_t> subtree(const Mem &m, uint32_t n);
 // chain, and either under the world root (id1 1) or whose first nonzero id1 in preorder of its subtree is a level pickup
 // (spec 1i, stage_map.py pieces())
 bool isPiece(const Mem &m, const std::map<uint32_t, uint32_t> &par, uint32_t node);
+// One world sphere around piece `node`: the spheres of the first GROUP, OBJECT or LOD on each branch under it, transformed as the
+// load would draw them (the piece has no transform above it), held by the sphere around their box. false when it has none
+bool pieceBounds(const Mem &m, uint32_t node, float centre[3], float &radius);
 // The hat pickup actions of DESTRUCTIBLE n's states (through ACT_GROUP and ACT_TRANSFORM, 20 levels at most), each once, in
 // state and slot order. Destructible::DispatchAction drops the level pickups within the action's radius of the destructible's
 // place + offset (doPickupHat, LevelPickups::hatCheck); the offset is added unrotated, so a turn turns it (apply()).

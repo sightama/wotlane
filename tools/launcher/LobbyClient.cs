@@ -17,7 +17,7 @@ class LobbyError : Exception
 // read with ReadLine (tests, request/response) or drain it with Poll (the launcher, from a UI Timer).
 class LobbyClient : IDisposable
 {
-    public const int Protocol = 4;   // native/net/wotm_net_proto.hpp kProtocol
+    public const int Protocol = 5;   // native/net/wotm_net_proto.hpp kProtocol
     public readonly string Host;
     public readonly int Port;
     public int Lobbies { get; private set; }
@@ -123,7 +123,7 @@ class LobbyClient : IDisposable
         };
     }
 
-    // MEMBERS <code> <owner> <name:monster,...>
+    // MEMBERS <code> <owner> <name:monster[:skin],...>
     public class MemberInfo
     {
         public string Code, Host;
@@ -137,15 +137,16 @@ class LobbyClient : IDisposable
         return new MemberInfo { Code = w[1], Host = w[2], Names = w[3] == "-" ? new string[0] : w[3].Split(',') };
     }
 
-    // the monster the server holds for `name` in a MEMBERS line, -1 if the name is not in it
+    // the monster the server holds for `name` in a MEMBERS line, -1 if the name is not in it. An entry is name:monster or
+    // name:monster:skin (a mod skin; names have no ':')
     public static int MemberMonster(MemberInfo m, string name)
     {
         if (m == null) return -1;
         foreach (string n in m.Names)
         {
-            int colon = n.LastIndexOf(':');
+            string[] parts = n.Split(':');
             int monster;
-            if (colon > 0 && n.Substring(0, colon) == name && int.TryParse(n.Substring(colon + 1), out monster)) return monster;
+            if (parts.Length >= 2 && parts[0] == name && int.TryParse(parts[1], out monster)) return monster;
         }
         return -1;
     }

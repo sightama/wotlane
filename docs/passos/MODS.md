@@ -145,7 +145,8 @@ A skin is a folder in `mods/<mod>/skins/<folder>/` with a `skin.json`:
   `agamo`, `zorgulon`), the file prefix (`SHOGUN`) or the `id` of a custom monster (`moddedtogera`; see "Custom monsters"). A
   custom's skin only shows up in that custom's list, never in the base monster's column nor in the AI draw; without `base`, the `costume`
   from `monster.json` applies.
-- `id`: lowercase letters, digits and `_` (without it, the folder name). The save stores `"ultra-v/roxo"`.
+- `id`: lowercase letters, digits and `_` (without it, the folder name). The save stores `"ultra-v/roxo"`. An id that starts with a
+  digit can't be picked through `WOTM_MATCH` or the online lobby (`<monster>:<skin id>`: a leading digit reads as a disc costume).
 - `name`: what the select screen shows. `base`: the disc costume (0 to 3) that supplies whatever the folder does not bring, and the costume's sounds.
   `ai`: whether randomly drawn AIs can use it (default no).
 - A mod skin is always unlocked: it does not go through the unlock screen.
@@ -352,7 +353,33 @@ TOKYO 193, TOKYODM 246, TRAINING 0, UFO 89, VEGAS 185, VOLCANO 111. A copy takes
 (its state, its effects, its collision paths); the drawing is shared with the original. A typical CENTRAL or METRO building
 takes 6 to 8 KB, the largest piece (on VEGAS) 72 KB, out of the map reserve's 4 MB.
 
-**Making one with `tools/stage_map.py`** (until the in-game editor; reads the extracted disc in `disc/`, or `--disc`):
+**Making one in the game (map editor).** Start a direct match on the stock stage with `WOTM_MAPEDIT=<new map id>`, for example
+`WOTM_MATCH=3,1` (Togera alone on Midtown Park) and `WOTM_MAPEDIT=downtown`. The editor opens on the free camera once the stage is
+on screen (F10 closes and opens it; offline only):
+
+| Key | Does |
+|---|---|
+| WASD, Q/E, arrows, right mouse button | fly and look (the free camera's keys) |
+| Enter or left click | picks the piece under the crosshair (yellow) |
+| I/K/J/L | slides it on the ground, relative to the camera (10 units; Shift: 100) |
+| U/O | up and down; Z/X turns it 15 degrees |
+| C | copies it in place (the copy is picked: slide it out) |
+| Delete, Backspace, R | removes it; undoes the last step; puts it back where the disc has it |
+| F4 | saves `mods/Creator/stages/<id>/stage.json` (the name is the id in capitals) |
+
+A move shows at once (the piece is drawn at its new place); turns, copies, removals and collision take effect when the map is
+played (`WOTM_MATCH=3,<id>`, or the stage selection after a restart). Removed pieces and copies show as red and cyan spheres.
+The editor starts from the stock stage: to change a saved map, edit its `stage.json` or remake it.
+
+Picking works on one sphere per piece: the nearest sphere the crosshair's ray enters wins, unless that sphere wholly contains a
+smaller one the ray also enters (a piece standing inside a bigger piece's sphere is the one picked); a sphere around the camera
+(the ground's) is never picked. A session undoes its last 100 steps (`kUndoSteps`). The window queues at most 64 commands for the
+game thread (`WotmMapEdit::kMaxQueued`), so a key held while the game is paused doesn't pile up. In the browser version the front
+panel's "Your creations" has a Map editor row (map id, stage, Open) that reloads the page with `?WOTM_MATCH=3,<stage>&WOTM_MAPEDIT=<id>`
+(`web/creations.js` `mapEditorQuery`); F4 saves into the browser's `mods/` like any creation, and a file system without `rename` saves
+by copy.
+
+**Making one with `tools/stage_map.py`** (reads the extracted disc in `disc/`, or `--disc`):
 
 ```
 python tools/stage_map.py pieces disc/LVL/CENTRAL.NGP          # one line per piece: node, kind, position, collision paths, riders, power-ups, destructible, copy
@@ -431,8 +458,8 @@ find a piece, take the position from `pieces` and look at it with the free camer
 - **Direct match:** `WOTM_MATCH=3,1,downtown` (the map id in the stage field).
 - **Same id in two mods:** the first one in mod order wins (`[stages] map <id>: <mod> beats <mod>`).
 - **Online:** every PC needs the same mods folder. The map's files are part of the mod digest in the config hash, so a PC without
-  the map (or with another version of it) is refused (`game configuration differs`). Today a map is picked online through
-  `WOTM_MATCH`; picking one in the launcher's lobby is a follow-up.
+  the map (or with another version of it) is refused (`game configuration differs`). The lobby owner picks a map as the stage by
+  its id (`SET stage=<id>`, `net_lobby.py --stage <id>`, the browser lobby's stage list); the Windows launcher lists stock stages only.
 
 **Known limits.**
 - Move, turn, remove and copy within the stage: no pieces from other stages, no ground or terrain edits.

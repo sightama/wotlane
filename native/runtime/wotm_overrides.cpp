@@ -120,6 +120,7 @@ std::atomic<bool> g_wotmCheatWin{false};
 #include "wotm_mouse.hpp"   // mouse for the modern camera (wotm_orbit.inc consumes it, the window accumulates it)
 #include "wotm_personalpause.hpp"   // network match: what this PC sends while its own menu is open (wotm_sync.inc)
 #include "wotm_detmath.hpp"   // trig with the same bits on every machine, for results that reach guest RAM (wotm_orbit.inc, lock-on)
+#include "wotm_zip.hpp"   // the stages' .TEX/.RTX unzip on the host (zipInflateCodesNative)
 std::atomic<bool> g_wotmFreeCam{false};
 std::atomic<bool> g_wotmFreeCamPad{false};
 std::mutex g_wotmFreeCamM;
@@ -143,8 +144,11 @@ WotmFreeCamPose g_wotmFreeCamPose;
 #include "wotm_training.inc"
 // The game's sine and cosine against retail, bit for bit (WOTM_TRIGCHECK): what a Windows vs Mac match needs
 #include "wotm_trigcheck.inc"
+#include "wotm_mapedit_live.h"   // map editor state shared with the window (wotm_mapedit_view.inc)
 // Map creator: stage image hash at LoadLevelDB, the active map's edits at dbInitDb (WOTM_MATCH's map id, WOTM_STAGE_DUMP)
 #include "wotm_stagemap.inc"
+// Map editor: a session over the stock stage on screen, its live preview and its save (WOTM_MAPEDIT)
+#include "wotm_mapedit.inc"
 
 namespace
 {
@@ -771,6 +775,8 @@ namespace
             }
             if (slot == 0)
                 wotm_stagemap::tick(rdram, ctx, runtime);   // WOTM_STAGE_BREAK (test only): breaks a map copy mid-fight
+            if (slot == 0)
+                wotm_mapedit_rt::tick(rdram);   // map editor: commands, live preview, save
             if (slot == 0 && g_wotmCheatWin.exchange(false))
             {
                 const int32_t ais = static_cast<int32_t>(READ32(kGame + 0x1203E0));   // m_numAIs
@@ -2488,6 +2494,70 @@ double wotmDamageIdleSeconds()
     return double(now - g_damageUpdateMs.load(std::memory_order_relaxed)) / 1000.0;
 }
 
+// The stages' .TEX/.RTX unzip (zipInflateAll, issue #80): its two hot functions run on the host (wotm_zip.hpp) with the same RAM
+// writes and results. Translated, they took about 100 ms per 512 KB block, which spaced a load's disc reads that far apart.
+namespace
+{
+    uint32_t zipRead32(const uint8_t *rdram, uint32_t addr) { uint32_t v; std::memcpy(&v, rdram + addr, 4); return v; }
+    uint64_t zipRead64(const uint8_t *rdram, uint32_t addr) { uint64_t v; std::memcpy(&v, rdram + addr, 8); return v; }
+    void zipWrite32(uint8_t *rdram, uint32_t addr, uint32_t v) { std::memcpy(rdram + addr, &v, 4); }
+    void zipWrite64(uint8_t *rdram, uint32_t addr, uint64_t v) { std::memcpy(rdram + addr, &v, 8); }
+    const uint64_t *zipCrcTable(const uint8_t *rdram) { return reinterpret_cast<const uint64_t *>(rdram + wotm::sym::crc_32_tab); }
+
+    // unsigned long zipCrc32(unsigned long crc, const unsigned char *buf, long len)
+    void zipCrc32Native(uint8_t *rdram, R5900Context *ctx, PS2Runtime *)
+    {
+        const uint64_t crc = wotm::zip::crc32(zipCrcTable(rdram), GPR_U64(ctx, 4), rdram, GPR_U32(ctx, 5), static_cast<int64_t>(GPR_U64(ctx, 6)));
+        SET_GPR_U64(ctx, 2, crc);
+        ctx->pc = GPR_U32(ctx, 31);
+    }
+
+    // int zipInflateCodes(struct huft *tl, struct huft *td, int bl, int bd)
+    void zipInflateCodesNative(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        namespace s = wotm::sym;
+        wotm::zip::State st;
+        st.bitBucket = zipRead32(rdram, s::G_bitBucket);
+        st.bitCount = zipRead32(rdram, s::G_bitCount);
+        st.windowPos = zipRead32(rdram, s::G_windowPos);
+        st.fileBuf = zipRead32(rdram, s::zipFileBuf);
+        st.outBuf = zipRead32(rdram, s::outFileBuf);
+        st.outWindow = zipRead32(rdram, s::outFileWindow);
+        st.crc = zipRead64(rdram, s::G_crc32val);
+        st.outSize = zipRead64(rdram, s::G_outSize);
+
+        // zipGetChar at the end of the read window: fileReads(G_FileName, ZIP_BUF, whichHalfMeg++), its stack frame where the game's
+        // would be (below zipInflateCodes' 0xC0 bytes and zipGetChar's 0x10)
+        auto refill = [&]() {
+            const uint32_t block = zipRead32(rdram, s::whichHalfMeg);
+            zipWrite32(rdram, s::whichHalfMeg, block + 1);
+            const R5900Context saved = *ctx;
+            SET_GPR_U32(ctx, 4, zipRead32(rdram, s::G_FileName));
+            SET_GPR_U32(ctx, 5, wotm::zip::kReadBuf);
+            SET_GPR_U32(ctx, 6, block);
+            SET_GPR_U32(ctx, 29, GPR_U32(ctx, 29) - 0xD0u);
+            SET_GPR_U32(ctx, 31, 0);
+            ctx->pc = wotm::fn::fileReads__FPcPvUi;
+            runtime->lookupFunction(wotm::fn::fileReads__FPcPvUi)(rdram, ctx, runtime);
+            *ctx = saved;
+        };
+        const int r = wotm::zip::inflateCodes(rdram, zipCrcTable(rdram), s::mask_bits, st,
+                                              GPR_U32(ctx, 4), GPR_U32(ctx, 5), static_cast<int32_t>(GPR_U32(ctx, 6)),
+                                              static_cast<int32_t>(GPR_U32(ctx, 7)), refill);
+
+        zipWrite32(rdram, s::G_bitBucket, st.bitBucket);
+        zipWrite32(rdram, s::G_bitCount, st.bitCount);
+        zipWrite32(rdram, s::G_windowPos, st.windowPos);
+        zipWrite32(rdram, s::zipFileBuf, st.fileBuf);
+        zipWrite32(rdram, s::outFileBuf, st.outBuf);
+        zipWrite32(rdram, s::outFileWindow, st.outWindow);
+        zipWrite64(rdram, s::G_crc32val, st.crc);
+        zipWrite64(rdram, s::G_outSize, st.outSize);
+        SET_GPR_U32(ctx, 2, r);
+        ctx->pc = GPR_U32(ctx, 31);
+    }
+}
+
 void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
 {
     const size_t slash = elfPath.find_last_of("/\\");
@@ -2497,6 +2567,8 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
 
     wotmModsInstall(runtime, elfPath);
     wotmCreatorInstall();   // after the scan: registers the skin it saves (IoPaths are set by now: loadELF runs this)
+    runtime.registerFunction(wotm::fn::zipInflateCodes__FP4huftT0ii, &zipInflateCodesNative);   // the stages' unzip on the host (#80)
+    runtime.registerFunction(wotm::fn::zipCrc32__FUlPCUcl, &zipCrc32Native);
     if (const char *e = std::getenv("WOTM_RATEMIN"))
         g_minRate = std::atoi(e);
     if (std::getenv("WOTM_TURNLOG") && (g_origUpdatePosition = runtime.lookupFunction(kMonsterDynamicsUpdatePosition)))
@@ -2616,6 +2688,7 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
     wotmPadSelInstall(runtime);
     wotmLevelSelInstall(runtime);
     wotm_stagemap::install(runtime);
+    wotm_mapedit_rt::init();
     wotmMainMenuInstall(runtime);
     wotm_menu::install(runtime);
     if ((g_origEnableHighlights = runtime.lookupFunction(kEnableHighlights)))
@@ -2674,14 +2747,16 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
                         ++t;
                     const std::string id(q, t);
                     const wotm::mods::Skin *sk = wotm::mods::Registry::get().skin(v[n - 1], id);
+                    // not found: an automatic costume, which goes through the disc costume check (the lobby can't check a skin's
+                    // files, so a mistyped id online must not become a requested costume the disc may not have)
                     if (!sk)
-                        std::fprintf(stderr, "[wotm] WOTM_MATCH: skin \"%s\" for monster %d not found in mods/; costume 0\n", id.c_str(), v[n - 1]);
-                    c[n - 1] = sk ? sk->index : 0;
+                        std::fprintf(stderr, "[wotm] WOTM_MATCH: skin \"%s\" for monster %d not found in mods/; automatic costume\n", id.c_str(), v[n - 1]);
+                    c[n - 1] = sk ? sk->index : -1;
                     end = const_cast<char *>(t);
                 }
                 else
                     c[n - 1] = static_cast<int>(std::strtol(q, &end, 10));
-                if (end == q || c[n - 1] < 0 || c[n - 1] > 99)   // 4..99: mod costumes (file name up to 8 letters)
+                if (end == q || c[n - 1] < -1 || c[n - 1] > 99)   // 4..99: mod costumes (file name up to 8 letters); -1: automatic
                 {
                     p = nullptr;
                     break;

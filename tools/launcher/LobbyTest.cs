@@ -103,6 +103,8 @@ static class LobbyTest
                     LobbyClient.MemberInfo m = b.ChangeMonster(5, 2000);
                     Check(LobbyClient.MemberMonster(m, "Bia") == 5 && LobbyClient.MemberMonster(m, "Ana") == 3, "Bia is now monster 5");
                     Check(LobbyClient.MemberMonster(m, "Cid") == -1, "a name not in the lobby has no monster");
+                    LobbyClient.MemberInfo skinned = LobbyClient.ParseMembers("MEMBERS ABCD Ana Ana:3:green,Bia:1");   // protocol 5: <monster>:<skin>
+                    Check(LobbyClient.MemberMonster(skinned, "Ana") == 3 && LobbyClient.MemberMonster(skinned, "Bia") == 1, "a member with a skin keeps its monster");
                     bool refused = false;
                     try { b.ChangeMonster(6, 2000); }
                     catch (LobbyError e) { refused = e.Message.Contains("monster"); }

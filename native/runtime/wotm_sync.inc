@@ -661,10 +661,10 @@ namespace wotm_sync
     std::string netConfigHash()
     {
         std::string all = wotm_net::confighash::envText([](const char *name) { return std::getenv(name); });
-        // the enabled mods change the game data: the same set (names and contents) on every PC, or the server refuses
+        // the enabled mods change the game data: the same set (names and contents) on every PC, or the server refuses. They travel
+        // as the hash's second part, so the refusal can say whether the mods or the settings differ
         char mods[17];
         std::snprintf(mods, sizeof mods, "%016llx", static_cast<unsigned long long>(wotm::mods::digest(wotm::mods::Registry::get().dir())));
-        all += std::string("mods=") + mods + ";";
         std::fprintf(stderr, "[net] mods: %s\n", mods);
         // gameplay modifiers (the lobby's WOTM_MODIFIERS) in canonical order: "turbo,jump" and "jump,turbo" are the same match
         int modBits = 0;
@@ -674,7 +674,7 @@ namespace wotm_sync
         all.resize((all.size() + 7u) & ~size_t(7), '\0');   // hashBytes reads 8-byte words
         char out[17];
         std::snprintf(out, sizeof out, "%016llx", static_cast<unsigned long long>(hashBytes(reinterpret_cast<const uint8_t *>(all.data()), all.size())));
-        return out;
+        return wotm_net::confighash::compose(out, mods);
     }
 
     void netInit(const char *addr)

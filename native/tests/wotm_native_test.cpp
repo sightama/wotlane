@@ -19,6 +19,9 @@
 #include "wotm_tint.hpp"
 #include "wotm_creator.hpp"
 #include "wotm_stagemap.hpp"
+#include "wotm_zip.hpp"
+#include "wotm_mapedit.hpp"
+#include "wotm_mapedit_live.h"
 #include "net/wotm_camsettings.hpp"
 #include "net/wotm_inputfile.hpp"
 #include "net/wotm_confighash.hpp"
@@ -43,6 +46,18 @@
 #include <set>
 #include <string>
 #include <vector>
+#if defined(_MSC_VER)   // the SSE intrinsics, the way the runtime's ps2_runtime_macros.h includes them
+#include <intrin.h>
+#elif defined(USE_SSE2NEON)
+#include "sse2neon.h"
+#else
+#include <immintrin.h>
+#endif
+#ifdef _MSC_VER
+#include <io.h>
+#else
+#include <unistd.h>
+#endif
 
 namespace
 {
@@ -83,6 +98,69 @@ namespace
     using wotm::M4;
 
     bool near(float a, float b, float eps = 1e-4f) { return std::fabs(a - b) <= eps * std::max(1.f, std::fabs(b)); }
+
+    // A digest that must be the same on every machine: printed only when it differs, with the value it should have
+    bool digestIs(const char *what, uint64_t got, uint64_t want)
+    {
+        if (got != want)
+            std::printf("  %s digest %016llx, want %016llx\n", what, static_cast<unsigned long long>(got), static_cast<unsigned long long>(want));
+        return got == want;
+    }
+
+    // What the code under test writes to stderr (the mods registry's [mods] and [stages] lines) while it lives, so the test asserts
+    // those lines instead of letting them into the test output
+    class StderrCapture
+    {
+      public:
+        StderrCapture()
+        {
+            std::fflush(stderr);
+            m_file = std::tmpfile();
+            m_saved = dupFd(fdOf(stderr));
+            if (m_file && m_saved >= 0)
+                dup2Fd(fdOf(m_file), fdOf(stderr));
+        }
+        ~StderrCapture() { restore(); }
+        // everything written so far; stderr goes back to the test output
+        std::string take()
+        {
+            restore();
+            std::string text;
+            if (!m_file)
+                return text;
+            std::rewind(m_file);
+            char buf[4096];
+            for (size_t n; (n = std::fread(buf, 1, sizeof buf, m_file)) > 0;)
+                text.append(buf, n);
+            std::fclose(m_file);
+            m_file = nullptr;
+            return text;
+        }
+
+      private:
+        void restore()
+        {
+            if (m_saved < 0)
+                return;
+            std::fflush(stderr);
+            dup2Fd(m_saved, fdOf(stderr));
+            closeFd(m_saved);
+            m_saved = -1;
+        }
+#ifdef _MSC_VER
+        static int fdOf(FILE *f) { return _fileno(f); }
+        static int dupFd(int fd) { return _dup(fd); }
+        static int dup2Fd(int from, int to) { return _dup2(from, to); }
+        static void closeFd(int fd) { _close(fd); }
+#else
+        static int fdOf(FILE *f) { return fileno(f); }
+        static int dupFd(int fd) { return dup(fd); }
+        static int dup2Fd(int from, int to) { return dup2(from, to); }
+        static void closeFd(int fd) { close(fd); }
+#endif
+        FILE *m_file = nullptr;
+        int m_saved = -1;
+    };
 
     // rotation around Z (row vectors: row 0 = image of the X axis), per-row scale and translation
     M4 rotZ(float deg, float sx = 1.f, float sy = 1.f, float sz = 1.f, float tx = 0.f, float ty = 0.f, float tz = 0.f)
@@ -482,6 +560,20 @@ namespace
         CHECK(!o.neutral && !o.start);
     }
 
+    // The list also follows this PC's sampled pad (where scripted input, PS2X_PAD, arrives; the devices are read apart): up and down
+    // move, X acts, triangle and O go back
+    TEST(personal_pause_list_follows_the_sampled_pad)
+    {
+        namespace pp = wotm::personalpause;
+        const pp::ListKeys idle = pp::listKeys(0xFFFF);
+        CHECK(!idle.up && !idle.down && !idle.ok && !idle.back);
+        CHECK(pp::listKeys(0xFFFF & ~0x0010).up && pp::listKeys(0xFFFF & ~0x0040).down);
+        CHECK(pp::listKeys(0xFFFF & ~0x4000).ok);
+        CHECK(pp::listKeys(0xFFFF & ~0x1000).back && pp::listKeys(0xFFFF & ~0x2000).back);
+        const pp::ListKeys start = pp::listKeys(0xFFFF & ~pp::kStart);   // Start has its own edge (it closes the menu)
+        CHECK(!start.up && !start.down && !start.ok && !start.back);
+    }
+
     // A game dialog appearing while the menu is open (the match ends, someone else pauses for everyone) closes it: the game's own
     // screen needs this player's input
     TEST(personal_pause_closes_when_the_game_takes_over)
@@ -761,8 +853,51 @@ TEST(detmath_same_bits_on_every_machine)
         mix(dm::atan2f(a[i], b[i + 1]));
         mix(dm::atan2f(b[i], b[i + 1]));
     }
-    std::printf("  detmath digest %016llx\n", static_cast<unsigned long long>(h));
-    CHECK(h == 0xa6c8104174bda8ccull);
+    CHECK(digestIs("detmath", h, 0xa6c8104174bda8ccull));
+}
+
+// The translated game's VU0 macro ops use raw SSE intrinsics (PS2Recomp's vu_translation_helpers.cpp): VMINI/VMAX as _mm_min_ps
+// and _mm_max_ps, VFTOI as _mm_cvttps_epi32 after scaling, VITOF as _mm_cvtepi32_ps. x86 runs them natively, the browser through
+// Emscripten's SSE emulation and ARM through sse2neon, included the way ps2_runtime_macros.h includes them. Their edges (+-0, NaN,
+// infinities, values out of int range) must give the same bits everywhere, or the PCs desync. The expected digests are x86's.
+TEST(vu_simd_edges_same_bits_on_every_machine)
+{
+    const uint32_t edges[] = {
+        0x00000000u, 0x80000000u, 0x00000001u, 0x80000001u, 0x00800000u, 0x80800000u, 0x3F800000u, 0xBF800000u, 0x3FC00000u,
+        0xBFC00000u, 0x3F000000u, 0xC0200000u, 0x4EFFFFFFu, 0x4F000000u, 0xCF000000u, 0xCF000001u, 0x4F32D05Eu, 0xCF32D05Eu,
+        0x477FFF80u, 0x7F7FFFFFu, 0xFF7FFFFFu, 0x7F800000u, 0xFF800000u, 0x7FC00000u, 0xFFC00000u, 0x7F800001u, 0x7FFFFFFFu,
+        0xFFFFFFFFu, 0x0000FFFFu, 0x12345678u, 0xDEADBEEFu, 0x46FFFE00u};
+    const size_t n = sizeof(edges) / sizeof(edges[0]);
+    auto load = [](uint32_t a, uint32_t b, uint32_t c, uint32_t d) { return _mm_castsi128_ps(_mm_set_epi32(int(d), int(c), int(b), int(a))); };
+    auto mix = [](uint64_t &h, __m128 v) {   // FNV-1a over the result bits
+        alignas(16) uint32_t u[4];
+        _mm_store_si128(reinterpret_cast<__m128i *>(u), _mm_castps_si128(v));
+        for (uint32_t w : u)
+            for (int k = 0; k < 4; ++k)
+                h = (h ^ ((w >> (8 * k)) & 0xFFu)) * 1099511628211ull;
+    };
+    uint64_t hMin = 1469598103934665603ull, hMax = hMin, hFtoi = hMin, hItof = hMin;
+    for (size_t i = 0; i < n; ++i)   // every pair, in both operand orders
+        for (size_t j = 0; j < n; j += 2)
+        {
+            const __m128 a = load(edges[i], edges[i], edges[j], edges[j + 1]);
+            const __m128 b = load(edges[j], edges[j + 1], edges[i], edges[i]);
+            mix(hMin, _mm_min_ps(a, b));
+            mix(hMax, _mm_max_ps(a, b));
+        }
+    const float ftoiScales[] = {1.f, 16.f, 4096.f, 32768.f}, itofScales[] = {1.f, 1.f / 16.f, 1.f / 4096.f, 1.f / 32768.f};
+    for (size_t i = 0; i < n; i += 4)
+    {
+        const __m128 v = load(edges[i], edges[i + 1], edges[i + 2], edges[i + 3]);
+        for (float s : ftoiScales)
+            mix(hFtoi, _mm_castsi128_ps(_mm_cvttps_epi32(_mm_mul_ps(v, _mm_set1_ps(s)))));
+        for (float s : itofScales)
+            mix(hItof, _mm_mul_ps(_mm_cvtepi32_ps(_mm_castps_si128(v)), _mm_set1_ps(s)));
+    }
+    CHECK(digestIs("VMINI", hMin, 0xea74e6914d9010abull));
+    CHECK(digestIs("VMAX", hMax, 0xf14e6293080b6b4full));
+    CHECK(digestIs("VFTOI", hFtoi, 0xed114ca969162d63ull));
+    CHECK(digestIs("VITOF", hItof, 0xeb6bcbf76bcf5095ull));
 }
 
 // The orbit (and the F5 free camera) write these axes into the game camera's matrix, which then decides culling, LOD and
@@ -826,6 +961,8 @@ TEST(creator_id_from_name)
     CHECK(idFromName("---") == "skin");
     CHECK(idFromName(std::string(40, 'A')).size() == 32);
     CHECK(idFromName(std::string(31, 'a') + " bcd") == std::string(31, 'a'));
+    CHECK(idFromName("2 Fast") == "skin_2_fast");   // a leading digit would read as a disc costume number in WOTM_MATCH and the lobby
+    CHECK(idFromName("9" + std::string(40, 'a')).size() == 32);
 }
 
 TEST(creator_env_parse)
@@ -841,6 +978,7 @@ TEST(creator_env_parse)
     CHECK(!parseScript("togera:9:x", s, err) && err.find("costume") != std::string::npos);
     CHECK(!parseScript("togera:1", s, err));
     CHECK(!parseScript("togera:1:Bad Id", s, err) && err.find("id") != std::string::npos);
+    CHECK(!parseScript("togera:1:2fast", s, err) && err.find("digit") != std::string::npos);
     CHECK(!parseScript("togera:1:x:nan", s, err) && err.find("number") != std::string::npos);
 }
 
@@ -904,7 +1042,9 @@ TEST(mods_skin_owner)
     fs::create_directories(root / "Other" / "skins" / "green");
     { std::ofstream o(root / "Other" / "skins" / "green" / "skin.json"); o << wotm::creator::skinJson("togera", "green", "GREEN", 1); }
     wotm::mods::Registry reg;
+    StderrCapture err;
     reg.scan(root);
+    CHECK(err.take() == "[mods] skin togera/green (\"GREEN\", Other) = costume 4 (LIZARD4); base 1, 0 png\n");
     CHECK(reg.skinOwner(3, "green") == "Other");   // Togera's green belongs to Other
     CHECK(reg.skinOwner(3, "blue").empty());       // no such skin
     CHECK(reg.skinOwner(1, "green").empty());      // the same id on another monster is another skin
@@ -945,6 +1085,7 @@ TEST(mods_add_skin_after_scan)
         p << "not a real png";
     }
     wotm::mods::Registry reg;   // a fresh one, not get(): the singleton stays untouched
+    StderrCapture err;
     reg.scan(root / "nothing_here");   // ready, empty
     CHECK(reg.ready() && reg.skins().empty());
     std::string why;
@@ -969,6 +1110,10 @@ TEST(mods_add_skin_after_scan)
     CHECK(reg.aliasOf("MON/LIZARD5.TEX") == "MON/LIZARD2.TEX" && reg.aliasOf("MON/LIZARD4.TEX") == "MON/LIZARD1.TEX");
     fs::create_directories(root / "Creator" / "skins" / "bad");
     CHECK(!reg.addSkin(root / "Creator" / "skins" / "bad", why) && why.find("skin.json") != std::string::npos);
+    // one line per skin registered (green three times: added, overwritten, the same folder written another way); refusals only
+    // come back in `why`
+    const std::string green = "[mods] skin togera/green (\"GREEN TOGERA\", Creator) = costume 4 (LIZARD4); base 1, 1 png\n";
+    CHECK(err.take() == green + green + green + "[mods] skin togera/blue (\"BLUE\", Creator) = costume 5 (LIZARD5); base 2, 0 png\n");
     fs::remove_all(root);
 }
 
@@ -997,7 +1142,13 @@ TEST(mods_scan_stages)
             {"node": "0x200", "turn": 90}, {"addpowerup": 1, "from": [0, 0, 0], "at": [1, 1, 1]}, {"copy": "0x100", "at": [4, 5, 6], "turn": 45}]})");
     put(root / "A" / "MON" / "LIZARD1.TEX", "tex");   // a real override, so the file list is not empty
     wotm::mods::Registry reg;
+    StderrCapture err;
     reg.scan(root);
+    const std::string printed = err.take();
+    std::string stageLines;   // the [stages] lines also go to the log, nothing else
+    for (const std::string &l : reg.stageLog())
+        stageLines += l + "\n";
+    CHECK(!stageLines.empty() && printed == stageLines);
     const std::vector<wotm::mods::Stage> st = reg.stages();
     CHECK(st.size() == 3);
     if (st.size() == 3)
@@ -1843,8 +1994,6 @@ TEST(stagemap_powerups_apply)
     };
     const std::vector<uint8_t> before = buf;
     sm::PowerUpResult r = sm::applyPowerUps(mem, kPoints, 4, edits);
-    for (const std::string &l : r.log)
-        std::printf("  %s\n", l.c_str());
     CHECK(r.moved == 2 && r.refused == 3 && r.log.size() == 3);
     CHECK((pos(1) == std::array<float, 3>{500.f, 600.f, 70.f}) && (pos(2) == std::array<float, 3>{-1.5f, 2.5f, 3.5f}));
     CHECK((pos(0) == std::array<float, 3>{0.f, -50.f, 40.f}) && (pos(3) == std::array<float, 3>{300.f, -50.f, 43.f}));
@@ -1912,8 +2061,6 @@ TEST(stagemap_powerups_append)
         };
         uint32_t count = 0;
         const sm::PowerUpResult r = sm::appendPowerUps(mem, kPoints, 3, adds, count);
-        for (const std::string &l : r.log)
-            std::printf("  %s\n", l.c_str());
         CHECK(count == 6 && r.moved == 3 && r.refused == 2 && r.log.size() == 2);
         CHECK(tailOf(3, 1) && tailOf(4, 1) && tailOf(5, 2) && buf[sm::kPointSize * 5 + 0x2C] == 3);
         CHECK((pos(3) == std::array<float, 3>{500.f, 600.f, 70.f}) && (pos(4) == std::array<float, 3>{-1.5f, 2.5f, 3.5f}) &&
@@ -2455,11 +2602,10 @@ TEST(stagemap_same_bits_on_every_machine)
     uint64_t h = sm::fnv1a(s.im.img.data(), s.im.img.size());
     for (uint8_t byte : s.im.res)
         h = (h ^ byte) * 0x100000001B3ull;
-    std::printf("  stagemap digest %016llx\n", static_cast<unsigned long long>(h));
     CHECK(r.applied == 3 && s.im.gridProblems(s.g) == 0);
     // 0x035d31e0eff6d986 with the 1 MB reserve at 0x3EFF000; the 4 MB reserve (0x3BFF000) changes only the 5 reserve pointers the
     // edits write (each 0x300000 lower), no float bit
-    CHECK(h == 0x7ebbfd393eca9736ull);
+    CHECK(digestIs("stagemap", h, 0x7ebbfd393eca9736ull));
 }
 
 // The same for copies: a step 1 move, turned and plain copies of a world piece (one past the grid's edge, so the clamp's bits are
@@ -2481,9 +2627,6 @@ TEST(stagemap_copy_same_bits_on_every_machine)
     uint64_t h = sm::fnv1a(s.im.img.data(), s.im.img.size());
     for (uint8_t byte : s.im.res)
         h = (h ^ byte) * 0x100000001B3ull;
-    std::printf("  stagemap copy digest %016llx\n", static_cast<unsigned long long>(h));
-    for (const std::string &l : r.log)
-        std::printf("  %s\n", l.c_str());
     CHECK(r.applied == 1 && r.copied == 6 && r.copyRefused == 0 && s.im.gridProblems(s.g) == 0);
     CHECK(logHas(r, "copy " + hexOff(s.off(s.tD)) + " (edit 6): kept inside the collision grid's edge, at "));
     // the ROTATE's copy is a ROTATE at its place with turned rows (wotm_stagemap.cpp's ROTATE root branch)
@@ -2494,7 +2637,7 @@ TEST(stagemap_copy_same_bits_on_every_machine)
     CHECK(rc && s.im.r32(rc) == s.im.r32(rB) && s.im.rf(rc + 0x40) == 210.5f && s.im.rf(rc + 0x44) == 590.25f &&
           s.im.rf(rc + 0x48) == 2.f && s.im.rf(rc + 0x10) != 0.6f && s.im.rf(rc + 0x18) == s.im.rf(rB + 0x18));
     // measured on Windows, MSVC x64; the Mac (clang, arm64) must print the same. 0x946f58d8ff7f329e before the ROTATE copy
-    CHECK(h == 0xe6ad18f1f1b154feull);
+    CHECK(digestIs("stagemap copy", h, 0xe6ad18f1f1b154feull));
 }
 
 TEST(stagemap_copy_set)
@@ -3515,9 +3658,6 @@ TEST(stagemap_copy_logs)
         CHECK(int(r.log.size()) == refused + 1);   // the refusals come last
         CHECK(r.copySummary == "copies: 2 applied, 1 refused; reserve " + kb(res.next - sm::kReserve) +
                                    " of 16 KB; interactives 17 of 17, destructibles 7 of 1400, pickup room 0 KB (no limit)");
-        for (const std::string &l : r.log)
-            std::printf("  %s\n", l.c_str());
-        std::printf("  %s\n", r.copySummary.c_str());
     }
     {
         CopyStage s;   // the edit number counts the piece edits written before the copies (write()'s order)
@@ -3720,6 +3860,210 @@ namespace
 // Per stage: the C++ coverage rule gives exactly the stock cells, the C++ pieces equal stage_map.py's, and a realistic edit
 // set (a destructible removed, a piece moved across cells, a TRANSLATE turned 90, a ROTATE turned 15) all applies and leaves
 // the grid rule holding.
+// Map editor core (wotm_mapedit.hpp) on the stagemap tests' Stage: pieces tA (TRANSLATE 100,100,0, a GROUP of radius 20 under it),
+// rB (ROTATE 30 degrees at 500,100,0, an OBJECT of radius 10) and tC (TRANSLATE 700,700,0, an OBJECT of radius 10)
+namespace
+{
+    namespace me = wotm::mapedit;
+    int pieceIndex(const std::vector<me::Piece> &ps, uint32_t node)
+    {
+        for (size_t i = 0; i < ps.size(); ++i)
+            if (ps[i].node == node)
+                return int(i);
+        return -1;
+    }
+}
+
+TEST(mapedit_pieces_and_pick)
+{
+    Stage s;
+    const std::vector<me::Piece> ps = me::pieces(s.im.mem());
+    CHECK(ps.size() == 3);
+    const int a = pieceIndex(ps, s.tA), b = pieceIndex(ps, s.rB), c = pieceIndex(ps, s.tC);
+    CHECK(a >= 0 && b >= 0 && c >= 0);
+    if (a < 0 || b < 0 || c < 0)
+        return;
+    CHECK(ps[a].pos[0] == 100.f && ps[a].pos[1] == 100.f && ps[a].pos[2] == 0.f);
+    CHECK(ps[b].pos[0] == 500.f && ps[b].pos[1] == 100.f);
+    CHECK(near(ps[a].centre[0], 100.f) && near(ps[a].centre[1], 100.f) && near(ps[a].radius, 20.f));
+    CHECK(near(ps[c].centre[0], 700.f) && near(ps[c].radius, 10.f));
+    // straight down onto tA; down onto empty ground; along X from the left: tA (x 100) is hit before rB (x 500)
+    const float down[3] = {0, 0, -1}, east[3] = {1, 0, 0};
+    const float overA[3] = {100, 105, 500}, overNothing[3] = {300, 600, 500}, west[3] = {-100, 100, 0};
+    CHECK(me::pick(ps, overA, down) == a);
+    CHECK(me::pick(ps, overNothing, down) == -1);
+    CHECK(me::pick(ps, west, east) == a);
+    const float behind[3] = {1000, 100, 0};   // looking further east from past every piece: nothing in front
+    CHECK(me::pick(ps, behind, east) == -1);
+}
+
+TEST(mapedit_session_edits_round_trip)
+{
+    Stage s;
+    const std::vector<me::Piece> ps = me::pieces(s.im.mem());
+    const int a = pieceIndex(ps, s.tA), b = pieceIndex(ps, s.rB), c = pieceIndex(ps, s.tC);
+    me::Session ses("CENTRAL", 0x0123456789abcdefull, ps);
+    CHECK(ses.toMap("m1", "EMPTY").edits.empty() && !ses.undo());   // nothing done yet: no edits, nothing to undo
+    ses.selectPiece(a);
+    ses.move(50, 0, 0);
+    ses.turn(90);
+    ses.selectPiece(b);
+    ses.remove();
+    ses.selectPiece(c);
+    ses.copy(100, 0);            // the copy is selected: the next move moves it, not tC
+    ses.move(0, 0, 5);
+    float at[3];
+    CHECK(ses.position(at) && at[0] == 800.f && at[1] == 700.f && at[2] == 5.f);
+    sm::Map m = ses.toMap("m1", "TEST MAP");
+    CHECK(m.id == "m1" && m.name == "TEST MAP" && m.base == "CENTRAL" && m.baseHash == 0x0123456789abcdefull);
+    CHECK(m.edits.size() == 2 && m.copies.size() == 1);
+    if (m.edits.size() == 2 && m.copies.size() == 1)
+    {
+        CHECK(m.edits[0].node == s.off(s.tA) && m.edits[0].move && m.edits[0].pos[0] == 150.f && m.edits[0].turn == 90.f);
+        CHECK(m.edits[1].node == s.off(s.rB) && m.edits[1].remove);
+        CHECK(m.copies[0].node == s.off(s.tC) && m.copies[0].at[0] == 800.f && m.copies[0].at[2] == 5.f);
+    }
+    sm::Map back;
+    std::string why;
+    CHECK(sm::parse(sm::write(m), back, why) && sm::write(back) == sm::write(m));
+    // the edit list applies through the loader: the move and turn of tA and the removal of rB
+    Stage fresh;
+    sm::Reserve res = fresh.im.reserve();
+    const sm::Result r = sm::apply(fresh.im.mem(), uint32_t(fresh.im.img.size()), m, res);
+    CHECK(r.applied == 2 && r.refused == 0 && r.copied + r.copyRefused == 1);
+    // undo walks back one step at a time: the copy's move, the copy, the removal
+    CHECK(ses.undo() && ses.undo() && ses.toMap("m1", "X").copies.empty());
+    CHECK(ses.undo() && ses.toMap("m1", "X").edits.size() == 1);
+    // reset puts the selected piece back where the disc has it
+    ses.selectPiece(a);
+    ses.reset();
+    CHECK(ses.toMap("m1", "X").edits.empty());
+}
+
+TEST(mapedit_pick_finds_items_where_they_stand_now)
+{
+    Stage s;
+    const std::vector<me::Piece> ps = me::pieces(s.im.mem());
+    me::Session ses("CENTRAL", 1, ps);
+    const int a = pieceIndex(ps, s.tA), c = pieceIndex(ps, s.tC);
+    const float down[3] = {0, 0, -1}, overA[3] = {100, 100, 500}, newA[3] = {300, 300, 500}, overC[3] = {700, 700, 500},
+                besideC[3] = {700, 500, 500};
+    ses.selectPiece(a);
+    ses.move(200, 200, 0);
+    CHECK(ses.pickItem(overA, down) == -1);   // tA no longer stands at its disc place
+    CHECK(ses.pickItem(newA, down) == a);
+    ses.selectPiece(c);
+    ses.copy(0, -200);                        // a copy of tC at (700, 500): picked there, as its own item
+    const int copyItem = ses.selected();
+    CHECK(copyItem >= int(ps.size()) && ses.selectedIsCopy() && ses.pieceOf() == c);
+    CHECK(ses.pickItem(besideC, down) == copyItem);
+    ses.remove();                             // a removed copy is gone from the map and from picking
+    CHECK(ses.pickItem(besideC, down) == -1 && ses.toMap("m", "M").copies.empty());
+    ses.selectPiece(c);
+    ses.remove();
+    CHECK(ses.pickItem(overC, down) == -1);
+    // the view lists every item as it stands: the stock pieces first, then the copies; the drawing and the preview read it
+    const std::vector<me::ItemView> v = ses.view();
+    CHECK(v.size() == ps.size() + 1);
+    if (v.size() == ps.size() + 1)
+    {
+        CHECK(v[size_t(a)].pos[0] == 300.f && !v[size_t(a)].copy && !v[size_t(a)].removed && v[size_t(a)].node == s.tA);
+        CHECK(v[size_t(c)].removed && v.back().copy && v.back().removed && near(v[size_t(a)].centre[0], 300.f) && v[size_t(a)].radius > 0);
+    }
+}
+
+// WOTM_MAPEDIT_TEST: the editor's commands as text, run on a session (the runtime check drives the editor this way)
+TEST(mapedit_script_commands)
+{
+    std::vector<me::Command> cmds;
+    std::string why;
+    CHECK(me::parseScript("select 0x100; move 50 0 0 ;turn 90;copy 10 -20; remove; undo; reset;save", cmds, why) && cmds.size() == 8);
+    CHECK(!me::parseScript("select zz", cmds, why) && why.find("select") != std::string::npos);
+    CHECK(!me::parseScript("move 1 2", cmds, why) && why.find("move") != std::string::npos);
+    CHECK(!me::parseScript("fly 3", cmds, why) && why.find("fly") != std::string::npos);
+    CHECK(!me::parseScript("move 1e9 0 0", cmds, why));   // a place the loader would refuse (+-1000000)
+
+    Stage s;
+    const std::vector<me::Piece> ps = me::pieces(s.im.mem());
+    me::Session ses("CENTRAL", 1, ps);
+    char text[160];
+    std::snprintf(text, sizeof text, "select 0x%x; move 50 0 0; turn 90; select 0x%x; copy 100 0; select 0x%x; remove; save", s.off(s.tA),
+                  s.off(s.tC), s.off(s.rB));
+    CHECK(me::parseScript(text, cmds, why));
+    int saves = 0;
+    for (const me::Command &c : cmds)
+        saves += me::run(ses, c) ? 1 : 0;   // run() says true for a save: the caller writes the file
+    CHECK(saves == 1);
+    const sm::Map m = ses.toMap("ed", "ED");
+    CHECK(m.edits.size() == 2 && m.copies.size() == 1);
+    CHECK(!m.edits.empty() && m.edits[0].node == s.off(s.tA) && m.edits[0].pos[0] == 150.f && m.edits[0].turn == 90.f);
+    CHECK(!m.copies.empty() && m.copies[0].node == s.off(s.tC) && m.copies[0].at[0] == 800.f);
+}
+
+TEST(mapedit_slide_follows_the_camera)
+{
+    Stage s;
+    const std::vector<me::Piece> ps = me::pieces(s.im.mem());
+    me::Session ses("CENTRAL", 1, ps);
+    ses.selectPiece(pieceIndex(ps, s.tA));
+    float at[3];
+    ses.slide(10, 0, 0.f);     // camera looking along +X: forward is +X
+    CHECK(ses.position(at) && near(at[0], 110.f) && near(at[1], 100.f));
+    ses.slide(10, 0, 90.f);    // looking along +Y
+    CHECK(ses.position(at) && near(at[0], 110.f) && near(at[1], 110.f));
+    ses.slide(0, 10, 90.f);    // right of +Y is +X
+    CHECK(ses.position(at) && near(at[0], 120.f) && near(at[1], 110.f));
+    ses.selectPiece(-1);       // nothing selected: moves do nothing
+    ses.slide(10, 0, 0.f);
+    CHECK(!ses.position(at));
+}
+
+
+TEST(mapedit_pick_ignores_spheres_around_the_eye_and_prefers_the_piece_inside)
+{
+    const auto sphere = [](float x, float r) { me::Piece p; p.centre[0] = x, p.radius = r; return p; };
+    const float east[3] = {1, 0, 0}, eye[3] = {0, 0, 0}, outside[3] = {-500, 0, 0};
+    // the eye stands inside a big piece's sphere (the ground): aiming at nothing picks nothing, not the sphere's far side
+    CHECK(me::pick({sphere(0, 1000)}, eye, east) == -1);
+    // ... and a small piece in front inside that sphere is the one picked
+    CHECK(me::pick({sphere(0, 1000), sphere(300, 10)}, eye, east) == 1);
+    // from outside, a small piece wholly inside the nearer big sphere is picked rather than the big one
+    CHECK(me::pick({sphere(0, 100), sphere(20, 10)}, outside, east) == 1);
+    // a small piece behind a big one, not inside it, stays hidden behind it
+    CHECK(me::pick({sphere(0, 100), sphere(300, 10)}, outside, east) == 0);
+    // two pieces inside the big sphere, both on the ray: the nearer one, whatever their order
+    CHECK(me::pick({sphere(0, 100), sphere(30, 10), sphere(-30, 10)}, outside, east) == 2);
+    CHECK(me::pick({sphere(0, 100), sphere(-30, 10), sphere(30, 10)}, outside, east) == 1);
+    // the same rules for a session's items
+    me::Session ses("CENTRAL", 1, {sphere(0, 100), sphere(20, 10)});
+    CHECK(ses.pickItem(outside, east) == 1);
+}
+
+TEST(mapedit_undo_keeps_the_last_steps_only)
+{
+    Stage s;
+    const std::vector<me::Piece> ps = me::pieces(s.im.mem());
+    me::Session ses("CENTRAL", 1, ps);
+    ses.selectPiece(pieceIndex(ps, s.tA));
+    for (int i = 0; i < me::kUndoSteps + 50; ++i)
+        ses.move(1, 0, 0);
+    int undone = 0;
+    while (ses.undo())
+        ++undone;
+    CHECK(undone == me::kUndoSteps);
+    float at[3];
+    CHECK(ses.position(at) && near(at[0], 100.f + 50.f));   // the 50 oldest steps are gone for good
+}
+
+TEST(mapedit_window_commands_wait_in_a_bounded_queue)
+{
+    WotmMapEdit live;
+    me::Command c;
+    c.kind = me::Command::Undo;
+    for (int i = 0; i < WotmMapEdit::kMaxQueued + 40; ++i)
+        live.push(c);
+    CHECK(int(live.cmds.size()) == WotmMapEdit::kMaxQueued);
+}
 TEST(stagemap_stock_grid_rule)
 {
     const std::vector<std::string> stages = envList("WOTM_TEST_STAGE"), pieceFiles = envList("WOTM_TEST_PIECES");
@@ -4614,8 +4958,7 @@ TEST(rtz_same_bits_on_every_machine)
         mix(bitsOfDouble(wotm::rtz::add((double)t.c, p)), 8);
         mix(bitsOfDouble(wotm::rtz::sub((double)t.c, p)), 8);
     }
-    std::printf("  rtz digest %016llx\n", static_cast<unsigned long long>(h));
-    CHECK(h == 0x4db21735e0cf6d5aull);
+    CHECK(digestIs("rtz", h, 0x4db21735e0cf6d5aull));
 }
 
 TEST(rtz_edges)
@@ -4730,6 +5073,335 @@ TEST(watchdog_pace_window_rate_and_counting)
     CHECK(!pc::measure(1000, 1120, 2.0, false, 1.5, false).counted);   // a loading gap of over 1 s
     CHECK(pc::measure(1000, 1120, 2.0, false, 1.0, false).counted);
     CHECK(!pc::measure(1000, 1120, 2.0, false, 0.02, true).counted);   // a deliberate pause
+}
+// Inflate (wotm_zip.hpp): a fixed-Huffman deflate stream, as the game's zipInflateBlockFixed hands it to zipInflateCodes, in a fake
+// 64 MB guest RAM. The tables are built in the guest layout by gzip's huft_build (the game's zipBuildHuffmanTable).
+namespace zipt
+{
+    namespace z = wotm::zip;
+
+    const uint16_t kMask[17] = {0x0000, 0x0001, 0x0003, 0x0007, 0x000f, 0x001f, 0x003f, 0x007f, 0x00ff,
+                                0x01ff, 0x03ff, 0x07ff, 0x0fff, 0x1fff, 0x3fff, 0x7fff, 0xffff};
+    constexpr uint32_t kMaskAddr = 0x006F4E28u;
+
+    struct Ram
+    {
+        std::vector<uint8_t> m = std::vector<uint8_t>(64u << 20);   // the runtime's guest RAM (PS2_RAM_SIZE)
+        uint32_t heap = 0x01000000u;   // bump allocator for the tables
+        Ram() { std::memcpy(&m[kMaskAddr], kMask, sizeof kMask); }   // mask_bits where the game has it
+        uint32_t alloc(uint32_t bytes) { const uint32_t a = heap; heap += (bytes + 15u) & ~15u; return a; }
+        void put8(uint32_t a, uint8_t v) { m[a] = v; }
+        void put16(uint32_t a, uint16_t v) { std::memcpy(&m[a], &v, 2); }
+        void put32(uint32_t a, uint32_t v) { std::memcpy(&m[a], &v, 4); }
+    };
+
+    const uint16_t kLens[31] = {3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258, 0, 0};
+    const uint16_t kLext[31] = {0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0, 99, 99};
+    const uint16_t kDist[30] = {1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073,
+                                4097, 6145, 8193, 12289, 16385, 24577};
+    const uint16_t kDext[30] = {0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13};
+
+    std::array<uint64_t, 256> crcTable()
+    {
+        std::array<uint64_t, 256> t{};
+        for (uint32_t n = 0; n < 256; ++n)
+        {
+            uint32_t c = n;
+            for (int k = 0; k < 8; ++k)
+                c = c & 1 ? 0xEDB88320u ^ (c >> 1) : c >> 1;
+            t[n] = c;
+        }
+        return t;
+    }
+
+    // gzip's huft_build, writing struct huft (e, b, v at +4) into the guest RAM; returns the table's address
+    uint32_t buildTable(Ram &ram, const unsigned *b, unsigned n, unsigned s, const uint16_t *d, const uint16_t *e, int &m)
+    {
+        constexpr int BMAX = 16;
+        unsigned c[BMAX + 1] = {}, v[288] = {}, x[BMAX + 1] = {};
+        uint32_t u[BMAX] = {};
+        for (unsigned i = 0; i < n; ++i)
+            c[b[i]]++;
+        int l = m;
+        unsigned j, i;
+        for (j = 1; j <= BMAX; j++)
+            if (c[j])
+                break;
+        int k = int(j);
+        if (unsigned(l) < j)
+            l = int(j);
+        for (i = BMAX; i; i--)
+            if (c[i])
+                break;
+        const int g = int(i);
+        if (unsigned(l) > i)
+            l = int(i);
+        m = l;
+        int y;
+        for (y = 1 << j; j < i; j++, y <<= 1)
+            y -= int(c[j]);
+        y -= int(c[i]);
+        c[i] += unsigned(y);
+        x[1] = j = 0;
+        for (unsigned q = 1, *xp = x + 2; --i;)
+            *xp++ = (j += c[q++]);
+        for (i = 0; i < n; ++i)
+            if ((j = b[i]) != 0)
+                v[x[j]++] = i;
+        n = x[g];
+        x[0] = i = 0;
+        unsigned p = 0;
+        int h = -1, w = -l;
+        uint32_t q = 0, first = 0;
+        unsigned z = 0;
+        for (; k <= g; k++)
+        {
+            unsigned a = c[k];
+            while (a--)
+            {
+                while (k > w + l)
+                {
+                    h++;
+                    w += l;
+                    z = unsigned(g - w) > unsigned(l) ? unsigned(l) : unsigned(g - w);
+                    unsigned f;
+                    if ((f = 1u << (j = unsigned(k - w))) > a + 1)
+                    {
+                        f -= a + 1;
+                        unsigned xi = unsigned(k);
+                        if (j < z)
+                            while (++j < z)
+                            {
+                                if ((f <<= 1) <= c[++xi])
+                                    break;
+                                f -= c[xi];
+                            }
+                    }
+                    z = 1u << j;
+                    q = ram.alloc((z + 1) * 8) + 8;   // the entry before the table links the tables (freed by zipFreeHuffmanTable)
+                    if (!first)
+                        first = q;
+                    u[h] = q;
+                    if (h)
+                    {
+                        x[h] = i;
+                        const uint32_t r = u[h - 1] + 8 * (i >> (w - l));
+                        ram.put8(r, uint8_t(16 + j));
+                        ram.put8(r + 1, uint8_t(l));
+                        ram.put32(r + 4, q);
+                    }
+                }
+                uint8_t re, rb = uint8_t(k - w);
+                uint16_t rn = 0;
+                if (p >= n)
+                    re = 99;
+                else if (v[p] < s)
+                {
+                    re = uint8_t(v[p] < 256 ? 16 : 15);
+                    rn = uint16_t(v[p++]);
+                }
+                else
+                {
+                    re = uint8_t(e[v[p] - s]);
+                    rn = d[v[p++] - s];
+                }
+                const unsigned f = 1u << (k - w);
+                for (j = i >> w; j < z; j += f)
+                {
+                    ram.put8(q + 8 * j, re);
+                    ram.put8(q + 8 * j + 1, rb);
+                    ram.put16(q + 8 * j + 4, rn);
+                }
+                for (j = 1u << (k - 1); i & j; j >>= 1)
+                    i ^= j;
+                i ^= j;
+                while ((i & ((1u << w) - 1)) != x[h])
+                {
+                    h--;
+                    w -= l;
+                }
+            }
+        }
+        return first;
+    }
+
+    // A deflate block with the fixed codes (BTYPE 1): greedy matches of 3 to 258 bytes up to 32 KB back
+    struct BitWriter
+    {
+        std::vector<uint8_t> out;
+        uint32_t acc = 0, n = 0;
+        void bits(uint32_t v, uint32_t count) { acc |= v << n; n += count; while (n >= 8) { out.push_back(uint8_t(acc)); acc >>= 8; n -= 8; } }
+        void huff(uint32_t code, uint32_t len) { uint32_t r = 0; for (uint32_t i = 0; i < len; ++i) r |= ((code >> i) & 1) << (len - 1 - i); bits(r, len); }
+        void lit(uint32_t c)
+        {
+            if (c < 144) huff(0x30 + c, 8);
+            else if (c < 256) huff(0x190 + c - 144, 9);
+            else if (c < 280) huff(c - 256, 7);
+            else huff(0xC0 + c - 280, 8);
+        }
+    };
+
+    std::vector<uint8_t> deflateFixed(const std::vector<uint8_t> &data)
+    {
+        BitWriter bw;
+        bw.bits(1, 1);   // BFINAL
+        bw.bits(1, 2);   // BTYPE fixed
+        std::map<uint32_t, size_t> last;   // last position of each 3-byte prefix
+        for (size_t i = 0; i < data.size();)
+        {
+            size_t len = 0, dist = 0;
+            if (i + 3 <= data.size())
+            {
+                const uint32_t key = data[i] | data[i + 1] << 8 | data[i + 2] << 16;
+                auto it = last.find(key);
+                if (it != last.end() && i - it->second <= 32768)
+                {
+                    dist = i - it->second;
+                    while (len < 258 && i + len < data.size() && data[i + len] == data[i + len - dist])
+                        ++len;
+                }
+                last[key] = i;
+            }
+            if (len < 3)
+            {
+                bw.lit(data[i++]);
+                continue;
+            }
+            int lc = 28;
+            while (kLens[lc] > len) --lc;
+            bw.lit(257 + lc);
+            bw.bits(uint32_t(len - kLens[lc]), kLext[lc]);
+            int dc = 29;
+            while (kDist[dc] > dist) --dc;
+            bw.huff(uint32_t(dc), 5);
+            bw.bits(uint32_t(dist - kDist[dc]), kDext[dc]);
+            i += len;
+        }
+        bw.lit(256);
+        bw.bits(0, 7);
+        return bw.out;
+    }
+
+    // ~1.6 MB: random bytes with copies (near and up to 32 KB back, some overlapping runs) so the stream spans three 512 KB read
+    // blocks and the output four windows, with copies across a window boundary
+    std::vector<uint8_t> sample()
+    {
+        std::mt19937 rng(80);
+        std::vector<uint8_t> d;
+        while (d.size() < 1600000)
+        {
+            const uint32_t kind = rng() % 4;
+            if (kind == 0 || d.size() < 40000)
+                for (int i = 0; i < 1024; ++i)
+                    d.push_back(uint8_t(rng()));
+            else
+            {
+                const size_t dist = kind == 1 ? 1 + rng() % 4 : 1 + rng() % 32768, len = 3 + rng() % 300;
+                for (size_t i = 0; i < len; ++i)
+                    d.push_back(d[d.size() - dist]);
+            }
+        }
+        return d;
+    }
+}
+
+TEST(zip_crc32_is_zlibs)
+{
+    zipt::Ram ram;
+    const auto tab = zipt::crcTable();
+    std::memcpy(&ram.m[0x1000], "123456789", 9);
+    CHECK(wotm::zip::crc32(tab.data(), 0, ram.m.data(), 0x1000, 9) == 0xCBF43926u);
+    CHECK(wotm::zip::crc32(tab.data(), wotm::zip::crc32(tab.data(), 0, ram.m.data(), 0x1000, 4), ram.m.data(), 0x1004, 5) == 0xCBF43926u);
+    CHECK(wotm::zip::crc32(tab.data(), 0x1234, ram.m.data(), 0, 9) == 0);   // a null buffer gives 0
+    std::memcpy(&ram.m[0x021F6B80], "123456789", 9);   // above 32 MB: the stages unzip there
+    CHECK(wotm::zip::crc32(tab.data(), 0, ram.m.data(), 0x021F6B80, 9) == 0xCBF43926u);
+}
+
+// Inflates zipt::sample() to `dest` and checks the output, the globals and the CRC; guest addresses wrap at the end of RAM
+static void checkInflateTo(uint32_t dest)
+{
+    namespace z = wotm::zip;
+    zipt::Ram ram;
+    const auto tab = zipt::crcTable();
+    static const std::vector<uint8_t> data = zipt::sample(), packed = zipt::deflateFixed(data);
+    CHECK(packed.size() > 2 * z::kReadBufSize);
+
+    // zipInflateBlockFixed's tables: literal/length codes 7 bits deep, distances 5
+    unsigned l[288];
+    for (unsigned i = 0; i < 288; ++i)
+        l[i] = i < 144 ? 8 : i < 256 ? 9 : i < 280 ? 7 : 8;
+    int bl = 7, bd = 5;
+    const uint32_t tl = zipt::buildTable(ram, l, 288, 257, zipt::kLens, zipt::kLext, bl);
+    for (unsigned i = 0; i < 30; ++i)
+        l[i] = 5;
+    const uint32_t td = zipt::buildTable(ram, l, 30, 0, zipt::kDist, zipt::kDext, bd);
+
+    // fileReads: the next 512 KB of the stream into the read window
+    uint32_t block = 0;
+    auto refill = [&]() {
+        const size_t off = size_t(block++) * z::kReadBufSize;
+        std::memset(&ram.m[z::kReadBuf], 0, z::kReadBufSize);
+        if (off < packed.size())
+            std::memcpy(&ram.m[z::kReadBuf], packed.data() + off, std::min<size_t>(z::kReadBufSize, packed.size() - off));
+    };
+    refill();
+
+    z::State s;
+    s.fileBuf = z::kReadBuf;
+    s.outBuf = s.outWindow = dest;
+    s.outSize = data.size();
+    // the block header's 3 bits are already in the bit buffer, as zipInflateBlock leaves them
+    s.bitBucket = ram.m[z::kReadBuf] >> 3;
+    s.bitCount = 5;
+    s.fileBuf++;
+    CHECK(z::inflateCodes(ram.m.data(), tab.data(), zipt::kMaskAddr, s, tl, td, bl, bd, refill) == 0);
+    CHECK(s.outWindow == s.outBuf || s.outWindow == s.outBuf - z::kWindow);   // where the last copy read from
+    z::flush(ram.m.data(), tab.data(), s, s.windowPos);   // zipInflateAll's last zipFlush
+
+    CHECK(block == (packed.size() + z::kReadBufSize - 1) / z::kReadBufSize);
+    bool same = true;
+    for (size_t i = 0; i < data.size(); ++i)
+        same = same && ram.m[(dest + i) & z::kRamMask] == data[i];
+    CHECK(same);
+    CHECK(s.outBuf == dest + data.size());
+    CHECK(s.outSize == 0);
+    std::vector<uint8_t> copy(data.size() + 0x10);
+    std::memcpy(&copy[0x10], data.data(), data.size());
+    CHECK(s.crc == wotm::zip::crc32(tab.data(), 0, copy.data(), 0x10, int64_t(data.size())));
+    CHECK(s.windowPos == data.size() % z::kWindow);
+}
+
+TEST(zip_inflate_codes_decodes_a_stream_across_read_blocks_and_windows)
+{
+    checkInflateTo(0x01FFFC00u);   // right after the read window: the output runs past 32 MB, as the stages' does
+}
+
+// The guest's addresses wrap at the end of RAM: an output running off the end of the 64 MB continues at 0, never past the array
+TEST(zip_inflate_codes_wraps_at_the_end_of_ram)
+{
+    for (uint32_t end : {0x40000u, 0x80000u + 1000u, 0x80000u + 70001u, 0x123457u})   // ends among the copies, in several windows
+        checkInflateTo(0x04000000u - end);
+}
+
+// An invalid code (e 99) stops with 1 and leaves the bit state and window position as they were
+TEST(zip_inflate_codes_stops_on_an_invalid_code)
+{
+    namespace z = wotm::zip;
+    zipt::Ram ram;
+    const auto tab = zipt::crcTable();
+    const uint32_t tl = 0x00100000u;
+    for (uint32_t i = 0; i < 2; ++i)
+        ram.put8(tl + 8 * i, 99);
+    z::State s;
+    s.fileBuf = z::kReadBuf;
+    s.bitBucket = 0x5;
+    s.bitCount = 3;
+    s.windowPos = 0x1234;
+    CHECK(z::inflateCodes(ram.m.data(), tab.data(), zipt::kMaskAddr, s, tl, tl, 1, 1, [] {}) == 1);
+    CHECK(s.bitBucket == 0x5 && s.bitCount == 3 && s.windowPos == 0x1234);
+    // bl is a guest register: mask_bits + 2 * bl is a 32-bit guest address, here the halfword before the table (0: entry 0)
+    CHECK(z::inflateCodes(ram.m.data(), tab.data(), zipt::kMaskAddr, s, tl, tl, 0x7FFFFFFF, 1, [] {}) == 1);
+    CHECK(s.bitBucket == 0x5 && s.bitCount == 3 && s.windowPos == 0x1234);
 }
 
 int main()

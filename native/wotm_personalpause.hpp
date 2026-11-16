@@ -26,6 +26,18 @@ struct Out
     bool start = false;
 };
 
+// The list's keys in this PC's sampled pad (active low; scripted input, PS2X_PAD, arrives only there): up and down move, X acts,
+// triangle and O go back. Start is left to step's edge
+struct ListKeys
+{
+    bool up = false, down = false, ok = false, back = false;
+};
+inline ListKeys listKeys(uint16_t buttons)
+{
+    const auto held = [buttons](uint16_t bit) { return (buttons & bit) == 0; };
+    return {held(0x0010), held(0x0040), held(0x4000), held(0x1000) || held(0x2000)};
+}
+
 inline void close(Menu &m)
 {
     if (m.state == Menu::Open)

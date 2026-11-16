@@ -68,7 +68,7 @@ namespace wotm_net
             std::string build;
             int lobby = -1;
             std::string name;
-            int monster = 0;
+            proto::Pick pick;   // monster and skin for the next match
         };
 
         // a browser in a match (WebSocket /match)
@@ -95,9 +95,13 @@ namespace wotm_net
             bool joined = false, gone = false;
             bool away = false;               // the game is in the background (Away); only changes are passed on
             std::vector<uint32_t> need;   // per player, the first frame this client doesn't have yet
+            std::vector<uint32_t> sent;   // per player, the first frame not sent to this client yet
             uint32_t lastAckOwn = 0;
             Clock::time_point lastSend{};
             bool dirty = false;
+            // per player, the first frame to send next: what the client lacks, except that a WebSocket (reliable and ordered) delivers
+            // everything sent, so nothing goes twice (a silent browser isn't sent the same frames every tick until its buffers fill)
+            uint32_t sendFrom(size_t player) const { return peer.ws ? std::max(need[player], sent[player]) : need[player]; }
         };
 
         struct Match
@@ -105,6 +109,7 @@ namespace wotm_net
             int lobby = 0;
             std::vector<Slot> slots;
             std::string config;            // config of the first to join: everyone must match it
+            std::string refusal;           // the first seat refused (other build or settings): the match never starts
             bool started = false, desynced = false;
             uint32_t delay = 0;
             InputTimeline inputs{0, 0};
@@ -119,7 +124,8 @@ namespace wotm_net
             bool open = false;             // slot in use (created, and has someone in it or is in a match)
             std::string code, name, password;
             int host = -1;                 // owner's index in conns_
-            int stage = 1, wins = 0;
+            std::string stage = "1";       // a stock stage number or a saved map's id (proto::validStage)
+            int wins = 0;
             std::string mods;              // gameplay modifiers, canonical list (wotm_modifiers.hpp); "" = none
             std::vector<int> members;      // indices into conns_
             std::string build;
@@ -135,13 +141,13 @@ namespace wotm_net
         void setLobby(int c, const std::vector<std::string> &w);
         void changeMonster(int c, const std::vector<std::string> &w);
         // joins lobby li (already validated): member, owner if first, JOINED, SETTINGS and MEMBERS
-        void addMember(int c, int li, const std::string &name, int monster);
+        void addMember(int c, int li, const std::string &name, const proto::Pick &pick);
         // `except`: a member left out of the costume check (the one changing monster)
-        bool monsterFits(const Lobby &l, int monster, std::string &err, int except = -1) const;
+        bool monsterFits(const Lobby &l, const proto::Pick &pick, std::string &err, int except = -1) const;
         void leaveLobby(int c);
         bool closeIfEmpty(int lobby);
         void sendMembers(int lobby);
-        // SETTINGS <code> stage=<n> wins=<n> mods=<list>
+        // SETTINGS <code> stage=<n or map id> wins=<n> mods=<list>
         std::string settingsLine(const Lobby &l) const;
         void sendSettings(int lobby);
         void startMatch(int lobby);
@@ -158,6 +164,7 @@ namespace wotm_net
         void serviceWebSockets();
         void onReceive(PeerRef peer, const std::vector<uint8_t> &data);
         void onDisconnect(PeerRef peer);
+        void refuse(PeerRef peer, const std::string &why);   // sends Reject{why} and closes the connection
         void onJoin(PeerRef peer, const proto::Join &j);
         void dropSlot(Match &m, int slot);
         void tickMatches();

@@ -1,5 +1,6 @@
 // ABOUTME: Netcode tests without the game: the input timeline (lockstep), message encoding, and a real ENet server and client
 // ABOUTME: on localhost. Exits with 0 if everything passes; each failure prints the file, line and expression.
+#include "wotm_confighash.hpp"
 #include "wotm_lockstep.hpp"
 #include "wotm_monsters.hpp"
 #include "wotm_lobby_client.hpp"
@@ -64,6 +65,19 @@ namespace
         PadState s;
         s.buttons = static_cast<uint16_t>(0xFFFFu & ~mask);
         return s;
+    }
+
+    // A config hash is "<settings hash>:<mods digest>": a refusal says which part differs, so a player knows whether to import the
+    // host's creations or to check the match settings
+    TEST(config_mismatch_names_the_part_that_differs)
+    {
+        namespace ch = wotm_net::confighash;
+        CHECK(ch::compose("1111", "aaaa") == "1111:aaaa");
+        CHECK(ch::mismatch("1111:aaaa", "1111:bbbb") == "the mods (creations) differ");
+        CHECK(ch::mismatch("1111:aaaa", "2222:aaaa") == "the game settings differ");
+        CHECK(ch::mismatch("1111:aaaa", "2222:bbbb") == "the game settings and the mods (creations) differ");
+        CHECK(ch::mismatch("cfgA", "cfgB").empty());   // a hash without the two parts (an older client): nothing more to say
+        CHECK(ch::mismatch("1111:aaaa", "cfgB").empty());
     }
 
     TEST(timeline_first_frames_are_neutral_for_the_delay)
@@ -711,6 +725,48 @@ namespace
         CHECK(readUntil(b, "ERROR").find("match") != std::string::npos);
     }
 
+    // creations online (protocol 5): the stage can be a saved map's id and a member's monster can carry a skin id
+    // ("<monster>:<skin>"); both go into the MATCH line as WOTM_MATCH reads them. Every PC needs the same mods (the config hash)
+    TEST(lobby_carries_map_ids_and_skins)
+    {
+        ServerConfig cfg = testConfig();
+        RunningServer rs(cfg);
+        LineSocket a, b;
+        hello(a, cfg.port);
+        hello(b, cfg.port);
+        a.sendLine("CREATE Lobby Ana 3:green");
+        const std::string created = readUntil(a, "CREATED");
+        const std::string code = created.size() > 8 ? created.substr(8) : std::string{};
+        CHECK(code.size() == 4u);
+        CHECK(readUntil(a, "MEMBERS") == "MEMBERS " + code + " Ana Ana:3:green");
+        b.sendLine("JOIN " + code + " Bia 3:Bad!");   // a skin id is a-z, 0-9 and _ (up to 32), as the game scans them
+        CHECK(readUntil(b, "ERROR").find("skin") != std::string::npos);
+        b.sendLine("JOIN " + code + " Bia 3:2");   // a leading digit is a disc costume number to WOTM_MATCH, which skips the costume check
+        CHECK(readUntil(b, "ERROR").find("skin") != std::string::npos);
+        b.sendLine("JOIN " + code + " Bia 3:green");   // the same skin twice: the game would give the second a disc costume
+        CHECK(readUntil(b, "ERROR").find("skin") != std::string::npos);
+        b.sendLine("JOIN " + code + " Bia 3");   // the same monster with its disc costume is fine
+        CHECK(readUntil(b, "JOINED") == "JOINED " + code);
+        b.sendLine("MONSTER 1:blue");
+        CHECK(readUntil(a, "MEMBERS " + code + " Ana Ana:3:green,Bia:1") == "MEMBERS " + code + " Ana Ana:3:green,Bia:1:blue");
+
+        a.sendLine("SET stage=t1");
+        CHECK(readUntil(a, "SETTINGS") == "SETTINGS " + code + " stage=t1 wins=0 mods=");
+        a.sendLine("SET stage=9lives");   // a map id starts with a letter, then a-z, 0-9 and _ (up to 16)
+        CHECK(readUntil(a, "ERROR").find("stage") != std::string::npos);
+        a.sendLine("SET stage=Big-Map");
+        CHECK(readUntil(a, "ERROR").find("stage") != std::string::npos);
+        a.sendLine("SET wins=1");
+        CHECK(readUntil(a, "SETTINGS") == "SETTINGS " + code + " stage=t1 wins=1 mods=");
+
+        a.sendLine("START");
+        const auto ma = p::keyValues(p::words(readUntil(a, "MATCH"))), mb = p::keyValues(p::words(readUntil(b, "MATCH")));
+        CHECK(ma.count("stage") && ma.at("stage") == "t1" && mb.count("stage") && mb.at("stage") == "t1");
+        CHECK(ma.count("monsters") && ma.at("monsters") == "3:green,1:blue");
+        a.sendLine("SET stage=4");   // back to a stock stage by number
+        CHECK(readUntil(a, "SETTINGS") == "SETTINGS " + code + " stage=4 wins=1 mods=");
+    }
+
     // the lobby client the game and wotm_lobby use (as tools/net_lobby.py): the owner creates, sets the stage and wins, waits for the
     // second player and starts; the other joins by code; both get the MATCH and its game environment
     TEST(lobby_client_creates_joins_and_gets_the_match_environment)
@@ -720,11 +776,11 @@ namespace
         LobbyClient a, b;
         std::string err;
         CHECK(a.connect("127.0.0.1", cfg.port, "b1", err));
-        const std::string code = a.create("Sala", "Ana", 3, "", err);
+        const std::string code = a.create("Sala", "Ana", "3:green", "", err);
         CHECK(code.size() == 4u);
-        CHECK(a.set(9, 2, "turbo", err));
+        CHECK(a.set("t1", 2, "turbo", err));
         CHECK(b.connect("127.0.0.1", cfg.port, "b1", err));
-        CHECK(b.join(code, "Bia", 1, "", err));
+        CHECK(b.join(code, "Bia", "1", "", err));
         CHECK(a.waitMembers(2, err, 5000));
         CHECK(a.start(err));
         std::map<std::string, std::string> ma, mb;
@@ -732,14 +788,14 @@ namespace
         const auto env = matchEnv(mb, "127.0.0.1");
         std::map<std::string, std::string> e(env.begin(), env.end());
         CHECK(e["WOTM_NET"] == "127.0.0.1:" + std::to_string(cfg.port));
-        CHECK(e["WOTM_MATCH"] == "3,1,9");
+        CHECK(e["WOTM_MATCH"] == "3:green,1,t1");
         CHECK(e["WOTM_PLAYERS"] == "2" && e["WOTM_LOCALPLAYER"] == "2" && e["WOTM_NETNAME"] == "Bia");
         CHECK(e["WOTM_KILLTARGET"] == "2" && e["WOTM_MODIFIERS"] == "turbo");
         CHECK(!e["WOTM_NETTOKEN"].empty() && e["WOTM_NETTOKEN"] != matchEnv(ma, "127.0.0.1")[1].second);
 
         LobbyClient c;
         CHECK(c.connect("127.0.0.1", cfg.port, "b1", err));
-        CHECK(!c.join("QQQQ", "Cid", 1, "", err) && err.find("no such lobby") != std::string::npos);
+        CHECK(!c.join("QQQQ", "Cid", "1", "", err) && err.find("no such lobby") != std::string::npos);
         LobbyClient old;
         CHECK(!old.connect("127.0.0.1", cfg.port, "b1", err, p::kProtocol - 1) && err.find("protocol") != std::string::npos);
     }
@@ -992,6 +1048,41 @@ namespace
         CHECK(b.start(clientFor(cfg.port, *ms[1], "cfgB"), err));
         CHECK(!b.waitStarted(1500) && b.status() == Status::Rejected);
         CHECK(b.message().find("configuration") != std::string::npos);
+
+        // the same settings with other mods: the refusal says the mods differ
+        auto ms2 = formMatch(cfg.port, {"Caio", "Duda"}, {3, 1});
+        MatchClient c, d;
+        CHECK(c.start(clientFor(cfg.port, *ms2[0], "1111:aaaa"), err));
+        const auto until2 = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        while (c.status() != Status::Waiting && std::chrono::steady_clock::now() < until2)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        CHECK(c.status() == Status::Waiting);
+        CHECK(d.start(clientFor(cfg.port, *ms2[1], "1111:bbbb"), err));
+        CHECK(!d.waitStarted(1500) && d.status() == Status::Rejected);
+        CHECK(d.message().find("game configuration differs from the others: the mods (creations) differ") != std::string::npos);
+    }
+
+    // A refused seat (other build or settings) never becomes a neutral opponent: the match does not start, even after the join
+    // timeout that drops players who never arrive, and the players already in are told who could not join and why
+    TEST(match_never_starts_when_a_seat_was_refused)
+    {
+        ServerConfig cfg = testConfig();
+        cfg.joinTimeoutMs = 1500;
+        RunningServer rs(cfg);
+        auto ms = formMatch(cfg.port, {"Ana", "Bia"}, {3, 1});
+        MatchClient a, b;
+        std::string err;
+        CHECK(a.start(clientFor(cfg.port, *ms[0], "1111:aaaa"), err));
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        while (a.status() != Status::Waiting && std::chrono::steady_clock::now() < until)
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        CHECK(a.status() == Status::Waiting);
+        CHECK(b.start(clientFor(cfg.port, *ms[1], "1111:bbbb"), err));
+        CHECK(!b.waitStarted(1500) && b.status() == Status::Rejected);
+        CHECK(!a.waitStarted(3000));   // past the join timeout
+        CHECK(a.status() == Status::Rejected);
+        CHECK(a.message().find("Bia") != std::string::npos);
+        CHECK(a.message().find("the mods (creations) differ") != std::string::npos);
     }
 
     TEST(match_drops_a_player_that_leaves_at_an_agreed_frame)
@@ -1274,6 +1365,22 @@ namespace
         exchange(a, b, 300);
     }
 
+    // the test's packet loss is an ENet thing: a WebSocket loses nothing, and the server sends it each input once
+    TEST(ws_match_survives_the_servers_test_packet_loss)
+    {
+        ServerConfig cfg = wsTestConfig();
+        cfg.dropInputPercent = 30;
+        RunningServer rs(cfg);
+        auto ms = formMatch(cfg.port, {"Ana", "Bia"}, {3, 1});
+        MatchClient a, b;
+        std::string err;
+        ClientConfig ca = clientFor(cfg.port, *ms[0]), cb = clientFor(cfg.port, *ms[1]);
+        cb.host = wsUrl(cfg, "/match");
+        CHECK(a.start(ca, err) && b.start(cb, err));
+        CHECK(a.waitStarted(5000) && b.waitStarted(5000));
+        exchange(a, b, 200);
+    }
+
     // a malformed frame (unmasked, from a client) closes that connection only; the server and its other clients carry on
     TEST(ws_bad_frame_closes_only_that_client)
     {
@@ -1299,6 +1406,175 @@ namespace
         CHECK(good.connect(wsUrl(cfg, "/lobby"), 2000, err));
         good.sendLine("HELLO " + std::to_string(p::kProtocol) + " b1");
         CHECK(readUntil(good, "WELCOME") == "WELCOME 0");
+    }
+
+    // a browser whose traffic was held up (a stalled tab, a network that stopped and came back) sends everything it queued at once:
+    // hundreds of KB of small input messages in one go must not cost it the connection
+    TEST(ws_burst_of_queued_messages_keeps_the_connection)
+    {
+        using namespace wotm_net::ws;
+        ServerConfig cfg = wsTestConfig();
+        RunningServer rs(cfg);
+        auto ms = formMatch(cfg.port, {"Ana", "Bia"}, {3, 1});
+        LineSocket raw;
+        CHECK(raw.connect("127.0.0.1", cfg.wsPort, 2000));
+        const std::string req = handshakeRequest("127.0.0.1", "/match", "dGhlIHNhbXBsZSBub25jZQ==");
+        raw.sendBytes(req.data(), req.size());
+        auto frame = [](uint8_t channel, const std::vector<uint8_t> &body) {
+            std::vector<uint8_t> packet{channel};
+            packet.insert(packet.end(), body.begin(), body.end());
+            return encode(kBinary, packet.data(), packet.size(), true);
+        };
+        // about a minute of an 8-player client's input messages (acks for every player, a few frames of its own), then its Join
+        p::Input in;
+        in.acks.assign(8, 300u);
+        in.own.player = 7, in.own.first = 300, in.own.states.assign(2, PadState{});
+        const std::vector<uint8_t> one = frame(p::kInputs, p::encode(in));
+        std::vector<uint8_t> burst;
+        while (burst.size() < 256u * 1024u)
+            burst.insert(burst.end(), one.begin(), one.end());
+        p::Join j;
+        j.token = ms[0]->match["token"], j.buildId = "b1", j.configHash = "cfg", j.name = "Ana";
+        const std::vector<uint8_t> join = frame(p::kControl, p::encode(j));
+        burst.insert(burst.end(), join.begin(), join.end());
+        CHECK(raw.sendBytes(burst.data(), burst.size()));
+        std::string head;
+        FrameParser parser(false);
+        bool welcomed = false, alive = true;
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        while (alive && !welcomed && std::chrono::steady_clock::now() < until)
+        {
+            alive = raw.pump();
+            const std::string bytes = raw.takeReceived();
+            if (head.find("\r\n\r\n") == std::string::npos)
+            {
+                head += bytes;
+                const size_t end = head.find("\r\n\r\n");
+                if (end != std::string::npos)
+                    parser.feed(reinterpret_cast<const uint8_t *>(head.data()) + end + 4, head.size() - end - 4);
+            }
+            else
+                parser.feed(reinterpret_cast<const uint8_t *>(bytes.data()), bytes.size());
+            Frame f;
+            while (parser.next(f) == FrameParser::Result::Ok)
+                welcomed = welcomed || (f.opcode == kBinary && f.payload.size() > 1 &&
+                                        p::typeOf(std::vector<uint8_t>(f.payload.begin() + 1, f.payload.end())) == p::Type::Welcome);
+            raw.waitReadable(10);
+        }
+        CHECK(welcomed);
+    }
+
+    // a browser whose network stopped: over a WebSocket (reliable and ordered) the server sends it each input once, not again every
+    // tick while it doesn't answer, so a long outage neither fills the connection's buffers (the server would block on it, then drop the
+    // player) nor leaves the player a minute of repeats to chew through when it comes back. Only the server's pings keep going.
+    TEST(ws_silent_player_is_not_sent_repeats)
+    {
+        using namespace wotm_net::ws;
+        ServerConfig cfg = wsTestConfig();
+        RunningServer rs(cfg);
+        const std::vector<std::string> names = {"P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8"};
+        auto ms = formMatch(cfg.port, names, {3, 1, 2, 5, 4, 7, 8, 9});
+        std::vector<std::unique_ptr<MatchClient>> cs;
+        std::string err;
+        for (size_t i = 0; i + 1 < ms.size(); ++i)
+        {
+            cs.push_back(std::make_unique<MatchClient>());
+            CHECK(cs.back()->start(clientFor(cfg.port, *ms[i]), err));
+        }
+        LineSocket raw;
+        CHECK(raw.connect("127.0.0.1", cfg.wsPort, 2000));
+        const std::string req = handshakeRequest("127.0.0.1", "/match", "dGhlIHNhbXBsZSBub25jZQ==");
+        raw.sendBytes(req.data(), req.size());
+        p::Join j;
+        j.token = ms[7]->match["token"], j.buildId = "b1", j.configHash = "cfg", j.name = "P8";
+        std::vector<uint8_t> packet{p::kControl};
+        const std::vector<uint8_t> body = p::encode(j);
+        packet.insert(packet.end(), body.begin(), body.end());
+        const std::vector<uint8_t> join = encode(kBinary, packet.data(), packet.size(), true);
+        raw.sendBytes(join.data(), join.size());
+        bool started = true;
+        for (auto &c : cs)
+            started = started && c->waitStarted(5000);
+        CHECK(started);
+        if (!started)
+            return;
+        // the seven play a second ahead; P8 never answers, so they end up waiting for it
+        const uint32_t d = cs[0]->delay();
+        for (uint32_t f = 0; f < 30; ++f)
+            for (auto &c : cs)
+                c->pushLocal(f + d, pressed(1));
+        // what reaches P8: the bytes, and per player the first frame it doesn't have yet (from the Inputs it decodes)
+        std::string head;
+        FrameParser parser(false);
+        std::vector<uint32_t> have(8, 0u);
+        auto drain = [&] {
+            size_t total = 0;
+            for (bool alive = true; alive;)
+            {
+                alive = raw.pump();
+                const std::string bytes = raw.takeReceived();
+                total += bytes.size();
+                if (bytes.empty())
+                    break;
+                if (head.find("\r\n\r\n") == std::string::npos)
+                {
+                    head += bytes;
+                    const size_t end = head.find("\r\n\r\n");
+                    if (end != std::string::npos)
+                        parser.feed(reinterpret_cast<const uint8_t *>(head.data()) + end + 4, head.size() - end - 4);
+                }
+                else
+                    parser.feed(reinterpret_cast<const uint8_t *>(bytes.data()), bytes.size());
+                Frame f;
+                p::Inputs got;
+                while (parser.next(f) == FrameParser::Result::Ok)
+                    if (f.opcode == kBinary && f.payload.size() > 1 && p::decode(std::vector<uint8_t>(f.payload.begin() + 1, f.payload.end()), got))
+                        for (const p::InputRun &r : got.runs)
+                            if (r.first <= have[r.player])
+                                have[r.player] = std::max(have[r.player], r.first + static_cast<uint32_t>(r.states.size()));
+            }
+            return total;
+        };
+        // every frame of the seven reaches it
+        auto complete = [&] {
+            for (size_t q = 0; q < 7; ++q)
+                if (have[q] < d + 30)
+                    return false;
+            return true;
+        };
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        while (!complete() && std::chrono::steady_clock::now() < until)
+        {
+            drain();
+            raw.waitReadable(10);
+        }
+        CHECK(complete());
+        // and nothing more while it stays silent
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        drain();
+        std::this_thread::sleep_for(std::chrono::seconds(2));
+        const size_t silent = drain();
+        CHECK(silent < 1024u);   // 2 s of pings (20 of 10 bytes)
+        CHECK(raw.open());
+    }
+
+    // a lobby connection that sends 64 KB without ending a line is dropped
+    TEST(lobby_line_without_end_closes_the_connection)
+    {
+        ServerConfig cfg = testConfig();
+        RunningServer rs(cfg);
+        LineSocket s;
+        CHECK(hello(s, cfg.port) == "WELCOME 0");
+        const std::string junk(70000, 'a');
+        s.sendBytes(junk.data(), junk.size());
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        bool closed = false;
+        while (!closed && std::chrono::steady_clock::now() < until)
+        {
+            closed = !s.pump();
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        CHECK(closed);
     }
 
     TEST(ws_unknown_path_is_refused)
