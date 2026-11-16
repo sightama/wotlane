@@ -124,3 +124,10 @@ export async function deleteCreation(mods, { mod, kind, id }) {
     if (e?.name !== 'NotFoundError') throw e;
   }
 }
+
+// The address that opens the game's map editor on a stock stage (a direct match; the editor starts from the stage and saves to
+// mods/Creator/stages/<id>/), or null when the game would ignore the id (native/runtime/wotm_mapedit.inc) or the stage isn't a number
+export function mapEditorQuery(id, stage) {
+  if (!ID.stages.test(id) || !Number.isInteger(stage) || stage < 1) return null;
+  return `?WOTM_MATCH=3,${stage}&WOTM_MAPEDIT=${id}`;
+}

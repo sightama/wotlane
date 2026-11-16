@@ -44,7 +44,7 @@
   };
   // a few harmless switches from the address, for tests and direct matches (?WOTM_MATCH=5,1,9&WOTM_AIVSAI=1). Nothing that names a
   // file, a server or a cheat: a link someone sends must not be able to point the game elsewhere. The fixed values above always win.
-  const fromAddress = ['WOTM_MATCH', 'WOTM_AIVSAI', 'PS2X_STATS'];
+  const fromAddress = ['WOTM_MATCH', 'WOTM_AIVSAI', 'PS2X_STATS', 'WOTM_MAPEDIT'];
   const params = new URLSearchParams(location.search);
   const allowed = {};
   for (const key of fromAddress)

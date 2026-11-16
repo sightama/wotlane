@@ -2,7 +2,7 @@
 // ABOUTME: handle calls creations.js uses): listing, export, import with its path checks, and delete. Run: node --test web/*.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseCreationPath, listCreations, exportCreation, importZip, deleteCreation, lobbyChoices } from './creations.js';
+import { parseCreationPath, listCreations, exportCreation, importZip, deleteCreation, lobbyChoices, mapEditorQuery } from './creations.js';
 import { zip, unzip } from './zip.js';
 
 const text = (s) => new TextEncoder().encode(s);
@@ -142,4 +142,14 @@ test('delete removes only that creation', async () => {
   await deleteCreation(mods, { mod: 'Creator', kind: 'skins', id: 'green' });
   assert.deepEqual((await listCreations(mods)).map((c) => c.id), ['t1']);
   assert.ok(mods.items.has('Goliath Prime'));
+});
+
+test('the map editor opens as a direct match on a stock stage with the map id', () => {
+  assert.equal(mapEditorQuery('t1', 3), '?WOTM_MATCH=3,3&WOTM_MAPEDIT=t1');
+  assert.equal(mapEditorQuery('my_map2', 11), '?WOTM_MATCH=3,11&WOTM_MAPEDIT=my_map2');
+});
+
+test('the map editor refuses an id the game would ignore and a stage that is not stock', () => {
+  for (const id of ['', '1abc', 'Abc', 'a-b', 'a'.repeat(17), 'a&WOTM_NET=x']) assert.equal(mapEditorQuery(id, 3), null, id);
+  for (const stage of ['t1', 0, 1.5, -2, '3,1']) assert.equal(mapEditorQuery('t1', stage), null, String(stage));
 });

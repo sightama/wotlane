@@ -1,6 +1,6 @@
 // ABOUTME: The front panel's "Your creations" section: lists the skins and maps saved in this browser, exports one as a zip to share,
 // ABOUTME: imports a friend's zip and deletes. Runs before the game starts (the game scans mods/ once, at boot).
-import { listCreations, exportCreation, importZip, deleteCreation, lobbyChoices } from './creations.js';
+import { listCreations, exportCreation, importZip, deleteCreation, lobbyChoices, mapEditorQuery } from './creations.js';
 
 const $ = (id) => document.getElementById(id);
 const KIND_LABEL = { skins: 'skin', stages: 'map' };
@@ -42,7 +42,8 @@ export async function addLobbyChoices(monsterSelect, stageSelect) {
   for (const m of maps) stageSelect.add(new Option(m.label, m.value));
 }
 
-export function initCreations() {
+export function initCreations(stages = []) {
+  $('editorStage').replaceChildren(...stages.map(([n, label]) => new Option(label, n)));
   const say = (text) => { $('creationsMsg').textContent = text; };
 
   async function refresh() {
@@ -93,6 +94,11 @@ export function initCreations() {
       say(`Could not import ${file.name}: ${e.message}`);
     }
     refresh();
+  });
+  $('openEditor').addEventListener('click', () => {
+    const query = mapEditorQuery($('editorMapId').value.trim(), Number($('editorStage').value));
+    if (!query) { say('A map id is a letter, then letters, digits or _ (up to 16).'); return; }
+    location.search = query;   // the game reads its switches at start: the page reloads as a direct match
   });
   $('importCreation').addEventListener('click', () => $('importFile').click());
   refresh();

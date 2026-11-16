@@ -35,7 +35,7 @@ For online play start `wotm_server --ws-port <port>`; a page opened from `localh
 - **Graphics:** the native layer's GL calls go to WebGL2 (`native/wotm_glad_web.cpp`); its GLSL 330 shaders become GLSL ES 3.00
   (`native/wotm_glsl.hpp`). Lens flares are off (`WOTM_NOFLARE`: WebGL2 can't read the depth buffer back). The canvas fills the page and
   the game letterboxes its own frame.
-- **Address switches:** only `WOTM_MATCH`, `WOTM_AIVSAI` and `PS2X_STATS` are read from the page address; the disc, save and renderer
+- **Address switches:** only `WOTM_MATCH`, `WOTM_AIVSAI`, `PS2X_STATS` and `WOTM_MAPEDIT` (the front panel's "Map editor" under Your creations opens the page with it, on a stock stage) are read from the page address; the disc, save and renderer
   settings always win.
 - **Browser check:** `web/support.js` gives Firefox, Safari and phones a plain message and disables the play buttons.
 
