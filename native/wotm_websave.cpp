@@ -55,7 +55,8 @@ EM_JS(void, web_save_take_pack, (uint8_t *dst), {
     delete globalThis.wotmSavePack;
 });
 
-// Queues a write (data) or a removal (data null) of `path` in OPFS; the queue keeps them in order, and a failure is logged
+// Queues a write (data) or a removal (data null) of `path` in OPFS; the queue keeps them in order (the page awaits it before a
+// reload, boot.js wotmQuit). A failed write is logged and flagged for web_save_take_failed
 EM_JS(void, web_save_put, (const char *path, const uint8_t *data, int len), {
     const p = UTF8ToString(path);
     const bytes = data ? HEAPU8.slice(data, data + len) : null;   // a copy: the game may change the memory meanwhile
@@ -67,10 +68,21 @@ EM_JS(void, web_save_put, (const char *path, const uint8_t *data, int len), {
         const w = await (await dir.getFileHandle(parts[parts.length - 1], {create: true})).createWritable();
         await w.write(bytes);
         await w.close();
-    }).catch((e) => { if (bytes !== null || e.name !== "NotFoundError") console.error("[web] saving " + p + " failed: " + e); });
+    }).catch((e) => {
+        if (bytes === null && e.name === "NotFoundError") return;   // already gone
+        console.error("[web] saving " + p + " failed: " + e);
+        globalThis.wotmSaveFailed = true;
+    });
 });
 
-std::string g_root;                                     // the folder in memory ("/save"), empty while it isn't mounted
+// Whether a write failed since the last call (the next look then writes every file again)
+EM_JS(int, web_save_take_failed, (), {
+    const failed = globalThis.wotmSaveFailed === true;
+    globalThis.wotmSaveFailed = false;
+    return failed ? 1 : 0;
+});
+
+std::string g_root;                                     // the folder in memory ("/save") while it mirrors OPFS, else empty
 sm::Snapshot g_snapshot;                                // content hash of each file as OPFS has it
 std::map<std::string, std::pair<double, off_t>> g_seen; // last modified (ms) and size of each, to hash only what changed
 
@@ -87,7 +99,7 @@ bool wotmWebMountSaveMemory(const char *dir)
 {
     if (wasmfs_create_directory(dir, 0777, wasmfs_create_memory_backend()) != 0)
         return false;
-    g_root = dir;
+    // a load that failed leaves the folder empty and unmirrored: mirroring it would overwrite the saves OPFS still has
     const double size = web_save_read_all();
     std::vector<sm::File> files;
     if (size > 0)
@@ -95,8 +107,17 @@ bool wotmWebMountSaveMemory(const char *dir)
         std::vector<uint8_t> pack(static_cast<size_t>(size));
         web_save_take_pack(pack.data());
         if (!sm::unpack(pack.data(), pack.size(), files))
-            std::fprintf(stderr, "[web] the saved files didn't unpack; starting from an empty save folder\n");
+        {
+            std::fprintf(stderr, "[web] the saved files didn't unpack: this session's saves won't be kept\n");
+            return true;
+        }
     }
+    else if (size < 0)
+    {
+        std::fprintf(stderr, "[web] couldn't read the saved files: this session's saves won't be kept\n");
+        return true;
+    }
+    g_root = dir;
     for (const sm::File &f : files)
     {
         const fs::path path = fs::path(g_root) / f.path;
@@ -114,6 +135,8 @@ void wotmWebSaveSync()
 {
     if (g_root.empty())
         return;
+    if (web_save_take_failed())
+        g_snapshot.clear(), g_seen.clear();   // OPFS may lack any file: write them all again
     sm::Snapshot now;
     std::map<std::string, std::vector<uint8_t>> read;   // contents read this time (changed files only)
     std::error_code ec;
@@ -148,4 +171,7 @@ void wotmWebSaveSync()
     }
     g_snapshot = std::move(now);
 }
+
+// called by the page (boot.js): before it reloads, and when the tab is hidden or closed (no animation frame runs the sync then)
+extern "C" EMSCRIPTEN_KEEPALIVE void wotm_web_save_sync() { wotmWebSaveSync(); }
 #endif

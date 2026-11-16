@@ -61,8 +61,8 @@ During a match:
 
 ## Limits
 - **Safari:** not supported yet. Safari before 27 lacks JSPI; with it, the main-thread disc and saves (above) are the path to try.
-- **Firefox:** the game takes more CPU per frame than in Chrome (it keeps 60 frames per second); a save made less than 60 frames
-  before the tab closes is lost.
+- **Firefox:** the game takes more CPU per frame than in Chrome (it keeps 60 frames per second). The save folder in memory is also synced
+  when the tab is hidden and on `pagehide`, and the game's own quit waits for the writes; a tab closed right after a save can lose it.
 - **Movies:** skipped (no FFmpeg in the browser build).
 - **Audio:** raylib's web audio uses a ScriptProcessorNode, which Chrome reports as deprecated.
 - **Loading counter:** two game tabs of the same site on one computer count each other's chunks.

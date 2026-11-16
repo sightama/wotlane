@@ -5,7 +5,6 @@
 #include "wotm_discchunks.hpp"
 
 #include <emscripten.h>
-#include <emscripten/threading.h>
 #include <emscripten/wasmfs.h>
 
 #include <atomic>
@@ -48,8 +47,6 @@ bool wotmWebHidden() { return g_hidden.load(); }
 
 void wotmWebQuit()
 {
-    if (emscripten_is_main_browser_thread())
-        wotmWebSaveSync();
     MAIN_THREAD_EM_ASM({ if (globalThis.wotmQuit) globalThis.wotmQuit(); });
 }
 

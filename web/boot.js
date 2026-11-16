@@ -68,11 +68,21 @@
   }
 
   // the game quit from its own menu (wotm_webfs.cpp wotmWebQuit): back to the front panel
-  window.wotmQuit = () => location.reload();
+  // after the save folder's last changes reach the browser's storage (a save folder in memory: wotm_websave.cpp)
+  window.wotmQuit = () => {
+    syncSaves();
+    Promise.resolve(globalThis.wotmSaveQueue).finally(() => location.reload());
+  };
+
+  // writes what changed in a save folder kept in memory to the browser's storage now (a no-op on the OPFS backend)
+  function syncSaves() {
+    try { window.Module?._wotm_web_save_sync?.(); } catch (e) { out('[web] saving failed: ' + e.message); }
+  }
 
   // the game hears when the tab is hidden: an online match keeps running and tells the others why it may lag (wotm_webfs.cpp)
   function tellHidden() {
     window.Module._wotm_web_set_hidden?.(document.hidden ? 1 : 0);
+    if (document.hidden) syncSaves();   // a hidden tab gets no animation frames, which is where the game's saves are synced
   }
 
   // after a long wait for another player, the page offers to keep waiting or leave the match (back to the front panel)
@@ -120,6 +130,7 @@
     };
     showLoading(matchEnv ? 57 << 20 : 27 << 20);   // a first visit's download to a fight, or to the title
     document.addEventListener('visibilitychange', tellHidden);
+    window.addEventListener('pagehide', syncSaves);
     if (matchEnv) watchStalls();
     // the game reads its mods at start, so the repo's built-in mods are in place first
     Promise.all([syncMods(), mainThreadFiles()]).finally(() => {
@@ -140,7 +151,13 @@
       const sizes = await Promise.all(['SCUS_971.97', 'game.iso'].map(async (name) => {
         const r = await fetch('data/' + name, { method: 'HEAD' });
         if (!r.ok) throw new Error(`data/${name}: HTTP ${r.status}`);
-        return `${name}:${r.headers.get('content-length')}`;
+        let size = window.wotmFileSize(r.headers.get('content-length'), null);
+        if (size === null) {   // a server that sends no length on HEAD: one byte's range carries the total
+          const p = await fetch('data/' + name, { headers: { Range: 'bytes=0-0' } });
+          size = window.wotmFileSize(null, p.headers.get('content-range'));
+        }
+        if (size === null) throw new Error(`data/${name}: no size`);
+        return `${name}:${size}`;
       }));
       env.WOTM_DISC_SIZES = sizes.join(',');   // copied into the game's environment when it loads (preRun)
     } catch (e) {

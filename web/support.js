@@ -18,6 +18,15 @@ function mainThreadFiles({ chromium }) {
   return !chromium;
 }
 
+// a disc file's size (for mainThreadFiles reads) from a HEAD reply's content-length, or else from the total in a range probe's
+// content-range ("bytes 0-0/<total>"); null when neither says
+function fileSize(contentLength, contentRange) {
+  const n = Number(contentLength);
+  if (contentLength && Number.isInteger(n) && n > 0) return n;
+  const total = /\/(\d+)$/.exec(contentRange ?? '');
+  return total ? Number(total[1]) : null;
+}
+
 // the facts above, read from this browser
 function browserFacts() {
   const brands = navigator.userAgentData?.brands ?? [];
@@ -30,8 +39,9 @@ function browserFacts() {
   };
 }
 
-if (typeof module !== 'undefined' && module.exports) module.exports = { supportProblem, mainThreadFiles };
+if (typeof module !== 'undefined' && module.exports) module.exports = { supportProblem, mainThreadFiles, fileSize };
 else {
   globalThis.wotmSupportProblem = () => supportProblem(browserFacts());
   globalThis.wotmMainThreadFiles = () => mainThreadFiles(browserFacts());
+  globalThis.wotmFileSize = fileSize;
 }

@@ -25,26 +25,19 @@ namespace
 {
 constexpr uint32_t kChunkBytes = 1u << 20;   // one range request per MiB the game touches, as the fetch backend does
 
-// Both copy bytes [start, end) of `url` to dst and return how many arrived, or -1 after 5 tries. Network and 5xx errors are retried;
-// each chunk is reported on the channel web/loading.js listens to.
+// Both copy bytes [start, end) of `url` to dst and return how many arrived, or -1. On the main thread the page's fetch is
+// web/data_retry.js's, which already retries network and 5xx errors and reports each chunk to web/loading.js; the synchronous
+// XHR of the other threads does both itself.
 EM_ASYNC_JS(int, web_range_async, (const char *url, double start, double end, uint8_t *dst), {
-    const u = UTF8ToString(url);
-    for (let attempt = 1;; attempt++) {
-        try {
-            const r = await fetch(u, {headers: {Range: `bytes=${start}-${end - 1}`}});
-            if (r.status === 206 || r.status === 200) {
-                let b = new Uint8Array(await r.arrayBuffer());
-                if (r.status === 200) b = b.subarray(start, end);
-                HEAPU8.set(b, dst);
-                globalThis.wotmDiscChannel = globalThis.wotmDiscChannel || new BroadcastChannel('wotlane-disc');
-                globalThis.wotmDiscChannel.postMessage(b.length);
-                return b.length;
-            }
-            if (r.status < 500 && r.status !== 429) return -1;
-        } catch (e) {
-        }
-        if (attempt >= 5) return -1;
-        await new Promise((res) => setTimeout(res, 500 * attempt));
+    try {
+        const r = await fetch(UTF8ToString(url), {headers: {Range: `bytes=${start}-${end - 1}`}});
+        if (r.status !== 206 && r.status !== 200) return -1;
+        let b = new Uint8Array(await r.arrayBuffer());
+        if (r.status === 200) b = b.subarray(start, end);
+        HEAPU8.set(b, dst);
+        return b.length;
+    } catch (e) {
+        return -1;
     }
 });
 

@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
-const { supportProblem, mainThreadFiles } = createRequire(import.meta.url)('./support.js');
+const { supportProblem, mainThreadFiles, fileSize } = createRequire(import.meta.url)('./support.js');
 const chrome = { chromium: true, firefox: false, jspi: true, isolated: true, mobile: false };
 const firefox = { ...chrome, chromium: false, firefox: true };
 const safari = { ...chrome, chromium: false, firefox: false };
@@ -37,4 +37,13 @@ test('an old Chrome without JSPI: asks to update', () => {
 
 test('the page not isolated (a proxy dropped its headers): says to reload', () => {
   assert.match(supportProblem({ ...chrome, isolated: false }), /reload/i);
+});
+
+test('a disc file size from a HEAD content-length, else from a range probe content-range total', () => {
+  assert.equal(fileSize('7414808', null), 7414808);
+  assert.equal(fileSize(null, 'bytes 0-0/1258815488'), 1258815488);
+  assert.equal(fileSize('0', 'bytes 0-0/12'), 12);   // a HEAD with no body length says 0
+  assert.equal(fileSize(null, 'bytes 0-0/*'), null);
+  assert.equal(fileSize(null, null), null);
+  assert.equal(fileSize('abc', null), null);
 });
