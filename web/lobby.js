@@ -50,6 +50,21 @@ export function lobbySocketUrl(location, path) {
   return (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + path;
 }
 
+// LOBBY <code> <waiting|playing> <n>/<max> <open|locked> <lobby> <owner> <names,... or ->
+function parseLobby(parsed) {
+  const [code, state, fill, lock, name, host, names = '-'] = parsed.words;
+  const [count, max] = fill.split('/').map(Number);
+  return { code, playing: state === 'playing', count, max, locked: lock === 'locked', name, host: host === '-' ? '' : host,
+    names: names === '-' ? [] : names.split(',') };
+}
+
+// one line of the open-lobby list: what to show, and whether Join can work (this page can't send a password)
+export function lobbyRow(l) {
+  const state = l.playing ? 'in a match' : l.count >= l.max ? 'full' : 'waiting';
+  const text = `${l.host || l.name}: ${l.count}/${l.max} (${l.names.join(', ')}), ${state}${l.locked ? ', needs a password' : ''}`;
+  return { text, joinable: !l.playing && l.count < l.max && !l.locked };
+}
+
 // the address a friend opens to land in the lobby `code`: this page with only the code
 export function inviteLink(location, code) {
   return `${location.origin}${location.pathname}?join=${code}`;
@@ -99,7 +114,7 @@ export class LobbyClient {
     } else if (p.cmd === 'MATCH') {
       this.onMatch?.(p.fields);
     } else if (p.cmd === 'LOBBY') {
-      this.lobbies?.push({ code: p.words[0], playing: p.words[1] === 'playing' });
+      this.lobbies?.push(parseLobby(p));
     } else if (p.cmd === 'JOINED') {
       this.code = p.words[0];
     }

@@ -1,6 +1,6 @@
 // ABOUTME: The browser version's front panel: single player, or an online lobby on the game server (Host shows a 4-letter code,
 // ABOUTME: Join takes one). When the owner starts, every member's game loads with the match environment (boot.js wotmStart).
-import { LobbyClient, inviteLink, lastLobbyNotice, lobbySocketUrl, matchEnv } from './lobby.js';
+import { LobbyClient, inviteLink, lastLobbyNotice, lobbyRow, lobbySocketUrl, matchEnv } from './lobby.js';
 import { initCreations, addLobbyChoices } from './creations_ui.js';
 
 const MONSTERS = [[1, 'Congar'], [2, 'Robo-47'], [3, 'Togera'], [4, 'Ultra V'], [5, 'Preytor'], [7, 'Kineticlops'], [8, 'Magmo'],
@@ -101,6 +101,62 @@ async function connect(build) {
   return client;
 }
 
+// the open lobbies on the front panel: one connection that asks the server's LIST every few seconds while the panel is showing the
+// Host/Join choice (not in a lobby, not while the tab is hidden)
+const LIST_EVERY_MS = 5000;
+let watcher = null;
+let watchTimer = 0;
+
+function showLobbyList(lobbies) {
+  $('lobbyList').hidden = false;
+  const rows = lobbies.map((l) => {
+    const { text, joinable } = lobbyRow(l);
+    const li = document.createElement('li');
+    const label = document.createElement('span');
+    label.textContent = text;
+    const button = document.createElement('button');
+    button.textContent = 'Join';
+    button.disabled = !joinable || $('host').disabled;
+    button.addEventListener('click', () => { $('joinCode').value = l.code; hostOrJoin(true); });
+    li.append(label, button);
+    return li;
+  });
+  if (!rows.length) rows.push(Object.assign(document.createElement('li'), { textContent: 'No open lobbies. Host one and send the invite link.' }));
+  $('lobbies').replaceChildren(...rows);
+}
+
+async function refreshLobbies() {
+  try {
+    if (!watcher) {
+      const client = new LobbyClient(new WebSocket(serverUrl('/lobby')), await buildId());
+      client.onClose = () => { if (watcher === client) watcher = null; };
+      await client.ready;
+      if (!watchTimer) return client.close();   // the panel moved on while it connected
+      watcher = client;
+    }
+    const lobbies = await watcher.list();
+    if (watcher) showLobbyList(lobbies);
+  } catch {   // the server is out of reach or refused this build: the list stays hidden, Host and Join still show why
+    watcher?.close();
+    watcher = null;
+    $('lobbyList').hidden = true;
+  }
+}
+
+function startWatchingLobbies() {
+  stopWatchingLobbies();
+  const tick = () => { if (!document.hidden) refreshLobbies(); };
+  tick();
+  watchTimer = setInterval(tick, LIST_EVERY_MS);
+}
+
+function stopWatchingLobbies() {
+  clearInterval(watchTimer);
+  watchTimer = 0;
+  watcher?.close();
+  watcher = null;
+}
+
 async function hostOrJoin(join) {
   const name = cleanName($('name').value);
   if (!name) return say('Type a name first (letters, digits, - and _).');
@@ -112,6 +168,7 @@ async function hostOrJoin(join) {
   const code = $('joinCode').value.trim().toUpperCase();
   if (join && !/^[A-Z2-9]{4}$/.test(code)) return say('The code has 4 characters (letters and digits).');
   say(join ? 'Joining' : 'Creating a lobby');
+  stopWatchingLobbies();
   const buttons = ['single', 'host', 'join'].map($);
   for (const b of buttons) b.disabled = true;   // one connection per click
   try {
@@ -124,6 +181,7 @@ async function hostOrJoin(join) {
     lobby?.close();
     lobby = null;
     for (const b of buttons) b.disabled = false;
+    startWatchingLobbies();
   }
 }
 
@@ -220,6 +278,7 @@ function init() {
     if (!$('lobbyStage').value) $('lobbyStage').value = '1';
   }).catch(() => {}).then(() => { if (invited) acceptInvite(invited); });
   $('single').addEventListener('click', async () => {
+    stopWatchingLobbies();
     front.hidden = true;
     window.wotmStart(null, await buildId());
   });
@@ -238,6 +297,8 @@ function init() {
     });
   });
   $('copyInvite').addEventListener('click', copyInvite);
+  $('refreshLobbies').addEventListener('click', refreshLobbies);
+  startWatchingLobbies();
   $('start').addEventListener('click', () => lobby?.start().catch((e) => say(friendlyError(e.message))));
   $('leave').addEventListener('click', async () => {
     const leaving = lobby;
@@ -250,6 +311,7 @@ function init() {
     $('choose').hidden = false;
     for (const id of ['single', 'host', 'join']) $(id).disabled = false;
     say('');
+    startWatchingLobbies();
   });
 }
 
