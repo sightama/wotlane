@@ -1365,6 +1365,22 @@ namespace
         exchange(a, b, 300);
     }
 
+    // the test's packet loss is an ENet thing: a WebSocket loses nothing, and the server sends it each input once
+    TEST(ws_match_survives_the_servers_test_packet_loss)
+    {
+        ServerConfig cfg = wsTestConfig();
+        cfg.dropInputPercent = 30;
+        RunningServer rs(cfg);
+        auto ms = formMatch(cfg.port, {"Ana", "Bia"}, {3, 1});
+        MatchClient a, b;
+        std::string err;
+        ClientConfig ca = clientFor(cfg.port, *ms[0]), cb = clientFor(cfg.port, *ms[1]);
+        cb.host = wsUrl(cfg, "/match");
+        CHECK(a.start(ca, err) && b.start(cb, err));
+        CHECK(a.waitStarted(5000) && b.waitStarted(5000));
+        exchange(a, b, 200);
+    }
+
     // a malformed frame (unmasked, from a client) closes that connection only; the server and its other clients carry on
     TEST(ws_bad_frame_closes_only_that_client)
     {
@@ -1390,6 +1406,175 @@ namespace
         CHECK(good.connect(wsUrl(cfg, "/lobby"), 2000, err));
         good.sendLine("HELLO " + std::to_string(p::kProtocol) + " b1");
         CHECK(readUntil(good, "WELCOME") == "WELCOME 0");
+    }
+
+    // a browser whose traffic was held up (a stalled tab, a network that stopped and came back) sends everything it queued at once:
+    // hundreds of KB of small input messages in one go must not cost it the connection
+    TEST(ws_burst_of_queued_messages_keeps_the_connection)
+    {
+        using namespace wotm_net::ws;
+        ServerConfig cfg = wsTestConfig();
+        RunningServer rs(cfg);
+        auto ms = formMatch(cfg.port, {"Ana", "Bia"}, {3, 1});
+        LineSocket raw;
+        CHECK(raw.connect("127.0.0.1", cfg.wsPort, 2000));
+        const std::string req = handshakeRequest("127.0.0.1", "/match", "dGhlIHNhbXBsZSBub25jZQ==");
+        raw.sendBytes(req.data(), req.size());
+        auto frame = [](uint8_t channel, const std::vector<uint8_t> &body) {
+            std::vector<uint8_t> packet{channel};
+            packet.insert(packet.end(), body.begin(), body.end());
+            return encode(kBinary, packet.data(), packet.size(), true);
+        };
+        // about a minute of an 8-player client's input messages (acks for every player, a few frames of its own), then its Join
+        p::Input in;
+        in.acks.assign(8, 300u);
+        in.own.player = 7, in.own.first = 300, in.own.states.assign(2, PadState{});
+        const std::vector<uint8_t> one = frame(p::kInputs, p::encode(in));
+        std::vector<uint8_t> burst;
+        while (burst.size() < 256u * 1024u)
+            burst.insert(burst.end(), one.begin(), one.end());
+        p::Join j;
+        j.token = ms[0]->match["token"], j.buildId = "b1", j.configHash = "cfg", j.name = "Ana";
+        const std::vector<uint8_t> join = frame(p::kControl, p::encode(j));
+        burst.insert(burst.end(), join.begin(), join.end());
+        CHECK(raw.sendBytes(burst.data(), burst.size()));
+        std::string head;
+        FrameParser parser(false);
+        bool welcomed = false, alive = true;
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        while (alive && !welcomed && std::chrono::steady_clock::now() < until)
+        {
+            alive = raw.pump();
+            const std::string bytes = raw.takeReceived();
+            if (head.find("\r\n\r\n") == std::string::npos)
+            {
+                head += bytes;
+                const size_t end = head.find("\r\n\r\n");
+                if (end != std::string::npos)
+                    parser.feed(reinterpret_cast<const uint8_t *>(head.data()) + end + 4, head.size() - end - 4);
+            }
+            else
+                parser.feed(reinterpret_cast<const uint8_t *>(bytes.data()), bytes.size());
+            Frame f;
+            while (parser.next(f) == FrameParser::Result::Ok)
+                welcomed = welcomed || (f.opcode == kBinary && f.payload.size() > 1 &&
+                                        p::typeOf(std::vector<uint8_t>(f.payload.begin() + 1, f.payload.end())) == p::Type::Welcome);
+            raw.waitReadable(10);
+        }
+        CHECK(welcomed);
+    }
+
+    // a browser whose network stopped: over a WebSocket (reliable and ordered) the server sends it each input once, not again every
+    // tick while it doesn't answer, so a long outage neither fills the connection's buffers (the server would block on it, then drop the
+    // player) nor leaves the player a minute of repeats to chew through when it comes back. Only the server's pings keep going.
+    TEST(ws_silent_player_is_not_sent_repeats)
+    {
+        using namespace wotm_net::ws;
+        ServerConfig cfg = wsTestConfig();
+        RunningServer rs(cfg);
+        const std::vector<std::string> names = {"P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8"};
+        auto ms = formMatch(cfg.port, names, {3, 1, 2, 5, 4, 7, 8, 9});
+        std::vector<std::unique_ptr<MatchClient>> cs;
+        std::string err;
+        for (size_t i = 0; i + 1 < ms.size(); ++i)
+        {
+            cs.push_back(std::make_unique<MatchClient>());
+            CHECK(cs.back()->start(clientFor(cfg.port, *ms[i]), err));
+        }
+        LineSocket raw;
+        CHECK(raw.connect("127.0.0.1", cfg.wsPort, 2000));
+        const std::string req = handshakeRequest("127.0.0.1", "/match", "dGhlIHNhbXBsZSBub25jZQ==");
+        raw.sendBytes(req.data(), req.size());
+        p::Join j;
+        j.token = ms[7]->match["token"], j.buildId = "b1", j.configHash = "cfg", j.name = "P8";
+        std::vector<uint8_t> packet{p::kControl};
+        const std::vector<uint8_t> body = p::encode(j);
+        packet.insert(packet.end(), body.begin(), body.end());
+        const std::vector<uint8_t> join = encode(kBinary, packet.data(), packet.size(), true);
+        raw.sendBytes(join.data(), join.size());
+        bool started = true;
+        for (auto &c : cs)
+            started = started && c->waitStarted(5000);
+        CHECK(started);
+        if (!started)
+            return;
+        // the seven play a second ahead; P8 never answers, so they end up waiting for it
+        const uint32_t d = cs[0]->delay();
+        for (uint32_t f = 0; f < 30; ++f)
+            for (auto &c : cs)
+                c->pushLocal(f + d, pressed(1));
+        // what reaches P8: the bytes, and per player the first frame it doesn't have yet (from the Inputs it decodes)
+        std::string head;
+        FrameParser parser(false);
+        std::vector<uint32_t> have(8, 0u);
+        auto drain = [&] {
+            size_t total = 0;
+            for (bool alive = true; alive;)
+            {
+                alive = raw.pump();
+                const std::string bytes = raw.takeReceived();
+                total += bytes.size();
+                if (bytes.empty())
+                    break;
+                if (head.find("\r\n\r\n") == std::string::npos)
+                {
+                    head += bytes;
+                    const size_t end = head.find("\r\n\r\n");
+                    if (end != std::string::npos)
+                        parser.feed(reinterpret_cast<const uint8_t *>(head.data()) + end + 4, head.size() - end - 4);
+                }
+                else
+                    parser.feed(reinterpret_cast<const uint8_t *>(bytes.data()), bytes.size());
+                Frame f;
+                p::Inputs got;
+                while (parser.next(f) == FrameParser::Result::Ok)
+                    if (f.opcode == kBinary && f.payload.size() > 1 && p::decode(std::vector<uint8_t>(f.payload.begin() + 1, f.payload.end()), got))
+                        for (const p::InputRun &r : got.runs)
+                            if (r.first <= have[r.player])
+                                have[r.player] = std::max(have[r.player], r.first + static_cast<uint32_t>(r.states.size()));
+            }
+            return total;
+        };
+        // every frame of the seven reaches it
+        auto complete = [&] {
+            for (size_t q = 0; q < 7; ++q)
+                if (have[q] < d + 30)
+                    return false;
+            return true;
+        };
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        while (!complete() && std::chrono::steady_clock::now() < until)
+        {
+            drain();
+            raw.waitReadable(10);
+        }
+        CHECK(complete());
+        // and nothing more while it stays silent
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        drain();
+        std::this_thread::sleep_for(std::chrono::seconds(2));
+        const size_t silent = drain();
+        CHECK(silent < 1024u);   // 2 s of pings (20 of 10 bytes)
+        CHECK(raw.open());
+    }
+
+    // a lobby connection that sends 64 KB without ending a line is dropped
+    TEST(lobby_line_without_end_closes_the_connection)
+    {
+        ServerConfig cfg = testConfig();
+        RunningServer rs(cfg);
+        LineSocket s;
+        CHECK(hello(s, cfg.port) == "WELCOME 0");
+        const std::string junk(70000, 'a');
+        s.sendBytes(junk.data(), junk.size());
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+        bool closed = false;
+        while (!closed && std::chrono::steady_clock::now() < until)
+        {
+            closed = !s.pump();
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        CHECK(closed);
     }
 
     TEST(ws_unknown_path_is_refused)
