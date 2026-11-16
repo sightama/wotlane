@@ -2,16 +2,19 @@
 # ABOUTME: Network match test on one computer (macOS, Linux or Windows; same as tools\net_check.ps1): starts wotm_server, forms the match
 # ABOUTME: through the lobby (net_lobby.py), opens one game per player with its own pad script and checks every frame's state is equal.
 """Usage: python3 tools/net_check.py [--players 2] [--monsters 3,1] [--stage 1] [--wins 0] [--mods turbo] [--secs 70] [--port 7811]
-                                [--exe a,b] [--drop S] [--extra-env "A=1;B=2"] [--player-env "2:A=1|||3:B=2"]
+                                [--exe a,b] [--drop S] [--rtt 20,60] [--jitter 10] [--extra-env "A=1;B=2"] [--player-env "2:A=1|||3:B=2"]
                                 [--expect "re|||2:re"] [--reject "re"] [--expect-refused "reason"]
   --exe         one game executable per player (comma list; the last one covers the rest). Default: the runtime's build_dev.
   --drop S      closes the last player after S seconds and checks that the others carry on.
+  --rtt         simulated round trip (ms) to the server per player (comma list; the last one covers the rest), through
+                tools/net_lagproxy.py.   --jitter  spread of each one-way delay (ms), with --rtt.
   --extra-env   variables for every player.   --player-env  variables for player N only (what differs on just one PC).
   --expect      regexes every player's log must have ("2:re": player 2's only).   --reject  regexes no log may have.
   --expect-refused  the server must refuse the match with this reason: every player is told, and nobody may start it.
 Logs and hashes go to <runtime>/net/ (server.log, player<N>.err.log, player<N>.hash). Exit 0 when everything matches.
 """
 import argparse
+import json
 import re
 import shutil
 import subprocess
@@ -42,6 +45,42 @@ def build_server():
     return server
 
 
+def rtts(spec, players):
+    """Simulated round trip per player from a comma list (the last value covers the rest); [] without --rtt."""
+    if not spec:
+        return []
+    values = [float(v) for v in spec.split(',')]
+    return [values[min(i, len(values) - 1)] for i in range(players)]
+
+
+def proxy_port(a, player):
+    return a.port + 100 + player
+
+
+def start_proxy(a, out):
+    """tools/net_lagproxy.py between the players and the server, one link per player (None without --rtt)."""
+    if not a.rtt:
+        return None
+    links = [f'{proxy_port(a, i + 1)}:{r:g}:{a.jitter:g}' for i, r in enumerate(rtts(a.rtt, a.players))]
+    cmd = [sys.executable, str(gamecheck.REPO / 'tools' / 'net_lagproxy.py'), '--to', f'127.0.0.1:{a.port}']
+    for link in links:
+        cmd += ['--link', link]
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=open(out / 'lagproxy.log', 'w'), text=True)
+    for _ in links:
+        print(f'        lag proxy: {proc.stdout.readline().strip()}')
+    return proc
+
+
+def pace(log):
+    """The client's '[net] pace' lines summed up: windows, average delay, the delays, stalls, stall ms and the last frame."""
+    lines = re.findall(r'\[net\] pace: frame (\d+), delay (\d+), ping \d+ ms, (\d+) stalls \(([\d.]+) ms\)', log)
+    if not lines:
+        return None
+    delays = [int(d) for _, d, _, _ in lines]
+    return {'windows': len(lines), 'delay': sum(delays) / len(delays), 'delays': delays, 'stalls': sum(int(s) for _, _, s, _ in lines),
+            'stall_ms': sum(float(ms) for _, _, _, ms in lines), 'frames': int(lines[-1][0])}
+
+
 def verdict(a, out, server_log):
     """The checks on the logs and hashes; returns the list of failures."""
     fails = []
@@ -65,9 +104,15 @@ def verdict(a, out, server_log):
         gamecheck.say(True, f'server started the match (delay {m.group(1)})')
     else:
         fails.append('server never started the match')
+    paces = {}
     for i, log in logs.items():
         if f'[net] start: player {i} of {a.players}' in log:
             gamecheck.say(True, f'player {i} started')
+            p = pace(log)
+            if p:
+                gamecheck.say(True, f'player {i}: delay {p["delay"]:.2f} frames on average ({min(p["delays"])} to {max(p["delays"])}), '
+                                    f'{p["stalls"]} stalls, {p["stall_ms"]:.0f} ms over {p["frames"]} frames')
+                paces[i] = p
         else:
             fails.append(f'player {i} did not start the match')
         m = re.search(r'\[net\] stopped: [^\r\n]*', log)
@@ -79,6 +124,7 @@ def verdict(a, out, server_log):
         fails += [f'player {i}: {p}' for p in gamecheck.log_problems(log, gamecheck.patterns_for(a.expect, i), reject)]
     if a.drop and not re.search(rf'J{a.players} left the match \(neutral from frame \d+\)', server_log):
         fails.append(f'server did not log player {a.players} leaving')
+    (out / 'pace.json').write_text(json.dumps(paces))
     alive = a.players - 1 if a.drop else a.players
     for i in range(2, alive + 1):
         r = subprocess.run([sys.executable, str(gamecheck.REPO / 'tools' / 'statediff.py'), str(out / 'player1.hash'), str(out / f'player{i}.hash')],
@@ -104,6 +150,8 @@ def main():
     ap.add_argument('--port', type=int, default=7811)
     ap.add_argument('--exe', default='')
     ap.add_argument('--drop', type=int, default=0)
+    ap.add_argument('--rtt', default='')
+    ap.add_argument('--jitter', type=float, default=0.0)
     ap.add_argument('--extra-env', default='')
     ap.add_argument('--player-env', default='')
     ap.add_argument('--expect', default='')
@@ -124,6 +172,7 @@ def main():
     procs = []
     with open(out / 'server.log', 'w') as slog:
         srv = subprocess.Popen([str(server), '--port', str(a.port)], stdout=slog, stderr=subprocess.STDOUT)
+    proxy = start_proxy(a, out)
     try:
         time.sleep(0.5)
         names = ','.join(f'J{i}' for i in range(1, a.players + 1))
@@ -136,6 +185,8 @@ def main():
         for i in range(1, a.players + 1):
             env = dict(base)
             gamecheck.apply_pairs(env, gamecheck.env_pairs((out / f'env_{i}.txt').read_text().replace('\n', ';')))
+            if proxy:
+                env['WOTM_NET'] = f'127.0.0.1:{proxy_port(a, i)}'
             env['WOTM_STATEHASH'] = str(out / f'player{i}.hash')
             env['PS2X_PAD'] = SCRIPTS[(i - 1) % len(SCRIPTS)]
             gamecheck.apply_pairs(env, gamecheck.player_env(a.player_env, i))   # may replace this player's pad script
@@ -157,6 +208,9 @@ def main():
             time.sleep(a.secs)
     finally:
         gamecheck.stop(procs)
+        if proxy:
+            proxy.terminate()
+            proxy.wait()
         srv.terminate()
         srv.wait()
 
