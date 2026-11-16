@@ -3978,6 +3978,9 @@ TEST(mapedit_pick_ignores_spheres_around_the_eye_and_prefers_the_piece_inside)
     CHECK(me::pick({sphere(0, 100), sphere(20, 10)}, outside, east) == 1);
     // a small piece behind a big one, not inside it, stays hidden behind it
     CHECK(me::pick({sphere(0, 100), sphere(300, 10)}, outside, east) == 0);
+    // two pieces inside the big sphere, both on the ray: the nearer one, whatever their order
+    CHECK(me::pick({sphere(0, 100), sphere(30, 10), sphere(-30, 10)}, outside, east) == 2);
+    CHECK(me::pick({sphere(0, 100), sphere(-30, 10), sphere(30, 10)}, outside, east) == 1);
     // the same rules for a session's items
     me::Session ses("CENTRAL", 1, {sphere(0, 100), sphere(20, 10)});
     CHECK(ses.pickItem(outside, east) == 1);

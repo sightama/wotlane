@@ -62,7 +62,7 @@ inline float hitDistance(const float eye[3], const float dir[3], const float c[3
 // One sphere a ray may pick (centre, radius)
 struct Sphere { float c[3]; float r; };
 
-// The sphere the ray reaches first, or, when that one wholly contains other spheres the ray also reaches, the smallest of those
+// The sphere the ray reaches first, or, when that one wholly contains other spheres the ray also reaches, the nearest of those (and so on inwards)
 // (a piece standing inside a bigger piece's sphere is the one aimed at); -1 for none
 inline int nearestSphere(const std::vector<Sphere> &ss, const float eye[3], const float dir[3])
 {
@@ -77,15 +77,16 @@ inline int nearestSphere(const std::vector<Sphere> &ss, const float eye[3], cons
     for (bool again = best >= 0; again;)
     {
         again = false;
-        const Sphere &o = ss[size_t(best)];
+        const Sphere o = ss[size_t(best)];
+        int inner = -1;   // the nearest of the spheres inside o that the ray reaches
         for (size_t i = 0; i < ss.size(); ++i)
         {
             const float dx = ss[i].c[0] - o.c[0], dy = ss[i].c[1] - o.c[1], dz = ss[i].c[2] - o.c[2];
-            if (t[i] >= 0 && ss[i].r < o.r && std::sqrt(dx * dx + dy * dy + dz * dz) + ss[i].r <= o.r)
-                best = int(i), again = true;
-            if (again)
-                break;
+            if (t[i] >= 0 && ss[i].r < o.r && std::sqrt(dx * dx + dy * dy + dz * dz) + ss[i].r <= o.r && (inner < 0 || t[i] < t[size_t(inner)]))
+                inner = int(i);
         }
+        if (inner >= 0)
+            best = inner, again = true;
     }
     return best;
 }
