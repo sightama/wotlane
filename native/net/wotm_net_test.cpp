@@ -1365,6 +1365,22 @@ namespace
         exchange(a, b, 300);
     }
 
+    // the test's packet loss is an ENet thing: a WebSocket loses nothing, and the server sends it each input once
+    TEST(ws_match_survives_the_servers_test_packet_loss)
+    {
+        ServerConfig cfg = wsTestConfig();
+        cfg.dropInputPercent = 30;
+        RunningServer rs(cfg);
+        auto ms = formMatch(cfg.port, {"Ana", "Bia"}, {3, 1});
+        MatchClient a, b;
+        std::string err;
+        ClientConfig ca = clientFor(cfg.port, *ms[0]), cb = clientFor(cfg.port, *ms[1]);
+        cb.host = wsUrl(cfg, "/match");
+        CHECK(a.start(ca, err) && b.start(cb, err));
+        CHECK(a.waitStarted(5000) && b.waitStarted(5000));
+        exchange(a, b, 200);
+    }
+
     // a malformed frame (unmasked, from a client) closes that connection only; the server and its other clients carry on
     TEST(ws_bad_frame_closes_only_that_client)
     {
@@ -1429,16 +1445,16 @@ namespace
         while (alive && !welcomed && std::chrono::steady_clock::now() < until)
         {
             alive = raw.pump();
-            const std::string in = raw.takeReceived();
+            const std::string bytes = raw.takeReceived();
             if (head.find("\r\n\r\n") == std::string::npos)
             {
-                head += in;
+                head += bytes;
                 const size_t end = head.find("\r\n\r\n");
                 if (end != std::string::npos)
                     parser.feed(reinterpret_cast<const uint8_t *>(head.data()) + end + 4, head.size() - end - 4);
             }
             else
-                parser.feed(reinterpret_cast<const uint8_t *>(in.data()), in.size());
+                parser.feed(reinterpret_cast<const uint8_t *>(bytes.data()), bytes.size());
             Frame f;
             while (parser.next(f) == FrameParser::Result::Ok)
                 welcomed = welcomed || (f.opcode == kBinary && f.payload.size() > 1 &&
@@ -1487,23 +1503,58 @@ namespace
         for (uint32_t f = 0; f < 30; ++f)
             for (auto &c : cs)
                 c->pushLocal(f + d, pressed(1));
+        // what reaches P8: the bytes, and per player the first frame it doesn't have yet (from the Inputs it decodes)
+        std::string head;
+        FrameParser parser(false);
+        std::vector<uint32_t> have(8, 0u);
         auto drain = [&] {
             size_t total = 0;
             for (bool alive = true; alive;)
             {
                 alive = raw.pump();
-                const size_t got = raw.takeReceived().size();
-                total += got;
-                if (!got)
+                const std::string bytes = raw.takeReceived();
+                total += bytes.size();
+                if (bytes.empty())
                     break;
+                if (head.find("\r\n\r\n") == std::string::npos)
+                {
+                    head += bytes;
+                    const size_t end = head.find("\r\n\r\n");
+                    if (end != std::string::npos)
+                        parser.feed(reinterpret_cast<const uint8_t *>(head.data()) + end + 4, head.size() - end - 4);
+                }
+                else
+                    parser.feed(reinterpret_cast<const uint8_t *>(bytes.data()), bytes.size());
+                Frame f;
+                p::Inputs got;
+                while (parser.next(f) == FrameParser::Result::Ok)
+                    if (f.opcode == kBinary && f.payload.size() > 1 && p::decode(std::vector<uint8_t>(f.payload.begin() + 1, f.payload.end()), got))
+                        for (const p::InputRun &r : got.runs)
+                            if (r.first <= have[r.player])
+                                have[r.player] = std::max(have[r.player], r.first + static_cast<uint32_t>(r.states.size()));
             }
             return total;
         };
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        // every frame of the seven reaches it
+        auto complete = [&] {
+            for (size_t q = 0; q < 7; ++q)
+                if (have[q] < d + 30)
+                    return false;
+            return true;
+        };
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        while (!complete() && std::chrono::steady_clock::now() < until)
+        {
+            drain();
+            raw.waitReadable(10);
+        }
+        CHECK(complete());
+        // and nothing more while it stays silent
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
         drain();
         std::this_thread::sleep_for(std::chrono::seconds(2));
         const size_t silent = drain();
-        CHECK(silent < 1024u);   // 2 s of pings (20 of 10 bytes); the inputs already went
+        CHECK(silent < 1024u);   // 2 s of pings (20 of 10 bytes)
         CHECK(raw.open());
     }
 

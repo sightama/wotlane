@@ -568,8 +568,6 @@ namespace wotm_net
     {
         if (!peer)
             return;
-        if (!reliable && cfg_.dropInputPercent > 0 && static_cast<int>(rng_() % 100u) < cfg_.dropInputPercent)
-            return;
         if (peer.ws)
         {
             // WebSocket is reliable and ordered: one binary message per packet, the channel in front
@@ -580,6 +578,9 @@ namespace wotm_net
             peer.ws->link->sendPacket(packet);
             return;
         }
+        // the test's packet loss: only ENet loses packets (a WebSocket is sent each input once)
+        if (!reliable && cfg_.dropInputPercent > 0 && static_cast<int>(rng_() % 100u) < cfg_.dropInputPercent)
+            return;
         ENetPacket *p = enet_packet_create(data.data(), data.size(), reliable ? ENET_PACKET_FLAG_RELIABLE : 0);
         enet_peer_send(peer.enet, channel, p);
     }
