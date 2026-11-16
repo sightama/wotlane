@@ -23,12 +23,12 @@ export class Dir {
 
 export class File {
   constructor() { this.kind = 'file'; this.bytes = new Uint8Array(0); }
-  async getFile() { const b = this.bytes; return { size: b.length, arrayBuffer: async () => b.slice().buffer, text: async () => new TextDecoder().decode(b) }; }
+  async getFile() { const b = this.bytes; return { size: b.length, lastModified: this.modified ?? 0, arrayBuffer: async () => b.slice().buffer, text: async () => new TextDecoder().decode(b) }; }
   async createWritable() {
     const parts = [];
     return {
       write: async (d) => { parts.push(typeof d === 'string' ? new TextEncoder().encode(d) : new Uint8Array(d)); },
-      close: async () => { this.bytes = new Uint8Array(await new Blob(parts).arrayBuffer()); },
+      close: async () => { this.bytes = new Uint8Array(await new Blob(parts).arrayBuffer()); this.modified = Date.now(); },
     };
   }
 }

@@ -10,6 +10,7 @@ const percents = (from, to, step) => {
 };
 
 export const TABS = [
+  { id: 'saves', label: 'Saves' },
   { id: 'online', label: 'Online' },
   { id: 'game', label: 'Game' },
   { id: 'display', label: 'Display' },

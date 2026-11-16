@@ -20,7 +20,7 @@ async function builtinMods() {
   }
 }
 
-function download(fileName, bytes) {
+export function download(fileName, bytes) {
   const url = URL.createObjectURL(new Blob([bytes], { type: 'application/zip' }));
   const a = Object.assign(document.createElement('a'), { href: url, download: fileName });
   document.body.append(a);

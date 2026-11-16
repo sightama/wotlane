@@ -74,6 +74,21 @@ For online play start `wotm_server --ws-port <port>`; a page opened from `localh
   options through the page and checks the game's log for them (`settings_page`).
   A tab whose game runs holds a shared Web Lock (`wotlane-game`, taken in `boot.js`, read by `web/gamelock.js`); another tab's Settings
   turns its options off while it is held, because a running game writes `settings.ini` and the saves again from its own memory.
+- **Saves tab:** the Settings card's first tab (`web/saves_ui.js`, logic in `web/saves.js`). The memory-card saves are `save.json` and the
+  `mc0/` and `mc1/` card folders at the root of the browser's private file system (`settings.ini`, `mods/` and the rest are not saves). The tab
+  lists them (files, size, last saved, and from `save.json` the battle tokens and each adventure slot) and offers:
+  - **Back up:** one zip download of exactly those files.
+  - **Restore:** reads a zip and checks it before anything is written: file names from an allowlist (`save.json`, plain names under `mc0/` and
+    `mc1/`), no path that leaves the folder, at most 40 files and 8 MB unpacked, `save.json` under 1 MB and an object the game reads
+    (`options`, `unlocks`, `battleTokens` or `saves` of the right kind). Files outside the saves are left out and named; a zip of the whole
+    folder inside one folder works. An inline confirmation shows what the zip holds and what it replaces. The current saves are kept as an
+    automatic backup, then replaced (the card folders go too, because the game imports adventures from card files that `save.json`
+    lacks); a failed write puts the old saves back.
+  - **Delete all saves:** the same confirmation and automatic backup, then `save.json` and both card folders go. One adventure slot can't be
+    deleted from the page for the same reason: the game rebuilds the card files from `save.json` and imports a card's slots when the JSON has none.
+  - **Automatic backups:** the newest 5 stay in `backups/` of the same file system (`saves-<date>-<time>.zip`), each with a Download.
+  Both actions are refused while another tab's game runs (the game lock above). Creations export and import stay in the Mods tab.
+  `saves.test.mjs` covers the file logic on a fake file system; `browser_mp_test`'s `saves` session drives the tab in a real browser.
 
 ## Online
 The front panel (`web/front.js`, `web/lobby.js`) speaks the lobby protocol over a WebSocket at `/lobby` (one line per text frame):

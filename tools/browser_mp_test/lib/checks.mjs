@@ -1,10 +1,13 @@
 // ABOUTME: The checks, grouped in sessions that each form a lobby of N browser players: match (lobby, picks, start, inputs, sync, frame
-// ABOUTME: rate, late join, leaving), round (round end, win screen, rematch, quit), stall (frozen player, Away note), creations, single.
+// ABOUTME: rate, late join, leaving), round (round end, win screen, rematch, quit), stall (frozen player, Away note), creations, single, saves.
 import { Player, sleep } from './player.mjs';
 import { Run, formLobby, startMatch, waitAll, hasStart, stopped, MONSTER_IDS } from './session.mjs';
 import { CpuMeter } from './infra.mjs';
 import { hashes, compareHashes, gameFps, lastWaits, desyncs, padButtons, hasLine, roundsEnded, netStart } from './logs.mjs';
 import { makeCreations } from './creations.mjs';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { zip, unzip } from '../../../web/zip.js';
 
 // Per player, a key held for the input check and the pad buttons it must show (default keyboard layout, native/wotm_settings.hpp: Space is
 // X, E circle, 1 triangle+circle, 2 X+square, G select, the arrows the d-pad)
@@ -631,6 +634,77 @@ export async function singleSession(run) {
     R.add(1, 'settings_page', applied ? 'pass' : 'fail', applied ? 'Resolution and Anti-aliasing from the Settings page reached the game' : 'the game did not report the settings the page saved');
   } catch (e) {
     R.add(1, 'single_error', 'fail', e.stack?.split('\n').slice(0, 2).join(' ') ?? String(e));
+  } finally {
+    await run.saveEvidence(1, check, players, '').catch(() => {});
+    await run.closeAll(players);
+  }
+}
+
+// The Settings card's Saves tab on seeded memory-card saves: the list, a backup download, delete with its automatic backup, restore from the
+// backup and a zip that is refused. No game boots, so it takes seconds.
+export async function savesSession(run) {
+  const R = run.report;
+  const check = 'saves';
+  const players = [];
+  const row = (name, ok, detail) => R.add(1, name, ok ? 'pass' : 'fail', detail);
+  try {
+    players.push(...await run.openPlayers(1, check));
+    const { page } = players[0];
+    const dir = run.dir(1, check);
+    const SAVE = '{"options":{"difficulty":1},"battleTokens":120,"saves":[{"level":"ufo","monster":"congar","variant":0,"lives":3,"score":4500,"costume":"default"}]}';
+    await page.evaluate(async (save) => {
+      const root = await navigator.storage.getDirectory();
+      const write = async (dir, name, data) => { const w = await (await dir.getFileHandle(name, { create: true })).createWritable(); await w.write(data); await w.close(); };
+      await write(root, 'save.json', save);
+      const card = await (await root.getDirectoryHandle('mc0', { create: true })).getDirectoryHandle('BASCUS-97197', { create: true });
+      await write(card, 'savegame.dat', new Uint8Array(640).fill(7));
+    }, SAVE);
+    const opfsText = (path) => page.evaluate(async (p) => {
+      let d = await navigator.storage.getDirectory();
+      const parts = p.split('/');
+      try {
+        for (const part of parts.slice(0, -1)) d = await d.getDirectoryHandle(part);
+        return await (await (await d.getFileHandle(parts.at(-1))).getFile()).text();
+      } catch { return null; }
+    }, path);
+    const text = (sel) => page.textContent(sel).then((t) => t.trim());
+
+    await page.click('#openSettings');
+    await page.waitForFunction(() => /battle tokens/.test(document.getElementById('savesSummary').textContent));
+    const summary = await text('#savesSummary');
+    const slot = await text('#savesSlots');
+    row('saves_list', /2 files, 1 adventure slot, 120 battle tokens/.test(summary) && slot === 'Slot 1: Congar, Ufo, 3 lives, score 4500', `${summary} | ${slot}`);
+
+    const [download] = await Promise.all([page.waitForEvent('download'), page.click('#backupSaves')]);
+    const backup = join(dir, 'backup.zip');
+    await download.saveAs(backup);
+    const inside = (await unzip(new Uint8Array(readFileSync(backup)))).map((e) => e.name).sort();
+    row('saves_backup', JSON.stringify(inside) === JSON.stringify(['mc0/BASCUS-97197/savegame.dat', 'save.json']), `zip holds ${inside.join(', ')}`);
+
+    await page.click('#deleteSaves');
+    await page.waitForSelector('#savesConfirm:not([hidden])');
+    const ask = await text('#savesConfirmText');
+    await page.click('#savesConfirmOk');
+    await page.waitForFunction(() => /Deleted/.test(document.getElementById('savesMsg').textContent));
+    const gone = (await opfsText('save.json')) === null && (await opfsText('mc0/BASCUS-97197/savegame.dat')) === null;
+    const kept = await page.$$eval('#savesBackups button', (b) => b.length);
+    row('saves_delete', /^Delete all saves/.test(ask) && gone && kept === 1, `asked "${ask.slice(0, 60)}...", gone ${gone}, automatic backups ${kept}`);
+
+    await page.setInputFiles('#restoreFile', backup);
+    await page.waitForSelector('#savesConfirm:not([hidden])');
+    await page.click('#savesConfirmOk');
+    await page.waitForFunction(() => /Restored/.test(document.getElementById('savesMsg').textContent));
+    const back = (await opfsText('save.json')) === SAVE && (await opfsText('mc0/BASCUS-97197/savegame.dat'))?.length === 640;
+    row('saves_restore', back, back ? 'the backup restored save.json and the card file' : 'the restored files differ');
+
+    const bad = join(dir, 'bad.zip');
+    writeFileSync(bad, await zip([{ name: 'save.json', data: new TextEncoder().encode('{"hello":1}') }]));
+    await page.setInputFiles('#restoreFile', bad);
+    await page.waitForFunction(() => /not a War of the Monsters save/.test(document.getElementById('savesMsg').textContent));
+    const untouched = (await opfsText('save.json')) === SAVE && await page.$eval('#savesConfirm', (e) => e.hidden);
+    row('saves_refused', untouched, untouched ? 'a zip that is not a save was refused and nothing changed' : 'the refused zip changed the saves or asked to restore');
+  } catch (e) {
+    row('saves_error', false, e.stack?.split('\n').slice(0, 2).join(' ') ?? String(e));
   } finally {
     await run.saveEvidence(1, check, players, '').catch(() => {});
     await run.closeAll(players);
