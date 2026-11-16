@@ -69,7 +69,10 @@ A GPU run (`--browser chrome`) was not made.
 - #76 refused-join reason overwritten (fixed);
 - #78 "Join puts you back in it" for a closed lobby (fixed);
 - #79 lobby card not scrollable, Start out of reach at 8 members in a short window (fixed);
-- #81 8 players: a tab stalled about a minute never resumes (open; the CPU saturation may be part of it);
+- #81 8 players: a tab stalled about a minute never resumes (fixed by #85; not CPU: the server closed any connection with over 64 KB
+  unread, and the held tab's queued inputs passed that at 8 players. Same settings and machine: the old server fails, the fixed one
+  passes at 2, 4 and 8. The server also no longer resends inputs to a browser every 16 ms, about 27 KB/s at 8 players, which in a real
+  outage filled the connection within seconds);
 - #82 `PS2X_PAD` never fires in the browser build (`GetTime()` is wall-clock time there; open, low priority).
 
 One unexplained flake: in the first live run the post-match Join at N=2 did not settle within 15 s (no message); the rerun and N=4

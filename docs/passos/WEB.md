@@ -68,7 +68,10 @@ A lobby still in a match is named as such; one that is gone gets no note and no 
 
 `wotm_server --ws-port <port> [--ws-bind <address>]` (default bind `127.0.0.1`, behind a web server that terminates HTTPS) takes these
 connections: `/lobby` behaves as a TCP lobby connection, `/match` carries binary frames of one channel byte and the same datagram as
-ENet, and the server measures browser round trips with WebSocket pings. Browser, Mac and Windows players can share a match.
+ENet, and the server measures browser round trips with WebSocket pings. Browser, Mac and Windows players can share a match. A WebSocket
+is reliable and ordered, so the server sends a browser each input once (an ENet player gets what it lacks again every 16 ms): a browser
+whose network stops is sent only pings, not a growing pile of repeats. A browser that comes back sends everything it queued at once; the
+server reads a connection 64 KB at a time, so any burst is fine (only a lobby line over 64 KB closes the connection).
 
 During a match:
 - a hidden tab sends `Away` (and its return); the others' "Waiting for" message adds "(their game tab is in the background)";
