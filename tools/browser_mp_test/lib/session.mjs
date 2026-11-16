@@ -1,0 +1,116 @@
+// ABOUTME: Shared steps of the checks: opening N players, forming a lobby, starting the match and waiting for log lines on every tab,
+// ABOUTME: and saving each tab's log and screenshot as evidence. Each check in checks.mjs is built from these.
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join, relative } from 'node:path';
+import { Player, sleep } from './player.mjs';
+import { netStart, netStopped, serverLobbyLines } from './logs.mjs';
+
+// the stock monsters in the front panel's order (web/front.js MONSTERS): one each for up to 8 players
+export const MONSTER_IDS = [3, 1, 2, 5, 4, 7, 8, 9];
+
+export class Run {
+  constructor({ pw, target, browsers, opts, report, outDir, firefox = null }) {
+    Object.assign(this, { pw, target, browsers, opts, report, outDir, firefox });
+    this.refusals = [];   // refused joins seen by a check, judged by flushRefusals in checks.mjs
+  }
+
+  dir(n, check) {
+    const d = join(this.outDir, `n${n}`, check);
+    mkdirSync(d, { recursive: true });
+    return d;
+  }
+
+  rel(path) { return relative(this.outDir, path); }
+
+  async openPlayer(n, index, { env = {}, name, monster, video, check }) {
+    const firefox = this.firefox && index < n && index >= n - this.opts.firefoxCount;   // the last K players of a lobby (not the spare)
+    const browser = firefox ? this.firefox : this.browsers[this.opts.isolation === 'browser' ? index % this.browsers.length : 0];
+    return Player.open(browser, {
+      name: name ?? `P${index + 1}`,
+      index,
+      monster: monster ?? MONSTER_IDS[index % MONSTER_IDS.length],
+      url: this.target.pageUrl,
+      env,
+      cookies: this.target.cookies,
+      viewport: { width: this.opts.width, height: this.opts.lobbyHeight },
+      gameViewport: { width: this.opts.width, height: this.opts.height },
+      videoDir: video ? this.dir(n, check) : undefined,
+    });
+  }
+
+  // N players, opened one after another (each context downloads the game's data on first use)
+  async openPlayers(n, check, { env = {}, video = this.opts.video } = {}) {
+    const players = [];
+    for (let i = 0; i < n; i++) players.push(await this.openPlayer(n, i, { env, video, check }));
+    return players;
+  }
+
+  // The tab logs, a screenshot per tab and the server's lines for the lobby, under n<N>/<check>/. Returns the evidence paths.
+  async saveEvidence(n, check, players, code) {
+    const d = this.dir(n, check);
+    const files = [];
+    for (const p of players) {
+      await p.pollLog();
+      writeFileSync(join(d, `${p.name}.log`), p.logText);
+      files.push(this.rel(join(d, `${p.name}.log`)));
+      if (!p.closed) {
+        await p.shot(join(d, `${p.name}.png`));
+        files.push(this.rel(join(d, `${p.name}.png`)));
+      }
+    }
+    if (code && this.target.kind === 'local') {
+      const lines = serverLobbyLines(this.target.serverLog(), code);
+      writeFileSync(join(d, 'server.log'), lines.join('\n') + '\n');
+      files.push(this.rel(join(d, 'server.log')));
+    }
+    return files;
+  }
+
+  async closeAll(players) {
+    for (const p of players) await p.close();
+  }
+}
+
+// polls the logs of the players until test(player) is true for every one; resolves {ok, missing: [names]}
+export async function waitAll(players, test, { timeoutMs = 120000, everyMs = 1500 } = {}) {
+  const end = Date.now() + timeoutMs;
+  let missing = players;
+  while (Date.now() < end) {
+    await Promise.all(missing.map((p) => p.pollLog()));
+    missing = missing.filter((p) => !test(p));
+    if (!missing.length) return { ok: true, missing: [] };
+    await sleep(everyMs);
+  }
+  return { ok: false, missing: missing.map((p) => p.name) };
+}
+
+export const hasStart = (p) => netStart(p.logText) !== null;
+export const stopped = (p) => netStopped(p.logText);
+
+// Host and join: P1 hosts, the others join one by one. Returns {code, ok, detail}; every tab must list every member
+export async function formLobby(players) {
+  const [host, ...guests] = players;
+  const made = await host.host();
+  if (!made.joined) return { ok: false, detail: `host: ${made.msg}` };
+  if (!/^[A-Z2-9]{4}$/.test(made.code)) return { ok: false, detail: `bad code ${JSON.stringify(made.code)}` };
+  for (const [i, g] of guests.entries()) {
+    const r = await g.join(made.code);
+    if (!r.joined) return { ok: false, code: made.code, detail: `${g.name} could not join: ${r.msg}` };
+    await Promise.all(players.slice(0, i + 2).map((p) => p.waitMembers(i + 2)));
+  }
+  const want = players.map((p) => p.name).sort();
+  for (const p of players) {
+    const names = (await p.members()).map((m) => m.split(' ')[0]).sort();
+    if (JSON.stringify(names) !== JSON.stringify(want)) return { ok: false, code: made.code, detail: `${p.name} lists ${names.join(',')}` };
+  }
+  const owner = (await host.members()).filter((m) => m.endsWith(', owner'));
+  if (owner.length !== 1 || !owner[0].startsWith(`${host.name} `)) return { ok: false, code: made.code, detail: `owner line: ${owner.join('|')}` };
+  return { ok: true, code: made.code, detail: `${players.length} tabs list ${players.length} members, code ${made.code}` };
+}
+
+// the owner starts the match and every tab must report its start line; returns the same shape as waitAll
+export async function startMatch(players, { timeoutMs = 180000 } = {}) {
+  await players[0].start();
+  await Promise.all(players.map((p) => p.toGameViewport()));
+  return waitAll(players, (p) => hasStart(p) || stopped(p), { timeoutMs });
+}
