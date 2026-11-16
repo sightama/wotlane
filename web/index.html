@@ -6,6 +6,27 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>War of the Monsters</title>
+<meta name="description" content="Play War of the Monsters in your browser: a fan-made port for preservation and play, with online lobbies for up to 8 players. Nothing to install.">
+<meta name="theme-color" content="#e0592a">
+<link rel="canonical" href="https://playwotm.com/">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="War of the Monsters in the browser">
+<meta property="og:title" content="War of the Monsters">
+<meta property="og:description" content="A fan-made browser port of War of the Monsters, for preservation and play. Online lobbies for up to 8 players.">
+<meta property="og:url" content="https://playwotm.com/">
+<meta property="og:image" content="https://playwotm.com/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="War of the Monsters">
+<meta name="twitter:description" content="A fan-made browser port of War of the Monsters, for preservation and play. Online lobbies for up to 8 players.">
+<meta name="twitter:image" content="https://playwotm.com/og.png">
+<script type="application/ld+json">
+{"@context": "https://schema.org", "@type": "VideoGame", "name": "War of the Monsters", "url": "https://playwotm.com/",
+ "description": "A fan-made browser port of War of the Monsters for preservation and play, with online lobbies for up to 8 players.",
+ "gamePlatform": "Web browser", "applicationCategory": "Game", "operatingSystem": "Any with desktop Chrome, Edge or Firefox",
+ "image": "https://playwotm.com/og.png", "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"}}
+</script>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%23e0592a'/%3E%3Ctext x='8' y='12' font-size='10' font-family='sans-serif' font-weight='700' text-anchor='middle' fill='%23fff'%3EW%3C/text%3E%3C/svg%3E">
 <style>
   :root { --bg: #0b0b0d; --panel: #16161a; --fg: #d8d8dc; --dim: #7a7a82; --accent: #e0592a; --line: #2a2a30; }
@@ -68,6 +89,9 @@
   #controlsTable td + td { color: var(--dim); }
   #creationList { margin: 8px 0; padding: 0; list-style: none; display: grid; gap: 6px; }
   #creationList span { flex: 1; }
+  #legal { border-top: 1px solid var(--line); padding-top: 10px; color: var(--dim); font-size: 11px; }
+  #legal p { margin: 0 0 4px; }
+  #legal a { color: var(--dim); }
   #creationsMsg, #supported { color: var(--dim); margin: 0; font-size: 12px; }
 </style>
 </head>
@@ -118,6 +142,11 @@
     <p id="frontMsg"></p>
     <div class="row"><button id="openSettings">Settings</button></div>
     <p id="supported">Works in Chrome, Firefox and Edge on a computer.</p>
+    <footer id="legal">
+      <p>Not affiliated with or endorsed by Sony Interactive Entertainment or Incognito Entertainment. War of the Monsters is a trademark of
+        its respective owners. This site hosts a fan-made browser port for preservation and play.</p>
+      <p>Rights holders: <a href="mailto:legal@playwotm.com">legal@playwotm.com</a></p>
+    </footer>
   </div>
   <div id="settings" class="card" hidden>
     <div class="row"><h1 style="flex:1">Settings</h1><button id="closeSettings">Back</button></div>

@@ -96,7 +96,7 @@ Host creates a lobby and shows its code, Join takes one, the owner sets stage, w
 game's environment with the same mapping as `tools/net_lobby.py` `match_env`, with `WOTM_NET` the WebSocket at `/match`, and the build id
 from `version.json` in `WOTM_BUILDID`.
 
-**Invite link:** in a lobby, Copy invite link puts `<page>/?join=CODE` on the clipboard (a page that may not use the clipboard shows the link selected instead). A page opened with `?join=CODE` (`web/pageenv.js` `inviteCode`: only a valid 4-character lobby code counts, and it never reaches the game's environment) fills the code in and removes it from the address; a browser that remembers a name joins at once, any other asks for a name first. The site's password prompt comes before the page, so the link works after it.
+**Invite link:** in a lobby, Copy invite link puts `<page>/?join=CODE` on the clipboard (a page that may not use the clipboard shows the link selected instead). A page opened with `?join=CODE` (`web/pageenv.js` `inviteCode`: only a valid 4-character lobby code counts, and it never reaches the game's environment) fills the code in and removes it from the address; a browser that remembers a name joins at once, any other asks for a name first. The site has no password prompt (https://playwotm.com), so the link opens the page directly.
 
 **Open lobbies:** on the Host/Join choice the panel keeps one connection that asks `LIST` every 5 s (not while the tab is hidden, and not once the player is in a lobby or has pressed Single player) and lists each lobby as "<owner>: n/8 (<names>), waiting | in a match | full[, needs a password]" with a Join button (`lobbyRow` in `web/lobby.js`). Join is off for a lobby that is in a match, full or locked (the page can't send a password). The server's `LOBBY` line carries no map, so the list doesn't show one. A server that is out of reach hides the list.
 
@@ -140,6 +140,13 @@ again in the same profile (warm), to the title (the front panel's Single player)
 (`?WOTM_MATCH=3,1,1&WOTM_AIVSAI=1`), on the real network and throttled (Chrome's DevTools network emulation), counting the bytes of
 each kind of request (page, mods, wasm, disc). The `[boot] disc: LSN ...` lines give each disc read's time. A load's 512 KB reads are about 19 ms apart: the stage unzip runs in
 host code (`native/wotm_zip.hpp`), so the game does not decompress between reads, in the browser and natively alike.
+
+## The public site
+The live site is https://playwotm.com/ (Cloudflare in front of Caddy on the GCP VM; the old https://35-185-58-174.sslip.io/ redirects to it with a 301).
+Everything that serves and deploys it lives in the private coord repo (`scripts/deploy_web.sh`, `web/Caddyfile`, notes in its README).
+The page carries the not-affiliated disclaimer and the rights-holder address (`legal@playwotm.com`) in its footer, a description,
+OpenGraph and Twitter tags and JSON-LD (`web/index.html`, tested by `web/legal.test.mjs`). `robots.txt`, `sitemap.xml`, `llms.txt`,
+`manifest.webmanifest`, the icons and `og.png` are added to the dist by the coord deploy, not by `tools/build_web.sh`.
 
 ## Tests
 - `node --test web/` (the page scripts, with a fake WebSocket and an in-memory file system);

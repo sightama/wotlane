@@ -68,10 +68,16 @@ export async function startLocal({ site, data, server, outDir, maxPlayers = 8 })
   };
 }
 
-// Live target: the site's login form sets a cookie; every player's context gets it. The server's log is not reachable from here, so
-// the client logs are the only witness.
-export async function startLive({ url, password }) {
+// Live target: a public site needs nothing; a site with a password gate (password given) sets a cookie at its login form that every
+// player's context gets. The server's log is not reachable from here, so the client logs are the only witness.
+export async function startLive({ url, password = '' }) {
   const base = url.replace(/\/$/, '');
+  const cookies = password ? await loginCookies(base, password) : [];
+  const version = await (await fetch(`${base}/version.json`, { headers: { cookie: cookies.map((c) => `${c.name}=${c.value}`).join('; ') } })).json();
+  return { kind: 'live', pageUrl: `${base}/`, cookies, serverLog: () => '', buildId: version.build, async stop() {} };
+}
+
+async function loginCookies(base, password) {
   const login = await fetch(`${base}/login`, {
     method: 'POST',
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
@@ -81,14 +87,12 @@ export async function startLive({ url, password }) {
   const raw = login.headers.getSetCookie?.() ?? [];
   if (!raw.length) throw new Error(`live target: login at ${base}/login gave HTTP ${login.status} and no cookie (wrong password?)`);
   const host = new URL(base).hostname;
-  const cookies = raw.map((c) => {
+  return raw.map((c) => {
     const [pair, ...attrs] = c.split(';').map((s) => s.trim());
     const eq = pair.indexOf('=');
     return { name: pair.slice(0, eq), value: pair.slice(eq + 1), domain: host, path: '/', secure: base.startsWith('https'),
       httpOnly: attrs.some((a) => a.toLowerCase() === 'httponly') };
   });
-  const version = await (await fetch(`${base}/version.json`, { headers: { cookie: cookies.map((c) => `${c.name}=${c.value}`).join('; ') } })).json();
-  return { kind: 'live', pageUrl: `${base}/`, cookies, serverLog: () => '', buildId: version.build, async stop() {} };
 }
 
 // Browsers: one shared by all players (separate contexts, so separate storage) or one per player (`isolation: 'browser'`).

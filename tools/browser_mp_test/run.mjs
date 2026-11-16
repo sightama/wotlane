@@ -19,7 +19,7 @@ const USAGE = `Usage: node tools/browser_mp_test/run.mjs [options]
   --data <dir>             local: a folder with game.iso and SCUS_971.97 (default <runtime>/web_data)
   --server <file>          local: the wotm_server binary (default native/net/build/wotm_server)
   --disc <dir>            extracted disc folder, for the created map (default <repo>/disc if present)
-  --url <url>              live: the site (default https://35-185-58-174.sslip.io/)   --password <pw>  live: its password
+  --url <url>              live: the site (default https://playwotm.com/)   --password <pw>  live: only for a site behind the password gate
   --browser chromium|chrome  chromium: headless shell with software GL (default); chrome: the installed Chrome (real GPU)
   --headed                 show the browser windows            --isolation context|browser  one shared browser or one per player
   --firefox K              the last K players of each lobby use Playwright's Firefox (mixed lobbies; needs a build with Firefox support)
@@ -33,7 +33,7 @@ const { values: v } = parseArgs({
     target: { type: 'string', default: 'local' }, players: { type: 'string', default: '1,2,3,4,5,6,7,8' },
     checks: { type: 'string', default: 'match,round,stall,creations,single,saves' }, 'deep-n': { type: 'string', default: '2,4,8' },
     site: { type: 'string' }, data: { type: 'string' }, server: { type: 'string' }, disc: { type: 'string' },
-    url: { type: 'string', default: 'https://35-185-58-174.sslip.io/' }, password: { type: 'string', default: process.env.WOTM_SITE_PASSWORD ?? '' },
+    url: { type: 'string', default: 'https://playwotm.com/' }, password: { type: 'string', default: process.env.WOTM_SITE_PASSWORD ?? '' },
     browser: { type: 'string', default: 'chromium' }, headed: { type: 'boolean', default: false }, isolation: { type: 'string', default: 'context' },
     'play-secs': { type: 'string', default: '45' }, 'warmup-secs': { type: 'string', default: '20' }, 'padlog-frames': { type: 'string', default: '480' },
     width: { type: 'string', default: '640' }, height: { type: 'string', default: '400' }, 'lobby-height': { type: 'string', default: '900' }, firefox: { type: 'string', default: '0' }, video: { type: 'boolean', default: false },
@@ -59,7 +59,6 @@ const deep = new Set(nums(v['deep-n']));
 
 let target;
 if (v.target === 'live') {
-  if (!v.password) { console.error('live target: pass --password or set WOTM_SITE_PASSWORD'); process.exit(2); }
   target = await startLive({ url: v.url, password: v.password });
 } else {
   target = await startLocal({

@@ -11,7 +11,7 @@ sh tools/test_net.sh notest                 # builds native/net/build/wotm_serve
 sh tools/build_web.sh                       # builds <runtime>/web_dist (see docs/passos/WEB.md)
 npm install --prefix tools/browser_mp_test  # playwright (or have it in the global npm root; run.mjs falls back to it)
 node tools/browser_mp_test/run.mjs --players 1,2,3,4,5,6,7,8 --disc <extracted disc folder>
-node tools/browser_mp_test/run.mjs --target live --password <site password> --players 1,2,4   # shorter confirmation pass
+node tools/browser_mp_test/run.mjs --target live --players 1,2,4   # shorter confirmation pass
 node --test tools/browser_mp_test/test/     # the log readers
 ```
 
@@ -19,7 +19,7 @@ node --test tools/browser_mp_test/test/     # the log readers
 Use `--site <dir>` to test a `web_dist` copy and `--data <dir>` for the folder with `game.iso` and `SCUS_971.97`. Results (logs,
 screenshots, `results.md`, `results.json`) go to `<runtime>/browser_mp_test/<time>/`, or `--out`.
 
-A live run needs the site's password (`--password` or `WOTM_SITE_PASSWORD`). Every tab downloads the game's data (57 MB), so keep live
+A live run targets https://playwotm.com/ (`--url` for another site; `--password` or `WOTM_SITE_PASSWORD` only for a site behind the password gate). Every tab downloads the game's data (57 MB), so keep live
 runs short, and use your own lobbies (each run makes its own). The live server's log is out of reach, so a live run judges by the tabs'
 logs only (the server-side DESYNC and "left the match" checks are local only).
 
