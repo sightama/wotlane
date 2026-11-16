@@ -237,6 +237,7 @@ class FakeXHR {
   constructor() { FakeXHR.made.push(this); this.sent = 0; this.headers = {}; }
   open(method, url, async) { this.method = method; this.url = url; this.async = async; }
   setRequestHeader(n, v) { this.headers[n] = v; }
+  getResponseHeader(n) { return n === 'etag' ? '"v1"' : null; }
   send() { this.sent++; this.status = 206; this.response = FILE.slice(0, 8).buffer; }
 }
 FakeXHR.made = [];
@@ -262,11 +263,11 @@ test('a synchronous disc range GET is answered from the client\'s bytes without 
 
 test('a miss reads the network as before and hands the client the bytes to keep', () => {
   const kept = [];
-  const x = xhrOf({ ask: () => null, remember: (u, s, b) => kept.push([u, s, [...b]]) });
+  const x = xhrOf({ ask: () => null, remember: (u, s, b, etag) => kept.push([u, s, [...b], etag]) });
   x.send();
   assert.equal(x.sent, 1);
   assert.equal(x.status, 206);
-  assert.deepEqual(kept.map(([u, s, b]) => [u.endsWith('/data/game.iso'), s, b]), [[true, 0, [0, 1, 2, 3, 4, 5, 6, 7]]]);
+  assert.deepEqual(kept.map(([u, s, b, etag]) => [u.endsWith('/data/game.iso'), s, b, etag]), [[true, 0, [0, 1, 2, 3, 4, 5, 6, 7], '"v1"']]);
 });
 
 test('requests that are not synchronous disc range GETs never reach the client', () => {
@@ -288,4 +289,41 @@ test('the client hands the helper a copy of the bytes a worker fetched', () => {
   client.remember('http://x/data/game.iso', 16, bytes);
   bytes.fill(0);
   assert.deepEqual(posted.map((m) => [m.op, m.start, [...m.bytes]]), [['put', 16, [...FILE.slice(16, 20)]]]);
+});
+
+test('a get waits only a moment for the helper\'s version probe, then it is a miss; a put waits for the probe', async () => {
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const net = fakeNetwork();
+  const slow = async (url, init) => { if (init?.method === 'HEAD') await gate; return net(url, init); };
+  const serve = syncReadHelper(slow, helperOpts(fakeCaches()), { probeWaitMs: 20 });
+  assert.equal(await get(serve, 0, 16), null);
+  const put = serve({ op: 'put', url: 'http://x/data/game.iso', start: 0, bytes: FILE.slice(0, 16) });
+  release();
+  await put;
+  assert.deepEqual(await get(serve, 0, 16), [...FILE.slice(0, 16)]);
+});
+
+test('a failed version probe is tried again by the next message', async () => {
+  const net = fakeNetwork();
+  let heads = 0;
+  const flaky = async (url, init) => {
+    if (init?.method === 'HEAD' && ++heads === 1) throw new TypeError('network');
+    return net(url, init);
+  };
+  const serve = syncReadHelper(flaky, helperOpts(fakeCaches()));
+  await serve({ op: 'put', url: 'http://x/data/game.iso', start: 0, bytes: FILE.slice(0, 16) });
+  assert.equal(await get(serve, 0, 16), null, 'the first probe failed, so the put was not kept');
+  await serve({ op: 'put', url: 'http://x/data/game.iso', start: 0, bytes: FILE.slice(0, 16) });
+  assert.deepEqual(await get(serve, 0, 16), [...FILE.slice(0, 16)]);
+  assert.equal(heads, 2);
+});
+
+test('bytes a worker fetched of another version than the helper\'s are not kept', async () => {
+  const serve = syncReadHelper(fakeNetwork('"v1"'), helperOpts(fakeCaches()));
+  const url = 'http://x/data/game.iso';
+  await serve({ op: 'put', url, start: 0, bytes: FILE.slice(0, 16), etag: '"v2"' });
+  assert.equal(await get(serve, 0, 16), null);
+  await serve({ op: 'put', url, start: 0, bytes: FILE.slice(0, 16), etag: '"v1"' });
+  assert.deepEqual(await get(serve, 0, 16), [...FILE.slice(0, 16)]);
 });

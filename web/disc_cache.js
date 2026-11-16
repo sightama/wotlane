@@ -133,23 +133,34 @@ async function prefetch(fetchFn, url, chunks, { chunkBytes = 1 << 20, maxRun = 8
 // shared buffer until it answers, and after a read that went to the network hands it the bytes to keep. Messages:
 //   { op: 'ping', sab }                  answered (sab[0] = 1) as soon as the helper is listening
 //   { op: 'get', url, start, end, sab }  sab[0] = 1 and the bytes from byte 8 on when all of [start, end) is cached, else sab[0] = 2
-//   { op: 'put', url, start, bytes }     keeps the chunks of a range the worker fetched itself
+//   { op: 'put', url, start, bytes, etag }  keeps the chunks of a range the worker fetched itself (dropped when its ETag isn't the helper's)
 var HELPER_NAME = 'wotlane-disc-cache';
 var HELPER_CHANNEL = 'wotlane-disc-sync';
 var HELPER_HEADER = 8;   // bytes before the data in a reply buffer: Int32 status, Int32 length
 
 // the helper's side: `realFetch` only answers the HEAD that gives a file's version; ranges come from the cache or, for a put, from the bytes
-function syncReadHelper(realFetch, opts) {
+function syncReadHelper(realFetch, opts, { probeWaitMs = 1000 } = {}) {
   const base = async (url, init = {}) => {
     if (init.method === 'HEAD') return realFetch(url, init);
     if (init.fromBytes) return new Response(init.fromBytes, { status: 206, headers: { 'content-length': String(init.fromBytes.length) } });
     return new Response(null, { status: 504 });
   };
   const cached = cachingFetch(base, opts);
-  const heads = new Map();   // file -> the HEAD in flight or done
+  const heads = new Map();   // file -> { done, etag, settled }: the version probe, kept once it has an ETag, retried after a failure
   const known = (url) => {
     const file = discFile(url);
-    if (file && !heads.has(file)) heads.set(file, cached(url, { method: 'HEAD' }).catch(() => null));
+    if (!file) return null;
+    if (!heads.has(file)) {
+      const head = { done: false, etag: null };
+      head.settled = cached(url, { method: 'HEAD' })
+        .then((r) => { head.etag = r.headers?.get('etag') ?? null; })
+        .catch(() => null)
+        .then(() => {
+          head.done = true;
+          if (!head.etag) heads.delete(file);
+        });
+      heads.set(file, head);
+    }
     return heads.get(file);
   };
   return async function (msg) {
@@ -158,17 +169,22 @@ function syncReadHelper(realFetch, opts) {
       Atomics.notify(new Int32Array(msg.sab), 0);
       return;
     }
-    if (!discFile(msg.url)) return;
-    await known(msg.url);
+    const head = known(msg.url);
+    if (!head) return;
     if (msg.op === 'put') {
+      await head.settled;
+      // bytes of another version than the one this helper keeps would be stored under the wrong cache
+      if (msg.etag && head.etag && msg.etag !== head.etag) return;
       await cached(msg.url, { headers: { Range: `bytes=${msg.start}-${msg.start + msg.bytes.length - 1}` }, fromBytes: msg.bytes }).catch(() => null);
       return;
     }
     const ctl = new Int32Array(msg.sab, 0, 2);
     let status = 2;
     try {
-      const r = await cached(msg.url, { headers: { Range: `bytes=${msg.start}-${msg.end - 1}` } });
-      const bytes = r.status === 206 ? new Uint8Array(await r.arrayBuffer()) : null;
+      // a get waits only a moment for the probe: the worker is blocked, and a miss only costs it the network read it would make anyway
+      if (!head.done) await Promise.race([head.settled, new Promise((r) => setTimeout(r, probeWaitMs))]);
+      const r = head.done && head.etag ? await cached(msg.url, { headers: { Range: `bytes=${msg.start}-${msg.end - 1}` } }) : null;
+      const bytes = r && r.status === 206 ? new Uint8Array(await r.arrayBuffer()) : null;
       if (bytes && bytes.length === msg.end - msg.start && msg.sab.byteLength >= HELPER_HEADER + bytes.length) {
         new Uint8Array(msg.sab, HELPER_HEADER).set(bytes);
         ctl[1] = bytes.length;
@@ -183,7 +199,7 @@ function syncReadHelper(realFetch, opts) {
 }
 
 // the game worker's side: `ask(url, start, end)` is the cached bytes of a range or null (it blocks until the helper answers), and
-// `remember(url, start, bytes)` hands the helper the bytes of a range that came from the network. Never throws; a helper that doesn't
+// `remember(url, start, bytes, etag)` hands the helper the bytes of a range that came from the network. Never throws; a helper that doesn't
 // answer within `waitMs` is left alone for `pauseMs` (it may still be starting).
 function syncReadClient(post, { waitMs = 5000, pingMs = 300, pauseMs = 2000, now = Date.now } = {}) {
   let sab = null, pausedUntil = 0, alive = false;
@@ -216,7 +232,7 @@ function syncReadClient(post, { waitMs = 5000, pingMs = 300, pauseMs = 2000, now
     if (ctl[0] !== 1 || ctl[1] !== end - start) return null;
     return new Uint8Array(sab, HELPER_HEADER, end - start).slice();
   }
-  const remember = (url, start, bytes) => post({ op: 'put', url, start, bytes: new Uint8Array(bytes.slice(0)) });
+  const remember = (url, start, bytes, etag = null) => post({ op: 'put', url, start, bytes: new Uint8Array(bytes.slice(0)), etag });
   return { ask, remember };
 }
 
@@ -246,7 +262,7 @@ function syncDiscXHR(Base, client) {
         return undefined;
       }
       super.send(body);
-      if (this.status === 206 && this.response?.byteLength === end - start) client.remember(url, start, new Uint8Array(this.response));
+      if (this.status === 206 && this.response?.byteLength === end - start) client.remember(url, start, new Uint8Array(this.response), this.getResponseHeader('etag'));
       return undefined;
     }
   };
