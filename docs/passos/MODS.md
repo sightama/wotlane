@@ -353,7 +353,25 @@ TOKYO 193, TOKYODM 246, TRAINING 0, UFO 89, VEGAS 185, VOLCANO 111. A copy takes
 (its state, its effects, its collision paths); the drawing is shared with the original. A typical CENTRAL or METRO building
 takes 6 to 8 KB, the largest piece (on VEGAS) 72 KB, out of the map reserve's 4 MB.
 
-**Making one with `tools/stage_map.py`** (until the in-game editor; reads the extracted disc in `disc/`, or `--disc`):
+**Making one in the game (map editor).** Start a direct match on the stock stage with `WOTM_MAPEDIT=<new map id>`, for example
+`WOTM_MATCH=3,1` (Togera alone on Midtown Park) and `WOTM_MAPEDIT=downtown`. The editor opens on the free camera once the stage is
+on screen (F10 closes and opens it; offline only):
+
+| Key | Does |
+|---|---|
+| WASD, Q/E, arrows, right mouse button | fly and look (the free camera's keys) |
+| Enter or left click | picks the piece under the crosshair (yellow) |
+| I/K/J/L | slides it on the ground, relative to the camera (10 units; Shift: 100) |
+| U/O | up and down; Z/X turns it 15 degrees |
+| C | copies it in place (the copy is picked: slide it out) |
+| Delete, Backspace, R | removes it; undoes the last step; puts it back where the disc has it |
+| F4 | saves `mods/Creator/stages/<id>/stage.json` (the name is the id in capitals) |
+
+A move shows at once (the piece is drawn at its new place); turns, copies, removals and collision take effect when the map is
+played (`WOTM_MATCH=3,<id>`, or the stage selection after a restart). Removed pieces and copies show as red and cyan spheres.
+The editor starts from the stock stage: to change a saved map, edit its `stage.json` or remake it.
+
+**Making one with `tools/stage_map.py`** (reads the extracted disc in `disc/`, or `--disc`):
 
 ```
 python tools/stage_map.py pieces disc/LVL/CENTRAL.NGP          # one line per piece: node, kind, position, collision paths, riders, power-ups, destructible, copy
