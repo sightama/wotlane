@@ -81,7 +81,8 @@ For online play start `wotm_server --ws-port <port>`; a page opened from `localh
   starts), **Original** (the movie plays through; keys, taps and pads do nothing) or **Off** (nothing is fetched, not even `movies.json`). The
   choice is the page's own (`localStorage` `wotlane.movies`), not a `settings.ini` key: the game rewrites that file without keys it does not know.
   While the overlay is up its keys never reach the game (capture-phase listeners) and the page's audio contexts are held suspended, so the
-  game's title music does not play under the movie (`installAudioHold`); a gamepad press still reaches the game, which reads pads itself. A
+  game's title music does not play under the movie (`installAudioHold`), and the game's own gamepad polling (`navigator.getGamepads`) sees no
+  pads until the movies end (`holdGamepads`); the page reads them itself to skip. A
   movie that fails, or does not start within 15 s, is passed over. The files are made from the disc and never committed:
   `python3 tools/web_movies.py --iso <game.iso> --out <data>/movies` (FFmpeg needed) writes `intro_m.webm`, `int_main.webm` (VP9 picture, Opus
   audio, constrained quality: CRF 32, at most 500 kbit/s) and `movies.json`, about 6 MB in all against 85 MB of disc movies. FFmpeg reads the
