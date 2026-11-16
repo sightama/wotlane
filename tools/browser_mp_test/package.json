@@ -1,0 +1,8 @@
+{
+  "name": "wotlane-browser-mp-test",
+  "private": true,
+  "type": "module",
+  "description": "Browser multiplayer test for wotlane (tools/browser_mp_test/README.md)",
+  "scripts": { "test": "node --test test/" },
+  "devDependencies": { "playwright": "1.64.1" }
+}

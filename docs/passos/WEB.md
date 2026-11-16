@@ -96,3 +96,5 @@ are the game's own pacing, the same natively (issue #80).
   page scripts);
 - `python3 tools/test_serve_web.py`, `python3 tools/test_web_mods.py` and `python3 tools/test_web_boot_chunks.py`;
 - the WebSocket listener and transport: `sh tools/test_net.sh` (`ws_*` tests).
+- online play in real browsers, 1 to 8 players against a local server or the live site: `node tools/browser_mp_test/run.mjs`
+  (`tools/browser_mp_test/README.md`; its log readers: `node --test tools/browser_mp_test/test/`).
