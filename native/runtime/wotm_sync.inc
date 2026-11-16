@@ -720,6 +720,8 @@ namespace wotm_sync
     void init(PS2Runtime &runtime)
     {
         g_runtime = &runtime;
+        if (const char *e = std::getenv("WOTM_SNAPBENCH"); e && *e == '1')
+            snapbench::g_on = true;
         if (const char *e = std::getenv("WOTM_SEED"); e && *e && (g_origRandInit = runtime.lookupFunction(kRandInit)))
         {
             g_seed = std::clamp(std::atoll(e), 1LL, 0x7FFFFFFFLL);   // 0 would make the game read the clock
@@ -784,6 +786,97 @@ namespace wotm_sync
         sampleInputs(0);
     }
 
+    // WOTM_SNAPBENCH=1 (rollback spike, measurement only): at every frame boundary after the level load, the cost of saving and
+    // restoring the 32 MB a rollback would need. Per frame: the 4 KB pages that changed since the previous frame (found by comparing
+    // with a shadow copy, which is also what an incremental snapshot without write tracking does), the same at 64 KB, the pages
+    // changed in the last 8 frames (what a rollback of 8 frames restores), a full copy into a slot, a full restore from it (the same
+    // bytes, so the game does not notice), and the EE's busy time (frame interval minus idle wait minus this bench). One line per 300 frames.
+    namespace snapbench
+    {
+        constexpr uint32_t kPage = 4096u, kPages = kGuestRam / kPage, kWindow = 8u;
+        bool g_on = false;
+        std::vector<uint8_t> g_shadow, g_slot;
+        std::vector<uint32_t> g_lastDirty;
+        uint32_t g_frames = 0;
+        double g_sum[7] = {}, g_max[7] = {};
+        std::chrono::steady_clock::time_point g_lastEnd;
+        uint64_t g_lastIdleUs = 0;
+        double g_lastBenchMs = 0.0;
+
+        void add(int k, double v)
+        {
+            g_sum[k] += v;
+            g_max[k] = std::max(g_max[k], v);
+        }
+
+        void frame(uint8_t *rdram, uint32_t index)
+        {
+            using clk = std::chrono::steady_clock;
+            const auto ms = [](clk::time_point a, clk::time_point b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
+            const auto t0 = clk::now();
+            const uint64_t idleUs = g_wotmIdleUs.load(std::memory_order_relaxed);
+            if (g_shadow.empty())
+            {
+                g_shadow.assign(rdram, rdram + kGuestRam);
+                g_slot.resize(kGuestRam);
+                g_lastDirty.assign(kPages, 0xFFFFFFFFu);
+                g_lastEnd = t0;
+                g_lastIdleUs = idleUs;
+                std::fprintf(stderr, "[snapbench] on (frame %u)\n", index);
+                return;
+            }
+            const double busy = ms(g_lastEnd, t0) - (idleUs - g_lastIdleUs) / 1000.0 - g_lastBenchMs;
+            uint32_t dirty = 0, dirty64 = 0, window = 0;
+            bool group = false;
+            for (uint32_t p = 0; p < kPages; ++p)
+            {
+                const size_t at = static_cast<size_t>(p) * kPage;
+                if (std::memcmp(rdram + at, g_shadow.data() + at, kPage) != 0)
+                {
+                    std::memcpy(g_shadow.data() + at, rdram + at, kPage);
+                    g_lastDirty[p] = index;
+                    ++dirty;
+                    group = true;
+                }
+                if ((p & 15u) == 15u)
+                {
+                    dirty64 += group ? 1u : 0u;
+                    group = false;
+                }
+                if (g_lastDirty[p] != 0xFFFFFFFFu && index - g_lastDirty[p] < kWindow)
+                    ++window;
+            }
+            const auto t1 = clk::now();
+            std::memcpy(g_slot.data(), rdram, kGuestRam);
+            const auto t2 = clk::now();
+            std::memcpy(rdram, g_slot.data(), kGuestRam);
+            const auto t3 = clk::now();
+            add(0, ms(t0, t1));
+            add(1, ms(t1, t2));
+            add(2, ms(t2, t3));
+            add(3, dirty);
+            add(4, dirty64);
+            add(5, window);
+            add(6, busy);
+            if (++g_frames == 300u)
+            {
+                const double n = g_frames;
+                std::fprintf(stderr,
+                             "[snapbench] frame %u, 300 frames avg/max: compare+copy dirty %.2f/%.2f ms, full copy %.2f/%.2f ms, "
+                             "full restore %.2f/%.2f ms, dirty 4K pages %.0f/%.0f, dirty 64K blocks %.0f/%.0f, 4K pages dirty in last %u "
+                             "frames %.0f/%.0f, EE busy %.2f/%.2f ms\n",
+                             index, g_sum[0] / n, g_max[0], g_sum[1] / n, g_max[1], g_sum[2] / n, g_max[2], g_sum[3] / n, g_max[3],
+                             g_sum[4] / n, g_max[4], kWindow, g_sum[5] / n, g_max[5], g_sum[6] / n, g_max[6]);
+                g_frames = 0;
+                std::fill(std::begin(g_sum), std::end(g_sum), 0.0);
+                std::fill(std::begin(g_max), std::end(g_max), 0.0);
+            }
+            g_lastEnd = clk::now();
+            g_lastIdleUs = g_wotmIdleUs.load(std::memory_order_relaxed);
+            g_lastBenchMs = ms(t0, g_lastEnd);
+        }
+    }
+
     // fieldCounterAtStart/fieldCounter: D_006F8DC0/D_006F8DBC; fieldsForAverage: D_006F8DE4 (fields since timerSetFrameStart)
     void frame(uint8_t *rdram, uint32_t fieldCounter, uint32_t fieldCounterAtStart, uint32_t fieldsForAverage)
     {
@@ -831,6 +924,8 @@ namespace wotm_sync
         }
         if (!g_ring.empty() && g_levelLoaded)
             ringKeep(rdram, index);
+        if (snapbench::g_on && g_levelLoaded)
+            snapbench::frame(rdram, index);
         if (g_dumpAt >= 0 && index == static_cast<uint32_t>(g_dumpAt))
         {
             const std::string name = "state_" + std::to_string(index) + ".bin";
