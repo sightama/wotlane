@@ -172,3 +172,15 @@ test('lastLobbyNotice names the lobby without promising it is still open', () =>
   assert.match(lastLobbyNotice('ABCD'), /still open/);
   assert.doesNotMatch(lastLobbyNotice('ABCD'), /puts you back/);
 });
+
+test('LobbyClient: a refused HELLO closes the socket quietly, so the refusal stays on screen', async () => {
+  const ws = new FakeSocket();
+  const client = new LobbyClient(ws, 'wl-1');
+  let closed = false;
+  client.onClose = () => { closed = true; };
+  ws.open();
+  ws.reply('ERROR build differs');
+  await assert.rejects(client.ready, /build differs/);
+  assert.equal(ws.readyState, 3);
+  assert.equal(closed, false);
+});

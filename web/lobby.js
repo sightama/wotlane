@@ -70,6 +70,7 @@ export class LobbyClient {
     socket.onclose = () => this.closed();
     socket.onerror = () => {};
     this.ready = this.expect(['WELCOME']);
+    this.ready.catch(() => this.close());   // a refused HELLO leaves nothing to keep open
     socket.onopen = () => socket.send(`HELLO ${PROTOCOL} ${build}`);
   }
 
