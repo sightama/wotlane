@@ -13,6 +13,7 @@
 #include "wotm_lockon.hpp"
 #include "wotm_rtz.hpp"
 #include "wotm_hudedge.hpp"
+#include "wotm_pace.hpp"
 #include "wotm_trig_goldens.hpp"
 #include "net/wotm_modifiers.hpp"
 #include "wotm_tint.hpp"
@@ -5056,6 +5057,22 @@ TEST(hud_edge_shift_reaches_the_window_edge)
     // only Hud::update's two WINS buffers go to the edge (any address segment); other text stays
     CHECK(he::isWinsText(0x006EA920u) && he::isWinsText(0x006EA938u) && he::isWinsText(0x206EA920u));
     CHECK(!he::isWinsText(0x006EA924u) && !he::isWinsText(0));
+}
+
+// Watchdog pace window (ps2_runtime.cpp): game frames per second over a 2 s window, and whether the window counts toward SLOW
+TEST(watchdog_pace_window_rate_and_counting)
+{
+    namespace pc = wotm::pace;
+    const pc::Window normal = pc::measure(1000, 1120, 2.0, false, 0.02, false);
+    CHECK(normal.counted && normal.fps == 60.0);
+    // g_frame starts again after a match: the unsigned difference would wrap to ~4 billion, so the window doesn't count
+    const pc::Window restarted = pc::measure(50000, 30, 2.0, false, 0.02, false);
+    CHECK(!restarted.counted && restarted.fps == 0.0);
+    CHECK(!pc::measure(1000, 1000, 2.0, false, 0.0, false).counted);   // stuck: the freeze check handles it
+    CHECK(!pc::measure(1000, 1120, 2.0, true, 0.02, false).counted);   // a movie
+    CHECK(!pc::measure(1000, 1120, 2.0, false, 1.5, false).counted);   // a loading gap of over 1 s
+    CHECK(pc::measure(1000, 1120, 2.0, false, 1.0, false).counted);
+    CHECK(!pc::measure(1000, 1120, 2.0, false, 0.02, true).counted);   // a deliberate pause
 }
 
 // Inflate (wotm_zip.hpp): a fixed-Huffman deflate stream, as the game's zipInflateBlockFixed hands it to zipInflateCodes, in a fake
