@@ -87,6 +87,25 @@ async function lobbyLeave(run, n, spare, players, code) {
     `joined: ${inOk}; the choice is back: ${back}; no reload: ${sameDocument}; the others saw it go: ${outOk}; buttons usable again: ${reset}`);
 }
 
+// a line typed in one tab appears in every tab's chat log with its sender's name (markup stays text); six more in a burst are
+// refused with a plain message
+async function lobbyChat(run, n, players) {
+  const sender = players[n > 1 ? 1 : 0];
+  const text = 'hello <b>all</b> from ' + sender.name;
+  await sender.page.fill('#chatText', text);
+  await sender.page.click('#chatSend');
+  const shown = (p) => p.page.waitForFunction((want) => [...document.querySelectorAll('#chatLog li')].some((li) => li.textContent === want), `${sender.name}: ${text}`, { timeout: 10000 }).then(() => true, () => false);
+  const seen = await Promise.all(players.map(shown));
+  const plain = await sender.page.evaluate(() => document.querySelector('#chatLog li b') === null);
+  for (let i = 0; i < 6; i++) {
+    await sender.page.fill('#chatText', 'burst ' + i);
+    await sender.page.press('#chatText', 'Enter');
+  }
+  const refused = await sender.page.waitForFunction(() => /chatting too fast/.test(document.getElementById('frontMsg').textContent), null, { timeout: 5000 }).then(() => true, () => false);
+  run.report.add(n, 'lobby_chat', seen.every(Boolean) && plain && refused ? 'pass' : 'fail',
+    `every tab shows the line: ${seen.join(',')}; markup stayed text: ${plain}; a burst is refused with a message: ${refused}`);
+}
+
 // every tab shows a round trip in ms next to every member while the lobby waits (the server measures each browser with WebSocket pings)
 async function lobbyPing(run, n, players) {
   const shows = (p) => p.page.waitForFunction((k) => [...document.querySelectorAll('#members li')].filter((li) => /, \d+ ms(, owner)?$/.test(li.textContent)).length === k, n, { timeout: 15000 }).then(() => true, () => false);
@@ -240,6 +259,7 @@ export async function matchSession(run, n) {
     spare.name = 'Spare';   // it types P1 (a duplicate name) but its logs and screenshots must not overwrite P1's
     await lobbyErrors(run, n, spare, code);
     await lobbyPing(run, n, players);
+    await lobbyChat(run, n, players);
     await lobbyList(run, n, spare, players, code);
     if (n === run.opts.maxPlayers) await capCheck(run, n, spare, code, players);
     else await lobbyLeave(run, n, spare, players, code);

@@ -41,6 +41,8 @@
   #joinCode { width: 6em; text-transform: uppercase; letter-spacing: .2em; }
   #code { font: 700 28px/1 ui-monospace, monospace; letter-spacing: .25em; color: var(--accent); }
   #members { margin: 0; padding-left: 18px; }
+  #chatLog { margin: 0; padding: 0; list-style: none; max-height: 8em; overflow-y: auto; font-size: 13px; overflow-wrap: anywhere; }
+  #chatLog:empty { display: none; }
   #lobbies { margin: 8px 0 0; padding: 0; list-style: none; display: grid; gap: 6px; }
   #lobbies li { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
   #frontMsg { color: var(--dim); min-height: 1.4em; margin: 0; }
@@ -99,6 +101,10 @@
         <label><span><input type="checkbox" id="mod_jump"> Jump <input type="checkbox" id="mod_fast"> Fast
           <input type="checkbox" id="mod_turbo"> Turbo</span></label>
         <button id="start" class="main">Start</button>
+      </div>
+      <div id="chat" style="display:grid;gap:6px">
+        <ul id="chatLog" aria-live="polite"></ul>
+        <div class="row"><input id="chatText" maxlength="200" placeholder="Say something" aria-label="Chat message" autocomplete="off" style="flex:1"><button id="chatSend">Send</button></div>
       </div>
       <p id="guestSettings" style="margin:0;color:var(--dim)"></p>
       <div class="row"><button id="leave">Leave</button></div>

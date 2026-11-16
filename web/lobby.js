@@ -75,6 +75,13 @@ export function parsePings(parsed) {
   return pings;
 }
 
+// CHAT <code> <name> <text...>: the text keeps its spaces
+export function parseChat(parsed) {
+  const [, name] = parsed.words;
+  const text = parsed.words.slice(2).join(' ');
+  return { name, text };
+}
+
 // the address a friend opens to land in the lobby `code`: this page with only the code
 export function inviteLink(location, code) {
   return `${location.origin}${location.pathname}?join=${code}`;
@@ -92,6 +99,7 @@ export class LobbyClient {
     this.onSettings = null;
     this.onMatch = null;
     this.onPings = null;
+    this.onChat = null;
     this.onClose = null;
     this.onError = null;   // an ERROR no request waits for
     // requests waiting for their replies, oldest first: {replies (commands still expected, in order), got (the first reply),
@@ -124,6 +132,8 @@ export class LobbyClient {
       this.onMembers?.(parseMembers(p));
     } else if (p.cmd === 'PINGS') {
       this.onPings?.(parsePings(p));
+    } else if (p.cmd === 'CHAT') {
+      this.onChat?.(parseChat(p));
     } else if (p.cmd === 'MATCH') {
       this.onMatch?.(p.fields);
     } else if (p.cmd === 'LOBBY') {
@@ -180,6 +190,9 @@ export class LobbyClient {
   monster(id) { return this.request(`MONSTER ${id}`, ['MEMBERS']); }
 
   start() { return this.request('START', ['MATCH']); }
+
+  // a line of lobby chat, before the match; the server sends it back to everyone, this member included (or an ERROR: too fast)
+  chat(text) { this.socket.send(`CHAT ${text}`); }
 
   // leaves the lobby and keeps the connection; resolves with the code of the lobby that was left
   async leave() {

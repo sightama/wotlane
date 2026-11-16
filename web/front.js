@@ -78,6 +78,24 @@ function showMembers(m) {
   showMemberList();
 }
 
+// the lobby's chat: the last CHAT_LINES lines, the newest in view
+const CHAT_LINES = 50;
+function showChat({ name, text }) {
+  const log = $('chatLog');
+  const li = document.createElement('li');
+  li.textContent = `${name}: ${text}`;
+  log.append(li);
+  while (log.children.length > CHAT_LINES) log.firstChild.remove();
+  log.scrollTop = log.scrollHeight;
+}
+
+function sendChat() {
+  const text = $('chatText').value.trim();
+  if (!text || !lobby) return;
+  lobby.chat(text);
+  $('chatText').value = '';
+}
+
 // each member's round trip to the server arrives (PINGS) every second while the lobby waits; a member without a measurement shows none
 function showMemberList() {
   $('members').replaceChildren(...members.members.map((p) => {
@@ -94,6 +112,7 @@ async function connect(build) {
   const ws = new WebSocket(serverUrl('/lobby'));
   const client = new LobbyClient(ws, build);
   client.onMembers = showMembers;
+  client.onChat = showChat;
   client.onPings = (p) => { pings = p; showMemberList(); };
   client.onSettings = (s) => {
     // a saved map shows by its name when this browser has it (Your creations), else by its id
@@ -193,6 +212,7 @@ async function hostOrJoin(join) {
   const code = $('joinCode').value.trim().toUpperCase();
   if (join && !/^[A-Z2-9]{4}$/.test(code)) return say('The code has 4 characters (letters and digits).');
   pings = {};
+  $('chatLog').replaceChildren();
   say(join ? 'Joining' : 'Creating a lobby');
   stopWatchingLobbies();
   const buttons = ['single', 'host', 'join'].map($);
@@ -320,6 +340,8 @@ function init() {
     });
   });
   $('copyInvite').addEventListener('click', copyInvite);
+  $('chatSend').addEventListener('click', sendChat);
+  $('chatText').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendChat(); });
   $('refreshLobbies').addEventListener('click', refreshLobbies);
   startWatchingLobbies();
   $('start').addEventListener('click', () => lobby?.start().catch((e) => say(friendlyError(e.message))));

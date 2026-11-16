@@ -284,6 +284,8 @@ namespace wotm_net
             joinLobby(ci, w);
         else if (cmd == "SET")
             setLobby(ci, w);
+        else if (cmd == "CHAT")
+            chat(ci, line);
         else if (cmd == "MONSTER" && w.size() >= 2)
             changeMonster(ci, w);
         else if (cmd == "LEAVE")
@@ -531,6 +533,70 @@ namespace wotm_net
             for (int m : l.members)
                 conns_[static_cast<size_t>(m)]->link->sendLine(line);
         }
+    }
+
+    // well-formed UTF-8 (a browser closes a WebSocket that carries a text frame that isn't)
+    static bool validUtf8(const std::string &s)
+    {
+        size_t i = 0;
+        while (i < s.size())
+        {
+            const unsigned char b = static_cast<unsigned char>(s[i]);
+            const size_t more = b < 0x80 ? 0 : b >= 0xC2 && b <= 0xDF ? 1 : b >= 0xE0 && b <= 0xEF ? 2 : b >= 0xF0 && b <= 0xF4 ? 3 : SIZE_MAX;
+            if (more == SIZE_MAX || i + more >= s.size())
+                return false;
+            for (size_t k = 1; k <= more; ++k)
+                if ((static_cast<unsigned char>(s[i + k]) & 0xC0) != 0x80)
+                    return false;
+            if (b == 0xE0 && static_cast<unsigned char>(s[i + 1]) < 0xA0 || b == 0xED && static_cast<unsigned char>(s[i + 1]) > 0x9F ||
+                b == 0xF0 && static_cast<unsigned char>(s[i + 1]) < 0x90 || b == 0xF4 && static_cast<unsigned char>(s[i + 1]) > 0x8F)
+                return false;
+            i += more + 1;
+        }
+        return true;
+    }
+
+    void Server::chat(int ci, const std::string &line)
+    {
+        Conn &c = *conns_[static_cast<size_t>(ci)];
+        if (c.lobby < 0)
+            return void(c.link->sendLine("ERROR join a lobby first"));
+        Lobby &l = lobbies_[static_cast<size_t>(c.lobby)];
+        if (l.match)
+            return void(c.link->sendLine("ERROR chat is only open before the match"));
+        // printable text only: control characters go, the ends are trimmed, and the cut never splits a UTF-8 character
+        std::string text;
+        for (size_t i = 4; i < line.size(); ++i)
+            if (static_cast<unsigned char>(line[i]) >= 0x20 && static_cast<unsigned char>(line[i]) != 0x7f)
+                text += line[i];
+        if (!validUtf8(text))
+            return void(c.link->sendLine("ERROR chat text is not valid text"));
+        const auto trim = [&text] {
+            const size_t first = text.find_first_not_of(' '), last = text.find_last_not_of(' ');
+            text = first == std::string::npos ? "" : text.substr(first, last - first + 1);
+        };
+        trim();
+        if (text.size() > proto::kMaxChatBytes)
+        {
+            size_t cut = proto::kMaxChatBytes;
+            while (cut > 0 && (static_cast<unsigned char>(text[cut]) & 0xC0) == 0x80)
+                --cut;
+            text.resize(cut);
+            trim();
+        }
+        if (text.empty())
+            return;
+        const auto now = Clock::now();
+        if (now - c.chatWindow >= std::chrono::milliseconds(proto::kChatWindowMs))
+        {
+            c.chatWindow = now;
+            c.chatLines = 0;
+        }
+        if (++c.chatLines > proto::kChatBurst)
+            return void(c.link->sendLine("ERROR chat too fast; wait a few seconds"));
+        const std::string out = "CHAT " + l.code + " " + c.name + " " + text;
+        for (int m : l.members)
+            conns_[static_cast<size_t>(m)]->link->sendLine(out);
     }
 
     std::string Server::settingsLine(const Lobby &l) const
