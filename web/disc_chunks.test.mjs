@@ -18,22 +18,25 @@ const CHUNK_URL = new RegExp(`/${DIGEST}/\\d+\\.bin`);
 
 // the server: /data/index.json, /data/<digest>/manifest.json and /data/<digest>/<n>.bin (plain 200, whole chunk), and the whole-file
 // Range answer of a server that was not split; `chunked: false` has no index (404). `bad(n, attempt)` returns the bytes to send for
-// chunk n instead (attempt 0 is the first request, then ?retry=1, 2, ...). `answer` is synchronous; fakeServer wraps it as a fetch.
+// chunk n instead (attempt 0 is the first request for it, 1 the next, ...). `answer` is synchronous; fakeServer wraps it as a fetch.
 function server({ chunked = true, bad = () => null, size = SIZE, file = FILE } = {}) {
   const calls = [];
+  const asked = new Map();   // chunk -> requests so far
   const chunkCount = Math.ceil(size / CHUNK);
   const manifest = { name: 'game.iso', size, chunkBytes: CHUNK, chunks: chunkCount, sha256: Array.from({ length: chunkCount }, (_, n) => hex(file.slice(n * CHUNK, (n + 1) * CHUNK))) };
   const index = { chunkBytes: CHUNK, files: { 'game.iso': { digest: DIGEST, size } } };
   const json = (o) => ({ status: 200, body: new TextEncoder().encode(JSON.stringify(o)) });
   function answer(url, init = {}) {
     const u = String(url);
-    calls.push({ url: u, range: init.headers?.Range ?? null, method: init.method ?? 'GET' });
+    calls.push({ url: u, range: init.headers?.Range ?? null, method: init.method ?? 'GET', cache: init.cache ?? null });
     let m;
     if (/data\/+index\.json$/.test(u)) return chunked ? json(index) : { status: 404, body: new Uint8Array() };
     if (new RegExp(`(^|/)data/${DIGEST}/manifest\\.json$`).test(u)) return json(manifest);
-    if ((m = new RegExp(`(^|/)data/${DIGEST}/(\\d+)\\.bin(\\?retry=(\\d+))?$`).exec(u))) {
+    if ((m = new RegExp(`(^|/)data/${DIGEST}/(\\d+)\\.bin(\\?retry=\\w+)?$`).exec(u))) {
       const n = Number(m[2]);
-      return { status: 200, body: bad(n, Number(m[4] ?? 0)) ?? file.slice(n * CHUNK, (n + 1) * CHUNK) };
+      const attempt = asked.get(n) ?? 0;
+      asked.set(n, attempt + 1);
+      return { status: 200, body: bad(n, attempt) ?? file.slice(n * CHUNK, (n + 1) * CHUNK) };
     }
     if (/data\/+game\.iso$/.test(u)) {   // the whole-file path
       if (init.method === 'HEAD') return { status: 200, body: null, headers: { etag: '"raw"', 'content-length': String(size) } };
@@ -58,7 +61,9 @@ function fakeServer(opts) {
   return fn;
 }
 
-const make = (net, extra = {}) => chunkedFetch(net, { subtle: crypto.subtle, ...extra });
+const quiet = () => {};
+const make = (net, extra = {}) => chunkedFetch(net, { subtle: crypto.subtle, log: quiet, ...extra });
+const counter = () => { let k = 0; return () => `r${++k}`; };   // retry URLs that are easy to tell apart
 const range = (a, b) => ({ headers: { Range: `bytes=${a}-${b}` } });
 const bytesOf = async (r) => [...new Uint8Array(await r.arrayBuffer())];
 
@@ -146,11 +151,11 @@ const WRONG = Uint8Array.from([9, 9, 9, 9, 9, 9, 9, 9]);
 
 test('a chunk that fails its hash is fetched again from a new URL and never returned wrong', async () => {
   const net = fakeServer({ bad: (n, attempt) => (n === 1 && attempt === 0 ? WRONG : null) });
-  const f = make(net, { retryDelayMs: 0 });
+const f = make(net, { retryDelayMs: 0, nonce: counter() });
   assert.deepEqual(await bytesOf(await f('http://x/data/game.iso', range(8, 15))), [...FILE.slice(8, 16)]);
   const calls = net.chunkCalls();
   assert.equal(calls.length, 2);
-  assert.match(calls[1].url, /1\.bin\?retry=1$/);   // another URL, so a bad copy at the edge is not served again
+  assert.match(calls[1].url, /1\.bin\?retry=r1$/);   // another URL, so a bad copy at the edge is not served again
 });
 
 test('a chunk that keeps failing, or arrives the wrong length, is an error and nothing is returned', async () => {
@@ -272,7 +277,7 @@ function fakeXhr(s) {
 
 test('the sync reader gives the bytes of a range [start, end) from chunk files and the version to keep them under', () => {
   const s = server();
-  const reader = syncChunkReader(fakeXhr(s));
+  const reader = syncChunkReader(fakeXhr(s), { log: quiet });
   const got = reader.read('http://x/data/game.iso', 6, 10);
   assert.deepEqual([...got.bytes], [6, 7, 8, 9]);
   assert.equal(got.etag, `"${DIGEST}"`);
@@ -282,18 +287,18 @@ test('the sync reader gives the bytes of a range [start, end) from chunk files a
 });
 
 test('the sync reader returns null when there is no index, and throws when the index fails another way', () => {
-  assert.equal(syncChunkReader(fakeXhr(server({ chunked: false }))).read('http://x/data/game.iso', 0, 8), null);
+  assert.equal(syncChunkReader(fakeXhr(server({ chunked: false })), { log: quiet }).read('http://x/data/game.iso', 0, 8), null);
   const failing = server();
   const X = fakeXhr({ answer: (u, i) => (/index/.test(u) ? { status: 503, body: null } : failing.answer(u, i)), calls: [] });
-  assert.throws(() => syncChunkReader(X).read('http://x/data/game.iso', 0, 8), /index.*503/);
+  assert.throws(() => syncChunkReader(X, { log: quiet }).read('http://x/data/game.iso', 0, 8), /index.*503/);
 });
 
 test('the sync reader checks every chunk, tries again from a new URL, and throws when it stays wrong', () => {
-  const s = server({ bad: (n, attempt) => (n === 0 && attempt === 0 ? WRONG : null) });
-  assert.deepEqual([...syncChunkReader(fakeXhr(s)).read('http://x/data/game.iso', 0, 8).bytes], [...FILE.slice(0, 8)]);
-  assert.match(s.calls.at(-1).url, /0\.bin\?retry=1$/);
+const s = server({ bad: (n, attempt) => (n === 0 && attempt === 0 ? WRONG : null) });
+  assert.deepEqual([...syncChunkReader(fakeXhr(s), { nonce: counter(), log: quiet }).read('http://x/data/game.iso', 0, 8).bytes], [...FILE.slice(0, 8)]);
+  assert.match(s.calls.at(-1).url, /0\.bin\?retry=r1$/);
   const stuck = server({ bad: (n) => (n === 0 ? WRONG : null) });
-  assert.throws(() => syncChunkReader(fakeXhr(stuck)).read('http://x/data/game.iso', 0, 8), /chunk 0/);
+  assert.throws(() => syncChunkReader(fakeXhr(stuck), { log: quiet }).read('http://x/data/game.iso', 0, 8), /chunk 0/);
 });
 
 // the worker's XMLHttpRequest: a base class the wrapper subclasses, which must not be used for the chunk requests
@@ -316,7 +321,7 @@ function wrapped(chunkReader) {
 }
 
 test('a worker\'s synchronous disc read that the helper cannot answer is read from chunk files and handed to the helper to keep', () => {
-  const { x, kept } = wrapped(syncChunkReader(fakeXhr(server())));
+  const { x, kept } = wrapped(syncChunkReader(fakeXhr(server()), { log: quiet }));
   x.send();
   assert.equal(x.sent, 0, 'the whole-file URL is not used');
   assert.equal(x.status, 206);
@@ -325,8 +330,74 @@ test('a worker\'s synchronous disc read that the helper cannot answer is read fr
 });
 
 test('without an index the worker\'s synchronous read goes to the whole-file URL as it always did', () => {
-  const { x, kept } = wrapped(syncChunkReader(fakeXhr(server({ chunked: false }))));
+  const { x, kept } = wrapped(syncChunkReader(fakeXhr(server({ chunked: false })), { log: quiet }));
   x.send();
   assert.equal(x.sent, 1);
   assert.deepEqual(kept.map(([s, , etag]) => [s, etag]), [[8, '"raw"']]);
+});
+
+// ---- what the review of the loader asked to be pinned down ----
+
+test('retry URLs are never reused: two reads that both need a retry ask for four different chunk URLs', async () => {
+  const net = fakeServer({ bad: (n, attempt) => (attempt % 2 === 0 ? WRONG : null) });   // every first request of a chunk is bad
+  const f = make(net, { retryDelayMs: 0, nonce: counter() });
+  await f('http://x/data/game.iso', range(0, 7));
+  await f('http://x/data/game.iso', range(8, 15));
+  const urls = net.chunkCalls().map((c) => c.url);
+  assert.equal(new Set(urls).size, urls.length);
+});
+
+test('every failure is logged with its reason before the read fails', async () => {
+  const logged = [];
+  const f = make(fakeServer({ bad: (n) => (n === 0 ? WRONG : null) }), { retryDelayMs: 0, log: (m) => logged.push(m) });
+  await assert.rejects(f('http://x/data/game.iso', range(0, 7)));
+  assert.deepEqual(logged, ['[disc] disc chunk 0 of game.iso failed its SHA-256 check']);
+  const syncLogged = [];
+  assert.throws(() => syncChunkReader(fakeXhr(server({ bad: (n) => (n === 0 ? WRONG : null) })), { log: (m) => syncLogged.push(m) }).read('http://x/data/game.iso', 0, 8));
+  assert.deepEqual(syncLogged, ['[disc] disc chunk 0 of game.iso failed its SHA-256 check']);
+});
+
+test('the index is revalidated, not taken from the HTTP cache', async () => {
+  const net = fakeServer();
+  await make(net)('http://x/data/game.iso', { method: 'HEAD' });
+  assert.equal(net.calls.find((c) => /index\.json/.test(c.url)).cache, 'no-cache');
+});
+
+test('an index or manifest that does not fit what it describes is an error', async () => {
+  const served = (override) => async (url, init) => {
+    const u = String(url);
+    if (override[0].test(u)) return Response.json(override[1]);
+    return fakeServer()(url, init);
+  };
+  const wrongIndex = make(served([/index\.json/, { files: { 'game.iso': { digest: 'nothex', size: SIZE } } }]));
+  await assert.rejects(wrongIndex('http://x/data/game.iso', range(0, 7)), /bad entry/);
+  const notAnIndex = make(served([/index\.json/, { chunkBytes: CHUNK }]));
+  await assert.rejects(notAnIndex('http://x/data/game.iso', range(0, 7)), /not valid/);
+  const wrongSize = make(served([/manifest\.json/, { name: 'game.iso', size: SIZE + 1, chunkBytes: CHUNK, chunks: 3, sha256: ['0'.repeat(64), '0'.repeat(64), '0'.repeat(64)] }]));
+  await assert.rejects(wrongSize('http://x/data/game.iso', range(0, 7)), /does not match the index/);
+  const fewHashes = make(served([/manifest\.json/, { name: 'game.iso', size: SIZE, chunkBytes: CHUNK, chunks: 3, sha256: ['0'.repeat(64)] }]));
+  await assert.rejects(fewHashes('http://x/data/game.iso', range(0, 7)), /does not match the index/);
+});
+
+test('a manifest that fails once is asked for again by the next read', async () => {
+  const net = fakeServer();
+  let failing = true;
+  const flaky = async (url, init) => (failing && /manifest\.json/.test(String(url)) ? new Response('no', { status: 503 }) : net(url, init));
+  const f = make(flaky);
+  await assert.rejects(f('http://x/data/game.iso', range(0, 7)), /manifest.*503/);
+  failing = false;
+  assert.deepEqual(await bytesOf(await f('http://x/data/game.iso', range(0, 7))), [...FILE.slice(0, 8)]);
+});
+
+test('a lowercase range header counts, and a range that is not bytes=a-b is a 416', async () => {
+  const f = make(fakeServer());
+  assert.deepEqual(await bytesOf(await f('http://x/data/game.iso', { headers: { range: 'bytes=2-4' } })), [2, 3, 4]);
+  assert.equal((await f('http://x/data/game.iso', { headers: { Range: 'bytes=-4' } })).status, 416);
+  assert.equal((await f('http://x/data/game.iso', { headers: { Range: 'bytes=0-1,4-5' } })).status, 416);
+});
+
+test('the sync reader cuts a read past the end of the file short, and has no answer for one that starts past it', () => {
+  const reader = syncChunkReader(fakeXhr(server()), { log: quiet });
+  assert.deepEqual([...reader.read('http://x/data/game.iso', 16, 40).bytes], [...FILE.slice(16)]);
+  assert.equal(reader.read('http://x/data/game.iso', SIZE, SIZE + 8), null);
 });

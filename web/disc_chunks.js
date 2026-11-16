@@ -53,8 +53,10 @@
     return json;
   }
 
-  // chunk n's URL; a later attempt names another URL, so that a bad copy kept by the browser or the edge is not served again
-  const chunkUrl = (base, entry, n, attempt) => `${base}${entry.digest}/${n}.bin${attempt ? `?retry=${attempt}` : ''}`;
+  // chunk n's URL; a retry names a URL nothing has been asked for before (`nonce`), so that a bad copy kept by the browser or the
+  // edge, under the chunk's own URL or an earlier retry's, is not served again
+  const chunkUrl = (base, entry, n, nonce) => `${base}${entry.digest}/${n}.bin${nonce ? `?retry=${nonce}` : ''}`;
+  const randomNonce = () => Math.random().toString(36).slice(2, 10);
   const chunkLength = (manifest, n) => Math.min(manifest.chunkBytes, manifest.size - n * manifest.chunkBytes);
 
   async function sha256Hex(subtle, bytes) {
@@ -109,7 +111,7 @@
   // when it fails) and cut to size. With no index (a 404, the server is not split) and for anything the index does not list, `baseFetch`
   // answers as it is. An index that fails another way is an error: falling back to the whole file would hide a broken server. At most
   // `maxInflight` chunk files are in flight at once. `onBytes` hears the size of each chunk that arrived.
-  function chunkedFetch(baseFetch, { subtle = null, maxInflight = 12, tries = 3, retryDelayMs = 300, onBytes = null } = {}) {
+  function chunkedFetch(baseFetch, { subtle = null, maxInflight = 12, tries = 3, retryDelayMs = 300, onBytes = null, nonce = randomNonce, log = console.error } = {}) {
     const indexes = new Map();     // base -> Promise of the index, or null when the server has none
     const manifests = new Map();   // base + digest -> Promise of the manifest
     let active = 0;
@@ -126,7 +128,7 @@
     }
 
     const getIndex = (base) => remembered(indexes, base, async () => {
-      const r = await baseFetch(base + 'index.json');
+      const r = await baseFetch(base + 'index.json', { cache: 'no-cache' });   // revalidated: a new disc is announced there
       if (r.status === 404) return null;
       if (!r.ok) throw new Error(`disc index: HTTP ${r.status}`);
       return parseIndex(await r.json());
@@ -154,7 +156,7 @@
     async function getChunk(base, name, entry, manifest, n) {
       for (let attempt = 0; ; attempt++) {
         const bytes = await limited(async () => {
-          const r = await baseFetch(chunkUrl(base, entry, n, attempt));
+          const r = await baseFetch(chunkUrl(base, entry, n, attempt && nonce()));
           if (r.status !== 200) throw new Error(`disc chunk ${n} of ${name}: HTTP ${r.status}`);
           return new Uint8Array(await r.arrayBuffer());
         });
@@ -168,7 +170,7 @@
       }
     }
 
-    return async function (url, init = {}) {
+    async function read(url, init) {
       const found = discPath(url);
       if (!found) return baseFetch(url, init);
       const path = { base: absolute(found.base), file: found.file };
@@ -195,6 +197,16 @@
       }
       const extra = m ? { 'content-range': `bytes ${start}-${end}/${entry.size}` } : {};
       return new Response(body, { status: m ? 206 : 200, headers: { ...headers, ...extra, 'content-length': String(body.length) } });
+    }
+
+    // the game turns a failed read into a bare I/O error, so the reason is logged here
+    return async function (url, init = {}) {
+      try {
+        return await read(url, init);
+      } catch (e) {
+        log?.(`[disc] ${e.message}`);
+        throw e;
+      }
     };
   }
 
@@ -202,7 +214,7 @@
   // { bytes, etag } for the bytes [start, end) of a disc file, or null when the server has no index (or does not list the file). Chunks
   // are fetched with `Xhr`, one after the other, and checked with sha256Sync; a bad chunk is asked for again from another URL, and any
   // failure throws (the caller, the game's own retry loop, tries the whole read again).
-  function syncChunkReader(Xhr, { tries = 3 } = {}) {
+  function syncChunkReader(Xhr, { tries = 3, nonce = randomNonce, log = console.error } = {}) {
     const indexes = new Map();
     const manifests = new Map();
 
@@ -237,18 +249,18 @@
 
     function getChunk(base, name, entry, manifest, n) {
       for (let attempt = 0; ; attempt++) {
-        const r = get(chunkUrl(base, entry, n, attempt));
+        const r = get(chunkUrl(base, entry, n, attempt && nonce()));
         if (r.status !== 200) throw new Error(`disc chunk ${n} of ${name}: HTTP ${r.status}`);
         if (r.bytes.length === chunkLength(manifest, n) && sha256Sync(r.bytes) === manifest.sha256[n]) return r.bytes;
         if (attempt + 1 >= tries) throw new Error(`disc chunk ${n} of ${name} failed its SHA-256 check`);
       }
     }
 
-    function read(url, start, end) {
+    function readRange(url, start, end) {
       const found = discPath(url);
       const path = found && { base: absolute(found.base), file: found.file };
       const index = path && getIndex(path.base);
-      const entry = entryOf(index, path.file);
+      const entry = entryOf(index, path?.file);
       if (!entry || start >= Math.min(end, entry.size)) return null;
       const manifest = getManifest(path.base, path.file, entry);
       const last = Math.min(end, entry.size) - 1;
@@ -259,6 +271,15 @@
         at += to - from;
       }
       return { bytes, etag: discEtag(entry) };
+    }
+
+    function read(url, start, end) {
+      try {
+        return readRange(url, start, end);
+      } catch (e) {
+        log?.(`[disc] ${e.message}`);
+        throw e;
+      }
     }
 
     return { read };
