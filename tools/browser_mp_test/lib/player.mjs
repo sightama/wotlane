@@ -53,7 +53,7 @@ export class Player {
     const page = await context.newPage();
     const p = new Player({ name, index, context, page, monster });
     p.gameViewport = gameViewport;
-    page.on('pageerror', (e) => p.errors.push(e.message));
+    page.on('pageerror', (e) => p.errors.push(`${e.message}${e.stack ? ' @ ' + e.stack.split('\n').slice(0, 3).join(' | ') : ''}`));
     await page.goto(url, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => document.getElementById('monster')?.options.length > 0);
     await page.fill('#name', name);

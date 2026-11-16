@@ -90,7 +90,7 @@ async function connect(build) {
     $('guestSettings').textContent = `Stage: ${stage ? stage.text : s.stage}, wins: ${s.wins === '0' ? 'endless' : s.wins}` +
       (s.mods ? `, modifiers: ${s.mods}` : '');
   };
-  client.onError = say;
+  client.onError = (text) => say(friendlyError(text));
   client.onClose = () => { if (!front.hidden) say('Lost the connection to the game server. Reload the page to try again.'); };
   client.onMatch = (match) => {
     try { sessionStorage.setItem('wotlane.lobby', client.code); } catch { /* private window: not kept */ }
@@ -120,7 +120,7 @@ async function hostOrJoin(join) {
     showLobby(join ? await lobby.join(code, name, monster) : await lobby.create(name, monster), !join);
     if (!join) await sendSettings();
   } catch (e) {
-    say(e.message);
+    say(friendlyError(e.message));
     lobby?.close();
     lobby = null;
     for (const b of buttons) b.disabled = false;
@@ -134,7 +134,7 @@ async function sendSettings() {
   try {
     await lobby.set({ stage: $('lobbyStage').value, wins: $('wins').value, mods });
   } catch (e) {
-    say(e.message);
+    say(friendlyError(e.message));
   }
 }
 
@@ -198,11 +198,11 @@ function init() {
     remember('monster', picked);
     if (!lobby) return;
     lobby.monster(picked).then(() => { myMonster = picked; }, (e) => {
-      say(e.message);
+      say(friendlyError(e.message));
       $('monster').value = String(myMonster);   // the server kept the previous one
     });
   });
-  $('start').addEventListener('click', () => lobby?.start().catch((e) => say(e.message)));
+  $('start').addEventListener('click', () => lobby?.start().catch((e) => say(friendlyError(e.message))));
   $('leave').addEventListener('click', () => location.reload());
 }
 

@@ -58,9 +58,9 @@ async function lobbyErrors(run, n, spare, code) {
   const R = run.report;
   const dup = await spare.join(code);   // the spare is called like P1
   // a full lobby (N=8) refuses for being full before it looks at the name
-  const dupOk = !dup.joined && (n === run.opts.maxPlayers ? /full/ : /name already taken/).test(dup.first);
+  const dupOk = !dup.joined && (n === run.opts.maxPlayers ? /full/ : /already has that name/).test(dup.first);
   const wrong = await spare.join(code === 'ZZZZ' ? 'YYYY' : 'ZZZZ');
-  const wrongOk = !wrong.joined && /no such lobby/.test(wrong.first);
+  const wrongOk = !wrong.joined && /No lobby has that code/.test(wrong.first);
   noteRefusal(run, 'duplicate name', dup);
   noteRefusal(run, 'wrong code', wrong);
   await spare.page.fill('#joinCode', 'AB');
