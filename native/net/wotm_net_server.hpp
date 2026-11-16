@@ -69,6 +69,8 @@ namespace wotm_net
             int lobby = -1;
             std::string name;
             proto::Pick pick;   // monster and skin for the next match
+            Clock::time_point chatWindow{};   // start of the current chat window and the lines sent in it
+            int chatLines = 0;
         };
 
         // a browser in a match (WebSocket /match)
@@ -150,6 +152,8 @@ namespace wotm_net
         void sendMembers(int lobby);
         // pings the members of waiting lobbies and tells each lobby its members' round trips (PINGS)
         void tickLobbyPings();
+        // CHAT <text>: plain text to everyone in the member's waiting lobby, rate limited
+        void chat(int c, const std::string &line);
         // SETTINGS <code> stage=<n or map id> wins=<n> mods=<list>
         std::string settingsLine(const Lobby &l) const;
         void sendSettings(int lobby);

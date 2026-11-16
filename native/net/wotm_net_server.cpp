@@ -284,6 +284,8 @@ namespace wotm_net
             joinLobby(ci, w);
         else if (cmd == "SET")
             setLobby(ci, w);
+        else if (cmd == "CHAT")
+            chat(ci, line);
         else if (cmd == "MONSTER" && w.size() >= 2)
             changeMonster(ci, w);
         else if (cmd == "LEAVE")
@@ -531,6 +533,43 @@ namespace wotm_net
             for (int m : l.members)
                 conns_[static_cast<size_t>(m)]->link->sendLine(line);
         }
+    }
+
+    void Server::chat(int ci, const std::string &line)
+    {
+        Conn &c = *conns_[static_cast<size_t>(ci)];
+        if (c.lobby < 0)
+            return void(c.link->sendLine("ERROR join a lobby first"));
+        Lobby &l = lobbies_[static_cast<size_t>(c.lobby)];
+        if (l.match)
+            return void(c.link->sendLine("ERROR chat is only open before the match"));
+        // printable text only: control characters go, the ends are trimmed, and the cut never splits a UTF-8 character
+        std::string text;
+        for (size_t i = 4; i < line.size(); ++i)
+            if (static_cast<unsigned char>(line[i]) >= 0x20 && static_cast<unsigned char>(line[i]) != 0x7f)
+                text += line[i];
+        const size_t first = text.find_first_not_of(' '), last = text.find_last_not_of(' ');
+        text = first == std::string::npos ? "" : text.substr(first, last - first + 1);
+        if (text.size() > proto::kMaxChatBytes)
+        {
+            size_t cut = proto::kMaxChatBytes;
+            while (cut > 0 && (static_cast<unsigned char>(text[cut]) & 0xC0) == 0x80)
+                --cut;
+            text.resize(cut);
+        }
+        if (text.empty())
+            return;
+        const auto now = Clock::now();
+        if (now - c.chatWindow >= std::chrono::milliseconds(proto::kChatWindowMs))
+        {
+            c.chatWindow = now;
+            c.chatLines = 0;
+        }
+        if (++c.chatLines > proto::kChatBurst)
+            return void(c.link->sendLine("ERROR chat too fast; wait a few seconds"));
+        const std::string out = "CHAT " + l.code + " " + c.name + " " + text;
+        for (int m : l.members)
+            conns_[static_cast<size_t>(m)]->link->sendLine(out);
     }
 
     std::string Server::settingsLine(const Lobby &l) const

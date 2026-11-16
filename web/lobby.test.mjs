@@ -2,7 +2,7 @@
 // ABOUTME: tools/net_lobby.py's match_env) and the lobby client's requests and replies over a fake WebSocket. Run: node --test web/
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { PROTOCOL, parseLine, parseMembers, matchEnv, lobbySocketUrl, lastLobbyNotice, inviteLink, lobbyRow, parsePings, LobbyClient } from './lobby.js';
+import { PROTOCOL, parseLine, parseMembers, matchEnv, lobbySocketUrl, lastLobbyNotice, inviteLink, lobbyRow, parsePings, parseChat, LobbyClient } from './lobby.js';
 
 const MATCH_LINE = 'MATCH lobby=QZXW players=2 stage=9 wins=2 mods=jump,turbo monsters=5,1 names=Ana,Bia ' +
   'seed=12345 step=1 you=1 token=00aa11bb22cc33dd port=7777';
@@ -249,4 +249,19 @@ test('LobbyClient hands PINGS lines to onPings', async () => {
   client.onPings = (p) => seen.push(p);
   ws.reply('PINGS QZXW Ana:-,Bia:23');
   assert.deepEqual(seen, [{ Ana: null, Bia: 23 }]);
+});
+
+test('parseChat splits the sender from the text, which keeps its spaces', () => {
+  assert.deepEqual(parseChat(parseLine('CHAT QZXW Ana hello  there, all')), { name: 'Ana', text: 'hello  there, all' });
+});
+
+test('LobbyClient hands CHAT lines to onChat and sends chat without waiting for a reply', async () => {
+  const { ws, client } = await connected();
+  const seen = [];
+  client.onChat = (m) => seen.push(m);
+  client.chat('hi all');
+  assert.equal(ws.sent.at(-1), 'CHAT hi all');
+  ws.reply('CHAT QZXW Ana hi all');
+  assert.deepEqual(seen, [{ name: 'Ana', text: 'hi all' }]);
+  assert.equal(client.waiting.length, 0);
 });

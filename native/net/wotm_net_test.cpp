@@ -1366,6 +1366,48 @@ namespace
         CHECK(pings.find_first_not_of("0123456789", pings.find("Bia:") + 4) == std::string::npos);
     }
 
+    // plain chat in a waiting lobby: everyone in it (the sender too) gets "CHAT <code> <name> <text>"; control characters are dropped,
+    // the text is cut at proto::kMaxChatBytes, and a member can send only proto::kChatBurst lines per proto::kChatWindowMs
+    TEST(lobby_chat_reaches_the_lobby_is_cleaned_and_rate_limited)
+    {
+        ServerConfig cfg = wsTestConfig();
+        RunningServer rs(cfg);
+        CHECK(rs.ok);
+        LineSocket a;
+        CHECK(hello(a, cfg.port) == "WELCOME 0");
+        const std::string code = createLobby(a, "Lobby", "Ana", 3);
+        wotm_net::WsLink b;
+        std::string err;
+        CHECK(b.connect(wsUrl(cfg, "/lobby"), 2000, err));
+        b.sendLine("HELLO " + std::to_string(p::kProtocol) + " b1");
+        CHECK(readUntil(b, "WELCOME") == "WELCOME 1");
+        b.sendLine("JOIN " + code + " Bia 1");
+        CHECK(readUntil(b, "JOINED") == "JOINED " + code);
+        a.sendLine("CHAT  hello \t there ");
+        CHECK(readUntil(b, "CHAT ") == "CHAT " + code + " Ana hello  there");
+        CHECK(readUntil(a, "CHAT ") == "CHAT " + code + " Ana hello  there");
+        a.sendLine("CHAT " + std::string(p::kMaxChatBytes + 50, 'x'));
+        CHECK(readUntil(b, "CHAT ") == "CHAT " + code + " Ana " + std::string(p::kMaxChatBytes, 'x'));
+        a.sendLine("CHAT    ");   // nothing to say: nothing sent, nothing counted
+        for (int i = 0; i < p::kChatBurst; ++i)
+            a.sendLine("CHAT burst");
+        const std::string refused = readUntil(a, "ERROR");
+        CHECK(refused.rfind("ERROR chat too fast", 0) == 0);
+        LineSocket stranger;
+        CHECK(hello(stranger, cfg.port) == "WELCOME 1");
+        stranger.sendLine("CHAT hi");
+        CHECK(readUntil(stranger, "ERROR").rfind("ERROR join a lobby first", 0) == 0);
+    }
+
+    TEST(lobby_chat_is_closed_once_the_match_starts)
+    {
+        ServerConfig cfg = wsTestConfig();
+        RunningServer rs(cfg);
+        auto ms = formMatch(cfg.port, {"Ana", "Bia"}, {3, 1});
+        ms[0]->socket.sendLine("CHAT too late");
+        CHECK(readUntil(ms[0]->socket, "ERROR").rfind("ERROR chat is only open before the match", 0) == 0);
+    }
+
     TEST(ws_match_clients_share_every_frame_of_input)
     {
         ServerConfig cfg = wsTestConfig();

@@ -22,6 +22,8 @@ const MESSAGES = [
   [/^lobby is in a match; change monster/, 'You can pick another monster once the match is over.'],
   [/^bad monster|^invalid monster/, 'That monster isn\'t available.'],
   [/^that skin is already taken/, 'Someone in the lobby already has that skin. Pick another skin or costume.'],
+  [/^chat is only open before the match/, 'Chat closes when the match starts.'],
+  [/^chat too fast/, 'You are chatting too fast. Wait a few seconds.'],
   [/^monster has no free costume/, 'Every costume of that monster is taken in this lobby. Pick another monster.'],
 ];
 
