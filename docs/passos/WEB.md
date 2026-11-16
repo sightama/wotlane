@@ -31,8 +31,11 @@ For online play start `wotm_server --ws-port <port>`; a page opened from `localh
   gave no ETag or storage is 90% full. From the page's load, while the player is on the front panel, `web/boot.js` drops the caches
   of other versions and fetches in parallel the chunks every boot reads (`web/boot_chunks.json`, written by
   `python3 tools/web_boot_chunks.py <boot log> <SCUS_971.97>` from a boot to the title); the game starts once they are in. In Firefox
-  the game's own reads from worker threads are synchronous XHR (below), which the Cache API can't serve: there only the prefetched
-  chunks and the main thread's reads are kept. The page also fetches `wotm.wasm` from its load on, into the HTTP cache (served with an
+  the game's own reads from worker threads are synchronous XHR (below), which the Cache API can't serve, so the page starts a helper
+  worker (`disc_cache.js` itself, named `wotlane-disc-cache`) that owns the cache for them: a game worker (its `XMLHttpRequest` is wrapped
+  by `data_retry.js`'s `importScripts` of `disc_cache.js`) asks it over a BroadcastChannel, blocks on a SharedArrayBuffer until it
+  answers, and after a read that went to the network hands it the bytes to keep. A helper that doesn't answer within 300 ms is left
+  alone for 2 s and the read goes to the network, as it did before the helper. The page also fetches `wotm.wasm` from its load on, into the HTTP cache (served with an
   ETag and `no-cache`), so `wotm.js`'s own request only revalidates it.
 - **Saves and settings:** `/save` is the browser's private file system (OPFS) and the game's working folder (`WOTM_SAVEDIR=/save`), so
   `settings.ini`, the memory card and `mods/` survive a reload.
