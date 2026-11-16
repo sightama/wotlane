@@ -2,7 +2,7 @@
 // ABOUTME: tools/net_lobby.py's match_env) and the lobby client's requests and replies over a fake WebSocket. Run: node --test web/
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { PROTOCOL, parseLine, parseMembers, matchEnv, lobbySocketUrl, lastLobbyNotice, LobbyClient } from './lobby.js';
+import { PROTOCOL, parseLine, parseMembers, matchEnv, lobbySocketUrl, lastLobbyNotice, inviteLink, LobbyClient } from './lobby.js';
 
 const MATCH_LINE = 'MATCH lobby=QZXW players=2 stage=9 wins=2 mods=jump,turbo monsters=5,1 names=Ana,Bia ' +
   'seed=12345 step=1 you=1 token=00aa11bb22cc33dd port=7777';
@@ -209,4 +209,9 @@ test('leave() is refused with the server reason', async () => {
   const left = client.leave();
   ws.reply('ERROR join a lobby first');
   await assert.rejects(left, /join a lobby first/);
+});
+
+test('inviteLink gives the page address with only the lobby code', () => {
+  assert.equal(inviteLink({ origin: 'https://x.example', pathname: '/' }, 'ABCD'), 'https://x.example/?join=ABCD');
+  assert.equal(inviteLink({ origin: 'https://x.example', pathname: '/play/' }, 'QZ2W'), 'https://x.example/play/?join=QZ2W');
 });

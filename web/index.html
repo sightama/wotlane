@@ -75,7 +75,8 @@
         <input id="joinCode" maxlength="4" placeholder="CODE" aria-label="Lobby code"><button id="join">Join</button></div>
     </div>
     <div id="inLobby" hidden style="display:grid;gap:12px">
-      <div class="row">Lobby code <span id="code"></span></div>
+      <div class="row">Lobby code <span id="code"></span><button id="copyInvite">Copy invite link</button></div>
+      <input id="inviteLink" readonly hidden aria-label="Invite link">
       <ul id="members"></ul>
       <div id="ownerOnly" class="row">
         <label>Stage <select id="lobbyStage"></select></label>

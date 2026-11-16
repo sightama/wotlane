@@ -1,6 +1,6 @@
 // ABOUTME: The browser version's front panel: single player, or an online lobby on the game server (Host shows a 4-letter code,
 // ABOUTME: Join takes one). When the owner starts, every member's game loads with the match environment (boot.js wotmStart).
-import { LobbyClient, lastLobbyNotice, lobbySocketUrl, matchEnv } from './lobby.js';
+import { LobbyClient, inviteLink, lastLobbyNotice, lobbySocketUrl, matchEnv } from './lobby.js';
 import { initCreations, addLobbyChoices } from './creations_ui.js';
 
 const MONSTERS = [[1, 'Congar'], [2, 'Robo-47'], [3, 'Togera'], [4, 'Ultra V'], [5, 'Preytor'], [7, 'Kineticlops'], [8, 'Magmo'],
@@ -159,6 +159,30 @@ async function offerLastLobby() {
   probe?.close();
 }
 
+// an invite link (/?join=CODE): the code is filled in and, for a player whose name this browser remembers, joined at once
+function acceptInvite(code) {
+  if (front.hidden || lobby || $('host').disabled) return;   // the player already chose something else
+  $('joinCode').value = code;
+  if ($('name').value) return hostOrJoin(true);
+  say(`You are invited to lobby ${code}. Type a name, then press Join.`);
+  $('name').focus();
+}
+
+// the link goes to the clipboard; a page that may not use it (or a refusal) shows the link selected to copy by hand
+async function copyInvite() {
+  const link = inviteLink(location, $('code').textContent);
+  try {
+    await navigator.clipboard.writeText(link);
+    say('Invite link copied. Send it to your friends.');
+  } catch {
+    const box = $('inviteLink');
+    box.value = link;
+    box.hidden = false;
+    box.select();
+    say('Copy the invite link below.');
+  }
+}
+
 function init() {
   // a browser that can't run the game gets a plain message instead of a page that freezes
   const problem = window.wotmSupportProblem();
@@ -179,7 +203,13 @@ function init() {
     return;
   }
   $('name').value = recall('name', '');
-  offerLastLobby();
+  const invited = window.inviteCode(new URLSearchParams(location.search));
+  if (invited) {   // a reload doesn't join again; the address keeps its other parts
+    const rest = new URLSearchParams(location.search);
+    rest.delete('join');
+    history.replaceState(null, '', location.pathname + (rest.size ? '?' + rest : '') + location.hash);
+  }
+  else offerLastLobby();
   fill($('monster'), MONSTERS, recall('monster', 5));
   fill($('lobbyStage'), STAGES, recall('stage', 1));
   fill($('wins'), [[0, 'Endless'], ...[1, 2, 3, 4, 5].map((n) => [n, String(n)])], recall('wins', 2));
@@ -188,7 +218,7 @@ function init() {
     if (!$('monster').value) $('monster').value = '5';
     $('lobbyStage').value = recall('stage', 1);
     if (!$('lobbyStage').value) $('lobbyStage').value = '1';
-  });
+  }).catch(() => {}).then(() => { if (invited) acceptInvite(invited); });
   $('single').addEventListener('click', async () => {
     front.hidden = true;
     window.wotmStart(null, await buildId());
@@ -207,6 +237,7 @@ function init() {
       $('monster').value = String(myMonster);   // the server kept the previous one
     });
   });
+  $('copyInvite').addEventListener('click', copyInvite);
   $('start').addEventListener('click', () => lobby?.start().catch((e) => say(friendlyError(e.message))));
   $('leave').addEventListener('click', async () => {
     const leaving = lobby;
@@ -215,6 +246,7 @@ function init() {
     try { await Promise.race([leaving?.leave(), new Promise((r) => setTimeout(r, 1000))]); } catch { /* the connection is closed next either way */ }
     leaving?.close();
     $('inLobby').hidden = true;
+    $('inviteLink').hidden = true;
     $('choose').hidden = false;
     for (const id of ['single', 'host', 'join']) $(id).disabled = false;
     say('');

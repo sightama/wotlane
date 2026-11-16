@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
-const { pageEnv, FROM_ADDRESS } = createRequire(import.meta.url)('./pageenv.js');
+const { pageEnv, FROM_ADDRESS, inviteCode } = createRequire(import.meta.url)('./pageenv.js');
 const fixed = { PS2X_CD_IMAGE: '/disc/game.iso', WOTM_SAVEDIR: '/save', PS2X_SKIP_MOVIES: '1' };
 const params = (q) => new URLSearchParams(q);
 
@@ -46,4 +46,19 @@ test('WOTM_BUILDID comes only from the build id', () => {
 
 test('the allowlist is the four test switches', () => {
   assert.deepEqual([...FROM_ADDRESS].sort(), ['PS2X_STATS', 'WOTM_AIVSAI', 'WOTM_MAPEDIT', 'WOTM_MATCH']);
+});
+
+test('an invite link names a lobby by its 4-character code, in any case', () => {
+  assert.equal(inviteCode(params('join=abcd')), 'ABCD');
+  assert.equal(inviteCode(params('join=QZ2W')), 'QZ2W');
+});
+
+test('an invite code that is not a lobby code is ignored', () => {
+  for (const bad of ['', 'ABC', 'ABCDE', 'AB1D', 'AB0D', 'ABOD', 'AB D', '<b>x'])
+    assert.equal(inviteCode(params('join=' + encodeURIComponent(bad))), '', bad);
+  assert.equal(inviteCode(params('')), '');
+});
+
+test('an invite link adds no game switch', () => {
+  assert.deepEqual(pageEnv(params('join=ABCD'), fixed, null, null), fixed);
 });

@@ -17,5 +17,12 @@ function pageEnv(searchParams, fixed, matchEnv, build) {
   return { ...env, ...fixed };
 }
 
-if (typeof module !== 'undefined' && module.exports) module.exports = { pageEnv, FROM_ADDRESS };
-else globalThis.pageEnv = pageEnv;
+// the lobby an invite link (/?join=CODE) names: the server's 4-character code (native/net/wotm_net_proto.hpp kCodeLetters), or '' when
+// the address has none or something else; it only prefills the front panel, never the game's environment
+function inviteCode(searchParams) {
+  const code = (searchParams.get('join') || '').toUpperCase();
+  return /^[A-HJ-NP-Z2-9]{4}$/.test(code) ? code : '';
+}
+
+if (typeof module !== 'undefined' && module.exports) module.exports = { pageEnv, FROM_ADDRESS, inviteCode };
+else Object.assign(globalThis, { pageEnv, inviteCode });
