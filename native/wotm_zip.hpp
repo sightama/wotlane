@@ -52,8 +52,9 @@ inline int inflateCodes(uint8_t *ram, const uint64_t *crcTable, const uint16_t *
                         int bd, const std::function<void()> &refill)
 {
     auto u8 = [ram](uint32_t a) { return ram[a & kRamMask]; };
-    auto u16 = [ram](uint32_t a) { uint16_t v; std::memcpy(&v, ram + (a & kRamMask), 2); return v; };
-    auto u32 = [ram](uint32_t a) { uint32_t v; std::memcpy(&v, ram + (a & kRamMask), 4); return v; };
+    // little-endian, byte by byte so that an entry at the end of RAM wraps like the guest's reads do
+    auto u16 = [&u8](uint32_t a) { return static_cast<uint16_t>(u8(a) | u8(a + 1) << 8); };
+    auto u32 = [&u8](uint32_t a) { return static_cast<uint32_t>(u8(a) | u8(a + 1) << 8 | u8(a + 2) << 16 | uint32_t(u8(a + 3)) << 24); };
     auto nextByte = [&]() -> uint64_t {
         if (s.fileBuf >= kReadBuf + kReadBufSize)
         {
@@ -131,9 +132,10 @@ inline int inflateCodes(uint8_t *ram, const uint64_t *crcTable, const uint16_t *
             if (e > n)
                 e = n;
             n -= e;
-            if (w - d >= e)
+            const uint32_t to = (s.outBuf + w) & kRamMask, from = (s.outWindow + d) & kRamMask;
+            if (w - d >= e && to + e <= kRamMask + 1 && from + e <= kRamMask + 1)   // no overlap, and neither range wraps
             {
-                std::memmove(ram + ((s.outBuf + w) & kRamMask), ram + ((s.outWindow + d) & kRamMask), e);
+                std::memmove(ram + to, ram + from, e);
                 w += e;
                 d += e;
             }

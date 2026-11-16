@@ -5298,12 +5298,13 @@ TEST(zip_crc32_is_zlibs)
     CHECK(wotm::zip::crc32(tab.data(), 0, ram.m.data(), 0x021F6B80, 9) == 0xCBF43926u);
 }
 
-TEST(zip_inflate_codes_decodes_a_stream_across_read_blocks_and_windows)
+// Inflates zipt::sample() to `dest` and checks the output, the globals and the CRC; guest addresses wrap at the end of RAM
+static void checkInflateTo(uint32_t dest)
 {
     namespace z = wotm::zip;
     zipt::Ram ram;
     const auto tab = zipt::crcTable();
-    const std::vector<uint8_t> data = zipt::sample(), packed = zipt::deflateFixed(data);
+    static const std::vector<uint8_t> data = zipt::sample(), packed = zipt::deflateFixed(data);
     CHECK(packed.size() > 2 * z::kReadBufSize);
 
     // zipInflateBlockFixed's tables: literal/length codes 7 bits deep, distances 5
@@ -5326,7 +5327,6 @@ TEST(zip_inflate_codes_decodes_a_stream_across_read_blocks_and_windows)
     };
     refill();
 
-    const uint32_t dest = 0x01FFFC00u;   // right after the read window: the output runs past 32 MB, as the stages' does
     z::State s;
     s.fileBuf = z::kReadBuf;
     s.outBuf = s.outWindow = dest;
@@ -5340,13 +5340,28 @@ TEST(zip_inflate_codes_decodes_a_stream_across_read_blocks_and_windows)
     z::flush(ram.m.data(), tab.data(), s, s.windowPos);   // zipInflateAll's last zipFlush
 
     CHECK(block == (packed.size() + z::kReadBufSize - 1) / z::kReadBufSize);
-    CHECK(std::memcmp(&ram.m[dest], data.data(), data.size()) == 0);
+    bool same = true;
+    for (size_t i = 0; i < data.size(); ++i)
+        same = same && ram.m[(dest + i) & z::kRamMask] == data[i];
+    CHECK(same);
     CHECK(s.outBuf == dest + data.size());
     CHECK(s.outSize == 0);
     std::vector<uint8_t> copy(64u << 20);
     std::memcpy(&copy[0x10], data.data(), std::min<size_t>(data.size(), copy.size() - 0x10));
     CHECK(s.crc == wotm::zip::crc32(tab.data(), 0, copy.data(), 0x10, int64_t(data.size())));
     CHECK(s.windowPos == data.size() % z::kWindow);
+}
+
+TEST(zip_inflate_codes_decodes_a_stream_across_read_blocks_and_windows)
+{
+    checkInflateTo(0x01FFFC00u);   // right after the read window: the output runs past 32 MB, as the stages' does
+}
+
+// The guest's addresses wrap at the end of RAM: an output running off the end of the 64 MB continues at 0, never past the array
+TEST(zip_inflate_codes_wraps_at_the_end_of_ram)
+{
+    for (uint32_t end : {0x40000u, 0x80000u + 1000u, 0x80000u + 70001u, 0x123457u})   // ends among the copies, in several windows
+        checkInflateTo(0x04000000u - end);
 }
 
 // An invalid code (e 99) stops with 1 and leaves the bit state and window position as they were
