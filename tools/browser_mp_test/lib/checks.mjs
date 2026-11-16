@@ -593,14 +593,22 @@ export async function singleSession(run) {
   const players = [];
   try {
     players.push(...await run.openPlayers(1, check));
-    await players[0].page.click('#single');
-    await sleep(45000);
-    await players[0].pollLog();
     const p = players[0];
+    // two options chosen on the Settings page reach the game through the settings.ini it reads at boot
+    await p.page.click('#openSettings');
+    await p.page.click('#tab-display');
+    await p.page.selectOption('#opt_WOTM_RES', '448');
+    await p.page.selectOption('#opt_WOTM_MSAA', '2');
+    await p.page.click('#closeSettings');
+    await p.page.click('#single');
+    await sleep(45000);
+    await p.pollLog();
     const status = await p.status();
     const problems = health(players);
     const booted = hasLine(p.logText, /\[boot\]/) && /Running/.test(status);
     R.add(1, 'single_player', booted && !problems.length ? 'pass' : 'fail', `status ${JSON.stringify(status)}; ${problems.join('; ') || 'no crash or page error'}`);
+    const applied = hasLine(p.logText, /\[settings\] .*: [2-9] from file/) && hasLine(p.logText, /\[msaa\] frame \d+x448 with 2 samples/);
+    R.add(1, 'settings_page', applied ? 'pass' : 'fail', applied ? 'Resolution and Anti-aliasing from the Settings page reached the game' : 'the game did not report the settings the page saved');
   } catch (e) {
     R.add(1, 'single_error', 'fail', e.stack?.split('\n').slice(0, 2).join(' ') ?? String(e));
   } finally {

@@ -2,6 +2,7 @@
 // ABOUTME: Join takes one). When the owner starts, every member's game loads with the match environment (boot.js wotmStart).
 import { LobbyClient, inviteLink, lastLobbyNotice, lobbyRow, lobbySocketUrl, matchEnv } from './lobby.js';
 import { initCreations, addLobbyChoices } from './creations_ui.js';
+import { initSettings } from './settings_ui.js';
 
 const MONSTERS = [[1, 'Congar'], [2, 'Robo-47'], [3, 'Togera'], [4, 'Ultra V'], [5, 'Preytor'], [7, 'Kineticlops'], [8, 'Magmo'],
   [9, 'Raptros'], [10, 'Agamo'], [11, 'Zorgulon']];
@@ -269,15 +270,11 @@ function init() {
   const problem = window.wotmSupportProblem();
   if (problem) {
     say(problem);
-    for (const id of ['single', 'host', 'join']) $(id).disabled = true;
+    for (const id of ['single', 'host', 'join', 'openSettings']) $(id).disabled = true;
     return;
   }
   initCreations(STAGES);
-  $('controlsTable').replaceChildren(...controlRows().map((cells) => {
-    const tr = document.createElement('tr');
-    tr.replaceChildren(...cells.map((text) => Object.assign(document.createElement('td'), { textContent: text })));
-    return tr;
-  }));
+  initSettings({ remember, recall });
   if (window.wotmDirect) {
     front.hidden = true;
     buildId().then((b) => window.wotmStart(null, b));

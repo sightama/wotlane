@@ -56,10 +56,22 @@ For online play start `wotm_server --ws-port <port>`; a page opened from `localh
 - **Graphics:** the native layer's GL calls go to WebGL2 (`native/wotm_glad_web.cpp`); its GLSL 330 shaders become GLSL ES 3.00
   (`native/wotm_glsl.hpp`). Lens flares are off (`WOTM_NOFLARE`: WebGL2 can't read the depth buffer back). The canvas fills the page and
   the game letterboxes its own frame.
-- **Address switches** (`web/pageenv.js`, tested in `pageenv.test.mjs`): only `WOTM_MATCH`, `WOTM_AIVSAI`, `PS2X_STATS` and `WOTM_MAPEDIT` (the front panel's "Map editor" under Your creations opens the page with it, on a stock stage) are read from the page address; the disc, save and renderer
+- **Address switches** (`web/pageenv.js`, tested in `pageenv.test.mjs`): only `WOTM_MATCH`, `WOTM_AIVSAI`, `PS2X_STATS` and `WOTM_MAPEDIT` (the Settings page's Mods tab, Your creations, has a Map editor row that opens the page with it, on a stock stage) are read from the page address; the disc, save and renderer
   settings always win.
 - **Browser check:** `web/support.js` gives Safari, browsers without JSPI and phones a plain message and disables the play buttons; the front panel says Chrome, Firefox and Edge on a computer work.
-- **Controls card:** the front panel lists the default keyboard layout (`web/controls.js`); `controls.test.mjs` reads `native/wotm_settings.hpp` and fails when a default key is missing from the card.
+- **Settings page:** the front panel's Settings button swaps the panel for a card of tabs (Online, Game, Display, Mods, Controls;
+  `web/settings_ui.js`, the list of options in `web/settings.js`). Every option is a `settings.ini` key of `native/wotm_settings.hpp`, so
+  the page and the game's own "Recompiled options" panel edit one file: `settings.ini` at the root of the browser's private file system
+  (the game's `/save`), which the game reads at boot. A change is written at once (`updateSetting`: read, change the one line, write; the
+  other lines, such as the key bindings, stay) and applies the next time the game starts; the card says so. The options are the ones that
+  matter in a browser: picture (resolution, render scale, aspect ratio, anti-aliasing, texture filter, frame interpolation), sound
+  (volumes, narrator), fighting (enemy bars, damage numbers, lock-on toggle, modifiers), camera, keyboard and button icons. Options that
+  need a window or a monitor (display mode, refresh rate, vsync) are not offered. An online match fixes lock-on toggle (off) and the
+  close-up camera (on) and takes the modifiers from the lobby, as `native/wotm_settings.hpp` `kNetKeys` says; the Online tab and each
+  option's hint say so. `settings.test.mjs` reads `native/wotm_settings.hpp` and fails when an option's key, default or values drift
+  from the game. The Mods tab holds Your creations and the Map editor row; the Controls tab lists the default keyboard layout
+  (`web/controls.js`; `controls.test.mjs` fails when a default key is missing from it). `browser_mp_test`'s `single` session sets two
+  options through the page and checks the game's log for them (`settings_page`).
 
 ## Online
 The front panel (`web/front.js`, `web/lobby.js`) speaks the lobby protocol over a WebSocket at `/lobby` (one line per text frame):

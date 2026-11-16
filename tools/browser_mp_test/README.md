@@ -31,7 +31,7 @@ logs only (the server-side DESYNC and "left the match" checks are local only).
 | `round` | `round_end`, `win_screen` (wins 1 and the `vencer` cheat), `rematch` (PLAY AGAIN, round 2 in sync), `quit` (QUIT returns every tab to the front panel), `rejoin_after_match` |
 | `stall` | `stall_detected`, `away_note` (hidden tab), `stall_prompt` (60 s), `keep_waiting`, `stall_recovery`, `connection_lost`, `reconnect` |
 | `creations` | a created map and skin imported in every tab, picked in the lobby and played (N=2 and 4); `creations_missing`: one tab without them is refused with an explanation |
-| `single` | the front panel's Single player button boots the game |
+| `single` | `settings_page` (Resolution and Anti-aliasing set on the Settings page reach the game's log) and `single_player` (the front panel's Single player button boots the game) |
 
 `stall` and `creations` run only at the `--deep-n` player counts (default 2, 4, 8).
 
