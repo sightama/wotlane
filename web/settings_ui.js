@@ -145,11 +145,13 @@ export function initSettings({ remember, recall }) {
     $('tab-' + next).focus();
   });
   $('onlineNotes').replaceChildren(...onlineNotes());
-  $('controlsTable').replaceChildren(...globalThis.controlRows().map((cells) => {
+  const tableRows = (rows) => rows.map((cells) => {
     const tr = document.createElement('tr');
     tr.replaceChildren(...cells.map((t) => Object.assign(document.createElement('td'), { textContent: t })));
     return tr;
-  }));
+  });
+  $('controlsTable').replaceChildren(...tableRows(globalThis.controlRows()));
+  $('touchTable').replaceChildren(...tableRows(globalThis.wotTouchRows()));
   // the name is the front panel's own field, remembered by the same key the lobby buttons use
   $('settingsName').addEventListener('input', () => {
     const name = $('settingsName').value.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 16);
