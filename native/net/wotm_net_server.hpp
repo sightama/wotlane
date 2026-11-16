@@ -180,7 +180,6 @@ namespace wotm_net
         static void *&dataOf(PeerRef peer);
         // a round trip at its high end: ENet's smoothed one plus twice its variation (a WebSocket's is a single ping)
         uint32_t rttHighOf(PeerRef peer) const;
-        double frameMsOf(const Match &m) const;
         std::vector<uint32_t> rttHighs(Match &m);
         void pace(Match &m, const Lobby &l);
 

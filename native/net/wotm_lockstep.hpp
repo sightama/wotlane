@@ -149,9 +149,10 @@ namespace wotm_net
     // This PC's own input delay, which may change during the match (the server's advice, proto::Pace). The sample taken at frame S
     // fills frame S + delay. Growing by one repeats the previous frame (with no mouse motion) and shrinking by one skips a sample (its
     // mouse motion goes into the next), so every frame of this player still gets exactly one input, whenever and however often the
-    // delay moves: the other PCs only see a value per frame, and stay in sync. A step waits for a sample with the same buttons and
-    // sticks as the previous one, so it neither repeats nor drops a press; growing goes ahead anyway after kForceGrowAfter samples
-    // (a delay that is too short stalls everyone). Steps are kStepGap samples apart.
+    // delay moves: the other PCs only see a value per frame, and stay in sync. A step waits for a sample with the same buttons as the
+    // previous one, so it neither repeats nor drops a press (a repeated or skipped stick sample only shifts the stick by a frame, and
+    // a held stick is never exactly still); growing goes ahead anyway after kForceGrowAfter samples (a delay that is too short
+    // stalls everyone). Steps are kStepGap samples apart.
     class LocalSchedule
     {
     public:
@@ -161,13 +162,17 @@ namespace wotm_net
 
         uint32_t delay() const { return delay_; }
         uint32_t target() const { return target_; }
-        void setTarget(uint32_t t) { target_ = t; }
+        void setTarget(uint32_t t)
+        {
+            if (t != target_)
+                target_ = t, waiting_ = 0;
+        }
 
         // the frames the next sample fills, in order (none when it is skipped)
         std::vector<std::pair<uint32_t, PadState>> push(PadState s)
         {
             std::vector<std::pair<uint32_t, PadState>> out;
-            const bool steady = sameControls(s, prev_);
+            const bool steady = s.buttons == prev_.buttons;
             const bool canStep = sinceStep_ >= kStepGap;
             ++sinceStep_;
             if (target_ > delay_ && canStep && (steady || waiting_ >= kForceGrowAfter))
@@ -197,10 +202,6 @@ namespace wotm_net
         }
 
     private:
-        static bool sameControls(const PadState &a, const PadState &b)
-        {
-            return a.buttons == b.buttons && a.lx == b.lx && a.ly == b.ly && a.rx == b.rx && a.ry == b.ry;
-        }
         static int16_t clampMouse(int v) { return static_cast<int16_t>(std::clamp(v, -32768, 32767)); }
         void step()
         {

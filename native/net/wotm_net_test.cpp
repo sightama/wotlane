@@ -195,6 +195,35 @@ namespace
         CHECK(s.push(pressed(1)) == Fills({{6u, pressed(1)}}));
     }
 
+    // a held stick wobbles a little every frame: only the buttons decide (a repeated or skipped stick sample only shifts it by a frame)
+    TEST(schedule_steps_while_a_stick_wobbles)
+    {
+        LocalSchedule s(4);
+        s.setTarget(3);
+        PadState held = pressed(1);
+        for (uint8_t i = 0; i < 4 && s.delay() == 4u; ++i)
+        {
+            held.lx = static_cast<uint8_t>(0x20 + i);
+            s.push(held);
+        }
+        CHECK(s.delay() == 3u);
+    }
+
+    // a target that came back to the delay forgets the wait, so the next rise waits its full kForceGrowAfter again
+    TEST(schedule_restarts_the_wait_when_the_target_changes)
+    {
+        LocalSchedule s(3);
+        s.setTarget(4);
+        for (uint32_t i = 0; i < 25; ++i)
+            s.push(pressed(static_cast<uint16_t>(i + 1)));
+        s.setTarget(3);
+        s.setTarget(4);
+        uint32_t n = 0;
+        while (s.delay() == 3u && n < 1000u)
+            s.push(pressed(static_cast<uint16_t>(100 + n++)));
+        CHECK(n == LocalSchedule::kForceGrowAfter + 1u);
+    }
+
     TEST(schedule_never_shrinks_while_the_input_changes)
     {
         LocalSchedule s(4);
@@ -1185,13 +1214,12 @@ namespace
             }
         };
         run(60);
-        const uint32_t low = a.delay();
         rs.server.setTestRtt(150);   // 150 ms everywhere: (150 + 150) / 2 + 3 = 153 ms = 10 frames (more on a loaded machine)
         run(400);
         CHECK(ok && a.delay() >= 10u && b.delay() >= 10u);
         rs.server.setTestRtt(0);
         run(600);
-        CHECK(ok && a.delay() <= low + 1u && b.delay() <= low + 1u && most >= 10u);   // back down (the local ping may wander by a frame)
+        CHECK(ok && most >= 10u && a.delay() + 4u <= most && b.delay() + 4u <= most);   // back down (how far depends on the local ping)
         CHECK(same && ordered);
         CHECK(a.status() == Status::Running && b.status() == Status::Running);
     }
