@@ -1334,6 +1334,38 @@ namespace
         CHECK(mb.count("you") && mb.at("you") == "1");
     }
 
+    // a waiting lobby tells its members each one's round trip: measured for a browser (WebSocket pings), "-" for a TCP member
+    TEST(ws_lobby_members_see_each_others_ping)
+    {
+        ServerConfig cfg = wsTestConfig();
+        RunningServer rs(cfg);
+        CHECK(rs.ok);
+        LineSocket a;
+        CHECK(hello(a, cfg.port) == "WELCOME 0");
+        const std::string code = createLobby(a, "Lobby", "Ana", 3);
+        wotm_net::WsLink b;
+        std::string err;
+        CHECK(b.connect(wsUrl(cfg, "/lobby"), 2000, err));
+        b.sendLine("HELLO " + std::to_string(p::kProtocol) + " b1");
+        CHECK(readUntil(b, "WELCOME") == "WELCOME 1");
+        b.sendLine("JOIN " + code + " Bia 1");
+        CHECK(readUntil(b, "JOINED") == "JOINED " + code);
+        std::string pings, line;
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (std::chrono::steady_clock::now() < until)
+        {
+            b.pump();   // answers the server's pings
+            if (!a.readLine(line, 50) || line.rfind("PINGS " + code + " ", 0) != 0 || line.find("Bia:") == std::string::npos)
+                continue;
+            pings = line;   // the first ones may come before Bia's first pong
+            if (line.find("Bia:-") == std::string::npos)
+                break;
+        }
+        CHECK(pings.rfind("PINGS " + code + " Ana:-,Bia:", 0) == 0);
+        CHECK(pings.find("Bia:-") == std::string::npos);
+        CHECK(pings.find_first_not_of("0123456789", pings.find("Bia:") + 4) == std::string::npos);
+    }
+
     TEST(ws_match_clients_share_every_frame_of_input)
     {
         ServerConfig cfg = wsTestConfig();

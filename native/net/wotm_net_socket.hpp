@@ -89,6 +89,9 @@ namespace wotm_net
         // next complete line already received (without the \n and \r)
         virtual bool nextLine(std::string &line) = 0;
         virtual bool sendLine(const std::string &line) = 0;
+        // round trips: ping() starts a measurement and pingMs() is the last result in ms, -1 for a link that can't measure (TCP) or has not yet
+        virtual void ping() {}
+        virtual int pingMs() const { return -1; }
         // waits up to `ms` for something to arrive
         virtual void waitReadable(int ms) = 0;
 

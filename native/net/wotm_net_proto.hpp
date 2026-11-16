@@ -399,7 +399,8 @@ namespace wotm_net::proto
     //         SET [stage=<stage>] [wins=<wins>] [mods=<list>] | MONSTER <monster> (any member, while the lobby waits) | START | LEAVE
     // server: WELCOME <open lobbies> | LOBBY <code> <waiting|playing> <n>/<max> <open|locked> <lobby> <owner> <names,...|-> |
     //         END | CREATED <code> | JOINED <code> | LEFT <code> | SETTINGS <code> stage=<stage> wins=<wins> mods=<list> |
-    //         MEMBERS <code> <owner> <name:monster,...> | MATCH <key=value>... | ERROR <text>
+    //         MEMBERS <code> <owner> <name:monster,...> |
+    //         PINGS <code> <name:ms|name:->,... (every second while the lobby waits; - for a member the server can't measure, a TCP one) | MATCH <key=value>... | ERROR <text>
     // <monster> is "<number>" or "<number>:<skin id>" (Pick); <stage> is a stage number or a saved map's id (validStage)
     constexpr int kMaxWins = 99;
     constexpr const char *kCodeLetters = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";   // no I, O, 0 or 1 (easily confused when reading the code aloud)

@@ -65,6 +65,16 @@ export function lobbyRow(l) {
   return { text, joinable: !l.playing && l.count < l.max && !l.locked };
 }
 
+// PINGS <code> <name:ms|name:->,...: each member's round trip to the server in ms (null: not measured)
+export function parsePings(parsed) {
+  const pings = {};
+  for (const entry of (parsed.words[1] ?? '').split(',')) {
+    const [name, ms] = entry.split(':');
+    if (name) pings[name] = ms === undefined || ms === '-' ? null : Number(ms);
+  }
+  return pings;
+}
+
 // the address a friend opens to land in the lobby `code`: this page with only the code
 export function inviteLink(location, code) {
   return `${location.origin}${location.pathname}?join=${code}`;
@@ -81,6 +91,7 @@ export class LobbyClient {
     this.onMembers = null;
     this.onSettings = null;
     this.onMatch = null;
+    this.onPings = null;
     this.onClose = null;
     this.onError = null;   // an ERROR no request waits for
     // requests waiting for their replies, oldest first: {replies (commands still expected, in order), got (the first reply),
@@ -111,6 +122,8 @@ export class LobbyClient {
       this.onSettings?.(this.settings);
     } else if (p.cmd === 'MEMBERS') {
       this.onMembers?.(parseMembers(p));
+    } else if (p.cmd === 'PINGS') {
+      this.onPings?.(parsePings(p));
     } else if (p.cmd === 'MATCH') {
       this.onMatch?.(p.fields);
     } else if (p.cmd === 'LOBBY') {

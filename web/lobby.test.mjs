@@ -2,7 +2,7 @@
 // ABOUTME: tools/net_lobby.py's match_env) and the lobby client's requests and replies over a fake WebSocket. Run: node --test web/
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { PROTOCOL, parseLine, parseMembers, matchEnv, lobbySocketUrl, lastLobbyNotice, inviteLink, lobbyRow, LobbyClient } from './lobby.js';
+import { PROTOCOL, parseLine, parseMembers, matchEnv, lobbySocketUrl, lastLobbyNotice, inviteLink, lobbyRow, parsePings, LobbyClient } from './lobby.js';
 
 const MATCH_LINE = 'MATCH lobby=QZXW players=2 stage=9 wins=2 mods=jump,turbo monsters=5,1 names=Ana,Bia ' +
   'seed=12345 step=1 you=1 token=00aa11bb22cc33dd port=7777';
@@ -237,4 +237,16 @@ test('lobbyRow says who hosts, how full it is and whether Join works', () => {
   assert.deepEqual(lobbyRow({ ...open, playing: true }), { text: 'Ana: 2/8 (Ana, Bo), in a match', joinable: false });
   assert.deepEqual(lobbyRow({ ...open, count: 8 }), { text: 'Ana: 8/8 (Ana, Bo), full', joinable: false });
   assert.deepEqual(lobbyRow({ ...open, locked: true }), { text: 'Ana: 2/8 (Ana, Bo), waiting, needs a password', joinable: false });
+});
+
+test('parsePings reads each member\'s round trip, null where the server has none', () => {
+  assert.deepEqual(parsePings(parseLine('PINGS QZXW Ana:-,Bia:23,Cy:0')), { Ana: null, Bia: 23, Cy: 0 });
+});
+
+test('LobbyClient hands PINGS lines to onPings', async () => {
+  const { ws, client } = await connected();
+  const seen = [];
+  client.onPings = (p) => seen.push(p);
+  ws.reply('PINGS QZXW Ana:-,Bia:23');
+  assert.deepEqual(seen, [{ Ana: null, Bia: 23 }]);
 });

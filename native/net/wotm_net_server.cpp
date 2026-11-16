@@ -118,6 +118,7 @@ namespace wotm_net
         serviceWebSockets();
         serviceEnet(ms);
         tickMatches();
+        tickLobbyPings();
         updateCounts();
     }
 
@@ -508,6 +509,28 @@ namespace wotm_net
         const std::string line = "MEMBERS " + l.code + " " + host + " " + (v.empty() ? "-" : join(v, ","));
         for (int m : l.members)
             conns_[static_cast<size_t>(m)]->link->sendLine(line);
+    }
+
+    void Server::tickLobbyPings()
+    {
+        const auto now = Clock::now();
+        for (Lobby &l : lobbies_)
+        {
+            if (!l.open || l.match || l.members.empty() || now - l.lastPings < std::chrono::seconds(1))
+                continue;
+            l.lastPings = now;
+            std::vector<std::string> v;
+            for (int m : l.members)
+            {
+                Conn &c = *conns_[static_cast<size_t>(m)];
+                c.link->ping();
+                const int ms = c.link->pingMs();
+                v.push_back(c.name + ":" + (ms < 0 ? "-" : std::to_string(ms)));
+            }
+            const std::string line = "PINGS " + l.code + " " + join(v, ",");
+            for (int m : l.members)
+                conns_[static_cast<size_t>(m)]->link->sendLine(line);
+        }
     }
 
     std::string Server::settingsLine(const Lobby &l) const

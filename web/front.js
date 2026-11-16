@@ -44,6 +44,8 @@ const cleanName = (s) => s.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 16);
 let lobby = null;
 let owner = false;
 let myName = '';
+let members = { owner: '', members: [] };
+let pings = {};
 let myMonster = 0;   // the monster the server last accepted
 
 // the owner picks the stage, wins and modifiers and starts; a guest sees them. The server hands the lobby on when the owner leaves
@@ -70,12 +72,18 @@ function showMembers(m) {
     setOwner(true);
     say('The owner left: you are the owner now. Start when everyone is in.');
   }
-  const list = $('members');
-  list.replaceChildren(...m.members.map((p) => {
+  members = m;
+  showMemberList();
+}
+
+// each member's round trip to the server arrives (PINGS) every second while the lobby waits; a member without a measurement shows none
+function showMemberList() {
+  $('members').replaceChildren(...members.members.map((p) => {
     const li = document.createElement('li');
     const monster = MONSTERS.find(([id]) => id === p.monster);
     const skin = p.skin ? `, skin ${p.skin}` : '';
-    li.textContent = `${p.name} (${monster ? monster[1] : 'monster ' + p.monster}${skin})${p.name === m.owner ? ', owner' : ''}`;
+    const ping = typeof pings[p.name] === 'number' ? `, ${pings[p.name]} ms` : '';
+    li.textContent = `${p.name} (${monster ? monster[1] : 'monster ' + p.monster}${skin})${ping}${p.name === members.owner ? ', owner' : ''}`;
     return li;
   }));
 }
@@ -84,6 +92,7 @@ async function connect(build) {
   const ws = new WebSocket(serverUrl('/lobby'));
   const client = new LobbyClient(ws, build);
   client.onMembers = showMembers;
+  client.onPings = (p) => { pings = p; showMemberList(); };
   client.onSettings = (s) => {
     // a saved map shows by its name when this browser has it (Your creations), else by its id
     const stage = [...$('lobbyStage').options].find((o) => o.value === s.stage);
@@ -180,6 +189,7 @@ async function hostOrJoin(join) {
   remember('monster', monster);
   const code = $('joinCode').value.trim().toUpperCase();
   if (join && !/^[A-Z2-9]{4}$/.test(code)) return say('The code has 4 characters (letters and digits).');
+  pings = {};
   say(join ? 'Joining' : 'Creating a lobby');
   stopWatchingLobbies();
   const buttons = ['single', 'host', 'join'].map($);
