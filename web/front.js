@@ -168,6 +168,11 @@ function init() {
     return;
   }
   initCreations(STAGES);
+  $('controlsTable').replaceChildren(...controlRows().map((cells) => {
+    const tr = document.createElement('tr');
+    tr.replaceChildren(...cells.map((text) => Object.assign(document.createElement('td'), { textContent: text })));
+    return tr;
+  }));
   if (window.wotmDirect) {
     front.hidden = true;
     buildId().then((b) => window.wotmStart(null, b));
