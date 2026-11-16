@@ -1,7 +1,7 @@
 # The browser version
 
 The whole port (the recompiled game, the PS2Recomp runtime and `native/`) built with Emscripten into one WebAssembly module, plus a
-page in `web/`. It runs in desktop Chrome, Edge and Firefox. The disc is never part of the build or the repo: the page reads it from a `data/`
+page in `web/`. It runs in Chrome, Edge and Firefox on a computer and in Chrome on an Android phone. The disc is never part of the build or the repo: the page reads it from a `data/`
 folder its server provides.
 
 **Direction: browser first.** The browser version is the product. Mac-native features, Mac friends zips and browser-versus-Mac cross-play
@@ -99,7 +99,7 @@ For online play start `wotm_server --ws-port <port>`; a page opened from `localh
   and saves a screenshot.
 - **Address switches** (`web/pageenv.js`, tested in `pageenv.test.mjs`): only `WOTM_MATCH`, `WOTM_AIVSAI`, `PS2X_STATS` and `WOTM_MAPEDIT` (the Settings page's Mods tab, Your creations, has a Map editor row that opens the page with it, on a stock stage) are read from the page address; the disc, save and renderer
   settings always win.
-- **Browser check:** `web/support.js` gives Safari, browsers without JSPI and phones a plain message and disables the play buttons; the front panel says Chrome, Firefox and Edge on a computer work.
+- **Browser check:** `web/support.js` gives Safari, browsers without JSPI and iPhones and iPads (every browser there is WebKit) a plain message and disables the play buttons; the front panel says Chrome, Firefox and Edge on a computer or an Android phone work.
 - **Settings page:** the front panel's Settings button swaps the panel for a card of tabs (Online, Game, Display, Mods, Controls;
   `web/settings_ui.js`, the list of options in `web/settings.js`). Every option is a `settings.ini` key of `native/wotm_settings.hpp`, so
   the page and the game's own "Recompiled options" panel edit one file: `settings.ini` at the root of the browser's private file system
@@ -110,7 +110,7 @@ For online play start `wotm_server --ws-port <port>`; a page opened from `localh
   need a window or a monitor (display mode, refresh rate, vsync) are not offered. An online match fixes lock-on toggle (off) and the
   close-up camera (on) and takes the modifiers from the lobby, as `native/wotm_settings.hpp` `kNetKeys` says; the Online tab and each
   option's hint say so. `settings.test.mjs` reads `native/wotm_settings.hpp` and fails when an option's key, default or values drift
-  from the game. The Mods tab holds Your creations and the Map editor row; the Controls tab lists the default keyboard layout
+  from the game. The Mods tab holds Your creations and the Map editor row; the Controls tab lists the default keyboard layout and the touch controls
   (`web/controls.js`; `controls.test.mjs` fails when a default key is missing from it). `browser_mp_test`'s `single` session sets two
   options through the page and checks the game's log for them (`settings_page`).
   A tab whose game runs holds a shared Web Lock (`wotlane-game`, taken in `boot.js`, read by `web/gamelock.js`); another tab's Settings
@@ -190,6 +190,43 @@ During a match:
 - **Movies:** the game side skips every movie (no FFmpeg in the browser build, `PS2X_SKIP_MOVIES`); the page plays the two boot movies itself (Startup movies). The endings, the act intros, the credits and the menu's big-screen loop are skipped.
 - **Audio:** raylib's web audio uses a ScriptProcessorNode, which Chrome reports as deprecated.
 - **Loading counter:** two game tabs of the same site on one computer count each other's chunks.
+
+
+## Phones, touch and gamepads
+The game reads pads through raylib's web platform: `navigator.getGamepads()` in the standard layout, four slots, player n is the n-th
+connected pad. Everything that feeds it lives in the page (`web/pads.js`, `web/touch.js`), so none of it changes the wasm or the build id.
+
+- **Pad hub (`web/pads.js`):** `installPads` replaces `navigator.getGamepads` with the hub's answer: four slots, each a pad in the standard
+  layout. A real pad keeps its slot while it stays; a fifth pad is ignored. The browser's own `gamepadconnected` and `gamepaddisconnected`
+  events (whose indexes are not the slots) are swallowed by a capture listener and replaced by the hub's, with the slot as the index. The hub
+  also announces every pad again each second, so a game that starts listening after a pad was plugged in still hears of it. A standard-mapped pad
+  passes through. Any other pad is mapped by its shape (`fallbackLayout`): buttons 0 to 5 as the face buttons and shoulders, then
+  triggers, select, start and sticks; a hat on axis 9 or a hat pair on axes 6 and 7 as the d-pad; with 8 axes the triggers on axes 2 and 5
+  at rest -1. Those layouts are guesses checked only with synthetic pads (`pads.test.mjs`).
+- **Toast:** a connected or removed real pad shows "Controller connected: <name> (player N)" over the page, front panel included; the
+  vendor and product text of the browser's name is cut (`padLabel`).
+- **Several pads:** up to four pads are four slots; the game's own multiplayer screens give them to players.
+- **Touch controls (`web/touch.js`):** shown while the game runs (the front panel is hidden) on a device whose primary pointer is coarse, and on
+  any other device from its first touch. They feed a virtual pad named "Touch screen controls" that takes slot 0 while it is shown, so the
+  game sees one more gamepad. Layout (`LAYOUT`, positions in thumb units): a floating left stick anywhere on the left 46% of the screen
+  (below the top row), a look zone on the right (a drag is the right stick, which turns the camera), the four face buttons as a diamond at the
+  bottom right with jump, light and heavy attack bigger than grab, two chord buttons (SP1 is triangle and circle, SP2 is cross and square, the
+  game's specials) and one for lock-on (L1 and R1), L2 and L1 at the top left and R1 and R2 (block) at the top right, Select, a gear and Start
+  at the top middle. Several fingers work at once; a press stays down at least 80 ms, so a tap shorter than the game's pad reads is still
+  read. Vibration (`navigator.vibrate`) answers a press and the game's own rumble. The gear opens size (0.7 to 1.2), opacity and vibration,
+  kept in `localStorage` (`wotlane.touch`).
+- **Steps aside:** a key press, a mouse press or a real pad hides the controls and removes the virtual pad (a real pad would otherwise be player
+  2); a touch brings them back unless a real pad is connected. While they are shown the page refuses the game's pointer lock (the mouse
+  camera) and leaves any lock, which would zero every touch's coordinates.
+- **Fullscreen and landscape:** the first tap on a button on a touch device asks for fullscreen on the whole page and a landscape orientation
+  lock (the browser may refuse either); the gear panel has a Fullscreen button. In portrait the controls are replaced by "Turn your phone
+  sideways to play". The screen is kept awake while the controls are up (Wake Lock, where the browser has it).
+- **Phones:** the same game runs in Chrome on Android; there is no phone-specific build. Frame size is the game's 720 lines; the in-game
+  VIDEO options (resolution, render scale) are the lever on a slow phone. iPhones and iPads cannot run it (no JSPI before Safari 27).
+- **Tests:** `node --test web/` (`pads.test.mjs`: layouts, slots, hot-plug, events; `touch.test.mjs`: every PS2 button reachable, nothing
+  overlapping or off screen on five phone-sized screens at three control sizes, settings); `node tools/browser_touch_test/run.mjs`
+  (`tools/browser_touch_test/README.md`): a phone-sized Chromium with multi-touch through the DevTools protocol and a mocked Gamepad API
+  against the real game, including a fight against the AI.
 
 ## Startup time
 Measured from the page's navigation to the game log's `[boot] ... ready:` line, in a new browser profile (cold: nothing cached) and
