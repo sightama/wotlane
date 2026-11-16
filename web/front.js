@@ -146,10 +146,12 @@ async function offerLastLobby() {
   if (!code) return;
   let probe;
   try {
-    probe = new LobbyClient(new WebSocket(serverUrl('/lobby')), await buildId());
+    const build = await buildId();
+    probe = new LobbyClient(new WebSocket(serverUrl('/lobby')), build);
     await probe.ready;
     const notice = lastLobbyNotice(code, await probe.list());
-    if (notice) {
+    // the player may have started typing or clicked meanwhile: their message and code stay
+    if (notice && !$('frontMsg').textContent && !$('joinCode').value) {
       $('joinCode').value = code;
       say(notice);
     }
