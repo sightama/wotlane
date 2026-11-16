@@ -1,11 +1,12 @@
 // ABOUTME: Whether this browser can run the game, as a plain message for the front panel (or null when it can), and whether it reads
-// ABOUTME: the disc and saves on the main thread. Chromium-based browsers (Chrome, Edge) and Firefox (with JSPI) can run it; Safari and phones can't.
+// ABOUTME: the disc and saves on the main thread. Chromium-based browsers (Chrome, Edge) and Firefox (with JSPI) can run it, on a computer or an Android phone; Safari and iPhones can't.
 'use strict';
 
-// what the page can see: chromium (Chrome, Edge, Opera...), firefox, jspi (WebAssembly.Suspending), isolated (crossOriginIsolated), mobile
-function supportProblem({ chromium, firefox, jspi, isolated, mobile }) {
-  if (mobile) return 'This game needs a computer (Windows, Mac or Linux) with Chrome, Firefox or Edge. Phones and tablets can\'t run it.';
-  if (!chromium && !firefox) return 'This game runs in Chrome, Firefox or Edge on a computer. Open this page in one of those.';
+// what the page can see: chromium (Chrome, Edge, Opera...), firefox, jspi (WebAssembly.Suspending), isolated (crossOriginIsolated),
+// ios (every iPhone and iPad browser is WebKit underneath, whatever its name)
+function supportProblem({ chromium, firefox, jspi, isolated, ios }) {
+  if (ios) return 'This game can\'t run on an iPhone or iPad yet: Apple\'s browsers lack what it needs. Open this page in Chrome, Firefox or Edge on a computer or an Android phone.';
+  if (!chromium && !firefox) return 'This game runs in Chrome, Firefox or Edge on a computer or an Android phone. Open this page in one of those.';
   if (!jspi) return firefox ? 'Your Firefox is too old for this game: update Firefox, then reload the page.'
     : 'Your browser is too old for this game: update Chrome or Edge, then reload the page.';
   if (!isolated) return 'The page loaded without the settings the game needs. Reload the page; if it keeps happening, tell Lane.';
@@ -50,7 +51,8 @@ function browserFacts() {
     firefox: /Firefox\//.test(navigator.userAgent),
     jspi: typeof WebAssembly.Suspending === 'function',
     isolated: globalThis.crossOriginIsolated === true,
-    mobile: navigator.userAgentData?.mobile ?? /Mobi|Android|iPad|iPhone/.test(navigator.userAgent),
+    // an iPad asks for the desktop site (a Macintosh user agent), so touch points tell it from a Mac
+    ios: /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1),
   };
 }
 
