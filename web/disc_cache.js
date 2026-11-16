@@ -2,16 +2,16 @@
 // ABOUTME: checked against its SHA-256 before use; and prefetches the chunks the boot needs. Loaded by the page and, in workers, by data_retry.js.
 'use strict';
 
+// disc_chunks.js: a script tag loads it in the page; a worker (the game's, or the helper below, which has this file as its script) imports it
+if (typeof module === 'undefined' && !globalThis.wotmDiscChunks && typeof importScripts === 'function') importScripts(new URL('disc_chunks.js', globalThis.location.href).href);
+
 // function and var declarations: loading the file twice in one global scope is harmless (the guard at the end keeps one wrapper)
+var discChunks = typeof module !== 'undefined' && module.exports ? require('./disc_chunks.js') : globalThis.wotmDiscChunks;
 var CACHE_PREFIX = 'wotlane-disc:';
 function cacheName(file, etag) { return `${CACHE_PREFIX}${file}:${etag}`; }
 function chunkKey(file, i) { return `https://wotlane.invalid/disc/${encodeURIComponent(file)}/${i}`; }
-function discFile(url) { return (/(?:^|\/)data\/+([^/?#]+)$/.exec(typeof url === 'string' ? url : url.url) || [])[1] ?? null; }
-
-async function sha256Hex(subtle, bytes) {
-  const d = new Uint8Array(await subtle.digest('SHA-256', bytes));
-  return Array.from(d, (b) => b.toString(16).padStart(2, '0')).join('');
-}
+function discFile(url) { return discChunks.discPath(url)?.file ?? null; }
+function sha256Hex(subtle, bytes) { return discChunks.sha256Hex(subtle, bytes); }
 
 // Wraps `baseFetch`: a HEAD of a disc file records its version and size; a GET of a chunk-aligned range of a known version is served
 // from the cache when every chunk in it is there and matches its hash, else from the network, whose chunks are then stored. Anything
@@ -236,8 +236,10 @@ function syncReadClient(post, { waitMs = 5000, pingMs = 300, pauseMs = 2000, now
   return { ask, remember };
 }
 
-// A XMLHttpRequest whose synchronous disc range GETs are answered by `client` when it has the bytes; everything else is `Base`'s
-function syncDiscXHR(Base, client) {
+// A XMLHttpRequest whose synchronous disc range GETs are answered by `client` when it has the bytes; what it lacks is read from the
+// server's chunk files by `chunks` (disc_chunks.js syncChunkReader) when the server has them, else with `Base` from the whole file;
+// everything else is `Base`'s
+function syncDiscXHR(Base, client, chunks = null) {
   return class extends Base {
     open(method, url, async, ...rest) {
       this.wotm = { method, url: String(url), sync: async === false, range: null };
@@ -261,6 +263,13 @@ function syncDiscXHR(Base, client) {
         Object.defineProperty(this, 'response', { value: hit.buffer });
         return undefined;
       }
+      const read = chunks?.read(url, start, end);
+      if (read) {
+        Object.defineProperty(this, 'status', { value: 206 });
+        Object.defineProperty(this, 'response', { value: read.bytes.buffer });
+        client.remember(url, start, read.bytes, read.etag);
+        return undefined;
+      }
       super.send(body);
       if (this.status === 206 && this.response?.byteLength === end - start) client.remember(url, start, new Uint8Array(this.response), this.getResponseHeader('etag'));
       return undefined;
@@ -271,17 +280,20 @@ function syncDiscXHR(Base, client) {
 if (typeof module !== 'undefined' && module.exports) module.exports = { cachingFetch, evictOld, prefetch, syncReadHelper, syncReadClient, syncDiscXHR };
 else if (typeof document === 'undefined' && globalThis.name === HELPER_NAME) {
   // this is the helper worker (a page of Firefox starts it below)
-  const serve = syncReadHelper(globalThis.fetch.bind(globalThis), { caches: globalThis.caches, subtle: globalThis.crypto?.subtle, estimate: globalThis.navigator?.storage?.estimate ? () => navigator.storage.estimate() : null });
+  const subtle = globalThis.crypto?.subtle;
+  const serve = syncReadHelper(discChunks.chunkedFetch(globalThis.fetch.bind(globalThis), { subtle }), { caches: globalThis.caches, subtle, estimate: globalThis.navigator?.storage?.estimate ? () => navigator.storage.estimate() : null });
   new BroadcastChannel(HELPER_CHANNEL).onmessage = (e) => { serve(e.data).catch(() => null); };
 } else if (typeof globalThis.fetch === 'function' && !globalThis.wotmDiscCaching) {
   globalThis.wotmDiscCaching = true;
   const progress = typeof BroadcastChannel === 'function' ? new BroadcastChannel('wotlane-disc') : null;
   const storage = globalThis.navigator?.storage;
-  globalThis.fetch = cachingFetch(globalThis.fetch, {
+  // the cache sits over the chunk files: what it lacks is read from data/<digest>/<n>.bin when the server has them (disc_chunks.js)
+  const onBytes = (n) => progress?.postMessage(n);
+  globalThis.fetch = cachingFetch(discChunks.chunkedFetch(globalThis.fetch, { subtle: globalThis.crypto?.subtle, onBytes }), {
     caches: globalThis.caches,
     subtle: globalThis.crypto?.subtle,
     estimate: storage?.estimate ? () => storage.estimate() : null,
-    onBytes: (n) => progress?.postMessage(n),
+    onBytes,
   });
   globalThis.wotmDiscCache = { evictOld, prefetch };
   const canBlock = typeof SharedArrayBuffer === 'function' && typeof BroadcastChannel === 'function';
@@ -289,6 +301,6 @@ else if (typeof document === 'undefined' && globalThis.name === HELPER_NAME) {
     globalThis.wotmDiscSyncHelper = new Worker(document.currentScript.src, { name: HELPER_NAME });
   } else if (typeof document === 'undefined' && canBlock && typeof XMLHttpRequest === 'function') {
     const channel = new BroadcastChannel(HELPER_CHANNEL);
-    globalThis.XMLHttpRequest = syncDiscXHR(XMLHttpRequest, syncReadClient((m) => channel.postMessage(m)));
+    globalThis.XMLHttpRequest = syncDiscXHR(XMLHttpRequest, syncReadClient((m) => channel.postMessage(m)), discChunks.syncChunkReader(XMLHttpRequest));
   }
 }
