@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
-const { cachingFetch, evictOld, prefetch } = createRequire(import.meta.url)('./disc_cache.js');
+const { cachingFetch, evictOld, prefetch, syncReadHelper, syncReadClient, syncDiscXHR } = createRequire(import.meta.url)('./disc_cache.js');
 
 const CHUNK = 8;   // bytes per chunk in these tests
 const SIZE = 20;   // the fake file: bytes 0..19 (chunks 0, 1 and a short 2)
@@ -168,4 +168,124 @@ test('the fetch backend\'s double slash (data//game.iso) names the same file and
   await f('data//game.iso', range(0, 7));
   assert.deepEqual(await bytesOf(await f('data/game.iso', range(0, 7))), [...FILE.slice(0, 8)]);
   assert.equal(net.gets().length, 1);
+});
+
+// ---- synchronous reads of a game worker (Firefox): the helper worker, the worker's client and the XHR that uses them ----
+
+const helperOpts = (caches) => ({ caches, subtle: crypto.subtle, estimate: roomy, chunkBytes: CHUNK });
+const get = async (serve, start, end) => {
+  const sab = new SharedArrayBuffer(8 + (end - start));
+  await serve({ op: 'get', url: 'http://x/data/game.iso', start, end, sab });
+  const ctl = new Int32Array(sab, 0, 2);
+  return ctl[0] === 1 ? [...new Uint8Array(sab, 8, ctl[1])] : null;
+};
+
+test('the helper answers a ping, misses what is not cached without touching the network, then serves what a worker put', async () => {
+  const net = fakeNetwork();
+  const serve = syncReadHelper(net, helperOpts(fakeCaches()));
+  const ping = new SharedArrayBuffer(4);
+  await serve({ op: 'ping', sab: ping });
+  assert.equal(new Int32Array(ping)[0], 1);
+
+  assert.equal(await get(serve, 0, 16), null);
+  assert.deepEqual(net.gets(), []);
+
+  await serve({ op: 'put', url: 'http://x/data/game.iso', start: 0, bytes: FILE.slice(0, 16) });
+  assert.deepEqual(await get(serve, 0, 16), [...FILE.slice(0, 16)]);
+  assert.deepEqual(await get(serve, 8, 16), [...FILE.slice(8, 16)]);
+  assert.equal(await get(serve, 0, 24), null, 'one chunk of the range is missing');
+  assert.deepEqual(net.gets(), [], 'a put or a get never reads the disc from the network');
+});
+
+test('the helper ignores what is not a disc file and keeps the file\'s last short chunk', async () => {
+  const serve = syncReadHelper(fakeNetwork(), helperOpts(fakeCaches()));
+  const sab = new SharedArrayBuffer(8 + 8);
+  await serve({ op: 'get', url: 'http://x/page.html', start: 0, end: 8, sab });
+  assert.equal(new Int32Array(sab)[0], 0, 'no answer for a page: the worker never asks for one');
+  await serve({ op: 'put', url: 'http://x/data/game.iso', start: 16, bytes: FILE.slice(16, 20) });
+  assert.deepEqual(await get(serve, 16, 20), [...FILE.slice(16, 20)]);
+});
+
+test('the client treats a helper that never answers as absent: one short wait, then no more asks for a while', () => {
+  let t = 1000;
+  const posted = [];
+  const client = syncReadClient((m) => posted.push(m.op), { waitMs: 20, pingMs: 20, pauseMs: 500, now: () => t });
+  assert.equal(client.ask('http://x/data/game.iso', 0, 8), null);
+  assert.deepEqual(posted, ['ping']);
+  assert.equal(client.ask('http://x/data/game.iso', 0, 8), null);
+  assert.deepEqual(posted, ['ping'], 'paused: nothing is posted');
+  t += 600;
+  assert.equal(client.ask('http://x/data/game.iso', 0, 8), null);
+  assert.deepEqual(posted, ['ping', 'ping'], 'after the pause it tries again');
+});
+
+test('the client reads the bytes a helper wrote into the reply buffer, and a wrong length is a miss', () => {
+  const reply = (status, bytes) => (m) => {
+    if (m.op === 'ping') { Atomics.store(new Int32Array(m.sab), 0, 1); return; }
+    const ctl = new Int32Array(m.sab, 0, 2);
+    new Uint8Array(m.sab, 8).set(bytes);
+    ctl[1] = bytes.length;
+    Atomics.store(ctl, 0, status);
+  };
+  const url = 'http://x/data/game.iso';
+  assert.deepEqual([...syncReadClient(reply(1, [1, 2, 3, 4]), { waitMs: 50 }).ask(url, 0, 4)], [1, 2, 3, 4]);
+  assert.equal(syncReadClient(reply(2, [1, 2, 3, 4]), { waitMs: 50 }).ask(url, 0, 4), null);
+  assert.equal(syncReadClient(reply(1, [1, 2, 3]), { waitMs: 50 }).ask(url, 0, 4), null);
+});
+
+class FakeXHR {
+  constructor() { FakeXHR.made.push(this); this.sent = 0; this.headers = {}; }
+  open(method, url, async) { this.method = method; this.url = url; this.async = async; }
+  setRequestHeader(n, v) { this.headers[n] = v; }
+  send() { this.sent++; this.status = 206; this.response = FILE.slice(0, 8).buffer; }
+}
+FakeXHR.made = [];
+
+function xhrOf(client, url = 'http://x/data/game.iso', async = false, method = 'GET') {
+  const X = syncDiscXHR(FakeXHR, client);
+  const x = new X();
+  x.open(method, url, async);
+  x.responseType = 'arraybuffer';
+  x.setRequestHeader('Range', 'bytes=0-7');
+  return x;
+}
+
+test('a synchronous disc range GET is answered from the client\'s bytes without a request', () => {
+  const asked = [];
+  const x = xhrOf({ ask: (...a) => (asked.push(a), Uint8Array.from([9, 8, 7, 6, 5, 4, 3, 2])), remember: () => assert.fail('a hit is already cached') });
+  x.send();
+  assert.equal(x.sent, 0);
+  assert.equal(x.status, 206);
+  assert.deepEqual([...new Uint8Array(x.response)], [9, 8, 7, 6, 5, 4, 3, 2]);
+  assert.deepEqual(asked.map(([u, a, b]) => [u.endsWith('/data/game.iso'), a, b]), [[true, 0, 8]]);
+});
+
+test('a miss reads the network as before and hands the client the bytes to keep', () => {
+  const kept = [];
+  const x = xhrOf({ ask: () => null, remember: (u, s, b) => kept.push([u, s, [...b]]) });
+  x.send();
+  assert.equal(x.sent, 1);
+  assert.equal(x.status, 206);
+  assert.deepEqual(kept.map(([u, s, b]) => [u.endsWith('/data/game.iso'), s, b]), [[true, 0, [0, 1, 2, 3, 4, 5, 6, 7]]]);
+});
+
+test('requests that are not synchronous disc range GETs never reach the client', () => {
+  const never = { ask: () => assert.fail('asked'), remember: () => assert.fail('kept') };
+  xhrOf(never, undefined, true).send();
+  xhrOf(never, 'page.html').send();
+  xhrOf(never, undefined, false, 'HEAD').send();
+  const X = syncDiscXHR(FakeXHR, never);
+  const x = new X();
+  x.open('GET', 'http://x/data/game.iso', false);
+  x.send();
+  assert.equal(x.sent, 1);
+});
+
+test('the client hands the helper a copy of the bytes a worker fetched', () => {
+  const posted = [];
+  const client = syncReadClient((m) => posted.push(m));
+  const bytes = FILE.slice(16, 20);
+  client.remember('http://x/data/game.iso', 16, bytes);
+  bytes.fill(0);
+  assert.deepEqual(posted.map((m) => [m.op, m.start, [...m.bytes]]), [['put', 16, [...FILE.slice(16, 20)]]]);
 });
