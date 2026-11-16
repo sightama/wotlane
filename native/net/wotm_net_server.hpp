@@ -130,6 +130,7 @@ namespace wotm_net
             std::vector<int> members;      // indices into conns_
             std::string build;
             std::unique_ptr<Match> match;
+            Clock::time_point lastPings{};   // the last PINGS line sent to the members
         };
 
         void log(const char *fmt, ...);
@@ -147,6 +148,8 @@ namespace wotm_net
         void leaveLobby(int c);
         bool closeIfEmpty(int lobby);
         void sendMembers(int lobby);
+        // pings the members of waiting lobbies and tells each lobby its members' round trips (PINGS)
+        void tickLobbyPings();
         // SETTINGS <code> stage=<n or map id> wins=<n> mods=<list>
         std::string settingsLine(const Lobby &l) const;
         void sendSettings(int lobby);

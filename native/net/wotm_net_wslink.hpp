@@ -140,7 +140,10 @@ namespace wotm_net
                             sent = sent << 8 | b;
                         const uint64_t now = micros();
                         if (now >= sent)
+                        {
                             rttMs_ = static_cast<uint32_t>((now - sent + 500) / 1000);
+                            measured_ = true;
+                        }
                     }
                     break;
                 case ws::kClose:
@@ -181,7 +184,7 @@ namespace wotm_net
         bool sendPacket(const std::vector<uint8_t> &packet) { return ready_ && sendFrame(ws::kBinary, packet.data(), packet.size()); }
 
         // a ping carrying the send time; the pong gives rttMs() (the server measures each browser this way, for the input delay)
-        void ping()
+        void ping() override
         {
             const uint64_t now = micros();
             uint8_t b[8];
@@ -190,6 +193,7 @@ namespace wotm_net
             sendFrame(ws::kPing, b, sizeof b);
         }
         uint32_t rttMs() const { return rttMs_; }
+        int pingMs() const override { return measured_ ? static_cast<int>(rttMs_) : -1; }
 
         void close()
         {
@@ -226,5 +230,6 @@ namespace wotm_net
         std::deque<std::string> lines_;
         std::deque<std::vector<uint8_t>> packets_;
         uint32_t rttMs_ = 0;
+        bool measured_ = false;
     };
 }

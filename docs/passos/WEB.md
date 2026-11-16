@@ -71,6 +71,8 @@ from `version.json` in `WOTM_BUILDID`.
 
 **Open lobbies:** on the Host/Join choice the panel keeps one connection that asks `LIST` every 5 s (not while the tab is hidden, and not once the player is in a lobby or has pressed Single player) and lists each lobby as "<owner>: n/8 (<names>), waiting | in a match | full[, needs a password]" with a Join button (`lobbyRow` in `web/lobby.js`). Join is off for a lobby that is in a match, full or locked (the page can't send a password). The server's `LOBBY` line carries no map, so the list doesn't show one. A server that is out of reach hides the list.
 
+**Pings:** while a lobby waits, the server pings each member's `/lobby` WebSocket every second and sends the lobby a `PINGS <code> <name:ms,...>` line with the round trips (`-` for a native member on TCP, which the server can't measure). The member list shows "<name> (<monster>), 23 ms[, owner]". `PINGS` is an extra line: a client that doesn't know it skips it, so the protocol number stays 5.
+
 A refusal from the server (name taken, no such lobby, lobby full, lobby in a match, build differs) stays on the message line, as a plain sentence (`web/messages.js` maps every ERROR the lobby sends; a test reads them from `wotm_net_server.cpp`, and an unknown text is shown as it is). The live server runs with `--lobbies 4`: a fifth lobby creator reads "All 4 lobbies are busy. Try again soon." Leave sends `LEAVE` and returns to Host/Join without a reload (`LobbyClient.leave()`). The page's own
 `LobbyClient.close()` silences `onClose`, which only reports a connection that dropped. The panel is a flex column that scrolls
 (`#front` has `overflow-y: auto`, its card `margin: auto`), so a card taller than the window (8 members, a zoomed page) keeps Start

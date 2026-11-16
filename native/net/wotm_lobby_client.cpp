@@ -3,6 +3,7 @@
 #include "wotm_lobby_client.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <climits>
 #include <cstdlib>
 
@@ -28,9 +29,12 @@ namespace wotm_net
 
     bool LobbyClient::expect(const std::string &prefix, std::string &line, std::string &err, int ms)
     {
+        // the wait is for the whole reply, not for each line: a waiting lobby sends PINGS lines every second
+        const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
         while (true)
         {
-            if (!s_.readLine(line, ms))
+            const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(until - std::chrono::steady_clock::now()).count();
+            if (!s_.readLine(line, static_cast<int>(std::max<long long>(left, 0))))
             {
                 err = s_.open() ? "no answer from the server" : "the server closed the connection";
                 return false;
