@@ -148,6 +148,13 @@ export class LobbyClient {
 
   start() { return this.request('START', ['MATCH']); }
 
+  // leaves the lobby and keeps the connection; resolves with the code of the lobby that was left
+  async leave() {
+    const left = await this.request('LEAVE', ['LEFT']);
+    this.code = '';
+    return left.words[0];
+  }
+
   // the lobbies the server holds: [{code, playing}]
   async list() {
     this.lobbies = [];

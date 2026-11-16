@@ -71,6 +71,21 @@ async function lobbyErrors(run, n, spare, code) {
     `duplicate name: ${JSON.stringify(dup.msg)}; wrong code: ${JSON.stringify(wrong.msg)}; short code: ${JSON.stringify(short)}`);
 }
 
+// Leave takes a guest out of the lobby without a reload: the Host/Join choice is back, the others see the member go
+async function lobbyLeave(run, n, spare, players, code) {
+  const count = (k) => players[0].page.waitForFunction((want) => document.querySelectorAll('#members li').length === want, k, { timeout: 10000 }).then(() => true, () => false);
+  await spare.page.fill('#name', 'Spare');
+  const joined = await spare.join(code);
+  const inOk = joined.joined && await count(n + 1);
+  await spare.page.evaluate(() => { window.__sameDocument = true; });
+  await spare.page.click('#leave');
+  const back = await spare.page.waitForSelector('#choose', { state: 'visible', timeout: 10000 }).then(() => true, () => false);
+  const sameDocument = await spare.page.evaluate(() => window.__sameDocument === true);
+  const outOk = await count(n);
+  run.report.add(n, 'lobby_leave', inOk && back && sameDocument && outOk ? 'pass' : 'fail',
+    `joined: ${inOk}; the choice is back: ${back}; no reload: ${sameDocument}; the others saw it go: ${outOk}`);
+}
+
 // a ninth player at a full lobby: the front panel says so and the others are untouched
 async function capCheck(run, n, spare, code, players) {
   await spare.page.fill('#name', 'P9');
@@ -151,6 +166,7 @@ export async function matchSession(run, n) {
     spare.name = 'Spare';   // it types P1 (a duplicate name) but its logs and screenshots must not overwrite P1's
     await lobbyErrors(run, n, spare, code);
     if (n === run.opts.maxPlayers) await capCheck(run, n, spare, code, players);
+    else await lobbyLeave(run, n, spare, players, code);
     await picks(run, n, players);
 
     const started = await startMatch(players);

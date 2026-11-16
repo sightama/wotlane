@@ -203,7 +203,15 @@ function init() {
     });
   });
   $('start').addEventListener('click', () => lobby?.start().catch((e) => say(friendlyError(e.message))));
-  $('leave').addEventListener('click', () => location.reload());
+  $('leave').addEventListener('click', async () => {
+    try { await lobby?.leave(); } catch { /* the connection is closed next either way */ }
+    lobby?.close();
+    lobby = null;
+    $('inLobby').hidden = true;
+    $('choose').hidden = false;
+    for (const id of ['single', 'host', 'join']) $(id).disabled = false;
+    say('');
+  });
 }
 
 init();
