@@ -3,6 +3,7 @@
 What is left to do, and only that. Bug reports go first. A finished item leaves this file: the story goes into the commit message and what now exists goes into the reference doc (in the present tense). Doc rules: `CLAUDE.md`, "Documentation".
 
 **Direction: browser first.** The browser version is the release. Mac-native features, Mac friends zips and browser-versus-Mac cross-play runs are not release gates; the native build and its tests stay in CI because the browser game is built from the same code (`docs/passos/WEB.md`).
+
 ## Order
 | # | Item | Depends on | Cost |
 |---|---|---|---|
