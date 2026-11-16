@@ -16,7 +16,7 @@
 namespace wotm_sync
 {
     constexpr uint32_t kGuestRam = 32u * 1024u * 1024u, kBlocks = 256u, kBlockSize = kGuestRam / kBlocks;
-    namespace snapbench { extern bool g_on; }
+    namespace snapbench { extern bool g_on, g_compare; }
 
     struct FrameHash
     {
@@ -721,8 +721,8 @@ namespace wotm_sync
     void init(PS2Runtime &runtime)
     {
         g_runtime = &runtime;
-        if (const char *e = std::getenv("WOTM_SNAPBENCH"); e && *e == '1')
-            snapbench::g_on = true;
+        if (const char *e = std::getenv("WOTM_SNAPBENCH"); e && (*e == '1' || *e == '2'))
+            snapbench::g_on = true, snapbench::g_compare = *e == '1';
         if (const char *e = std::getenv("WOTM_SEED"); e && *e && (g_origRandInit = runtime.lookupFunction(kRandInit)))
         {
             g_seed = std::clamp(std::atoll(e), 1LL, 0x7FFFFFFFLL);   // 0 would make the game read the clock
@@ -796,13 +796,13 @@ namespace wotm_sync
     {
         constexpr uint32_t kPage = 4096u, kPages = kGuestRam / kPage, kWindow = 8u;
         bool g_on = false;
+        bool g_compare = true;   // WOTM_SNAPBENCH=2: copy and restore only (the compare alone takes longer than a full copy)
         std::vector<uint8_t> g_shadow, g_slot;
         std::vector<uint32_t> g_lastDirty;
         uint32_t g_frames = 0;
         double g_sum[8] = {}, g_max[8] = {};
         std::chrono::steady_clock::time_point g_lastEnd;
         uint64_t g_lastIdleUs = 0;
-        double g_lastBenchMs = 0.0;
 
         void add(int k, double v)
         {
@@ -826,10 +826,10 @@ namespace wotm_sync
                 std::fprintf(stderr, "[snapbench] on (frame %u)\n", index);
                 return;
             }
-            const double busy = ms(g_lastEnd, t0) - (idleUs - g_lastIdleUs) / 1000.0 - g_lastBenchMs;
+            const double busy = ms(g_lastEnd, t0) - (idleUs - g_lastIdleUs) / 1000.0;   // the interval starts after this bench
             uint32_t dirty = 0, dirty64 = 0, window = 0, upper = 0;
             bool group = false;
-            for (uint32_t p = 0; p < kPages; ++p)
+            for (uint32_t p = 0; g_compare && p < kPages; ++p)
             {
                 const size_t at = static_cast<size_t>(p) * kPage;
                 if (std::memcmp(rdram + at, g_shadow.data() + at, kPage) != 0)
@@ -847,7 +847,7 @@ namespace wotm_sync
                 if (g_lastDirty[p] != 0xFFFFFFFFu && index - g_lastDirty[p] < kWindow)
                     ++window;
             }
-            for (uint32_t p = kPages; p < 2u * kPages; ++p)
+            for (uint32_t p = kPages; g_compare && p < 2u * kPages; ++p)
             {
                 const size_t at = static_cast<size_t>(p) * kPage;
                 if (std::memcmp(rdram + at, g_shadow.data() + at, kPage) != 0)
@@ -884,7 +884,6 @@ namespace wotm_sync
             }
             g_lastEnd = clk::now();
             g_lastIdleUs = g_wotmIdleUs.load(std::memory_order_relaxed);
-            g_lastBenchMs = ms(t0, g_lastEnd);
         }
     }
 
