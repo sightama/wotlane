@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { LAYOUT, SCALE_RANGE, unitFor, rectOf, clampSettings, loadSettings, saveSettings, touchRows, ZONE } = require('./touch.js');
+const { LAYOUT, SCALE_RANGE, unitFor, rectOf, clampSettings, loadSettings, saveSettings, touchRows, ZONE, isTap } = require('./touch.js');
 const { STD } = require('./pads.js');
 
 const buttons = LAYOUT.filter((b) => b.press.length > 0);
@@ -87,4 +87,10 @@ test('the Controls card gets one row per control in plain words', () => {
   assert.ok(rows.some(([does, how]) => /Jump/.test(does) && /✕/.test(how)));
   assert.ok(rows.some(([does]) => /Move/.test(does)));
   assert.ok(rows.some(([does]) => /camera/i.test(does)));
+});
+
+test('a tap is a quick touch that hardly moved; a held touch or a drag is not', () => {
+  assert.equal(isTap({ ms: 90, distance: 3 }), true);
+  assert.equal(isTap({ ms: 400, distance: 3 }), false, 'resting a thumb is not a tap');
+  assert.equal(isTap({ ms: 90, distance: 40 }), false, 'a flick is a drag');
 });

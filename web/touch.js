@@ -29,6 +29,10 @@ const SCALE_RANGE = { min: 0.7, max: 1.2 };
 const DEFAULTS = { scale: 1, opacity: 0.6, haptics: true };
 const STORAGE_KEY = 'wotlane.touch';
 const STICK_RADIUS = 1.5, LOOK_RADIUS = 2.0, STICK_DEAD = 0.1, LOOK_DEAD = 0.08;   // in units, and fractions of the radius
+const TAP = { ms: 220, distance: 12 };   // a touch this quick that moved this little (pixels) is a tap
+
+// a touch of `ms` milliseconds that travelled `distance` pixels is a tap, not a held or dragged thumb
+const isTap = ({ ms, distance }) => ms <= TAP.ms && distance <= TAP.distance;
 
 // a thumb's width in pixels on a screen `vh` tall
 const unitFor = (vh, scale) => Math.min(76, Math.max(38, 0.11 * vh)) * scale;
@@ -220,12 +224,15 @@ class TouchOverlay {
       stick.pointer = e.pointerId;
       stick.cx = e.clientX;
       stick.cy = e.clientY;
+      stick.t0 = this.now();
+      stick.travel = 0;
       stick.el.classList.add('active');
       this.placeStick(which, e.clientX, e.clientY, 0, 0);
     });
     zone.addEventListener('pointermove', (e) => {
       if (e.pointerId !== stick.pointer) return;
       const r = radiusUnits * this.u;
+      stick.travel = Math.max(stick.travel, Math.hypot(e.clientX - stick.cx, e.clientY - stick.cy));
       const [x, y] = Pads.stickVector(e.clientX - stick.cx, e.clientY - stick.cy, r, deadZone);
       this.virtual.setStick(which, x, y);
       const len = Math.hypot(e.clientX - stick.cx, e.clientY - stick.cy) || 1;
@@ -235,11 +242,22 @@ class TouchOverlay {
     const end = (e) => {
       if (e.pointerId !== stick.pointer) return;
       stick.pointer = null;
+      if (e.type === 'pointerup' && isTap({ ms: this.now() - stick.t0, distance: stick.travel })) this.tap(e.clientX, e.clientY);
       this.virtual.setStick(which, 0, 0);
       stick.el.classList.remove('active');
       this.restStick(which);
     };
     for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) zone.addEventListener(type, end);
+  }
+
+  // A tap on the screen is a mouse click on the game (its menus pick lines by pointer; in a fight a click is the light attack)
+  tap(x, y) {
+    const canvas = this.document.getElementById('canvas');
+    if (!canvas) return;
+    const init = { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0, view: this.window };
+    canvas.dispatchEvent(new this.window.MouseEvent('mousemove', init));
+    canvas.dispatchEvent(new this.window.MouseEvent('mousedown', { ...init, buttons: 1 }));
+    this.window.setTimeout(() => canvas.dispatchEvent(new this.window.MouseEvent('mouseup', init)), 80);
   }
 
   placeStick(which, cx, cy, ox, oy) {
@@ -383,7 +401,7 @@ function start() {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { LAYOUT, ZONE, SCALE_RANGE, unitFor, rectOf, clampSettings, loadSettings, saveSettings, touchRows, TouchOverlay };
+  module.exports = { LAYOUT, ZONE, SCALE_RANGE, unitFor, rectOf, clampSettings, loadSettings, saveSettings, touchRows, isTap, TouchOverlay };
 } else {
   Object.assign(globalThis, { wotTouchRows: touchRows });
   start();
