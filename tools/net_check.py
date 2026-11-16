@@ -2,9 +2,10 @@
 # ABOUTME: Network match test on one computer (macOS, Linux or Windows; same as tools\net_check.ps1): starts wotm_server, forms the match
 # ABOUTME: through the lobby (net_lobby.py), opens one game per player with its own pad script and checks every frame's state is equal.
 """Usage: python3 tools/net_check.py [--players 2] [--monsters 3,1] [--stage 1] [--wins 0] [--mods turbo] [--secs 70] [--port 7811]
-                                [--exe a,b] [--drop S] [--rtt 20,60] [--jitter 10] [--extra-env "A=1;B=2"] [--player-env "2:A=1|||3:B=2"]
+                                [--exe a,b] [--server S] [--drop S] [--rtt 20,60] [--jitter 10] [--extra-env "A=1;B=2"] [--player-env "2:A=1|||3:B=2"]
                                 [--expect "re|||2:re"] [--reject "re"] [--expect-refused "reason"]
   --exe         one game executable per player (comma list; the last one covers the rest). Default: the runtime's build_dev.
+  --server      the wotm_server to run. Default: native/net/build, rebuilt when its sources changed.
   --drop S      closes the last player after S seconds and checks that the others carry on.
   --rtt         simulated round trip (ms) to the server per player (comma list; the last one covers the rest), through
                 tools/net_lagproxy.py.   --jitter  spread of each one-way delay (ms), with --rtt.
@@ -20,6 +21,7 @@ import shutil
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 import gamecheck
 
@@ -65,7 +67,8 @@ def start_proxy(a, out):
     cmd = [sys.executable, str(gamecheck.REPO / 'tools' / 'net_lagproxy.py'), '--to', f'127.0.0.1:{a.port}']
     for link in links:
         cmd += ['--link', link]
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=open(out / 'lagproxy.log', 'w'), text=True)
+    with open(out / 'lagproxy.log', 'w') as log:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=log, text=True)
     for _ in links:
         print(f'        lag proxy: {proc.stdout.readline().strip()}')
     return proc
@@ -149,6 +152,7 @@ def main():
     ap.add_argument('--secs', type=int, default=70)
     ap.add_argument('--port', type=int, default=7811)
     ap.add_argument('--exe', default='')
+    ap.add_argument('--server', default='')
     ap.add_argument('--drop', type=int, default=0)
     ap.add_argument('--rtt', default='')
     ap.add_argument('--jitter', type=float, default=0.0)
@@ -160,7 +164,7 @@ def main():
     a = ap.parse_args()
 
     rt = gamecheck.runtime_dir()
-    server = build_server()
+    server = a.server or build_server()
     exes = a.exe.split(',') if a.exe else [str(gamecheck.game_exe(rt))]
     elf = rt / 'discroot' / 'SCUS_971.97'
     out = rt / 'net'
@@ -181,6 +185,9 @@ def main():
                  '--monsters', mons, '--stage', a.stage, '--wins', str(a.wins), '--env-dir', str(out)]
         if a.mods:
             lobby += ['--mods', a.mods]
+        build_id = Path(exes[0]).parent / 'wotm.buildid'   # the build the exe sends (net_lobby's default is the runtime's build_dev)
+        if a.exe and build_id.exists():
+            lobby += ['--build', build_id.read_text().strip()]
         subprocess.run(lobby, check=True)
         for i in range(1, a.players + 1):
             env = dict(base)
