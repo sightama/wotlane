@@ -1,7 +1,7 @@
 # The browser version
 
 The whole port (the recompiled game, the PS2Recomp runtime and `native/`) built with Emscripten into one WebAssembly module, plus a
-page in `web/`. It runs in desktop Chrome and Edge. The disc is never part of the build or the repo: the page reads it from a `data/`
+page in `web/`. It runs in desktop Chrome, Edge and Firefox. The disc is never part of the build or the repo: the page reads it from a `data/`
 folder its server provides.
 
 ## Build
@@ -27,6 +27,11 @@ For online play start `wotm_server --ws-port <port>`; a page opened from `localh
   `web/loading.js` shows as "Downloading game data 34%" over the game.
 - **Saves and settings:** `/save` is the browser's private file system (OPFS) and the game's working folder (`WOTM_SAVEDIR=/save`), so
   `settings.ini`, the memory card and `mods/` survive a reload.
+- **Disc and saves outside Chromium:** the WASMFS fetch and OPFS backends hand each read to a worker while the game's main thread waits;
+  Chrome services those workers meanwhile, Firefox doesn't. So everywhere but Chromium (`web/support.js` `mainThreadFiles`) the page
+  passes the disc files' sizes (`WOTM_DISC_SIZES`) and `WOTM_SAVE_MEMORY=1`: `/disc` fetches its 1 MiB chunks itself, awaiting the fetch
+  through JSPI on the main thread (`native/wotm_webdisc.cpp`), and `/save` lives in memory, loaded from OPFS at boot and compared with
+  OPFS every 60 frames, which writes back new, changed and removed files in the background (`native/wotm_websave.cpp`).
 - **Mods:** before the game starts, `web/builtin_mods.js` mirrors the dist's `mods/` into `<OPFS root>/mods/<mod>/`, as
   `tools/sync_mods.sh` does natively; other folders (the player's creations, `web/creations.js`) are left alone. With the same files the
   mods digest equals a native install's.
@@ -37,7 +42,7 @@ For online play start `wotm_server --ws-port <port>`; a page opened from `localh
   the game letterboxes its own frame.
 - **Address switches:** only `WOTM_MATCH`, `WOTM_AIVSAI` and `PS2X_STATS` are read from the page address; the disc, save and renderer
   settings always win.
-- **Browser check:** `web/support.js` gives Firefox, Safari and phones a plain message and disables the play buttons.
+- **Browser check:** `web/support.js` gives Safari, browsers without JSPI and phones a plain message and disables the play buttons.
 
 ## Online
 The front panel (`web/front.js`, `web/lobby.js`) speaks the lobby protocol over a WebSocket at `/lobby` (one line per text frame):
@@ -55,9 +60,9 @@ During a match:
 - a match that stops (refused, desync, connection lost) shows the reason with a way back to the front panel, the lobby code filled in.
 
 ## Limits
-- **Firefox and Safari:** the game's main thread waits on reads the WASMFS fetch and OPFS backends hand to workers. Chrome services those
-  worker reads meanwhile; Firefox doesn't finish a fetch body and WebKit doesn't run the worker's fetch or OPFS calls until the main thread
-  yields, so the page freezes at boot. Safari before 27 also lacks JSPI.
+- **Safari:** not supported yet. Safari before 27 lacks JSPI; with it, the main-thread disc and saves (above) are the path to try.
+- **Firefox:** the game takes more CPU per frame than in Chrome (it keeps 60 frames per second); a save made less than 60 frames
+  before the tab closes is lost.
 - **Movies:** skipped (no FFmpeg in the browser build).
 - **Audio:** raylib's web audio uses a ScriptProcessorNode, which Chrome reports as deprecated.
 - **Loading counter:** two game tabs of the same site on one computer count each other's chunks.

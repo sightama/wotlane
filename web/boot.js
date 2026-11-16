@@ -122,7 +122,7 @@
     document.addEventListener('visibilitychange', tellHidden);
     if (matchEnv) watchStalls();
     // the game reads its mods at start, so the repo's built-in mods are in place first
-    Promise.all([syncMods(), discSizes()]).finally(() => {
+    Promise.all([syncMods(), mainThreadFiles()]).finally(() => {
       const script = document.createElement('script');
       script.src = 'wotm.js';
       document.body.appendChild(script);
@@ -130,10 +130,12 @@
     canvas.focus();
   };
 
-  // where a worker's fetch stalls while the main thread waits (support.js rangeDisc: Firefox), the game reads the disc in ranges
-  // itself (native/wotm_webdisc.cpp) and needs each file's size first
-  async function discSizes() {
-    if (!window.wotmRangeDisc()) return;
+  // where a worker's fetch and OPFS calls stall while the main thread waits (support.js mainThreadFiles: Firefox), the game keeps
+  // its save folder in memory (native/wotm_websave.cpp) and reads the disc in ranges itself (native/wotm_webdisc.cpp), which needs
+  // each disc file's size first
+  async function mainThreadFiles() {
+    if (!window.wotmMainThreadFiles()) return;
+    env.WOTM_SAVE_MEMORY = '1';
     try {
       const sizes = await Promise.all(['SCUS_971.97', 'game.iso'].map(async (name) => {
         const r = await fetch('data/' + name, { method: 'HEAD' });

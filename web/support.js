@@ -1,5 +1,5 @@
-// ABOUTME: Whether this browser can run the game, as a plain message for the front panel (or null when it can), and how it reads the
-// ABOUTME: disc. Chromium-based browsers and Firefox (with JSPI) can; Safari freezes while the game reads the disc, and phones are out.
+// ABOUTME: Whether this browser can run the game, as a plain message for the front panel (or null when it can), and whether it reads
+// ABOUTME: the disc and saves on the main thread. Chromium-based browsers and Firefox (with JSPI) can run it; Safari and phones can't yet.
 'use strict';
 
 // what the page can see: chromium (Chrome, Edge, Opera...), firefox, jspi (WebAssembly.Suspending), isolated (crossOriginIsolated), mobile
@@ -12,9 +12,9 @@ function supportProblem({ chromium, firefox, jspi, isolated, mobile }) {
   return null;
 }
 
-// the disc in byte ranges read without blocking the main thread (native/wotm_webdisc.cpp) everywhere but Chromium, whose worker
-// fetches go on while the main thread waits (the WASMFS fetch backend, the proven path)
-function rangeDisc({ chromium }) {
+// the disc and the save folder read without blocking the main thread (native/wotm_webdisc.cpp, wotm_websave.cpp) everywhere but
+// Chromium, whose workers' fetches and OPFS calls go on while the main thread waits (WASMFS's fetch and OPFS backends, the proven path)
+function mainThreadFiles({ chromium }) {
   return !chromium;
 }
 
@@ -30,8 +30,8 @@ function browserFacts() {
   };
 }
 
-if (typeof module !== 'undefined' && module.exports) module.exports = { supportProblem, rangeDisc };
+if (typeof module !== 'undefined' && module.exports) module.exports = { supportProblem, mainThreadFiles };
 else {
   globalThis.wotmSupportProblem = () => supportProblem(browserFacts());
-  globalThis.wotmRangeDisc = () => rangeDisc(browserFacts());
+  globalThis.wotmMainThreadFiles = () => mainThreadFiles(browserFacts());
 }

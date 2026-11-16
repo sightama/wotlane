@@ -197,7 +197,7 @@ index 0000000..9095b52
 +    }
 +}
 diff --git a/ps2xRuntime/CMakeLists.txt b/ps2xRuntime/CMakeLists.txt
-index 589d768..0cf7eb7 100644
+index 589d768..0a672df 100644
 --- a/ps2xRuntime/CMakeLists.txt
 +++ b/ps2xRuntime/CMakeLists.txt
 @@ -393,6 +393,7 @@ add_library(ps2_runtime STATIC
@@ -352,7 +352,7 @@ index 589d768..0cf7eb7 100644
 +# web/data_retry.js retries the disc's requests in every thread
 +if(EMSCRIPTEN)
 +    target_sources(ps2_runtime PRIVATE "${WOTM_NATIVE_DIR}/wotm_glad_web.cpp" "${WOTM_NATIVE_DIR}/wotm_webfs.cpp"
-+        "${WOTM_NATIVE_DIR}/wotm_webdisc.cpp")
++        "${WOTM_NATIVE_DIR}/wotm_webdisc.cpp" "${WOTM_NATIVE_DIR}/wotm_websave.cpp")
 +    # wotm_webdisc.cpp implements a WASMFS file (its internal headers)
 +    set_source_files_properties("${WOTM_NATIVE_DIR}/wotm_webdisc.cpp" PROPERTIES
 +        INCLUDE_DIRECTORIES "${EMSCRIPTEN_ROOT_PATH}/system/lib/wasmfs" SKIP_UNITY_BUILD_INCLUSION TRUE)

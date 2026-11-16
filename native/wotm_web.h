@@ -11,6 +11,11 @@ void wotmWebMount();
 // /disc read in byte ranges without blocking the main thread (wotm_webdisc.cpp): `names` under the page's data/, with their sizes
 bool wotmWebMountRangeDisc(const char *dir, const char *const *names, const uint64_t *sizes, int count);
 
+// the save folder in memory, loaded from OPFS without blocking the main thread (wotm_websave.cpp); wotmWebSaveSync writes what changed
+// in it since the last call back to OPFS, in the background (main thread; a no-op when the folder isn't this one)
+bool wotmWebMountSaveMemory(const char *dir);
+void wotmWebSaveSync();
+
 // waits for the browser's next animation frame, so the page stays responsive and the frame reaches the screen
 void wotmWebPresent();
 

@@ -1,10 +1,11 @@
-// ABOUTME: Browser build only: mounts the streamed disc (/disc, read lazily from data/) and the save folder (/save, OPFS), paces the
+// ABOUTME: Browser build only: mounts the streamed disc (/disc, read lazily from data/) and the save folder (/save, OPFS or memory), paces the
 // ABOUTME: render loop on requestAnimationFrame (JSPI suspends it between frames), and shares the tab and network state with the page.
 #ifdef __EMSCRIPTEN__
 #include "wotm_web.h"
 #include "wotm_discchunks.hpp"
 
 #include <emscripten.h>
+#include <emscripten/threading.h>
 #include <emscripten/wasmfs.h>
 
 #include <atomic>
@@ -35,12 +36,20 @@ EM_ASYNC_JS(void, wotm_web_wait_frame, (), {
     s.frames++;
 });
 
-void wotmWebPresent() { wotm_web_wait_frame(); }
+void wotmWebPresent()
+{
+    static unsigned frames = 0;
+    if (++frames % 60 == 0)
+        wotmWebSaveSync();   // every 60 frames, what the game saved goes to the browser's storage (WOTM_SAVE_MEMORY)
+    wotm_web_wait_frame();
+}
 
 bool wotmWebHidden() { return g_hidden.load(); }
 
 void wotmWebQuit()
 {
+    if (emscripten_is_main_browser_thread())
+        wotmWebSaveSync();
     MAIN_THREAD_EM_ASM({ if (globalThis.wotmQuit) globalThis.wotmQuit(); });
 }
 
@@ -97,7 +106,15 @@ void wotmWebMount()
                 std::fprintf(stderr, "[web] couldn't create %s\n", path);
         }
     }
-    if (wasmfs_create_directory("/save", 0777, wasmfs_create_opfs_backend()) != 0)
+    // WOTM_SAVE_MEMORY=1 (the page sets it where a worker's OPFS calls stall while the main thread waits): the folder in memory,
+    // written back to OPFS as it changes (wotm_websave.cpp). Otherwise the WASMFS OPFS backend
+    const char *saveMemory = std::getenv("WOTM_SAVE_MEMORY");
+    if (saveMemory && saveMemory[0] == '1')
+    {
+        if (!wotmWebMountSaveMemory("/save"))
+            std::fprintf(stderr, "[web] couldn't mount /save (saves won't persist)\n");
+    }
+    else if (wasmfs_create_directory("/save", 0777, wasmfs_create_opfs_backend()) != 0)
         std::fprintf(stderr, "[web] couldn't mount /save (saves won't persist)\n");
     if (chdir("/save") != 0)
         std::fprintf(stderr, "[web] couldn't enter /save\n");

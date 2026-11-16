@@ -5,6 +5,7 @@
 #include "wotm_snd.hpp"
 #include "wotm_windowfit.hpp"
 #include "wotm_discchunks.hpp"
+#include "wotm_savemirror.hpp"
 #include "wotm_personalpause.hpp"
 #include "wotm_pauseview.hpp"
 #include "wotm_mods.hpp"
@@ -704,6 +705,39 @@ namespace
         CHECK(!dc::parseSizes("SCUS_971.97:7414808", names, 2, sizes));        // game.iso missing
         CHECK(!dc::parseSizes("SCUS_971.97:x,game.iso:5", names, 2, sizes));   // not a number
         CHECK(!dc::parseSizes("", names, 2, sizes));
+    }
+
+    // The browser's save folder in memory (wotm_websave.cpp): the page packs OPFS's files as [u32 path length][path][u32 size][bytes]
+    TEST(save_mirror_unpacks_the_page_files)
+    {
+        namespace sm = wotm::savemirror;
+        const auto put32 = [](std::vector<uint8_t> &v, uint32_t n) { for (int i = 0; i < 4; ++i) v.push_back(static_cast<uint8_t>(n >> (8 * i))); };
+        std::vector<uint8_t> pack;
+        put32(pack, 8), pack.insert(pack.end(), {'s', 'a', 'v', 'e', '.', 'j', 's', 'o'}), put32(pack, 2), pack.insert(pack.end(), {'{', '}'});
+        put32(pack, 7), pack.insert(pack.end(), {'m', 'c', '0', '/', 'a', 'b', 'c'}), put32(pack, 0);
+        std::vector<sm::File> files;
+        CHECK(sm::unpack(pack.data(), pack.size(), files));
+        CHECK(files.size() == 2 && files[0].path == "save.jso" && files[0].bytes == std::vector<uint8_t>({'{', '}'}));
+        CHECK(files[1].path == "mc0/abc" && files[1].bytes.empty());
+        CHECK(sm::unpack(nullptr, 0, files) && files.empty());
+        CHECK(!sm::unpack(pack.data(), pack.size() - 1, files));   // cut short
+        std::vector<uint8_t> escape;
+        put32(escape, 5), escape.insert(escape.end(), {'.', '.', '/', 'e', 'x'}), put32(escape, 0);
+        CHECK(!sm::unpack(escape.data(), escape.size(), files));   // a path leaving the folder
+    }
+
+    // ...and what to write back: a file new or changed since the last look (by content hash), and one that's gone
+    TEST(save_mirror_diff_finds_changed_and_removed_files)
+    {
+        namespace sm = wotm::savemirror;
+        const std::vector<uint8_t> a{1, 2, 3}, b{1, 2, 4};
+        CHECK(sm::hash(a) != sm::hash(b) && sm::hash(a) == sm::hash(std::vector<uint8_t>{1, 2, 3}));
+        const sm::Snapshot before{{"save.json", sm::hash(a)}, {"mc0/x", sm::hash(a)}, {"settings.ini", sm::hash(a)}};
+        const sm::Snapshot after{{"save.json", sm::hash(b)}, {"settings.ini", sm::hash(a)}, {"mods/m/stages/s/stage.json", sm::hash(a)}};
+        const sm::Changes c = sm::diff(before, after);
+        CHECK(c.changed == std::vector<std::string>({"mods/m/stages/s/stage.json", "save.json"}));
+        CHECK(c.removed == std::vector<std::string>({"mc0/x"}));
+        CHECK(sm::diff(after, after).changed.empty() && sm::diff(after, after).removed.empty());
     }
 
     // The digest's value is fixed by its definition (each file's path inside the mods folder, then its contents), whatever form the
