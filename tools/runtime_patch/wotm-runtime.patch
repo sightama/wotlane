@@ -212,7 +212,7 @@ index 0000000..9095b52
 +    }
 +}
 diff --git a/ps2xRuntime/CMakeLists.txt b/ps2xRuntime/CMakeLists.txt
-index 589d768..6583d21 100644
+index 589d768..0a672df 100644
 --- a/ps2xRuntime/CMakeLists.txt
 +++ b/ps2xRuntime/CMakeLists.txt
 @@ -393,6 +393,7 @@ add_library(ps2_runtime STATIC
@@ -332,7 +332,7 @@ index 589d768..6583d21 100644
  
      if(WIN32 AND NOT PS2X_SHOW_WINDOWS_CONSOLE)
          if(MSVC)
-@@ -608,3 +645,115 @@ endif()
+@@ -608,3 +645,114 @@ endif()
  install(DIRECTORY include/
      DESTINATION include
  )
@@ -364,7 +364,7 @@ index 589d768..6583d21 100644
 +)
 +# WotM, browser build (tools/build_web.sh): WebGL2 for the GL calls the native layer makes, the streamed disc and OPFS saves
 +# (wotm_webfs.cpp), pthreads on SharedArrayBuffer, wasm exceptions and JSPI (the frame loop waits on requestAnimationFrame);
-+# web/data_retry.js retries the disc's requests in every thread and web/disc_cache.js keeps their chunks across visits
++# web/data_retry.js retries the disc's requests in every thread
 +if(EMSCRIPTEN)
 +    target_sources(ps2_runtime PRIVATE "${WOTM_NATIVE_DIR}/wotm_glad_web.cpp" "${WOTM_NATIVE_DIR}/wotm_webfs.cpp"
 +        "${WOTM_NATIVE_DIR}/wotm_webdisc.cpp" "${WOTM_NATIVE_DIR}/wotm_websave.cpp")
@@ -374,9 +374,8 @@ index 589d768..6583d21 100644
 +    target_link_options(ps2EntryRunner PRIVATE -pthread -fwasm-exceptions -sJSPI -sWASMFS -sUSE_GLFW=3 -sUSE_WEBGL2=1
 +        -sMIN_WEBGL_VERSION=2 -sFULL_ES3=1 -sINITIAL_MEMORY=512MB -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=2GB -sPTHREAD_POOL_SIZE=8
 +        -sSTACK_SIZE=8MB -sDEFAULT_PTHREAD_STACK_SIZE=8MB -sEXIT_RUNTIME=0 -sEXPORTED_RUNTIME_METHODS=ENV,HEAPF32,UTF8ToString
-+        "--pre-js=${WOTM_NATIVE_DIR}/../web/data_retry.js" "--pre-js=${WOTM_NATIVE_DIR}/../web/disc_cache.js")
-+    set_property(TARGET ps2EntryRunner APPEND PROPERTY LINK_DEPENDS "${WOTM_NATIVE_DIR}/../web/data_retry.js"
-+        "${WOTM_NATIVE_DIR}/../web/disc_cache.js")   # relink when they change
++        "--pre-js=${WOTM_NATIVE_DIR}/../web/data_retry.js")
++    set_property(TARGET ps2EntryRunner APPEND PROPERTY LINK_DEPENDS "${WOTM_NATIVE_DIR}/../web/data_retry.js")   # relink when it changes
 +endif()
 +# WotM, macOS/Linux: crash stack trace and the macOS menu bar/Dock in fullscreen (wotm_posix.cpp; system headers that clash with raylib)
 +if(NOT WIN32)

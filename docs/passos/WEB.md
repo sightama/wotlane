@@ -25,7 +25,7 @@ For online play start `wotm_server --ws-port <port>`; a page opened from `localh
 - **Disc:** `/disc` is a WASMFS fetch backend over `data/`: the game's reads become 1 MiB range requests, each fetched once
   (`native/wotm_webfs.cpp`). `web/data_retry.js` retries network and 5xx failures in every thread and reports each chunk, which
   `web/loading.js` shows as "Downloading game data 34%" over the game.
-- **Disc cache:** `web/disc_cache.js` (loaded by the page and, after `data_retry.js`, as a `--pre-js` in every thread) keeps the disc's
+- **Disc cache:** `web/disc_cache.js` (loaded by the page with a script tag and, in the game's workers, by `data_retry.js`; it is not in the `--pre-js` list, so a change to it leaves the build id alone) keeps the disc's
   1 MiB chunks in the browser's Cache API, one cache per disc file and version (its ETag), each chunk stored with its SHA-256 and checked
   before use; a chunk missing or failing the check comes from the network. Nothing is stored when the Cache API is missing, the HEAD
   gave no ETag or storage is 90% full. From the page's load, while the player is on the front panel, `web/boot.js` drops the caches

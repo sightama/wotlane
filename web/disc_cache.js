@@ -1,8 +1,8 @@
 // ABOUTME: Keeps the streamed disc's chunks (data/) in the browser's Cache API across visits, per file version (its ETag), each chunk
-// ABOUTME: checked against its SHA-256 before use; and prefetches the chunks the boot needs. Linked as a --pre-js after data_retry.js.
+// ABOUTME: checked against its SHA-256 before use; and prefetches the chunks the boot needs. Loaded by the page and, in workers, by data_retry.js.
 'use strict';
 
-// declarations that can repeat: the page loads this file and wotm.js carries it again as a --pre-js, in the same global scope
+// function and var declarations: loading the file twice in one global scope is harmless (the guard at the end keeps one wrapper)
 var CACHE_PREFIX = 'wotlane-disc:';
 function cacheName(file, etag) { return `${CACHE_PREFIX}${file}:${etag}`; }
 function chunkKey(file, i) { return `https://wotlane.invalid/disc/${encodeURIComponent(file)}/${i}`; }

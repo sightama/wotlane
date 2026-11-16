@@ -1,5 +1,5 @@
 // ABOUTME: Retries the streamed disc's requests (data/) when the network or the server fails for a moment, and tells the page how much
-// ABOUTME: arrived. Linked as an Emscripten --pre-js: it runs in the page and in the worker that fetches the disc.
+// ABOUTME: arrived; in the game's workers it also loads web/disc_cache.js. Linked as an Emscripten --pre-js: it runs in the page and the workers.
 'use strict';
 
 // `onBytes` hears the size of each disc chunk that arrives (the page shows the loading progress)
@@ -30,4 +30,13 @@ else if (typeof globalThis.fetch === 'function' && !globalThis.wotmFetchRetrying
   // the disc is fetched in a worker; the page listens on this channel (boot.js)
   const progress = typeof BroadcastChannel === 'function' ? new BroadcastChannel('wotlane-disc') : null;
   globalThis.fetch = retryingFetch(globalThis.fetch.bind(globalThis), { onBytes: (n) => progress?.postMessage(n) });
+  // a worker of the game (no document) adds the disc cache over this fetch, as the page does with its own script tag; the cache is
+  // not in the --pre-js list, so it stays out of the build id (tools/build_id.py hashes the runtime patch that lists the pre-js)
+  if (typeof document === 'undefined' && typeof importScripts === 'function') {
+    try {
+      importScripts(new URL('disc_cache.js', globalThis.location?.href).href);
+    } catch (e) {
+      // without it the disc is read from the network, as before
+    }
+  }
 }
