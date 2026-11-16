@@ -209,9 +209,11 @@ function init() {
   });
   $('start').addEventListener('click', () => lobby?.start().catch((e) => say(friendlyError(e.message))));
   $('leave').addEventListener('click', async () => {
-    try { await lobby?.leave(); } catch { /* the connection is closed next either way */ }
-    lobby?.close();
-    lobby = null;
+    const leaving = lobby;
+    lobby = null;   // a second click has nothing to leave
+    // LEFT only comes when the server still has the player in a lobby: a second of waiting is enough
+    try { await Promise.race([leaving?.leave(), new Promise((r) => setTimeout(r, 1000))]); } catch { /* the connection is closed next either way */ }
+    leaving?.close();
     $('inLobby').hidden = true;
     $('choose').hidden = false;
     for (const id of ['single', 'host', 'join']) $(id).disabled = false;

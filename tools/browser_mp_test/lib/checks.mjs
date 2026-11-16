@@ -82,8 +82,9 @@ async function lobbyLeave(run, n, spare, players, code) {
   const back = await spare.page.waitForSelector('#choose', { state: 'visible', timeout: 10000 }).then(() => true, () => false);
   const sameDocument = await spare.page.evaluate(() => window.__sameDocument === true);
   const outOk = await count(n);
-  run.report.add(n, 'lobby_leave', inOk && back && sameDocument && outOk ? 'pass' : 'fail',
-    `joined: ${inOk}; the choice is back: ${back}; no reload: ${sameDocument}; the others saw it go: ${outOk}`);
+  const reset = await spare.page.evaluate(() => document.getElementById('inLobby').hidden && ['single', 'host', 'join'].every((id) => !document.getElementById(id).disabled));
+  run.report.add(n, 'lobby_leave', inOk && back && sameDocument && outOk && reset ? 'pass' : 'fail',
+    `joined: ${inOk}; the choice is back: ${back}; no reload: ${sameDocument}; the others saw it go: ${outOk}; buttons usable again: ${reset}`);
 }
 
 // a ninth player at a full lobby: the front panel says so and the others are untouched
