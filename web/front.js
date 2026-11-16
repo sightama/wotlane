@@ -161,6 +161,7 @@ async function offerLastLobby() {
 
 // an invite link (/?join=CODE): the code is filled in and, for a player whose name this browser remembers, joined at once
 function acceptInvite(code) {
+  if (front.hidden || lobby || $('host').disabled) return;   // the player already chose something else
   $('joinCode').value = code;
   if ($('name').value) return hostOrJoin(true);
   say(`You are invited to lobby ${code}. Type a name, then press Join.`);
@@ -206,7 +207,7 @@ function init() {
   if (invited) {   // a reload doesn't join again; the address keeps its other parts
     const rest = new URLSearchParams(location.search);
     rest.delete('join');
-    history.replaceState(null, '', location.pathname + (rest.size ? '?' + rest : ''));
+    history.replaceState(null, '', location.pathname + (rest.size ? '?' + rest : '') + location.hash);
   }
   else offerLastLobby();
   fill($('monster'), MONSTERS, recall('monster', 5));
@@ -217,8 +218,7 @@ function init() {
     if (!$('monster').value) $('monster').value = '5';
     $('lobbyStage').value = recall('stage', 1);
     if (!$('lobbyStage').value) $('lobbyStage').value = '1';
-    if (invited) acceptInvite(invited);
-  });
+  }).catch(() => {}).then(() => { if (invited) acceptInvite(invited); });
   $('single').addEventListener('click', async () => {
     front.hidden = true;
     window.wotmStart(null, await buildId());

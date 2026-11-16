@@ -57,7 +57,10 @@ export class Player {
     page.on('pageerror', (e) => p.errors.push(`${e.message}${e.stack ? ' @ ' + e.stack.split('\n').slice(0, 3).join(' | ') : ''}`));
     await page.goto(url, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => document.getElementById('monster')?.options.length > 0);
-    if (invited) return p;   // an invite link opened the page: the name and monster are the panel's to ask for
+    if (invited) {
+      await page.waitForFunction(() => document.getElementById('joinCode').value !== '' || document.getElementById('frontMsg').textContent !== '', null, { timeout: 15000 });
+      return p;
+    }   // an invite link opened the page: the name and monster are the panel's to ask for
     await page.fill('#name', name);
     if (monster !== undefined) await page.selectOption('#monster', String(monster));
     return p;
