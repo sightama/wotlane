@@ -5074,6 +5074,7 @@ TEST(watchdog_pace_window_rate_and_counting)
     CHECK(pc::measure(1000, 1120, 2.0, false, 1.0, false).counted);
     CHECK(!pc::measure(1000, 1120, 2.0, false, 0.02, true).counted);   // a deliberate pause
 }
+
 // Inflate (wotm_zip.hpp): a fixed-Huffman deflate stream, as the game's zipInflateBlockFixed hands it to zipInflateCodes, in a fake
 // 64 MB guest RAM. The tables are built in the guest layout by gzip's huft_build (the game's zipBuildHuffmanTable).
 namespace zipt
