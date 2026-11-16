@@ -45,7 +45,16 @@
   #lobbies li { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
   #frontMsg { color: var(--dim); min-height: 1.4em; margin: 0; }
   hr { border: 0; border-top: 1px solid var(--line); margin: 0; width: 100%; }
-  #creations summary, #controls summary { cursor: pointer; color: var(--dim); }
+  #settings { width: min(560px, 100%); }
+  #settings h2 { margin: 12px 0 4px; font-size: 14px; color: var(--dim); font-weight: 600; }
+  #settingsTabs { display: flex; gap: 4px; flex-wrap: wrap; border-bottom: 1px solid var(--line); }
+  #settingsTabs button { border: 0; border-bottom: 2px solid transparent; border-radius: 0; padding: 6px 10px; color: var(--dim); }
+  #settingsTabs button[aria-selected="true"] { color: var(--fg); border-bottom-color: var(--accent); }
+  #settings section { display: grid; gap: 10px; align-content: start; min-height: 28em; }
+  #settings .options { display: grid; gap: 10px; }
+  #settings .option { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; align-items: center; }
+  #settings .option .hint { grid-column: 1 / -1; color: var(--dim); font-size: 12px; }
+  #settings .note, #settings .online { color: var(--dim); font-size: 12px; margin: 0; }
   #controlsTable { border-collapse: collapse; margin-top: 8px; font-size: 13px; width: 100%; }
   #controlsTable td { padding: 3px 8px 3px 0; vertical-align: top; }
   #controlsTable td + td { color: var(--dim); }
@@ -63,7 +72,7 @@
     <button id="logToggle" title="Show the log">L</button></div>
 </div>
 <div id="front">
-  <div class="card">
+  <div id="home" class="card">
     <h1>War of the Monsters</h1>
     <div class="row">
       <label>Name <input id="name" maxlength="16" autocomplete="nickname"></label>
@@ -95,20 +104,35 @@
       <div class="row"><button id="leave">Leave</button></div>
     </div>
     <p id="frontMsg"></p>
-    <details id="controls">
-      <summary>Controls</summary>
-      <table id="controlsTable"></table>
-    </details>
-    <details id="creations">
-      <summary>Your creations <span id="creationsCount"></span></summary>
+    <div class="row"><button id="openSettings">Settings</button></div>
+    <p id="supported">Works in Chrome, Firefox and Edge on a computer.</p>
+  </div>
+  <div id="settings" class="card" hidden>
+    <div class="row"><h1 style="flex:1">Settings</h1><button id="closeSettings">Back</button></div>
+    <div id="settingsTabs" role="tablist" aria-label="Settings"></div>
+    <section id="panel-online" role="tabpanel" aria-labelledby="tab-online" hidden>
+      <label>Your name <input id="settingsName" maxlength="16" autocomplete="nickname"></label>
+      <div class="options"></div>
+      <div id="onlineNotes"></div>
+    </section>
+    <section id="panel-game" role="tabpanel" aria-labelledby="tab-game" hidden><div class="options"></div></section>
+    <section id="panel-display" role="tabpanel" aria-labelledby="tab-display" hidden><div class="options"></div></section>
+    <section id="panel-mods" role="tabpanel" aria-labelledby="tab-mods" hidden>
+      <h2>Your creations <span id="creationsCount"></span></h2>
       <ul id="creationList"></ul>
       <div class="row"><button id="importCreation">Import a zip</button>
         <input type="file" id="importFile" accept=".zip,application/zip" hidden></div>
       <div class="row"><label>Map editor <input id="editorMapId" maxlength="16" placeholder="map id, e.g. t1" aria-label="Map id"></label>
         <select id="editorStage" aria-label="Stage to start from"></select><button id="openEditor">Open</button></div>
       <p id="creationsMsg"></p>
-    </details>
-    <p id="supported">Works in Chrome, Firefox and Edge on a computer.</p>
+    </section>
+    <section id="panel-controls" role="tabpanel" aria-labelledby="tab-controls" hidden>
+      <div class="options"></div>
+      <h2>Keyboard</h2>
+      <table id="controlsTable"></table>
+      <p class="note">Keys and gamepad buttons can be changed in the game: main menu, Recompiled options, Controls.</p>
+    </section>
+    <p id="settingsMsg" class="note">Saved as you change them. Changes apply the next time you press Play.</p>
   </div>
 </div>
 <pre id="log"></pre>

@@ -2,6 +2,8 @@
 // ABOUTME: Join takes one). When the owner starts, every member's game loads with the match environment (boot.js wotmStart).
 import { LobbyClient, inviteLink, lastLobbyNotice, lobbyRow, lobbySocketUrl, matchEnv } from './lobby.js';
 import { initCreations, addLobbyChoices } from './creations_ui.js';
+import { initSettings } from './settings_ui.js';
+import { settingsSaved } from './settings.js';
 
 const MONSTERS = [[1, 'Congar'], [2, 'Robo-47'], [3, 'Togera'], [4, 'Ultra V'], [5, 'Preytor'], [7, 'Kineticlops'], [8, 'Magmo'],
   [9, 'Raptros'], [10, 'Agamo'], [11, 'Zorgulon']];
@@ -101,9 +103,10 @@ async function connect(build) {
   };
   client.onError = (text) => say(friendlyError(text));
   client.onClose = () => { if (!front.hidden) say('Lost the connection to the game server. Reload the page to try again.'); };
-  client.onMatch = (match) => {
+  client.onMatch = async (match) => {
     try { sessionStorage.setItem('wotlane.lobby', client.code); } catch { /* private window: not kept */ }
     front.hidden = true;
+    await settingsSaved();   // a change made a moment ago is in the file before the game reads it
     window.wotmStart(matchEnv(match, serverUrl('/match')), build);
   };
   await client.ready;
@@ -269,15 +272,11 @@ function init() {
   const problem = window.wotmSupportProblem();
   if (problem) {
     say(problem);
-    for (const id of ['single', 'host', 'join']) $(id).disabled = true;
+    for (const id of ['single', 'host', 'join', 'openSettings']) $(id).disabled = true;
     return;
   }
   initCreations(STAGES);
-  $('controlsTable').replaceChildren(...controlRows().map((cells) => {
-    const tr = document.createElement('tr');
-    tr.replaceChildren(...cells.map((text) => Object.assign(document.createElement('td'), { textContent: text })));
-    return tr;
-  }));
+  initSettings({ remember, recall });
   if (window.wotmDirect) {
     front.hidden = true;
     buildId().then((b) => window.wotmStart(null, b));
@@ -303,6 +302,7 @@ function init() {
   $('single').addEventListener('click', async () => {
     stopWatchingLobbies();
     front.hidden = true;
+    await settingsSaved();
     window.wotmStart(null, await buildId());
   });
   $('host').addEventListener('click', () => hostOrJoin(false));
