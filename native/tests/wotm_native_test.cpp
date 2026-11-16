@@ -44,6 +44,13 @@
 #include <set>
 #include <string>
 #include <vector>
+#if defined(_MSC_VER)   // the SSE intrinsics, the way the runtime's ps2_runtime_macros.h includes them
+#include <intrin.h>
+#elif defined(USE_SSE2NEON)
+#include "sse2neon.h"
+#else
+#include <immintrin.h>
+#endif
 #ifdef _MSC_VER
 #include <io.h>
 #else
@@ -845,6 +852,50 @@ TEST(detmath_same_bits_on_every_machine)
         mix(dm::atan2f(b[i], b[i + 1]));
     }
     CHECK(digestIs("detmath", h, 0xa6c8104174bda8ccull));
+}
+
+// The translated game's VU0 macro ops use raw SSE intrinsics (PS2Recomp's vu_translation_helpers.cpp): VMINI/VMAX as _mm_min_ps
+// and _mm_max_ps, VFTOI as _mm_cvttps_epi32 after scaling, VITOF as _mm_cvtepi32_ps. x86 runs them natively, the browser through
+// Emscripten's SSE emulation and ARM through sse2neon, included the way ps2_runtime_macros.h includes them. Their edges (+-0, NaN,
+// infinities, values out of int range) must give the same bits everywhere, or the PCs desync. The expected digests are x86's.
+TEST(vu_simd_edges_same_bits_on_every_machine)
+{
+    const uint32_t edges[] = {
+        0x00000000u, 0x80000000u, 0x00000001u, 0x80000001u, 0x00800000u, 0x80800000u, 0x3F800000u, 0xBF800000u, 0x3FC00000u,
+        0xBFC00000u, 0x3F000000u, 0xC0200000u, 0x4EFFFFFFu, 0x4F000000u, 0xCF000000u, 0xCF000001u, 0x4F32D05Eu, 0xCF32D05Eu,
+        0x477FFF80u, 0x7F7FFFFFu, 0xFF7FFFFFu, 0x7F800000u, 0xFF800000u, 0x7FC00000u, 0xFFC00000u, 0x7F800001u, 0x7FFFFFFFu,
+        0xFFFFFFFFu, 0x0000FFFFu, 0x12345678u, 0xDEADBEEFu, 0x46FFFE00u};
+    const size_t n = sizeof(edges) / sizeof(edges[0]);
+    auto load = [](uint32_t a, uint32_t b, uint32_t c, uint32_t d) { return _mm_castsi128_ps(_mm_set_epi32(int(d), int(c), int(b), int(a))); };
+    auto mix = [](uint64_t &h, __m128 v) {   // FNV-1a over the result bits
+        alignas(16) uint32_t u[4];
+        _mm_store_si128(reinterpret_cast<__m128i *>(u), _mm_castps_si128(v));
+        for (uint32_t w : u)
+            for (int k = 0; k < 4; ++k)
+                h = (h ^ ((w >> (8 * k)) & 0xFFu)) * 1099511628211ull;
+    };
+    uint64_t hMin = 1469598103934665603ull, hMax = hMin, hFtoi = hMin, hItof = hMin;
+    for (size_t i = 0; i < n; ++i)   // every pair, in both operand orders
+        for (size_t j = 0; j < n; j += 2)
+        {
+            const __m128 a = load(edges[i], edges[i], edges[j], edges[j + 1]);
+            const __m128 b = load(edges[j], edges[j + 1], edges[i], edges[i]);
+            mix(hMin, _mm_min_ps(a, b));
+            mix(hMax, _mm_max_ps(a, b));
+        }
+    const float ftoiScales[] = {1.f, 16.f, 4096.f, 32768.f}, itofScales[] = {1.f, 1.f / 16.f, 1.f / 4096.f, 1.f / 32768.f};
+    for (size_t i = 0; i < n; i += 4)
+    {
+        const __m128 v = load(edges[i], edges[i + 1], edges[i + 2], edges[i + 3]);
+        for (float s : ftoiScales)
+            mix(hFtoi, _mm_castsi128_ps(_mm_cvttps_epi32(_mm_mul_ps(v, _mm_set1_ps(s)))));
+        for (float s : itofScales)
+            mix(hItof, _mm_mul_ps(_mm_cvtepi32_ps(_mm_castps_si128(v)), _mm_set1_ps(s)));
+    }
+    CHECK(digestIs("VMINI", hMin, 0xea74e6914d9010abull));
+    CHECK(digestIs("VMAX", hMax, 0xf14e6293080b6b4full));
+    CHECK(digestIs("VFTOI", hFtoi, 0xed114ca969162d63ull));
+    CHECK(digestIs("VITOF", hItof, 0xeb6bcbf76bcf5095ull));
 }
 
 // The orbit (and the F5 free camera) write these axes into the game camera's matrix, which then decides culling, LOD and

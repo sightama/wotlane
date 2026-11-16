@@ -12,6 +12,10 @@
 #include <cstdlib>
 #include <cstring>
 #if defined(USE_SSE2NEON)   // ARM: PS2Recomp's CMake fetches sse2neon and defines this
+#if !defined(SSE2NEON_PRECISE_MINMAX) || !SSE2NEON_PRECISE_MINMAX
+// the translated game's VMINI/VMAX (_mm_min_ps/_mm_max_ps) would differ from x86 and the browser on +-0 and NaN
+#error "ARM runtime builds need SSE2NEON_PRECISE_MINMAX=1 (tools/runtime_patch/wotm-runtime.patch, PS2Recomp's CMakeLists.txt)"
+#endif
 #include "sse2neon.h"
 #include <arm_neon.h>
 #else
