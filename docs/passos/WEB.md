@@ -87,8 +87,8 @@ During a match:
 Measured from the page's navigation to the game log's `[boot] ... ready:` line, in a new browser profile (cold: nothing cached) and
 again in the same profile (warm), to the title (the front panel's Single player) and to a direct fight
 (`?WOTM_MATCH=3,1,1&WOTM_AIVSAI=1`), on the real network and throttled (Chrome's DevTools network emulation), counting the bytes of
-each kind of request (page, mods, wasm, disc). The `[boot] disc: LSN ...` lines give each disc read's time; the gaps between reads
-are the game's own pacing, the same natively (issue #80).
+each kind of request (page, mods, wasm, disc). The `[boot] disc: LSN ...` lines give each disc read's time. A load's 512 KB reads are about 19 ms apart: the stage unzip runs in
+host code (`native/wotm_zip.hpp`), so the game no longer spends about 100 ms between reads decompressing, in the browser and natively alike.
 
 ## Tests
 - `node --test web/` (the page scripts, with a fake WebSocket and an in-memory file system);
