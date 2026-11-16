@@ -20,6 +20,7 @@
 #include "wotm_tint.hpp"
 #include "wotm_creator.hpp"
 #include "wotm_stagemap.hpp"
+#include "wotm_zip.hpp"
 #include "wotm_mapedit.hpp"
 #include "wotm_mapedit_live.h"
 #include "net/wotm_camsettings.hpp"
@@ -5150,6 +5151,336 @@ TEST(hud_edge_shift_reaches_the_window_edge)
     // only Hud::update's two WINS buffers go to the edge (any address segment); other text stays
     CHECK(he::isWinsText(0x006EA920u) && he::isWinsText(0x006EA938u) && he::isWinsText(0x206EA920u));
     CHECK(!he::isWinsText(0x006EA924u) && !he::isWinsText(0));
+}
+
+// Inflate (wotm_zip.hpp): a fixed-Huffman deflate stream, as the game's zipInflateBlockFixed hands it to zipInflateCodes, in a fake
+// 64 MB guest RAM. The tables are built in the guest layout by gzip's huft_build (the game's zipBuildHuffmanTable).
+namespace zipt
+{
+    namespace z = wotm::zip;
+
+    const uint16_t kMask[17] = {0x0000, 0x0001, 0x0003, 0x0007, 0x000f, 0x001f, 0x003f, 0x007f, 0x00ff,
+                                0x01ff, 0x03ff, 0x07ff, 0x0fff, 0x1fff, 0x3fff, 0x7fff, 0xffff};
+    constexpr uint32_t kMaskAddr = 0x006F4E28u;
+
+    struct Ram
+    {
+        std::vector<uint8_t> m = std::vector<uint8_t>(64u << 20);   // the runtime's guest RAM (PS2_RAM_SIZE)
+        uint32_t heap = 0x01000000u;   // bump allocator for the tables
+        Ram() { std::memcpy(&m[kMaskAddr], kMask, sizeof kMask); }   // mask_bits where the game has it
+        uint32_t alloc(uint32_t bytes) { const uint32_t a = heap; heap += (bytes + 15u) & ~15u; return a; }
+        void put8(uint32_t a, uint8_t v) { m[a] = v; }
+        void put16(uint32_t a, uint16_t v) { std::memcpy(&m[a], &v, 2); }
+        void put32(uint32_t a, uint32_t v) { std::memcpy(&m[a], &v, 4); }
+    };
+
+    const uint16_t kLens[31] = {3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258, 0, 0};
+    const uint16_t kLext[31] = {0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0, 99, 99};
+    const uint16_t kDist[30] = {1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073,
+                                4097, 6145, 8193, 12289, 16385, 24577};
+    const uint16_t kDext[30] = {0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13};
+
+    std::array<uint64_t, 256> crcTable()
+    {
+        std::array<uint64_t, 256> t{};
+        for (uint32_t n = 0; n < 256; ++n)
+        {
+            uint32_t c = n;
+            for (int k = 0; k < 8; ++k)
+                c = c & 1 ? 0xEDB88320u ^ (c >> 1) : c >> 1;
+            t[n] = c;
+        }
+        return t;
+    }
+
+    // gzip's huft_build, writing struct huft (e, b, v at +4) into the guest RAM; returns the table's address
+    uint32_t buildTable(Ram &ram, const unsigned *b, unsigned n, unsigned s, const uint16_t *d, const uint16_t *e, int &m)
+    {
+        constexpr int BMAX = 16;
+        unsigned c[BMAX + 1] = {}, v[288] = {}, x[BMAX + 1] = {};
+        uint32_t u[BMAX] = {};
+        for (unsigned i = 0; i < n; ++i)
+            c[b[i]]++;
+        int l = m;
+        unsigned j, i;
+        for (j = 1; j <= BMAX; j++)
+            if (c[j])
+                break;
+        int k = int(j);
+        if (unsigned(l) < j)
+            l = int(j);
+        for (i = BMAX; i; i--)
+            if (c[i])
+                break;
+        const int g = int(i);
+        if (unsigned(l) > i)
+            l = int(i);
+        m = l;
+        int y;
+        for (y = 1 << j; j < i; j++, y <<= 1)
+            y -= int(c[j]);
+        y -= int(c[i]);
+        c[i] += unsigned(y);
+        x[1] = j = 0;
+        for (unsigned q = 1, *xp = x + 2; --i;)
+            *xp++ = (j += c[q++]);
+        for (i = 0; i < n; ++i)
+            if ((j = b[i]) != 0)
+                v[x[j]++] = i;
+        n = x[g];
+        x[0] = i = 0;
+        unsigned p = 0;
+        int h = -1, w = -l;
+        uint32_t q = 0, first = 0;
+        unsigned z = 0;
+        for (; k <= g; k++)
+        {
+            unsigned a = c[k];
+            while (a--)
+            {
+                while (k > w + l)
+                {
+                    h++;
+                    w += l;
+                    z = unsigned(g - w) > unsigned(l) ? unsigned(l) : unsigned(g - w);
+                    unsigned f;
+                    if ((f = 1u << (j = unsigned(k - w))) > a + 1)
+                    {
+                        f -= a + 1;
+                        unsigned xi = unsigned(k);
+                        if (j < z)
+                            while (++j < z)
+                            {
+                                if ((f <<= 1) <= c[++xi])
+                                    break;
+                                f -= c[xi];
+                            }
+                    }
+                    z = 1u << j;
+                    q = ram.alloc((z + 1) * 8) + 8;   // the entry before the table links the tables (freed by zipFreeHuffmanTable)
+                    if (!first)
+                        first = q;
+                    u[h] = q;
+                    if (h)
+                    {
+                        x[h] = i;
+                        const uint32_t r = u[h - 1] + 8 * (i >> (w - l));
+                        ram.put8(r, uint8_t(16 + j));
+                        ram.put8(r + 1, uint8_t(l));
+                        ram.put32(r + 4, q);
+                    }
+                }
+                uint8_t re, rb = uint8_t(k - w);
+                uint16_t rn = 0;
+                if (p >= n)
+                    re = 99;
+                else if (v[p] < s)
+                {
+                    re = uint8_t(v[p] < 256 ? 16 : 15);
+                    rn = uint16_t(v[p++]);
+                }
+                else
+                {
+                    re = uint8_t(e[v[p] - s]);
+                    rn = d[v[p++] - s];
+                }
+                const unsigned f = 1u << (k - w);
+                for (j = i >> w; j < z; j += f)
+                {
+                    ram.put8(q + 8 * j, re);
+                    ram.put8(q + 8 * j + 1, rb);
+                    ram.put16(q + 8 * j + 4, rn);
+                }
+                for (j = 1u << (k - 1); i & j; j >>= 1)
+                    i ^= j;
+                i ^= j;
+                while ((i & ((1u << w) - 1)) != x[h])
+                {
+                    h--;
+                    w -= l;
+                }
+            }
+        }
+        return first;
+    }
+
+    // A deflate block with the fixed codes (BTYPE 1): greedy matches of 3 to 258 bytes up to 32 KB back
+    struct BitWriter
+    {
+        std::vector<uint8_t> out;
+        uint32_t acc = 0, n = 0;
+        void bits(uint32_t v, uint32_t count) { acc |= v << n; n += count; while (n >= 8) { out.push_back(uint8_t(acc)); acc >>= 8; n -= 8; } }
+        void huff(uint32_t code, uint32_t len) { uint32_t r = 0; for (uint32_t i = 0; i < len; ++i) r |= ((code >> i) & 1) << (len - 1 - i); bits(r, len); }
+        void lit(uint32_t c)
+        {
+            if (c < 144) huff(0x30 + c, 8);
+            else if (c < 256) huff(0x190 + c - 144, 9);
+            else if (c < 280) huff(c - 256, 7);
+            else huff(0xC0 + c - 280, 8);
+        }
+    };
+
+    std::vector<uint8_t> deflateFixed(const std::vector<uint8_t> &data)
+    {
+        BitWriter bw;
+        bw.bits(1, 1);   // BFINAL
+        bw.bits(1, 2);   // BTYPE fixed
+        std::map<uint32_t, size_t> last;   // last position of each 3-byte prefix
+        for (size_t i = 0; i < data.size();)
+        {
+            size_t len = 0, dist = 0;
+            if (i + 3 <= data.size())
+            {
+                const uint32_t key = data[i] | data[i + 1] << 8 | data[i + 2] << 16;
+                auto it = last.find(key);
+                if (it != last.end() && i - it->second <= 32768)
+                {
+                    dist = i - it->second;
+                    while (len < 258 && i + len < data.size() && data[i + len] == data[i + len - dist])
+                        ++len;
+                }
+                last[key] = i;
+            }
+            if (len < 3)
+            {
+                bw.lit(data[i++]);
+                continue;
+            }
+            int lc = 28;
+            while (kLens[lc] > len) --lc;
+            bw.lit(257 + lc);
+            bw.bits(uint32_t(len - kLens[lc]), kLext[lc]);
+            int dc = 29;
+            while (kDist[dc] > dist) --dc;
+            bw.huff(uint32_t(dc), 5);
+            bw.bits(uint32_t(dist - kDist[dc]), kDext[dc]);
+            i += len;
+        }
+        bw.lit(256);
+        bw.bits(0, 7);
+        return bw.out;
+    }
+
+    // ~1.6 MB: random bytes with copies (near and up to 32 KB back, some overlapping runs) so the stream spans three 512 KB read
+    // blocks and the output four windows, with copies across a window boundary
+    std::vector<uint8_t> sample()
+    {
+        std::mt19937 rng(80);
+        std::vector<uint8_t> d;
+        while (d.size() < 1600000)
+        {
+            const uint32_t kind = rng() % 4;
+            if (kind == 0 || d.size() < 40000)
+                for (int i = 0; i < 1024; ++i)
+                    d.push_back(uint8_t(rng()));
+            else
+            {
+                const size_t dist = kind == 1 ? 1 + rng() % 4 : 1 + rng() % 32768, len = 3 + rng() % 300;
+                for (size_t i = 0; i < len; ++i)
+                    d.push_back(d[d.size() - dist]);
+            }
+        }
+        return d;
+    }
+}
+
+TEST(zip_crc32_is_zlibs)
+{
+    zipt::Ram ram;
+    const auto tab = zipt::crcTable();
+    std::memcpy(&ram.m[0x1000], "123456789", 9);
+    CHECK(wotm::zip::crc32(tab.data(), 0, ram.m.data(), 0x1000, 9) == 0xCBF43926u);
+    CHECK(wotm::zip::crc32(tab.data(), wotm::zip::crc32(tab.data(), 0, ram.m.data(), 0x1000, 4), ram.m.data(), 0x1004, 5) == 0xCBF43926u);
+    CHECK(wotm::zip::crc32(tab.data(), 0x1234, ram.m.data(), 0, 9) == 0);   // a null buffer gives 0
+    std::memcpy(&ram.m[0x021F6B80], "123456789", 9);   // above 32 MB: the stages unzip there
+    CHECK(wotm::zip::crc32(tab.data(), 0, ram.m.data(), 0x021F6B80, 9) == 0xCBF43926u);
+}
+
+// Inflates zipt::sample() to `dest` and checks the output, the globals and the CRC; guest addresses wrap at the end of RAM
+static void checkInflateTo(uint32_t dest)
+{
+    namespace z = wotm::zip;
+    zipt::Ram ram;
+    const auto tab = zipt::crcTable();
+    static const std::vector<uint8_t> data = zipt::sample(), packed = zipt::deflateFixed(data);
+    CHECK(packed.size() > 2 * z::kReadBufSize);
+
+    // zipInflateBlockFixed's tables: literal/length codes 7 bits deep, distances 5
+    unsigned l[288];
+    for (unsigned i = 0; i < 288; ++i)
+        l[i] = i < 144 ? 8 : i < 256 ? 9 : i < 280 ? 7 : 8;
+    int bl = 7, bd = 5;
+    const uint32_t tl = zipt::buildTable(ram, l, 288, 257, zipt::kLens, zipt::kLext, bl);
+    for (unsigned i = 0; i < 30; ++i)
+        l[i] = 5;
+    const uint32_t td = zipt::buildTable(ram, l, 30, 0, zipt::kDist, zipt::kDext, bd);
+
+    // fileReads: the next 512 KB of the stream into the read window
+    uint32_t block = 0;
+    auto refill = [&]() {
+        const size_t off = size_t(block++) * z::kReadBufSize;
+        std::memset(&ram.m[z::kReadBuf], 0, z::kReadBufSize);
+        if (off < packed.size())
+            std::memcpy(&ram.m[z::kReadBuf], packed.data() + off, std::min<size_t>(z::kReadBufSize, packed.size() - off));
+    };
+    refill();
+
+    z::State s;
+    s.fileBuf = z::kReadBuf;
+    s.outBuf = s.outWindow = dest;
+    s.outSize = data.size();
+    // the block header's 3 bits are already in the bit buffer, as zipInflateBlock leaves them
+    s.bitBucket = ram.m[z::kReadBuf] >> 3;
+    s.bitCount = 5;
+    s.fileBuf++;
+    CHECK(z::inflateCodes(ram.m.data(), tab.data(), zipt::kMaskAddr, s, tl, td, bl, bd, refill) == 0);
+    CHECK(s.outWindow == s.outBuf || s.outWindow == s.outBuf - z::kWindow);   // where the last copy read from
+    z::flush(ram.m.data(), tab.data(), s, s.windowPos);   // zipInflateAll's last zipFlush
+
+    CHECK(block == (packed.size() + z::kReadBufSize - 1) / z::kReadBufSize);
+    bool same = true;
+    for (size_t i = 0; i < data.size(); ++i)
+        same = same && ram.m[(dest + i) & z::kRamMask] == data[i];
+    CHECK(same);
+    CHECK(s.outBuf == dest + data.size());
+    CHECK(s.outSize == 0);
+    std::vector<uint8_t> copy(data.size() + 0x10);
+    std::memcpy(&copy[0x10], data.data(), data.size());
+    CHECK(s.crc == wotm::zip::crc32(tab.data(), 0, copy.data(), 0x10, int64_t(data.size())));
+    CHECK(s.windowPos == data.size() % z::kWindow);
+}
+
+TEST(zip_inflate_codes_decodes_a_stream_across_read_blocks_and_windows)
+{
+    checkInflateTo(0x01FFFC00u);   // right after the read window: the output runs past 32 MB, as the stages' does
+}
+
+// The guest's addresses wrap at the end of RAM: an output running off the end of the 64 MB continues at 0, never past the array
+TEST(zip_inflate_codes_wraps_at_the_end_of_ram)
+{
+    for (uint32_t end : {0x40000u, 0x80000u + 1000u, 0x80000u + 70001u, 0x123457u})   // ends among the copies, in several windows
+        checkInflateTo(0x04000000u - end);
+}
+
+// An invalid code (e 99) stops with 1 and leaves the bit state and window position as they were
+TEST(zip_inflate_codes_stops_on_an_invalid_code)
+{
+    namespace z = wotm::zip;
+    zipt::Ram ram;
+    const auto tab = zipt::crcTable();
+    const uint32_t tl = 0x00100000u;
+    for (uint32_t i = 0; i < 2; ++i)
+        ram.put8(tl + 8 * i, 99);
+    z::State s;
+    s.fileBuf = z::kReadBuf;
+    s.bitBucket = 0x5;
+    s.bitCount = 3;
+    s.windowPos = 0x1234;
+    CHECK(z::inflateCodes(ram.m.data(), tab.data(), zipt::kMaskAddr, s, tl, tl, 1, 1, [] {}) == 1);
+    CHECK(s.bitBucket == 0x5 && s.bitCount == 3 && s.windowPos == 0x1234);
+    // bl is a guest register: mask_bits + 2 * bl is a 32-bit guest address, here the halfword before the table (0: entry 0)
+    CHECK(z::inflateCodes(ram.m.data(), tab.data(), zipt::kMaskAddr, s, tl, tl, 0x7FFFFFFF, 1, [] {}) == 1);
+    CHECK(s.bitBucket == 0x5 && s.bitCount == 3 && s.windowPos == 0x1234);
 }
 
 int main()

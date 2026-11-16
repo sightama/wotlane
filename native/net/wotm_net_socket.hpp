@@ -196,17 +196,13 @@ namespace wotm_net
             if (!open())
                 return false;
             char buf[4096];
-            for (;;)
+            // at most kMaxLine per call: a burst beyond it waits in the system's buffer for the next call
+            while (in_.size() < kMaxLine)
             {
                 const int n = ::recv(s_, buf, sizeof buf, 0);
                 if (n > 0)
                 {
                     in_.append(buf, static_cast<size_t>(n));
-                    if (in_.size() > 65536u)   // absurdly long line: drop the connection
-                    {
-                        close();
-                        return false;
-                    }
                     continue;
                 }
                 if (n < 0 && wouldBlock())
@@ -214,13 +210,18 @@ namespace wotm_net
                 close();
                 return false;
             }
+            return true;
         }
 
         bool nextLine(std::string &line) override
         {
             const size_t nl = in_.find('\n');
             if (nl == std::string::npos)
+            {
+                if (in_.size() >= kMaxLine)   // absurdly long line: drop the connection
+                    close();
                 return false;
+            }
             line = in_.substr(0, nl);
             in_.erase(0, nl + 1);
             if (!line.empty() && line.back() == '\r')
@@ -268,6 +269,7 @@ namespace wotm_net
             return getsockopt(s_, SOL_SOCKET, SO_ERROR, reinterpret_cast<char *>(&err), &len) == 0 && err == 0;
         }
 
+        static constexpr size_t kMaxLine = 65536;
         SocketHandle s_ = kNoSocket;
         std::string in_;
     };
