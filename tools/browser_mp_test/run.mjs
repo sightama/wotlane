@@ -22,6 +22,8 @@ const USAGE = `Usage: node tools/browser_mp_test/run.mjs [options]
   --url <url>              live: the site (default https://playwotm.com/)   --password <pw>  live: only for a site behind the password gate
   --browser chromium|chrome  chromium: headless shell with software GL (default); chrome: the installed Chrome (real GPU)
   --headed                 show the browser windows            --isolation context|browser  one shared browser or one per player
+  --unlock-frames          animation frames at full rate in covered windows too (headless Chromium: as fast as it can), so the game interpolates frames
+  --ai                     the game's AI plays every seat (WOTM_AIVSAI=1 on the page address)
   --firefox K              the last K players of each lobby use Playwright's Firefox (mixed lobbies; needs a build with Firefox support)
   --play-secs 45  --warmup-secs 20  --padlog-frames 480  --width 640  --height 400  --lobby-height 900 (the lobby window; the card scrolls when it is taller)
   --video                  record a video per tab (webm)       --out <dir>  results folder (default <repo>/runtime/browser_mp_test/<time>)
@@ -34,7 +36,7 @@ const { values: v } = parseArgs({
     checks: { type: 'string', default: 'match,round,stall,creations,single,saves,movies' }, 'deep-n': { type: 'string', default: '2,4,8' },
     site: { type: 'string' }, data: { type: 'string' }, server: { type: 'string' }, disc: { type: 'string' },
     url: { type: 'string', default: 'https://playwotm.com/' }, password: { type: 'string', default: process.env.WOTM_SITE_PASSWORD ?? '' },
-    browser: { type: 'string', default: 'chromium' }, headed: { type: 'boolean', default: false }, isolation: { type: 'string', default: 'context' },
+    browser: { type: 'string', default: 'chromium' }, headed: { type: 'boolean', default: false }, isolation: { type: 'string', default: 'context' }, 'unlock-frames': { type: 'boolean', default: false }, ai: { type: 'boolean', default: false },
     'play-secs': { type: 'string', default: '45' }, 'warmup-secs': { type: 'string', default: '20' }, 'padlog-frames': { type: 'string', default: '480' },
     width: { type: 'string', default: '640' }, height: { type: 'string', default: '400' }, 'lobby-height': { type: 'string', default: '900' }, firefox: { type: 'string', default: '0' }, video: { type: 'boolean', default: false },
     out: { type: 'string' }, help: { type: 'boolean', default: false },
@@ -66,9 +68,11 @@ if (v.target === 'live') {
     server: resolve(v.server ?? join(REPO, 'native/net/build/wotm_server')), outDir,
   });
 }
+// the game's AI plays every seat, so a match runs to a result unattended (the inputs row then sees no held button)
+if (v.ai) target.pageUrl += (target.pageUrl.includes('?') ? '&' : '?') + 'WOTM_AIVSAI=1';
 
 const pw = await loadPlaywright();
-const browsers = await launchBrowsers(pw, { n: Math.max(...counts), browser: v.browser, headed: v.headed, isolation: v.isolation });
+const browsers = await launchBrowsers(pw, { n: Math.max(...counts), browser: v.browser, headed: v.headed, isolation: v.isolation, unlockFrames: v['unlock-frames'] });
 const firefox = opts.firefoxCount ? await launchFirefox(pw, { headed: v.headed }) : null;
 const report = new Report({
   target: `${target.kind} ${target.pageUrl.split('?')[0]}`, build: target.buildId, browser: `${v.browser}${v.headed ? ' headed' : ' headless'} ${browsers[0].version()}${firefox ? `, plus Firefox ${firefox.version()} for the last ${opts.firefoxCount} player(s) of each lobby` : ''}`,

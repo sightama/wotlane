@@ -52,8 +52,13 @@ void wotmWebQuit()
 
 void wotmWebPageSize(int &w, int &h)
 {
-    w = MAIN_THREAD_EM_ASM_INT({ return window.innerWidth; });
-    h = MAIN_THREAD_EM_ASM_INT({ return window.innerHeight; });
+    w = MAIN_THREAD_EM_ASM_INT({ return wotmDevicePixels(window.innerWidth, window.innerHeight, window.devicePixelRatio).w; });
+    h = MAIN_THREAD_EM_ASM_INT({ return wotmDevicePixels(window.innerWidth, window.innerHeight, window.devicePixelRatio).h; });
+}
+
+double wotmWebPixelRatio()
+{
+    return MAIN_THREAD_EM_ASM_DOUBLE({ return window.devicePixelRatio > 0 ? window.devicePixelRatio : 1; });
 }
 
 void wotmWebNetStall(double ms, const char *text)

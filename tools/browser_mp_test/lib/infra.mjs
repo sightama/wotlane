@@ -96,12 +96,18 @@ async function loginCookies(base, password) {
 }
 
 // Browsers: one shared by all players (separate contexts, so separate storage) or one per player (`isolation: 'browser'`).
-export async function launchBrowsers(pw, { n, browser = 'chromium', headed = false, isolation = 'context' }) {
+export async function launchBrowsers(pw, { n, browser = 'chromium', headed = false, isolation = 'context', unlockFrames = false }) {
   const opts = { headless: !headed, args: ['--enable-unsafe-swiftshader', '--use-gl=angle', '--use-angle=swiftshader', '--ignore-gpu-blocklist',
     '--autoplay-policy=no-user-gesture-required'] };
   if (browser === 'chrome') {
     opts.channel = 'chrome';
     opts.args = ['--autoplay-policy=no-user-gesture-required'];   // the real GPU
+  }
+  // animation frames at full rate in every window, covered or not (a covered window otherwise gets 30 a second), and in headless
+  // Chromium as fast as it can draw: the page reads a display above 60 Hz and the game draws interpolated frames
+  if (unlockFrames) {
+    opts.args.push('--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding', '--disable-background-timer-throttling');
+    if (browser !== 'chrome') opts.args.push('--disable-frame-rate-limit', '--disable-gpu-vsync');
   }
   const count = isolation === 'browser' ? n : 1;
   const list = [];

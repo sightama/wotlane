@@ -72,9 +72,31 @@ For online play start `wotm_server --ws-port <port>`; a page opened from `localh
   mods digest equals a native install's.
 - **Frames:** each presented frame awaits one `requestAnimationFrame` through JSPI. The game itself runs on its own thread and does not
   wait for presentation, so it keeps its 60 frames per second in a hidden tab.
+- **High frame rate:** the game logic always runs at 60, online and offline; only the drawing follows the display. Before the game starts
+  the page measures the display's refresh rate from 60 animation frames (`web/display.js` `measureRefresh`: the median of 4-frame spans,
+  snapped to a common rate within 4%; a hidden tab gives up after 2 s and the game assumes 60) and passes it as `WOTM_DISPLAY_HZ`, which
+  stands for the monitor rate natively (`initPresentRate`, `wotm_live.inc`). Above 60 Hz every animation frame draws the blend of the game's
+  last two frames (frame interpolation, `docs/passos/NATIVO.md`, "Presentation rate"), one game frame behind; at 60 the scene is redrawn
+  once per game frame. The redraw's real cost is in the browser's GPU process, which runs the WebGL calls after this thread has moved on, so the native
+  guard (the redraw time against the period) misses it; in the browser blending is judged by the frame interval it reaches
+  (`interp::PaceGuard`, `wotm_interp.hpp`): a moving average over 1.4 periods suspends it (the scene goes back to one redraw per game
+  frame, presented at the display rate), and it is tried again after 10 s, twice as long after each failed try (up to 160 s), with an
+  `[interp]` line in the log each time. The Settings page's Frame rate (`WOTM_HZ`: Display rate or 60) caps the rate the drawing assumes (an unmeasured display counts as 60), so 60 turns
+  interpolation off; Vsync has no effect in the browser. Online matches stay in step because nothing the drawing does reaches the game.
+  The rate is measured once: a window moved to a screen with another rate keeps the first one until the next Play. Measuring the rate
+  from frame times follows nfsu2-web (`web/src/app/display.ts`, https://github.com/th0mk/nfsu2-web, MIT License, Copyright (c) th0mk).
 - **Graphics:** the native layer's GL calls go to WebGL2 (`native/wotm_glad_web.cpp`); its GLSL 330 shaders become GLSL ES 3.00
-  (`native/wotm_glsl.hpp`). Lens flares are off (`WOTM_NOFLARE`: WebGL2 can't read the depth buffer back). The canvas fills the page and
-  the game letterboxes its own frame.
+  (`native/wotm_glsl.hpp`). Lens flares are off (`WOTM_NOFLARE`: WebGL2 can't read the depth buffer back). The canvas fills the page in
+  device pixels (CSS size times `devicePixelRatio`, `fitCanvas` in `wotm_live.inc`: raylib sizes it in CSS pixels at start and on each page
+  resize, so each present puts it back), so a high-density screen gets its full sharpness, and the game letterboxes its own frame in it.
+  The overlays drawn in window pixels (the online ping and "Waiting for" message, the F3 counter, the F1 menu) grow by the pixel ratio.
+  The picture options are the native ones (`docs/passos/NATIVO.md`, "PC graphics" and "Widescreen"), set on the Settings page's Display
+  tab: resolution (Window size is the canvas in device pixels), render scale, aspect ratio (Hor+: the width grows, the vertical field of
+  view stays the game's, so models are never stretched), anti-aliasing, texture filter, frame interpolation, frame rate and Wide HUD
+  (`WOTM_HUDWIDE`: the bars at the screen's edges, or off, in the 4:3 middle where the game puts them).
+- **Frame rate check:** `node tools/web_fps.mjs <chrome|firefox> <page url> [secs]` opens a direct AI fight in a visible browser and prints
+  the presented frames per second, the frame times (median, p95, p99, late frames), the game's redraws and interpolated redraws per second,
+  and saves a screenshot.
 - **Address switches** (`web/pageenv.js`, tested in `pageenv.test.mjs`): only `WOTM_MATCH`, `WOTM_AIVSAI`, `PS2X_STATS` and `WOTM_MAPEDIT` (the Settings page's Mods tab, Your creations, has a Map editor row that opens the page with it, on a stock stage) are read from the page address; the disc, save and renderer
   settings always win.
 - **Browser check:** `web/support.js` gives Safari, browsers without JSPI and phones a plain message and disables the play buttons; the front panel says Chrome, Firefox and Edge on a computer work.

@@ -29,5 +29,8 @@ void wotmWebNetStall(double ms, const char *text);
 // the game quit (its menu's quit game): the page goes back to its front panel (boot.js wotmQuit); any thread
 void wotmWebQuit();
 
-// the page's size in CSS pixels (window.innerWidth and innerHeight); any thread
+// the page's size in device pixels (window.innerWidth and innerHeight times devicePixelRatio, web/display.js); any thread
 void wotmWebPageSize(int &w, int &h);
+
+// device pixels per CSS pixel (window.devicePixelRatio, 1 when the page has none); any thread
+double wotmWebPixelRatio();

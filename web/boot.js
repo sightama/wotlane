@@ -106,6 +106,18 @@
     }, 500);
   }
 
+  // the display's refresh rate, measured while the front panel is idle: above 60 Hz the game draws in-between frames (WOTM_DISPLAY_HZ,
+  // native/runtime/wotm_live.inc). A hidden tab gets no animation frames, so after 2 s the rate is unknown and the game draws at 60
+  const displayRate = Promise.race([
+    wotmMeasureRefresh(60),
+    new Promise((resolve) => setTimeout(() => resolve({ hz: 0, raw: 0 }), 2000)),
+  ]).then((r) => {
+    if (r.hz) {
+      env.WOTM_DISPLAY_HZ = String(r.hz);
+      out(`[web] display ${r.raw.toFixed(1)} Hz, read as ${r.hz}`);
+    }
+  });
+
   // also from the page's load: the game's wasm into the browser's HTTP cache, so that wotm.js's own request is only a revalidation
   // (the server sends it with an ETag and no-cache). The game starts once this is done; a failure only means wotm.js downloads it
   const wasmWarm = fetch('wotm.wasm').then((r) => r.arrayBuffer()).catch(() => {});
@@ -151,7 +163,7 @@
     window.addEventListener('pagehide', syncSaves);
     if (matchEnv) watchStalls();
     // the game reads its mods at start, so the repo's built-in mods are in place first
-    Promise.all([syncMods(), mainThreadFiles(), discWarm, wasmWarm]).finally(() => {
+    Promise.all([syncMods(), mainThreadFiles(), discWarm, wasmWarm, displayRate]).finally(() => {
       const script = document.createElement('script');
       script.src = 'wotm.js';
       document.body.appendChild(script);

@@ -131,6 +131,17 @@ void wotmVu0UcodeInstall(PS2Runtime &runtime)
 void wotmVu0UcodeInstall(PS2Runtime &) {}
 #endif
 
+// The debug and network overlays are sized in window pixels; in the browser the canvas is in device pixels, so they grow by the page's
+// pixel ratio to keep their size on screen
+static int overlayPx(int px)
+{
+#ifdef __EMSCRIPTEN__
+    return static_cast<int>(std::lround(px * wotmWebPixelRatio()));
+#else
+    return px;
+#endif
+}
+
 // Boot trace: from process start to the game's first movie or frame, each step goes to stderr with the time since start
 // ("[boot]  3.21 s  disc: ...") and is written on the black screen. A step stuck for more than 3 s repeats in the log with the EE PC,
 // to find the bottleneck on machines where the black screen lingers. Called from main.cpp, initialize/run, sceCdSearchFile and the IOP log.
@@ -168,10 +179,10 @@ inline void drawOverlay()
         at = stepAt;
     }
     const double t = now();
-    const float h = static_cast<float>(GetScreenHeight());
-    DrawTextEx(font(), TextFormat("Loading... %.1f s", t), Vector2{16.0f, h - 54.0f}, 20.0f, 0.0f, LIGHTGRAY);
-    DrawTextEx(font(), TextFormat("%s%s", s.c_str(), t - at >= 3.0 ? TextFormat("  (%.0f s in this step)", t - at) : ""), Vector2{16.0f, h - 28.0f},
-               16.0f, 0.0f, GRAY);
+    const float h = static_cast<float>(GetScreenHeight()), k = static_cast<float>(overlayPx(100)) / 100.f;
+    DrawTextEx(font(), TextFormat("Loading... %.1f s", t), Vector2{16.0f * k, h - 54.0f * k}, 20.0f * k, 0.0f, LIGHTGRAY);
+    DrawTextEx(font(), TextFormat("%s%s", s.c_str(), t - at >= 3.0 ? TextFormat("  (%.0f s in this step)", t - at) : ""),
+               Vector2{16.0f * k, h - 28.0f * k}, 16.0f * k, 0.0f, GRAY);
 }
 } // namespace wotm_boot
 
@@ -459,11 +470,24 @@ static int renderHeight()
 // Rate and Vsync options (wotm_settings.hpp), live: applyVideoSettings calls this again when they change.
 static void initPresentRate()
 {
+#ifdef __EMSCRIPTEN__
+    // The browser presents on every animation frame (wotmWebPresent), at the display's rate, which the page measures before the game
+    // starts (WOTM_DISPLAY_HZ, web/display.js): raylib can't query it. The Rate option only lowers the rate the drawing assumes (60
+    // turns frame interpolation off); Vsync has no effect.
+    static const int monHz = [] { const char *e = std::getenv("WOTM_DISPLAY_HZ"); return e ? std::max(0, std::atoi(e)) : 0; }();
+#else
     const int mon = GetCurrentMonitor(), monHz = GetMonitorRefreshRate(mon);
+#endif
     int hz = wotm::settings::get(wotm::settings::Rate);
     if (hz <= 0)
         hz = monHz > 0 ? monHz : 60;
     hz = std::clamp(hz, 30, 1000);
+#ifdef __EMSCRIPTEN__
+    const int webHz = std::min(hz, monHz > 0 ? monHz : 60);   // an unmeasured display is taken as 60
+    wotm::settings::g_presentHz.store(webHz, std::memory_order_relaxed);
+    std::fprintf(stderr, "[native] present: %d Hz (display %d Hz, WOTM_HZ)\n", webHz, monHz);
+    return;
+#endif
     const bool vsync = wotm::settings::on(wotm::settings::Vsync);
     if (vsync)
         SetWindowState(FLAG_VSYNC_HINT);
@@ -476,16 +500,26 @@ static void initPresentRate()
     std::fprintf(stderr, "[native] present: %d Hz (monitor %d Hz), vsync %s (WOTM_HZ, WOTM_VSYNC)\n", eff, monHz, vsync ? "on" : "off");
 }
 
+#ifdef __EMSCRIPTEN__
+// The browser version fills the page, in device pixels, so a high-density screen gets its full sharpness (the present letterboxes the
+// game's frame either way). raylib sizes the canvas in CSS pixels, at start and on every page resize, so each present puts it back.
+static void fitCanvas()
+{
+    int pw = 0, ph = 0;
+    wotmWebPageSize(pw, ph);
+    if (pw <= 0 || ph <= 0 || (pw == GetScreenWidth() && ph == GetScreenHeight()))
+        return;
+    SetWindowSize(pw, ph);
+    std::fprintf(stderr, "[native] canvas %dx%d (the page, in device pixels)\n", pw, ph);
+}
+#endif
+
 // Window: the largest one at the fixed aspect ratio (or 16:9) inside 90% of the monitor, centered (wotm_windowfit.hpp, #6). The render
 // resolution (Res) is its own setting, scaled on present, so it never resizes the window. WOTM_WINDOW=<lines> caps the height (checks).
 static void fitWindow()
 {
 #ifdef __EMSCRIPTEN__
-    // the browser version fills the page, and raylib follows the page's resizes; the present letterboxes the game's frame either way
-    int pw = 0, ph = 0;
-    wotmWebPageSize(pw, ph);
-    SetWindowSize(pw, ph);
-    std::fprintf(stderr, "[native] window %dx%d (the page)\n", pw, ph);
+    fitCanvas();
     return;
 #endif
     const float a = fixedAspect() ? fixedAspect() : 16.f / 9.f;
@@ -646,6 +680,9 @@ static void applyVideoSettings()
     using namespace wotm::settings;
     if (g_localCollect || g_hideFps)
         return;
+#ifdef __EMSCRIPTEN__
+    fitCanvas();
+#endif
     int now[kKeys];
     for (int k = 0; k < kKeys; ++k)
         now[k] = get(Key(k));
@@ -1907,6 +1944,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
     const double nowT = GetTime();
     static double lastFreshT = 0.0, lastRenderT = 0.0;
     static long s_renders = 0, s_blends = 0;   // redraws and, of those, the ones blended by interpolation (PS2X_STATS, [native] line)
+    static bool s_lastBlend = false;   // the last redraw blended (the browser's PaceGuard)
     static double s_drawMs[5] = {}, s_drawCpu[5] = {};   // redraws with 1 to 4 views since the last [native] line: wall time and thread CPU
     static long s_drawN[5] = {};
     int nViews = 1;
@@ -1967,7 +2005,23 @@ static bool wotmDrawNative(const uint8_t *rdram)
             if (tooSlow != was)
                 std::fprintf(stderr, "[interp] redraw of %.2f ms for a period of %.2f ms: blending %s\n", ms, periodMs, tooSlow ? "suspended" : "back on");
         }
-        const bool want = wotm::settings::on(wotm::settings::Interp) && (presentHz > 60 || (presentHz > 0 && slowGame)) && !tooSlow &&
+        bool suspend = tooSlow;
+#ifdef __EMSCRIPTEN__
+        // in the browser this thread's redraw time misses the cost (the GPU process runs the WebGL calls later): blending is judged by
+        // the present interval it reaches (PaceGuard, wotm_interp.hpp), with a backed-off retry; a hidden tab leaves it as it is
+        static wotm::interp::PaceGuard pace;
+        static bool paced = false;
+        if (presentHz > 0 && !wotmWebHidden())
+        {
+            const bool was = paced;
+            paced = pace.update(wotm_live::hostNow(), presentHz, s_lastBlend);
+            if (paced != was)
+                std::fprintf(stderr, "[interp] presents every %.2f ms for a period of %.2f ms: blending %s\n", pace.averageMs(), 1000.0 / presentHz,
+                             paced ? "suspended" : "tried again");
+        }
+        suspend = suspend || paced;
+#endif
+        const bool want = wotm::settings::on(wotm::settings::Interp) && (presentHz > 60 || (presentHz > 0 && slowGame)) && !suspend &&
                           !wotm_live::g_localCollect;
         wotm_live::g_interpCull.store(want, std::memory_order_relaxed);
         const bool trainOverlay = wotm_training::g_on.load(std::memory_order_relaxed) &&
@@ -2008,6 +2062,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
     {
         S.lastAlpha = interpOn ? alpha - (interpOld ? 2.f : 0.f) : -1.f;   // the (P, A) pair sits below -1
         s_blends += interpOn && alpha < 1.f;
+        s_lastBlend = interpOn;
     }
     wotm::GameCamera gc = S.snap.cam;
     if (rerender)
@@ -2075,6 +2130,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
         wotm::g_beforeDepthRead = wotm::msaa::readDepthIfMsaa;
         wotm::g_depthReadIsMsaa = [] { return wotm::msaa::g_current != nullptr; };
         S.scene.setTexFilter(wotm_live::g_force43 ? 0 : wotm::settings::get(wotm::settings::TexFilter));
+        S.scene.hudWide = wotm::settings::on(wotm::settings::HudWide);
         if (msaaSamples <= 1)
             for (wotm::msaa::Target &t : S.vms)
                 if (t.on())
@@ -2498,8 +2554,9 @@ static bool wotmDrawNative(const uint8_t *rdram)
         {
             char line[128];
             std::snprintf(line, sizeof line, "game %.1f fps | screen %.1f fps", gameFps, screenFps);
-            DrawText(line, 11, 11, 20, BLACK);
-            DrawText(line, 10, 10, 20, gameFps >= 55.f ? GREEN : (gameFps >= 30.f ? YELLOW : RED));
+            const int fs = overlayPx(20), at = overlayPx(10);
+            DrawText(line, at + 1, at + 1, fs, BLACK);
+            DrawText(line, at, at, fs, gameFps >= 55.f ? GREEN : (gameFps >= 30.f ? YELLOW : RED));
         }
     }
 
@@ -2528,7 +2585,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
         }
         const uint32_t s2 = (c & kCheatStaminaMask) / kCheatStamina1;
         static const char *const stName[3] = {"normal", "full", "rage (130)"};
-        const int fs = 20, x = 10, top = 40;
+        const int fs = overlayPx(20), x = overlayPx(10), top = overlayPx(40);
         if (open)
         {
             char lines[8][64];
@@ -2562,17 +2619,18 @@ static bool wotmDrawNative(const uint8_t *rdram)
 
     if (wotm_netstatus::g_active)
     {   // network match: ping and delay in the corner; when waiting for someone or stopped, the message in the center
-        const int fs = 18, sw = GetScreenWidth(), sh = GetScreenHeight();
+        const int fs = overlayPx(18), sw = GetScreenWidth(), sh = GetScreenHeight();
         char line[64];
         std::snprintf(line, sizeof line, "ping %u ms | delay %u", wotm_netstatus::g_pingMs.load(), wotm_netstatus::g_delay.load());
         const int lw = MeasureText(line, fs);
-        DrawText(line, sw - lw - 9, 11, fs, BLACK);
-        DrawText(line, sw - lw - 10, 10, fs, LIGHTGRAY);
+        const int at = overlayPx(10);
+        DrawText(line, sw - lw - at + 1, at + 1, fs, BLACK);
+        DrawText(line, sw - lw - at, at, fs, LIGHTGRAY);
         const std::string msg = wotm_netstatus::message();
         if (!msg.empty())
         {
-            const int mfs = 28, mw = MeasureText(msg.c_str(), mfs);
-            DrawRectangle((sw - mw) / 2 - 16, sh / 2 - mfs, mw + 32, mfs * 2, Color{0, 0, 0, 190});
+            const int mfs = overlayPx(28), mw = MeasureText(msg.c_str(), mfs), pad = overlayPx(16);
+            DrawRectangle((sw - mw) / 2 - pad, sh / 2 - mfs, mw + 2 * pad, mfs * 2, Color{0, 0, 0, 190});
             DrawText(msg.c_str(), (sw - mw) / 2, sh / 2 - mfs / 2, mfs, YELLOW);
         }
     }

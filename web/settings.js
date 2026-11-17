@@ -38,6 +38,10 @@ export const OPTIONS = [
     choices: [['bilinear', 'Bilinear'], ['trilinear', 'Trilinear'], ['2x', 'Anisotropic 2x'], ['4x', 'Anisotropic 4x'],
       ['8x', 'Anisotropic 8x'], ['16x', 'Anisotropic 16x']] },
   toggle('WOTM_INTERP', 'display', 'Picture', 'Interpolate frames', 'Smoother motion on screens faster than 60 Hz.', '1'),
+  { key: 'WOTM_HZ', tab: 'display', group: 'Picture', label: 'Frame rate', def: '0',
+    hint: 'The game always runs at 60. On a faster screen, Display rate draws the frames in between; 60 saves power.',
+    choices: [['0', 'Display rate'], ['60', '60']] },
+  toggle('WOTM_HUDWIDE', 'display', 'Picture', 'Wide HUD', 'Health bars at the edges of a wide screen. Off keeps the original layout.', '1'),
 
   { key: 'WOTM_VOL_SFX', tab: 'game', group: 'Sound', label: 'Effects volume', def: '100',
     hint: 'Hits, roars, crashes and menu sounds. Only on this computer.', choices: percents(0, 100, 10) },
