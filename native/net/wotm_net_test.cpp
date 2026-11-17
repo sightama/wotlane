@@ -560,11 +560,11 @@ namespace
         std::map<std::string, std::string> match;
     };
 
-    // connects and sends the HELLO for the current protocol; returns the WELCOME line
-    std::string hello(LineSocket &s, uint16_t port, const std::string &build = "b1")
+    // connects and sends the HELLO for the current protocol (with `extra` words, such as hz=30); returns the WELCOME line
+    std::string hello(LineSocket &s, uint16_t port, const std::string &build = "b1", const std::string &extra = "")
     {
         CHECK(s.connect("127.0.0.1", port, 2000));
-        s.sendLine("HELLO " + std::to_string(p::kProtocol) + " " + build);
+        s.sendLine("HELLO " + std::to_string(p::kProtocol) + " " + build + (extra.empty() ? "" : " " + extra));
         return readUntil(s, "WELCOME");
     }
 
@@ -577,9 +577,10 @@ namespace
     }
 
     // forms a match through the lobby: the first name creates the lobby (and is the host), the others join by code, and the host
-    // picks the stage and the wins (SET) and starts it (START)
+    // picks the stage and the wins (SET) and starts it (START); `hellos`: each member's extra HELLO words
     std::vector<std::unique_ptr<Member>> formMatch(uint16_t port, const std::vector<std::string> &names, const std::vector<int> &monsters,
-                                                   int stage = 1, const std::string &build = "b1", int wins = 0)
+                                                   int stage = 1, const std::string &build = "b1", int wins = 0,
+                                                   const std::vector<std::string> &hellos = {})
     {
         std::vector<std::unique_ptr<Member>> ms;
         std::string code;
@@ -587,7 +588,7 @@ namespace
         {
             ms.push_back(std::make_unique<Member>());
             Member &m = *ms.back();
-            CHECK(hello(m.socket, port, build).rfind("WELCOME", 0) == 0);
+            CHECK(hello(m.socket, port, build, i < hellos.size() ? hellos[i] : "").rfind("WELCOME", 0) == 0);
             if (i == 0)
             {
                 code = createLobby(m.socket, "Lobby", names[i], monsters[i]);
@@ -1235,6 +1236,25 @@ namespace
         CHECK(ok && most >= 10u && a.delay() + 4u <= most && b.delay() + 4u <= most);   // back down (how far depends on the local ping)
         CHECK(same && ordered);
         CHECK(a.status() == Status::Running && b.status() == Status::Running);
+    }
+
+    // a member whose device can't compute 60 game frames a second (a phone: HELLO ... hz=30) puts a 2-player match in the game's
+    // 30 Hz mode, and the delay counts 33 ms frames: 150 ms everywhere is (150 + 150) / 2 + 3 = 153 ms = 5 frames, not 10
+    TEST(match_with_a_30hz_member_runs_at_30hz)
+    {
+        ServerConfig cfg = testConfig();
+        RunningServer rs(cfg);
+        rs.server.setTestRtt(150);
+        auto ms = formMatch(cfg.port, {"Ana", "Bia"}, {3, 1}, 1, "b1", 0, {"", "hz=30"});
+        CHECK(ms[0]->match.count("step") && ms[0]->match.at("step") == "2" && ms[1]->match.at("step") == "2");
+        MatchClient a, b;
+        std::string err;
+        CHECK(a.start(clientFor(cfg.port, *ms[0]), err) && b.start(clientFor(cfg.port, *ms[1]), err));
+        CHECK(a.waitStarted(5000) && b.waitStarted(5000));
+        CHECK(a.delay() >= 5u && a.delay() <= 7u && a.delay() == b.delay());
+        exchange(a, b, 100);
+        CHECK(a.delay() >= 5u && a.delay() <= 7u && b.delay() >= 5u && b.delay() <= 7u);
+        rs.server.setTestRtt(0);
     }
 
     TEST(match_survives_lost_input_packets)

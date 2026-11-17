@@ -87,11 +87,18 @@ export function inviteLink(location, code) {
   return `${location.origin}${location.pathname}?join=${code}`;
 }
 
+// A phone or tablet (touch is the primary pointer) can't compute 60 game frames a second, and an online match counts every frame as
+// 1/60 s of game time, so at 60 Hz it would play everyone's match in slow motion: it asks for the game's 30 Hz mode (HELLO hz=30).
+// `win`: the page's window
+export function halfRateDevice(win) {
+  return !!win.matchMedia?.('(pointer: coarse)').matches;
+}
+
 // One lobby connection. Requests wait for their reply (or the ERROR that refuses them), in order; MEMBERS, SETTINGS and MATCH can
 // arrive at any time and go to onMembers, onSettings and onMatch. `socket` is a WebSocket (or anything with send, close and the
-// on* handlers).
+// on* handlers). `halfRate`: this device's matches run at 30 Hz (halfRateDevice).
 export class LobbyClient {
-  constructor(socket, build) {
+  constructor(socket, build, { halfRate = false } = {}) {
     this.socket = socket;
     this.settings = {};
     this.code = '';
@@ -110,7 +117,7 @@ export class LobbyClient {
     socket.onerror = () => {};
     this.ready = this.expect(['WELCOME']);
     this.ready.catch(() => this.close());   // a refused HELLO leaves nothing to keep open
-    socket.onopen = () => socket.send(`HELLO ${PROTOCOL} ${build}`);
+    socket.onopen = () => socket.send(`HELLO ${PROTOCOL} ${build}${halfRate ? ' hz=30' : ''}`);
   }
 
   expect(replies) {

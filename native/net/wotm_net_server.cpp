@@ -263,6 +263,7 @@ namespace wotm_net
             }
             c.hello = true;
             c.build = w[2];
+            c.halfRate = proto::keyValues(w)["hz"] == "30";   // HELLO <protocol> <build> [hz=30]
             c.link->sendLine("WELCOME " + std::to_string(openLobbies()));
             return;
         }
@@ -623,7 +624,11 @@ namespace wotm_net
         m->created = Clock::now();
         const int players = static_cast<int>(l.members.size());
         const uint32_t seed = static_cast<uint32_t>(rng_() % 0x7FFFFFFEull) + 1u;
-        const int step = proto::matchStep(players);
+        bool halfRate = false;
+        for (int ci : l.members)
+            halfRate = halfRate || conns_[static_cast<size_t>(ci)]->halfRate;
+        const int step = proto::matchStep(players, halfRate);
+        m->step = step;
         std::vector<std::string> monsters, names;
         for (int ci : l.members)
         {
@@ -646,8 +651,8 @@ namespace wotm_net
                               " seed=" + std::to_string(seed) + " step=" + std::to_string(step) + " you=" + std::to_string(i) +
                               " token=" + m->slots[static_cast<size_t>(i)].token + " port=" + std::to_string(cfg_.port));
         }
-        log("lobby %s: match with %d player(s) (%s), stage %s, %d win(s), seed %u", l.code.c_str(), players, join(names, ",").c_str(),
-            l.stage.c_str(), l.wins, seed);
+        log("lobby %s: match with %d player(s) (%s), stage %s, %d win(s), seed %u, %d Hz%s", l.code.c_str(), players, join(names, ",").c_str(),
+            l.stage.c_str(), l.wins, seed, 60 / step, halfRate ? " (a member's device asked for 30 Hz)" : "");
         l.match = std::move(m);
     }
 
@@ -703,7 +708,7 @@ namespace wotm_net
             if (s.peer && !s.gone)
                 s.rtt.add(rttHighOf(s.peer));
         const std::vector<uint32_t> highs = rttHighs(m);
-        const double frame = proto::frameMs(static_cast<int>(m.slots.size()));
+        const double frame = proto::frameMs(m.step);
         for (size_t i = 0; i < m.slots.size(); ++i)
         {
             Slot &s = m.slots[i];
@@ -1009,7 +1014,7 @@ namespace wotm_net
                         st.names.push_back(s.name);
                     }
                     const std::vector<uint32_t> rtt = rttHighs(*m);
-                    st.delay = cfg_.forcedDelay ? cfg_.forcedDelay : proto::startDelay(rtt, proto::frameMs(static_cast<int>(m->slots.size())));
+                    st.delay = cfg_.forcedDelay ? cfg_.forcedDelay : proto::startDelay(rtt, proto::frameMs(m->step));
                     for (Slot &s : m->slots)
                         s.advised = st.delay;
                     m->lastPace = now;

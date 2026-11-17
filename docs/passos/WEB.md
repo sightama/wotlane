@@ -224,7 +224,9 @@ connected pad. Everything that feeds it lives in the page (`web/pads.js`, `web/t
   lock (the browser may refuse either); the gear panel has a Fullscreen button. In portrait the controls are replaced by "Turn your phone
   sideways to play". The screen is kept awake while the controls are up (Wake Lock, where the browser has it).
 - **Phones:** the same game runs in Chrome on Android; there is no phone-specific build. Frame size is the game's 720 lines; the in-game
-  VIDEO options (resolution, render scale) are the lever on a slow phone. iPhones and iPads cannot run it (no JSPI before Safari 27).
+  VIDEO options (resolution, render scale) are the lever on a slow phone. Online, a phone's lobby `HELLO` carries `hz=30` and its matches
+  run in the game's 30 Hz mode (`docs/ONLINE.md`, "30 Hz with a phone"): at 60 Hz a phone that computes fewer game frames plays
+  everyone's match in slow motion, with broken sound. iPhones and iPads cannot run it (no JSPI before Safari 27).
 - **Tests:** `node --test web/` (`pads.test.mjs`: layouts, slots, hot-plug, events; `touch.test.mjs`: every PS2 button reachable, nothing
   overlapping or off screen on five phone-sized screens at three control sizes, settings); `node tools/browser_touch_test/run.mjs`
   (`tools/browser_touch_test/README.md`): a phone-sized Chromium with multi-touch through the DevTools protocol and a mocked Gamepad API
