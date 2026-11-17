@@ -144,10 +144,15 @@ to the console) and starts once that many players are in; `--code <code> --name 
   refuses the join with "game configuration differs from the others: the mods (creations) differ".
 - Debug keys that change the game or pause it are off: F1 (cheats), F5 (free camera), F6/F7/F8 (pause, step, photo).
 - Input delay: 1 frame on a LAN, about 3 to 8 over the internet (each frame is 16.7 ms; 33 ms with 3 or more players, where the game
-  runs its own 30 Hz mode). Each player has their own: the time their input takes to reach the slowest other player (half their ping
+  runs its own 30 Hz mode, as it does when a phone or tablet is in the match). Each player has their own: the time their input takes to reach the slowest other player (half their ping
   plus half that player's, at the high end of the last few seconds). The server re-measures every half second and the game moves the
   delay one frame at a time, on a frame where your buttons did not change, so a press is not lost or doubled (a delay that must
   grow while the buttons keep changing for 30 frames goes ahead anyway).
+- **30 Hz with a phone:** every game frame of an online match is exactly 1/60 s of game time (fixed step, so every PC computes the
+  same thing), so a device that computes fewer than 60 game frames a second would slow the whole match down, sound included. A
+  phone or tablet (touch is the primary pointer, `web/lobby.js` `halfRateDevice`) says `hz=30` in its lobby `HELLO`, and a match
+  with such a member runs in the game's 30 Hz mode (`proto::matchStep`): half the frames for the same game time. Offline the game
+  measures real time and lowers its own update rate, so a phone keeps normal speed there either way.
 - **5 to 8 players:** the game itself only has 4 player slots and 4 cameras. Players 5 to 8 drive monsters in the computer-player slots
   (same controls and moves as players 1 to 4), and their screen uses a camera made by wotlane that follows from behind and above, since
   the game has no camera for them. It does not avoid buildings like the game's camera does, which is why it stays high. Every PC
