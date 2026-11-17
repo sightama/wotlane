@@ -165,6 +165,53 @@ to the console) and starts once that many players are in; `--code <code> --name 
   blocks that differ. Please report it with the message and everyone's `runtime\live.err.log` (each one has that PC's block hashes
   of the moment, so two logs are enough to name what diverged).
 
+## Diagnostics
+
+When an online match goes badly (lag, stutter, a freeze) the server holds what every player's page and the server itself saw, so the
+cause can be read afterwards without asking anyone to copy logs.
+
+- **What a page sends.** The browser version sends `DIAG <key=value>...` lines over its lobby connection (`web/diag.js`; the lines
+  are never relayed and never answered): once on joining a lobby (`why=join`: the device and the build), every 5 s of a match
+  (`why=periodic`) and once when the match ends (`why=end`, with the device again). A periodic report holds, for the last 5 s: `fps`
+  (frames presented) and `gfps` (game frames computed per second; `hz` is what it should be, 60 or 30), `work_ms` (the game loop's
+  time per presented frame), `waits` and `wait_ms` (how often and for how long the game was blocked waiting for the other players'
+  input; `waits_tot` and `wait_tot_ms` since the start), `delay` (input delay, frames), `ping_ms`, `ping_max_ms` and `jitter_ms`, `late`
+  (animation frames that took over 25 ms), `raf_p95_ms` and `raf_max_ms`, `lt_n`, `lt_ms` and `lt_max_ms` (main-thread tasks over
+  50 ms, Chrome and Edge only), `au_cb`, `au_gaps` and `au_max_ms` (audio callbacks, and the ones later than 1.5 buffers, which are
+  dropped buffers), `hid_s` (seconds the tab was hidden), plus `up_s`, `frame`, `build`, `players`. The device is the class of device:
+  `touch`, `mobile`, `os`, `ua` (browser name and major version, for example `Chrome-131`; never the user agent string), `cores`,
+  `mem_gb`, `dpr`, `scr` (window size), `net`, `dl_mbps` and `est_rtt_ms` (the browser's own connection estimate). A field the browser
+  can't give is left out.
+- **What the server adds.** Every 5 s of a started match, one line per player: `transport` (ws or enet), `hz`, `delay`, `rtt_ms`,
+  `rtt_high_ms`, `in_pkts` (input packets since the last line), `in_gap_avg_ms` and `in_gap_max_ms` (how far apart the player's input
+  packets arrived), `behind_max` and `behind_avg` (frames the player's inputs trailed the player furthest ahead, sampled every 100 ms;
+  in lockstep this is who the others wait for) and `away`. Events: `join` (with `half_rate`), `match_start`, `start`, `delay` (each
+  delay change), `away`, `left`, `desync`, `match_over`.
+- **Where it goes.** Every line is journaled (`journalctl -u wotlane-server`, lines starting `[diag]`). With `--diag-dir <folder>`
+  (the live server uses `/var/log/wotlane`) each line is also appended, with a UTC time, to that lobby's file: `<UTC time>-<code>-lobby.log`
+  until the match starts, then `<UTC time>-<code>-match.log`. Files older than `--diag-days` (default 7) are deleted, and the oldest go
+  while the folder is over `--diag-max-mb` (default 64); a file stops growing at 2 MB (a line says so), and players' reports only get
+  three quarters of that, so the server's own lines always fit. Without `--diag-dir` (a server run on a PC to play with friends) no
+  file is written.
+- **Privacy.** The lines hold the player's chosen name, the browser and device class above, and timings; no address, no user agent
+  string, no language, and never chat text (the server's chat code is the only place that reads it, and it writes nothing). A DIAG line
+  is checked by `native/net/wotm_net_diag.hpp`: keys are lower-case words, values are short tokens of letters, digits and `. _ : , / + -`,
+  at most 48 fields; anything else is dropped. The keys the server's own lines use (`src`, `lobby`, `player`, `event`, `slot`,
+  `transport`) can't be repeated by a report. A connection may send 10 DIAG lines per 10 s.
+- **Who the line is about.** From a connection in a lobby the server writes `src=client lobby=<code> player=<name>` itself. A report
+  from a connection in no lobby (a page back on its front panel after a match) says which lobby and player it was, and nothing proves
+  that, so it goes to the day's `reports-<date>.log` as `src=client_outside claimed_lobby=<code> claimed_player=<name>`, never into a
+  lobby's file.
+- **Send report.** A player flags a bad match from the page (front panel after a match, or Settings, Online tab): the last match's
+  numbers, this device and a note of up to 200 characters (`why=report`, `note="..."`). The page says what it sends.
+- **Reading it.** `sh scripts/match_diag.sh <lobby code>|latest` in the private coord repo pulls the files over `gcloud compute ssh`
+  and prints, per player, the device, the numbers, what looks wrong (a game that computes fewer frames than the match needs, time blocked
+  waiting, high ping or jitter, bursts of input packets, late frames, long tasks, dropped audio buffers, a hidden tab), who likely held the
+  match back, the events and the players' notes; `--raw` prints the lines.
+- **Older servers and pages.** A server from before this answers a DIAG line with `ERROR unknown command: DIAG`, which the page
+  recognizes, stops sending, and never mistakes for the answer to something else. A page from before this sends none, and the summary
+  says the match has no client reports. The protocol number stays 5.
+
 ## Troubleshooting
 
 - "different build": someone is on another commit. Compare `python tools\build_id.py`; `git pull` and rebuild.
