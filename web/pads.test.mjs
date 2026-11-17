@@ -288,3 +288,40 @@ test('the touch pad connects as pad 0 without a toast and the game hears it', ()
   assert.deepEqual(heard, [['gamepadconnected', 0, 'Touch screen controls']]);
   assert.deepEqual(toasts, []);
 });
+
+test('an axis 9 resting at 0 is not a hat: nothing is held', () => {
+  const pad = normalizeGamepad({ index: 0, id: 'USB Gamepad', mapping: '', connected: true, axes: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0], buttons: buttons(12) });
+  assert.ok([STD.UP, STD.DOWN, STD.LEFT, STD.RIGHT].every((i) => !pad.buttons[i].pressed));
+});
+
+test('an unmapped pad with eight axes and many buttons whose triggers rest at -1 keeps its triggers off the right stick', () => {
+  const raw = { index: 0, id: 'Wireless Controller', mapping: '', connected: true, axes: [0.1, 0.2, -1, 0.3, 0.4, -1, 0, 0], buttons: buttons(14) };
+  const pad = normalizeGamepad(raw);
+  assert.deepEqual(pad.axes, [0.1, 0.2, 0.3, 0.4]);
+});
+
+test('a pad whose name changes on the same browser index is a new pad', () => {
+  const { hub, raws, events } = hubWith();
+  raws[0] = standardPad({ index: 0, id: 'Pad A' });
+  hub.snapshot(0);
+  raws[0] = standardPad({ index: 0, id: 'Pad B' });
+  hub.snapshot(1);
+  assert.deepEqual(events.map((e) => `${e.type}:${e.label}`), ['connected:Pad A', 'disconnected:Pad A', 'connected:Pad B']);
+});
+
+test('a getGamepads that throws leaves the game with the last good answer, and a hidden tab keeps it', () => {
+  const window = Object.assign(new EventTarget(), { Event, setInterval: () => 0, clearInterval: () => {}, document: { hidden: false } });
+  const raws = [standardPad({ index: 0, id: 'Pad A' })];
+  let broken = false;
+  const navigator = { getGamepads: () => { if (broken) throw new Error('gone'); return raws; } };
+  installPads({ window, navigator, virtual: new VirtualPad(), virtualWanted: () => false, now: () => 0 });
+  assert.equal(navigator.getGamepads()[0].id, 'Pad A');
+  broken = true;
+  assert.equal(navigator.getGamepads()[0].id, 'Pad A');
+  broken = false;
+  raws[0] = null;   // some browsers answer null for every pad while the tab is hidden
+  window.document.hidden = true;
+  assert.equal(navigator.getGamepads()[0].id, 'Pad A', 'no disconnect for a tab that is only hidden');
+  window.document.hidden = false;
+  assert.equal(navigator.getGamepads()[0], null);
+});

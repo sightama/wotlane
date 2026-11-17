@@ -263,14 +263,14 @@ class TouchOverlay {
   placeStick(which, cx, cy, ox, oy) {
     const s = this.sticks[which];
     const r = (which === 'left' ? STICK_RADIUS : LOOK_RADIUS) * this.u;
-    const rect = this.root.getBoundingClientRect();
+    const rect = this.rect;
     Object.assign(s.el.style, { width: `${2 * r}px`, height: `${2 * r}px`, left: `${cx - rect.left - r}px`, top: `${cy - rect.top - r}px` });
     Object.assign(s.knob.style, { width: `${r * 0.8}px`, height: `${r * 0.8}px`, transform: `translate(${ox}px, ${oy}px)` });
   }
 
   // a stick not being touched sits faintly where a thumb would rest, as a hint
   restStick(which) {
-    const rect = this.root.getBoundingClientRect();
+    const rect = this.rect;
     if (which === 'left') this.placeStick('left', rect.left + 2.6 * this.u, rect.bottom - 2.6 * this.u, 0, 0);
     else this.sticks.right.el.style.width = this.sticks.right.el.style.height = '0px';
   }
@@ -301,6 +301,9 @@ class TouchOverlay {
 
   // the controls follow the settings and the screen
   apply() {
+    this.rect = this.root.getBoundingClientRect();   // read once here; the sticks are placed on every touch move
+    // in portrait the controls are hidden by CSS, which may cancel no touch: nothing stays held
+    if (this.window.matchMedia?.('(orientation: portrait)').matches) this.releaseAll();
     this.u = unitFor(this.window.innerHeight, this.settings.scale);
     const vw = this.window.innerWidth, vh = this.window.innerHeight;
     this.root.style.setProperty('--u', `${this.u}px`);
@@ -312,8 +315,8 @@ class TouchOverlay {
     const top = ZONE.top * vh;
     Object.assign(this.zoneLeft.style, { left: '0px', top: `${top}px`, width: `${ZONE.split * vw}px`, height: `${vh - top}px` });
     Object.assign(this.zoneRight.style, { left: `${ZONE.split * vw}px`, top: `${top}px`, width: `${(1 - ZONE.split) * vw}px`, height: `${vh - top}px` });
-    if (!this.sticks.left.pointer) this.restStick('left');
-    if (!this.sticks.right.pointer) this.restStick('right');
+    if (this.sticks.left.pointer === null) this.restStick('left');
+    if (this.sticks.right.pointer === null) this.restStick('right');
   }
 
   // shows or hides the controls as the situation changes; lifts every held control when they go
@@ -335,6 +338,7 @@ class TouchOverlay {
     for (const which of ['left', 'right']) {
       this.sticks[which].pointer = null;
       this.virtual.setStick(which, 0, 0);
+      this.sticks[which].el.classList.remove('active');
     }
   }
 
@@ -366,11 +370,14 @@ class TouchOverlay {
 
   // the screen stays on while the controls are up
   async keepAwake() {
-    if (!this.visible || this.wakeLock || !this.navigator.wakeLock) return;
+    if (!this.visible || this.wakeLock || this.wakeAsked || !this.navigator.wakeLock || this.now() < (this.wakeRetryAt ?? 0)) return;
+    this.wakeAsked = true;
     try {
-      this.wakeLock = await this.navigator.wakeLock.request('screen');
-      this.wakeLock.addEventListener('release', () => { this.wakeLock = null; });
-    } catch { this.wakeLock = null; }
+      const lock = await this.navigator.wakeLock.request('screen');
+      this.wakeLock = lock;
+      lock.addEventListener('release', () => { if (this.wakeLock === lock) this.wakeLock = null; });
+    } catch { this.wakeRetryAt = this.now() + 10000; }   // refused (hidden tab, no support): not again for a while
+    this.wakeAsked = false;
   }
 
   vibrate(ms, fromGame = false) {
@@ -398,7 +405,12 @@ function start() {
   // the game's mouse camera asks for the pointer on a screen the player is touching; there is no mouse to turn the camera with
   const canvas = document.getElementById('canvas');
   const requestLock = canvas?.requestPointerLock;
-  if (requestLock) canvas.requestPointerLock = function (...args) { return overlay.visible ? undefined : requestLock.apply(this, args); };
+  overlay.lockRefusals = 0;
+  if (requestLock) canvas.requestPointerLock = function (...args) {
+    if (!overlay.visible) return requestLock.apply(this, args);
+    overlay.lockRefusals++;
+    return undefined;
+  };
   window.wotTouch = { overlay, hub: pads.hub, virtual };
 }
 

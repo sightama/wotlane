@@ -113,9 +113,9 @@ class Phone {
   overlayVisible() { return this.page.evaluate(() => !!document.getElementById('touchpad') && !document.getElementById('touchpad').hidden); }
   toastText() { return this.page.evaluate(() => (document.getElementById('toast').classList.contains('show') ? document.getElementById('toast').textContent : '')); }
 
-  // the game is running and the touch controls are up
-  async waitForFight() {
-    await this.page.waitForFunction(() => window.wotTouch && !document.getElementById('touchpad').hidden && (window.wotmLog ?? []).some((l) => /\[native\] frame \d+x\d+/.test(l)), null, { timeout: 120000 });
+  // the game is running (and, unless `touch` is false, the touch controls are up)
+  async waitForFight({ touch = true } = {}) {
+    await this.page.waitForFunction((touch) => (!touch || (window.wotTouch && !document.getElementById('touchpad').hidden)) && (window.wotmLog ?? []).some((l) => /\[native\] frame \d+x\d+/.test(l)), touch, { timeout: 120000 });
     await sleep(7000);
   }
 
@@ -184,7 +184,7 @@ const scenarios = {
     await sleep(20);
     await p.touch('touchEnd', []);
     await sleep(200);
-    check(rows, 'a 20 ms tap on Square is seen by the pad', await p.page.evaluate(() => { clearInterval(window.__sampler); return window.__seen; }));
+    check(rows, 'a 20 ms tap on Square is still held at the next pad read', await p.page.evaluate(() => { clearInterval(window.__sampler); return window.__seen; }));
 
     // the look zone is the right stick
     await p.touch('touchStart', [{ id: 1, x: 560, y: 200 }]);
@@ -193,7 +193,8 @@ const scenarios = {
     check(rows, 'dragging in the right half turns the camera (right stick)', look.axes[2] > 0.7 && near(look.axes[0], 0, 0.01), JSON.stringify(look));
     await p.touch('touchEnd', []);
     await sleep(200);
-    check(rows, 'the game never holds the pointer while the controls are up', await p.page.evaluate(() => document.pointerLockElement === null));
+    const lock = await p.page.evaluate(() => ({ held: document.pointerLockElement !== null, refused: wotTouch.overlay.lockRefusals }));
+    check(rows, 'the game asked for the pointer and the page refused (the controls are up)', !lock.held && lock.refused > 0, JSON.stringify(lock));
     check(rows, 'no page errors', p.errors.length === 0, p.errors.join('; '));
     await p.shot('phone_landscape_fight.png');
     await p.close();
@@ -264,6 +265,10 @@ const scenarios = {
     await p.page.evaluate(() => __setPad(0, { id: 'Xbox Wireless Controller (STANDARD GAMEPAD Vendor: 045e Product: 0b13)' }));
     await sleep(1500);
     check(rows, 'a standard pad plugged in: a toast names it and player 1', /Controller connected: Xbox Wireless Controller \(player 1\)/.test(await p.toastText()), await p.toastText());
+    // the browser's own connect event (a different index) must not reach the game: the page replaces it with its own
+    await p.page.evaluate(() => { const e = new Event('gamepadconnected'); e.gamepad = { index: 3, id: 'Ghost Pad', connected: true, mapping: 'standard', axes: [0, 0, 0, 0], buttons: [], timestamp: 0 }; window.dispatchEvent(e); });
+    await sleep(1500);
+    check(rows, 'a connect event of the browser\'s own never reaches the game', !(await p.log()).some((l) => /Ghost Pad/.test(l)), (await p.log()).filter((l) => /Ghost Pad/.test(l)).join(' | '));
     check(rows, 'the touch controls step aside', !(await p.overlayVisible()));
     check(rows, 'the game\'s pad 0 is now the real pad', /Xbox/.test((await p.pad(0))?.id ?? ''), JSON.stringify(await p.pad(0)));
     let log = (await p.log()).filter((l) => /\[pad\] player 1/.test(l)).at(-1) ?? '';
@@ -298,6 +303,25 @@ const scenarios = {
     void from2;
     await p.close();
   },
+
+  // a computer with a mouse, a keyboard and a pad: no touch controls, no virtual pad, the real pad is player 1
+  async desktop({ browser, url, rows }) {
+    const p = await Phone.open(browser, { url, query: FIGHT, pads: true, env: { PS2X_PADLOG: '1' }, viewport: { width: 1280, height: 720 }, deviceScaleFactor: 1, isMobile: false, hasTouch: false, userAgent: undefined });
+    await p.waitForFight({ touch: false });
+    check(rows, 'no touch controls on a desktop', !(await p.overlayVisible()));
+    check(rows, 'no virtual pad: every slot is empty', JSON.stringify(await p.page.evaluate(() => navigator.getGamepads())) === '[null,null,null,null]');
+    await p.page.evaluate(() => __setPad(0, { id: 'Xbox Wireless Controller (STANDARD GAMEPAD Vendor: 045e Product: 0b13)' }));
+    await sleep(1500);
+    check(rows, 'a pad is player 1 with a toast', /Controller connected: Xbox Wireless Controller \(player 1\)/.test(await p.toastText()) && /Xbox/.test((await p.pad(0))?.id ?? ''), await p.toastText());
+    await p.page.keyboard.press('KeyW');
+    await sleep(300);
+    check(rows, 'the keyboard leaves the pad where it is', /Xbox/.test((await p.pad(0))?.id ?? '') && !(await p.overlayVisible()));
+    await p.page.evaluate(() => __unplug(0));
+    await sleep(1500);
+    check(rows, 'unplugged: still no touch controls, no pad', !(await p.overlayVisible()) && (await p.pad(0)) === null);
+    check(rows, 'no page errors', p.errors.length === 0, p.errors.join('; '));
+    await p.close();
+  },
 };
 
 // ---- run ----
@@ -326,6 +350,7 @@ try {
   await browser.close();
   server.stop();
 }
+if (results.length === 0) { console.log('no scenario matched --only; scenarios: ' + Object.keys(scenarios).join(', ')); failed = true; }
 const table = results.flatMap((s) => s.rows.map(([n, ok, d]) => `| ${s.name} | ${n} | ${ok ? 'pass' : 'FAIL ' + d} |`));
 writeFileSync(join(out, 'results.md'), `| scenario | check | result |\n|---|---|---|\n${table.join('\n')}\n`);
 writeFileSync(join(out, 'results.json'), JSON.stringify(results, null, 1));

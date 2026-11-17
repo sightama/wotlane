@@ -17,7 +17,8 @@ const num = (v) => (Number.isFinite(v) ? v : 0);
 
 // a hat axis (Chrome on Linux, generic pads) reports eight directions in steps of 2/7 from -1 (up) clockwise, and 9/7 at rest
 function hatDirections(v) {
-  const step = Math.round((num(v) + 1) * 3.5);   // 0 up, 1 up-right, 2 right, ... 7 up-left, 8 rest
+  const exact = (num(v) + 1) * 3.5;
+  const step = Math.abs(exact - Math.round(exact)) < 0.2 ? Math.round(exact) : 8;   // 0 up, 1 up-right, 2 right, ... 7 up-left, 8 rest (a value between steps is not a hat)
   const up = [0, 1, 7].includes(step), right = [1, 2, 3].includes(step), down = [3, 4, 5].includes(step), left = [5, 6, 7].includes(step);
   return { up, down, left, right };
 }
@@ -34,7 +35,8 @@ function fallbackLayout(raw) {
   const out = quiet();
   const set = (i, b) => { out[i] = press(b.pressed || b.value > 0.5, b.value); };
   const flag = (i, on) => { out[i] = press(on); };
-  const xboxAxes = axes.length === 8 && src.length <= 12;   // triggers and hat among the axes (Linux xpad)
+  const restingTriggers = (axes[2] ?? 0) <= -0.95 && (axes[5] ?? 0) <= -0.95;   // triggers rest at -1, sticks at 0
+  const xboxAxes = axes.length === 8 && (src.length <= 12 || restingTriggers);   // triggers and hat among the axes (Linux xpad)
   [STD.CROSS, STD.CIRCLE, STD.SQUARE, STD.TRIANGLE, STD.L1, STD.R1].forEach((to, i) => set(to, btn(i)));
   let stick = [axes[0] ?? 0, axes[1] ?? 0, axes[2] ?? 0, axes[3] ?? 0];
   let hat = null;
@@ -219,7 +221,7 @@ function installPads({ window, navigator, virtual, virtualWanted, toast = () => 
     window.dispatchEvent(event);
   };
   const hub = new PadHub({
-    getRaw: () => { try { return nativeGetGamepads(); } catch { return []; } },
+    getRaw: () => nativeGetGamepads(),
     virtual,
     virtualWanted,
     onEvent: (e) => {
@@ -235,8 +237,16 @@ function installPads({ window, navigator, virtual, virtualWanted, toast = () => 
       e.stopImmediatePropagation();
       hub.snapshot(now());   // the real event is a reason to look at the list now
     }, true);
-  navigator.getGamepads = () => hub.snapshot(now());
-  const timer = window.setInterval(() => hub.announce(now()), 1000);
+  let last = [null, null, null, null];
+  // the last good answer stands when the browser's call fails, and while the tab is hidden (some browsers answer null for every pad then,
+  // which would read as every pad unplugged)
+  const answer = () => {
+    if (window.document?.hidden) return last;
+    try { last = hub.snapshot(now()); } catch { /* the previous answer stands */ }
+    return last;
+  };
+  navigator.getGamepads = answer;
+  const timer = window.setInterval(() => { try { if (!window.document?.hidden) hub.announce(now()); } catch { /* the next second tries again */ } }, 1000);
   return { hub, stop: () => window.clearInterval(timer) };
 }
 
