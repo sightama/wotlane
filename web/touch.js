@@ -272,7 +272,10 @@ class TouchOverlay {
   restStick(which) {
     const rect = this.rect;
     if (which === 'left') this.placeStick('left', rect.left + 2.6 * this.u, rect.bottom - 2.6 * this.u, 0, 0);
-    else this.sticks.right.el.style.width = this.sticks.right.el.style.height = '0px';
+    else {   // the look zone has no hint: nothing is drawn until it is touched
+      const s = this.sticks.right;
+      s.el.style.width = s.el.style.height = s.knob.style.width = s.knob.style.height = '0px';
+    }
   }
 
   buildPanel() {

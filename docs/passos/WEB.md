@@ -213,7 +213,9 @@ connected pad. Everything that feeds it lives in the page (`web/pads.js`, `web/t
   bottom right with jump, light and heavy attack bigger than grab, two chord buttons (SP1 is triangle and circle, SP2 is cross and square, the
   game's specials) and one for lock-on (L1 and R1), L2 and L1 at the top left and R1 and R2 (block) at the top right, Select, a gear and Start
   at the top middle. Several fingers work at once; a press stays down at least 80 ms, so a tap shorter than the game's pad reads is still
-  read. Vibration (`navigator.vibrate`) answers a press and the game's own rumble. The gear opens size (0.7 to 1.2), opacity and vibration,
+  read. A quick tap (under 220 ms, under 12 px) on either zone is also a mouse click on the game: menu lines are picked by pointer, and in a
+  fight a click is the light attack. The stick moves the menu selection, Cross chooses and Triangle goes back, as on a pad.
+  Vibration (`navigator.vibrate`) answers a press and the game's own rumble. The gear opens size (0.7 to 1.2), opacity and vibration,
   kept in `localStorage` (`wotlane.touch`).
 - **Steps aside:** a key press, a mouse press or a real pad hides the controls and removes the virtual pad (a real pad would otherwise be player
   2); a touch brings them back unless a real pad is connected. While they are shown the page refuses the game's pointer lock (the mouse
