@@ -30,7 +30,8 @@ namespace wotm_net
         uint16_t port = proto::kDefaultPort;   // TCP (lobby) and UDP (match) on the same number
         int lobbies = 16;                       // maximum lobbies open at the same time
         int maxPlayers = proto::kMaxPlayers;
-        uint32_t forcedDelay = 0;               // 0: delay from ping
+        uint32_t forcedDelay = 0;               // 0: delay from ping (and re-picked during the match); otherwise fixed
+        int paceMs = 500;                       // during a match, each player's round trip is sampled and its delay re-picked this often
         int startWaitMs = 1000;                 // once everyone arrives, measures ping for this long before starting
         int joinTimeoutMs = 90000;              // anyone who doesn't reach the match in this time is dropped (the game takes ~15 s to load)
         int dropInputPercent = 0;               // test: discards this percentage of the input packets sent
@@ -57,6 +58,8 @@ namespace wotm_net
         bool start(std::string &err);
         // services the lobby and the match; waits up to `ms` for traffic
         void poll(int ms);
+        // tests: added to every round trip measured from now on (to move the delay during a match)
+        void setTestRtt(uint32_t ms) { testRttMs_ = ms; }
 
     private:
         using Clock = std::chrono::steady_clock;
@@ -99,6 +102,8 @@ namespace wotm_net
             std::vector<uint32_t> need;   // per player, the first frame this client doesn't have yet
             std::vector<uint32_t> sent;   // per player, the first frame not sent to this client yet
             uint32_t lastAckOwn = 0;
+            proto::RttWindow rtt;            // recent round trips (sampled every paceMs)
+            uint32_t advised = 0;            // the delay last sent to this player (Start or Pace)
             Clock::time_point lastSend{};
             bool dirty = false;
             // per player, the first frame to send next: what the client lacks, except that a WebSocket (reliable and ordered) delivers
@@ -117,7 +122,7 @@ namespace wotm_net
             InputTimeline inputs{0, 0};
             struct SlotHash { uint64_t hash = 0; std::vector<uint64_t> blocks; };   // blocks: the 256 block hashes, when sent
             std::map<uint32_t, std::vector<std::optional<SlotHash>>> hashes;
-            Clock::time_point created{}, allJoined{};
+            Clock::time_point created{}, allJoined{}, lastPace{};
             bool allJoinedSet = false;
         };
 
@@ -180,7 +185,10 @@ namespace wotm_net
         void send(PeerRef peer, uint8_t channel, const std::vector<uint8_t> &data, bool reliable);
         Match *matchOf(PeerRef peer, int &slot);
         static void *&dataOf(PeerRef peer);
-        static uint32_t rttOf(PeerRef peer);
+        // a round trip at its high end: ENet's smoothed one plus twice its variation (a WebSocket's is a single ping)
+        uint32_t rttHighOf(PeerRef peer) const;
+        std::vector<uint32_t> rttHighs(Match &m);
+        void pace(Match &m, const Lobby &l);
 
         ServerConfig cfg_;
         Listener listener_, wsListener_;
@@ -193,6 +201,7 @@ namespace wotm_net
         std::mt19937_64 rng_;
         // what the announcer sends the master (updated by poll): open lobbies, lobbies waiting for players, players in all lobbies
         std::atomic<int> open_{0}, waiting_{0}, players_{0};
+        std::atomic<uint32_t> testRttMs_{0};
         std::thread announcer_;
         std::mutex announceMu_;
         std::condition_variable announceCv_;

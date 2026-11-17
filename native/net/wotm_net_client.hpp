@@ -54,12 +54,14 @@ namespace wotm_net
         bool waitStarted(int ms);
         int localPlayer() const;
         int players() const;
-        uint32_t delay() const;
+        uint32_t delay() const;   // this player's current input delay (it follows the server's Pace advice one frame at a time)
         std::vector<std::string> names() const;
         uint32_t rttMs() const { return rtt_.load(); }
 
         // local input that applies on frame `frame` (sampled `delay` frames earlier)
         void pushLocal(uint32_t frame, const PadState &s);
+        // the local sample taken at the start of a frame: it fills the frame(s) the delay schedule gives it (LocalSchedule)
+        void pushSample(const PadState &s);
         // waits up to `ms` for everyone's inputs for the frame; false if some are missing, or if the match stopped
         bool waitFrame(uint32_t frame, int ms);
         PadState input(int player, uint32_t frame) const;
@@ -98,7 +100,7 @@ namespace wotm_net
         Status status_ = Status::Idle;
         std::string message_;
         int local_ = -1, players_ = 0;
-        uint32_t delay_ = 0;
+        LocalSchedule schedule_;
         std::vector<std::string> names_;
         InputTimeline inputs_{0, 0};
         std::vector<std::pair<int, uint32_t>> drops_;   // drops (including ones that arrive before the start)
