@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <map>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace wotm_net::proto
@@ -404,6 +405,13 @@ namespace wotm_net::proto
     // device that falls short of the rate slows the game itself for everyone; at 30 Hz it does half the frames for the same time
     inline int matchStep(int players, bool halfRateMember) { return players >= 3 || halfRateMember ? 2 : 1; }
     inline double frameMs(int step) { return step * 1000.0 / 60.0; }
+    // a phone's or tablet's browser, from its lobby WebSocket's User-Agent: the server's own check, so a phone plays at 30 Hz even
+    // when its page did not say hz=30 (an old page in the browser's memory, a pad as its input)
+    inline bool halfRateUserAgent(std::string_view ua)
+    {
+        return ua.find("Android") != std::string_view::npos || ua.find("Mobile") != std::string_view::npos ||
+               ua.find("iPhone") != std::string_view::npos || ua.find("iPad") != std::string_view::npos;
+    }
 
     // Input delay (frames) of `player`, from each player's round trip to the server (ms, the high end of the recent ones: RttWindow):
     // the input goes to the server and from there to every other player, so its path is half its own round trip plus half the

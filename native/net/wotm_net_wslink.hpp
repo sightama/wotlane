@@ -78,6 +78,8 @@ namespace wotm_net
         // the handshake is done (a server-side link before that has no path yet)
         bool ready() const { return ready_; }
         const std::string &path() const { return path_; }
+        // the browser's User-Agent from the handshake (empty for a client that sent none)
+        const std::string &userAgent() const { return userAgent_; }
 
         bool pump() override
         {
@@ -106,6 +108,7 @@ namespace wotm_net
                 if (!sock_.sendBytes(answer.data(), answer.size()))
                     return fail();
                 path_ = h->path;
+                userAgent_ = h->userAgent;
                 ready_ = true;
                 const std::string rest = head_.substr(end + 4);
                 head_.clear();
@@ -226,7 +229,7 @@ namespace wotm_net
         LineSocket sock_;
         bool server_ = false, ready_ = false;
         ws::FrameParser parser_{false};
-        std::string head_, path_;
+        std::string head_, path_, userAgent_;
         std::deque<std::string> lines_;
         std::deque<std::vector<uint8_t>> packets_;
         uint32_t rttMs_ = 0;

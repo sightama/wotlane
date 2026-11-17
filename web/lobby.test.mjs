@@ -197,9 +197,20 @@ test('LobbyClient on a device that cannot compute 60 game frames a second says s
   await ready;
 });
 
-test('halfRateDevice: a phone or tablet (touch is the primary pointer) plays online at 30 Hz, a desktop at 60', () => {
-  assert.equal(halfRateDevice({ matchMedia: (q) => ({ matches: q === '(pointer: coarse)' }) }), true);
-  assert.equal(halfRateDevice({ matchMedia: () => ({ matches: false }) }), false);
+test('halfRateDevice: a phone or tablet plays online at 30 Hz whatever it plays with, a desktop at 60', () => {
+  const coarse = (q) => ({ matches: q === '(pointer: coarse)' });
+  const none = () => ({ matches: false });
+  const desktopUa = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+  const pixelUa = 'Mozilla/5.0 (Linux; Android 15; Pixel 9 Pro XL) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36';
+  // the browser says it is a mobile device (User-Agent Client Hints), even with a pad connected and no touch reported
+  assert.equal(halfRateDevice({ matchMedia: none, navigator: { userAgentData: { mobile: true }, userAgent: desktopUa } }), true);
+  // an Android or mobile User-Agent
+  assert.equal(halfRateDevice({ matchMedia: none, navigator: { userAgent: pixelUa, maxTouchPoints: 0 } }), true);
+  // a touch screen that is the primary pointer
+  assert.equal(halfRateDevice({ matchMedia: coarse, navigator: { userAgent: desktopUa, maxTouchPoints: 5 } }), true);
+  // a desktop, with or without a touch screen next to its mouse
+  assert.equal(halfRateDevice({ matchMedia: none, navigator: { userAgentData: { mobile: false }, userAgent: desktopUa, maxTouchPoints: 10 } }), false);
+  assert.equal(halfRateDevice({ matchMedia: none, navigator: { userAgent: desktopUa } }), false);
   assert.equal(halfRateDevice({}), false);
 });
 

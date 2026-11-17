@@ -87,10 +87,14 @@ export function inviteLink(location, code) {
   return `${location.origin}${location.pathname}?join=${code}`;
 }
 
-// A phone or tablet (touch is the primary pointer) can't compute 60 game frames a second, and an online match counts every frame as
-// 1/60 s of game time, so at 60 Hz it would play everyone's match in slow motion: it asks for the game's 30 Hz mode (HELLO hz=30).
-// `win`: the page's window
+// A phone or tablet can't compute 60 game frames a second, and an online match counts every frame as 1/60 s of game time, so at 60 Hz
+// it would play everyone's match in slow motion: it asks for the game's 30 Hz mode (HELLO hz=30). The device decides, not what it
+// plays with (a pad on a phone is still a phone): the browser's own mobile flag, an Android or mobile User-Agent, or a touch screen
+// as the primary pointer. The server also checks the User-Agent itself. `win`: the page's window
 export function halfRateDevice(win) {
+  const nav = win.navigator ?? {};
+  if (nav.userAgentData?.mobile) return true;
+  if (/Android|Mobi|iPhone|iPad/.test(nav.userAgent ?? '')) return true;
   return !!win.matchMedia?.('(pointer: coarse)').matches;
 }
 
