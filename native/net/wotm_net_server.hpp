@@ -58,7 +58,7 @@ namespace wotm_net
         bool start(std::string &err);
         // services the lobby and the match; waits up to `ms` for traffic
         void poll(int ms);
-        // tests: added to every round trip measured from now on (to move the delay during a match)
+        // tests: added to every round trip measured (to move the delay during a match)
         void setTestRtt(uint32_t ms) { testRttMs_ = ms; }
 
     private:

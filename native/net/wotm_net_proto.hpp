@@ -434,10 +434,11 @@ namespace wotm_net::proto
         return up >= current ? up : std::min(current, down);
     }
 
-    // the delay everyone starts with (the frames before it are neutral for every player): the largest player's
+    // the delay everyone starts with (the frames before it are neutral for every player): the largest player's, and at least 2,
+    // since a browser's ping is 0 until its first pong (the advice brings a LAN player down to 1 during the match)
     inline uint32_t startDelay(const std::vector<uint32_t> &rttMs, double frameMs)
     {
-        uint32_t d = 1;
+        uint32_t d = 2;
         for (size_t p = 0; p < rttMs.size(); ++p)
             d = std::max(d, playerDelay(rttMs, p, frameMs));
         return d;

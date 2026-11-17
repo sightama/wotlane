@@ -426,6 +426,7 @@ namespace
         CHECK(p::playerDelay({2000, 2000}, 0, f60) == 15u);        // ceiling
         CHECK(p::playerDelay({40}, 0, f60) == 1u);                 // nobody else to reach
         CHECK(p::startDelay({20, 20, 120, 120}, f30) == 4u);       // everyone starts at the largest
+        CHECK(p::startDelay({0, 0}, f60) == 2u);   // at least 2: a browser ping may not be measured yet (0), the advice lowers it later
     }
 
     // the advice rises as soon as the path needs another frame, but only falls with half a frame to spare, so a ping sitting on a

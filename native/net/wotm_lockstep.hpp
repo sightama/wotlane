@@ -151,8 +151,8 @@ namespace wotm_net
     // mouse motion goes into the next), so every frame of this player still gets exactly one input, whenever and however often the
     // delay moves: the other PCs only see a value per frame, and stay in sync. A step waits for a sample with the same buttons as the
     // previous one, so it neither repeats nor drops a press (a repeated or skipped stick sample only shifts the stick by a frame, and
-    // a held stick is never exactly still); growing goes ahead anyway after kForceGrowAfter samples (a delay that is too short
-    // stalls everyone). Steps are kStepGap samples apart.
+    // a held stick is never exactly still); growing goes ahead anyway after kForceGrowAfter samples, repeating whatever the previous
+    // frame held (a delay that is too short stalls everyone). Steps are kStepGap samples apart.
     class LocalSchedule
     {
     public:
