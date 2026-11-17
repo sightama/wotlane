@@ -42,7 +42,10 @@ class ProxyTest(unittest.TestCase):
         self.running = True
         self.thread = threading.Thread(target=self.serve, daemon=True)
         self.thread.start()
-        self.listen = 19300 + int(time.time() * 1000) % 500
+        free = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        free.bind(('127.0.0.1', 0))
+        self.listen = free.getsockname()[1]   # a port the system just handed out, for the proxy to listen on
+        free.close()
         self.proxies = []
 
     def tearDown(self):
