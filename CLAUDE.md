@@ -25,6 +25,15 @@ runtime is only the reference for checking (`docs/passos/VU1CHECK.md`). The rule
 
 **What to work on:** **`TODO.md`** in the repo root (the list and its order belong to the owner); the owner's bug reports take priority over it.
 
+## Before taking a task: make sure nobody else is on it
+Several people (Lane `sightama`, Jake `jrkubic`) and many agent sessions work in this repo at once. Before writing code for an issue, a feature or a step of a plan, check that nobody else has it:
+1. The issue: its assignees, and its latest comments. A comment that announces a next step ("step 2 is next", "the in-game editor is PR 2", "I'm on this") claims that step for its author, even with no assignee.
+2. Open and draft PRs: `gh pr list --state open` and any PR that mentions the issue.
+3. Recent branches by someone else: `git fetch --all && git for-each-ref --sort=-committerdate refs/remotes --format='%(committerdate:short) %(refname:short) %(authorname)' | head -30`.
+4. `TODO.md`: the item may name who has it.
+
+If someone other than the person you work for has claimed it or touched it in the last two weeks, **stop and tell Lane** who it is, what they have (issue comment, PR or branch) and what you were about to do. Don't start, and don't build the same thing in parallel; Lane decides with that person whether to hand it over, split it or wait. When you do take a task, claim it where others will see it: assign the issue to your account, or comment "Working on this: <who>, branch <name>". Remove the claim if you stop.
+
 Read before starting: `README.md` (setup), `docs/ANALYSIS.md` (what's known about the ELF and the status conventions), `docs/PLANO.md` (architecture) and `TODO.md`. Index of `docs/passos/` ("steps"):
 - `NATIVO.md`: the native layer (drawing, textures, monsters, particles, shadows, menus, the "Recompiled options" panel, icons), host hooks, watchdog, batch runs, the table of `WOTM_*` variables.
 - `VU1CHECK.md`: the VU1 vs native check, corpus, the owner's photos, open bugs.

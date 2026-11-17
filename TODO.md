@@ -37,7 +37,6 @@ How it works today: `docs/passos/MODS.md` ("Skins", "Custom monsters").
 - **Off the critical path:** an oracle for functions with calls; coverage with gameplay to feed back into `boot_coverage_asm.csv` (`57d4afd:docs/investigacoes/2026-10-19/pendencias_oracle_cobertura.md`, sections 2 and 3).
 
 ## Out of order (until the owner chooses)
-- **Lower online input delay (#30):** relay each input as soon as it reaches the server (today it waits for the receiver's next packet or 16 ms), size the delay from the measured relay path and re-pick it during the match, log stalls per player. About one frame back at every ping; rollback stays discarded. Numbers and plan: `docs/investigacoes/2026-11-16/rollback-spike/README.md`.
 - **Firefox online on two computers:** on one Mac Firefox x Firefox and Firefox x Chrome stay in sync but run at 50 to 56 fps against 59.7 for Chrome x Chrome (machine load and a covered window confound it; issue #91); check pace with each browser on its own computer (`docs/passos/WEB.md`).
 - **Browser audio on an AudioWorklet:** raylib's web audio uses the deprecated ScriptProcessorNode; miniaudio supports AudioWorklets (`-sAUDIO_WORKLET`, `-sWASM_WORKERS`). Measure glitches before and after.
 - **More movies in the browser:** only the two boot movies play (`tools/web_movies.py`); the endings, act intros, credits and the menu's big-screen loop are still skipped.

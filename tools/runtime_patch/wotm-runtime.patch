@@ -4608,7 +4608,7 @@ index 8590f14..7e48d74 100644
      data[2] = static_cast<uint8_t>(btns & 0xFF);
      data[3] = static_cast<uint8_t>(btns >> 8);
 diff --git a/ps2xRuntime/src/lib/ps2_runtime.cpp b/ps2xRuntime/src/lib/ps2_runtime.cpp
-index 45cb9d2..c2e414c 100644
+index 45cb9d2..0cd1f29 100644
 --- a/ps2xRuntime/src/lib/ps2_runtime.cpp
 +++ b/ps2xRuntime/src/lib/ps2_runtime.cpp
 @@ -1,3 +1,8 @@
@@ -4620,15 +4620,16 @@ index 45cb9d2..c2e414c 100644
  #include "ps2_runtime.h"
  #include "ps2_log.h"
  #include "ps2_stubs.h"
-@@ -13,6 +18,7 @@
+@@ -13,6 +18,8 @@
  #include "ps2_host_backend.h"
  #include "ps2_iop_host.h"
  #include "ps2x/iop/iop_subsystem.h"
 +#include "wotm_vu0_native.h"   // WoTM: the repo's native/runtime/ (WOTM_NATIVE_DIR)
++#include "wotm_pace.hpp"         // WoTM: the watchdog's pace window (native/)
  
  #include <iostream>
  #include <stdexcept>
-@@ -31,6 +37,7 @@ namespace ps2_stubs
+@@ -31,6 +38,7 @@ namespace ps2_stubs
  {
      void resetSifState();
  }
@@ -4636,7 +4637,7 @@ index 45cb9d2..c2e414c 100644
  
  #define ELF_MAGIC 0x464C457F // "\x7FELF" in little endian
  #define ET_EXEC 2            // Executable file
-@@ -375,6 +382,20 @@ namespace
+@@ -375,6 +383,20 @@ namespace
  
  static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint32_t &outHeight)
  {
@@ -4657,7 +4658,7 @@ index 45cb9d2..c2e414c 100644
      static uint64_t s_lastPresentationTick = std::numeric_limits<uint64_t>::max();
      static bool s_hasLatchedInitialFrame = false;
      static uint32_t s_lastDisplayFbp = std::numeric_limits<uint32_t>::max();
-@@ -414,7 +435,7 @@ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint
+@@ -414,7 +436,7 @@ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint
                                                     &sourceFbp,
                                                     &usedPreferredDisplaySource))
      {
@@ -4666,7 +4667,7 @@ index 45cb9d2..c2e414c 100644
          UpdateTexture(tex, blank.data);
          UnloadImage(blank);
          outWidth = FB_WIDTH;
-@@ -475,6 +496,7 @@ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint
+@@ -475,6 +497,7 @@ static void UploadFrame(Texture2D &tex, PS2Runtime *rt, uint32_t &outWidth, uint
      outWidth = width;
      outHeight = height;
      s_hasUploadedFrame = true;
@@ -4674,7 +4675,7 @@ index 45cb9d2..c2e414c 100644
  }
  
  PS2Runtime::PS2Runtime()
-@@ -500,11 +522,11 @@ PS2Runtime::PS2Runtime()
+@@ -500,11 +523,11 @@ PS2Runtime::PS2Runtime()
      m_guestHeapBlocks.clear();
      m_guestHeapBase = kGuestHeapDefaultBase;
      m_guestHeapEnd = kGuestHeapDefaultBase;
@@ -4689,7 +4690,7 @@ index 45cb9d2..c2e414c 100644
  }
  
  void PS2Runtime::setDebugUiCallbacks(DebugUiCallback initCallback,
-@@ -594,6 +616,9 @@ bool PS2Runtime::canBindIopRpc(uint32_t sid) const noexcept
+@@ -594,6 +617,9 @@ bool PS2Runtime::canBindIopRpc(uint32_t sid) const noexcept
  
  ps2x::iop::RpcResult PS2Runtime::handleIopRpc(uint8_t *rdram, R5900Context *ctx, ps2x::iop::RpcRequest request)
  {
@@ -4699,7 +4700,7 @@ index 45cb9d2..c2e414c 100644
      auto scope = m_iopHost->enterCall(ctx, rdram);
      request.callToken = scope.token();
      return m_iopSubsystem->handleRpc(request);
-@@ -601,6 +626,10 @@ ps2x::iop::RpcResult PS2Runtime::handleIopRpc(uint8_t *rdram, R5900Context *ctx,
+@@ -601,6 +627,10 @@ ps2x::iop::RpcResult PS2Runtime::handleIopRpc(uint8_t *rdram, R5900Context *ctx,
  
  void PS2Runtime::notifyIopSifTransfer(uint8_t *rdram, const ps2x::iop::SifTransfer &transfer)
  {
@@ -4710,7 +4711,7 @@ index 45cb9d2..c2e414c 100644
      auto scope = m_iopHost->enterCall(nullptr, rdram);
      m_iopSubsystem->onSifTransfer(transfer);
  }
-@@ -664,6 +693,14 @@ bool PS2Runtime::syncCoreSubsystems()
+@@ -664,6 +694,14 @@ bool PS2Runtime::syncCoreSubsystems()
          return true;
      }
  
@@ -4725,7 +4726,7 @@ index 45cb9d2..c2e414c 100644
      m_gs.init(gsVram, static_cast<uint32_t>(PS2_GS_VRAM_SIZE), &m_memory.gs());
      m_gifArbiter.setProcessPacketFn([this](const uint8_t *data, uint32_t size)
                                      { m_gs.processGIFPacket(data, size); });
-@@ -707,6 +744,7 @@ bool PS2Runtime::syncCoreSubsystems()
+@@ -707,6 +745,7 @@ bool PS2Runtime::syncCoreSubsystems()
      resetIop();
      m_vu0.reset();
      m_vu1.reset();
@@ -4733,7 +4734,7 @@ index 45cb9d2..c2e414c 100644
  
      m_boundRdram = rdram;
      m_boundGSVram = gsVram;
-@@ -732,11 +770,17 @@ bool PS2Runtime::initialize(const char *title)
+@@ -732,11 +771,17 @@ bool PS2Runtime::initialize(const char *title)
          InitWindow(HOST_WINDOW_WIDTH, HOST_WINDOW_HEIGHT, title); // raylib vita does not support audio
  #else
          SetConfigFlags(FLAG_WINDOW_RESIZABLE);
@@ -4751,7 +4752,7 @@ index 45cb9d2..c2e414c 100644
          if (m_debugUiInitCallback)
          {
              m_debugUiInitCallback(*this, m_debugUiUserData);
-@@ -949,20 +993,20 @@ bool PS2Runtime::loadELF(const std::string &elfPath)
+@@ -949,20 +994,20 @@ bool PS2Runtime::loadELF(const std::string &elfPath)
          return false;
      }
  
@@ -4777,7 +4778,7 @@ index 45cb9d2..c2e414c 100644
              m_guestHeapSuggestedBase = std::min(suggestedHeapBase, hardLimit);
              m_guestHeapBase = m_guestHeapSuggestedBase;
              m_guestHeapEnd = m_guestHeapSuggestedBase;
-@@ -971,9 +1015,9 @@ bool PS2Runtime::loadELF(const std::string &elfPath)
+@@ -971,9 +1016,9 @@ bool PS2Runtime::loadELF(const std::string &elfPath)
      }
      {
          std::lock_guard<std::mutex> lock(m_asyncCallbackStackMutex);
@@ -4790,7 +4791,7 @@ index 45cb9d2..c2e414c 100644
      }
  
      LoadedModule module;
-@@ -1008,6 +1052,10 @@ bool PS2Runtime::loadELF(const std::string &elfPath)
+@@ -1008,6 +1053,10 @@ bool PS2Runtime::loadELF(const std::string &elfPath)
                                        m_cpuContext.pc,
                                        elfCrc32,
                                        elfCrc32Valid);
@@ -4801,7 +4802,7 @@ index 45cb9d2..c2e414c 100644
  
      RUNTIME_LOG("ELF file loaded successfully. Entry point: 0x" << std::hex << m_cpuContext.pc << std::dec);
      return true;
-@@ -1342,6 +1390,16 @@ void PS2Runtime::reportMissingFunction(uint8_t *rdram,
+@@ -1342,6 +1391,16 @@ void PS2Runtime::reportMissingFunction(uint8_t *rdram,
      }
  }
  
@@ -4818,7 +4819,7 @@ index 45cb9d2..c2e414c 100644
  bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
                                       R5900Context *ctx,
                                       uint32_t targetPc,
-@@ -1351,13 +1409,19 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
+@@ -1351,13 +1410,19 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
                                       const char *debugName)
  {
      ctx->pc = targetPc;
@@ -4838,7 +4839,7 @@ index 45cb9d2..c2e414c 100644
          return false;
      }
  
-@@ -1396,6 +1460,7 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
+@@ -1396,6 +1461,7 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
  
      RecompiledFunction targetFn = lookupFunction(targetPc);
      const uint32_t entryPc = ctx->pc;
@@ -4846,7 +4847,7 @@ index 45cb9d2..c2e414c 100644
      targetFn(rdram, ctx, this);
  
      if (isStopRequested() || ctx->pc == 0u)
-@@ -1403,7 +1468,10 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
+@@ -1403,7 +1469,10 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
          return false;
      }
  
@@ -4858,7 +4859,7 @@ index 45cb9d2..c2e414c 100644
      {
          ctx->pc = fallthroughPc;
      }
-@@ -1423,9 +1491,46 @@ void PS2Runtime::SignalException(R5900Context *ctx, PS2Exception exception)
+@@ -1423,9 +1492,46 @@ void PS2Runtime::SignalException(R5900Context *ctx, PS2Exception exception)
                         exception == EXCEPTION_TLB_REFILL);
  }
  
@@ -4905,7 +4906,7 @@ index 45cb9d2..c2e414c 100644
  
      uint8_t *const vu0Code = m_memory.getVU0Code();
      uint8_t *const vu0Data = m_memory.getVU0Data();
-@@ -1437,13 +1542,121 @@ void PS2Runtime::executeVU0Microprogram(uint8_t *rdram, R5900Context *ctx, uint3
+@@ -1437,13 +1543,121 @@ void PS2Runtime::executeVU0Microprogram(uint8_t *rdram, R5900Context *ctx, uint3
          return;
      }
  
@@ -5027,7 +5028,7 @@ index 45cb9d2..c2e414c 100644
  }
  
  void PS2Runtime::vu0StartMicroProgram(uint8_t *rdram, R5900Context *ctx, uint32_t address)
-@@ -1485,6 +1698,8 @@ void PS2Runtime::handleBreak(uint8_t *rdram, R5900Context *ctx)
+@@ -1485,6 +1699,8 @@ void PS2Runtime::handleBreak(uint8_t *rdram, R5900Context *ctx)
  
  void PS2Runtime::drainCompletedDmacHandlers(uint8_t *rdram)
  {
@@ -5036,7 +5037,7 @@ index 45cb9d2..c2e414c 100644
      for (uint32_t cause : m_memory.consumeCompletedDmacCauses())
      {
          ps2_syscalls::dispatchDmacHandlersForCause(rdram, this, cause);
-@@ -2165,6 +2380,7 @@ void PS2Runtime::kickGifDmaChainFromMMIO(uint8_t *rdram,
+@@ -2165,6 +2381,7 @@ void PS2Runtime::kickGifDmaChainFromMMIO(uint8_t *rdram,
      ps2TraceGuestWrite(rdram, GIF_TADR, 4u, tadr, 0u, "WRITE32", ctx);
      m_memory.writeIORegister(GIF_TADR, tadr);
      ps2TraceGuestWrite(rdram, GIF_CHCR, 4u, chcr, 0u, "WRITE32", ctx);
@@ -5044,7 +5045,7 @@ index 45cb9d2..c2e414c 100644
      if (m_memory.tryProcessNativeGifImageUploadChain(m_gs, tadr, chcr))
      {
          drainCompletedDmacHandlers(rdram);
-@@ -2175,6 +2391,7 @@ void PS2Runtime::kickGifDmaChainFromMMIO(uint8_t *rdram,
+@@ -2175,6 +2392,7 @@ void PS2Runtime::kickGifDmaChainFromMMIO(uint8_t *rdram,
          drainCompletedDmacHandlers(rdram);
          return;
      }
@@ -5052,7 +5053,7 @@ index 45cb9d2..c2e414c 100644
      m_memory.writeIORegister(GIF_CHCR, chcr);
      m_memory.processPendingTransfers();
      drainCompletedDmacHandlers(rdram);
-@@ -2211,7 +2428,10 @@ void PS2Runtime::postEeEvent(EeEvent event)
+@@ -2211,7 +2429,10 @@ void PS2Runtime::postEeEvent(EeEvent event)
  
  bool PS2Runtime::eeCheckpointDue(uint32_t cycles) noexcept
  {
@@ -5064,7 +5065,7 @@ index 45cb9d2..c2e414c 100644
  }
  
  [[noreturn]] void PS2Runtime::eeWaitVSyncTicks(uint32_t ticks, uint32_t resumePc)
-@@ -2356,6 +2576,7 @@ void PS2Runtime::run()
+@@ -2356,6 +2577,7 @@ void PS2Runtime::run()
      m_debugGp.store(static_cast<uint32_t>(_mm_extract_epi32(m_cpuContext.r[28], 0)), std::memory_order_relaxed);
  
      RUNTIME_LOG("Starting execution at address 0x" << std::hex << m_cpuContext.pc << std::dec);
@@ -5072,7 +5073,7 @@ index 45cb9d2..c2e414c 100644
  
      // A blank image to use as a framebuffer
      Image blank = GenImageColor(FB_WIDTH, FB_HEIGHT, BLANK);
-@@ -2422,7 +2643,11 @@ void PS2Runtime::run()
+@@ -2422,7 +2644,11 @@ void PS2Runtime::run()
          });
          uint32_t presentWidth = FB_WIDTH;
          uint32_t presentHeight = DEFAULT_DISPLAY_HEIGHT;
@@ -5084,7 +5085,7 @@ index 45cb9d2..c2e414c 100644
  
          BeginDrawing();
          ClearBackground(BLACK);
-@@ -2444,14 +2669,280 @@ void PS2Runtime::run()
+@@ -2444,14 +2670,282 @@ void PS2Runtime::run()
          {
              m_debugUiDrawCallback(*this, m_debugUiUserData);
          }
@@ -5246,7 +5247,8 @@ index 45cb9d2..c2e414c 100644
 +                // WOTM_WATCHDOG seconds (default 8; 0 turns it off) while presentation is alive = frozen logic. A movie (movieIsPlaying,
 +                // 0x6F8650) doesn't count. Once per stop: EE threads to the log and ram_/vram_vigia_<g_frame>.bin.
 +                // Performance: 2 s windows where the game runs below WOTM_MINFPS frames/s (default 25) become a log warning, with no dump.
-+                // A window with a gap of over 1 s between frames is loading, not slowness, and is left out.
++                // A window with a gap of over 1 s between frames is loading, not slowness, and is left out, as is one where g_frame
++                // started again (end of a match).
 +                static const double s_limit = [] { const char *e = std::getenv("WOTM_WATCHDOG"); return e ? std::atof(e) : 8.0; }();
 +                static const double s_minFps = [] { const char *e = std::getenv("WOTM_MINFPS"); return e ? std::atof(e) : 25.0; }();
 +                static uint32_t s_lastG = 0, s_winG = 0;
@@ -5295,8 +5297,9 @@ index 45cb9d2..c2e414c 100644
 +                }
 +                else if (now - s_winT >= 2.0)
 +                {
-+                    const double fps = static_cast<double>(g - s_winG) / (now - s_winT);
-+                    const bool counted = g != s_winG && movie == 0 && s_maxGap <= 1.0 && !s_pauseWin;
++                    const wotm::pace::Window win = wotm::pace::measure(s_winG, g, now - s_winT, movie != 0, s_maxGap, s_pauseWin);
++                    const double fps = win.fps;
++                    const bool counted = win.counted;
 +                    if (counted && fps < s_minFps)
 +                    {
 +                        if (s_slowSince == 0.0)
@@ -5365,7 +5368,7 @@ index 45cb9d2..c2e414c 100644
      }
  
      requestStop();
-@@ -2469,4 +2960,7 @@ void PS2Runtime::run()
+@@ -2469,4 +2963,7 @@ void PS2Runtime::run()
      CloseWindow();
  
      RUNTIME_LOG("[run] exiting loop");

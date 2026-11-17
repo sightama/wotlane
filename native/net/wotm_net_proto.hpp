@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <map>
@@ -46,6 +47,9 @@ namespace wotm_net::proto
         Drop,         // server -> client: a player left; neutral from a given frame
         Away,         // client -> server: this player's game went to the background or came back (a hidden browser tab);
                       // server -> client: the same for another player. Older peers ignore it
+        Pace,         // server -> client: the input delay this player should move to (re-picked from the round trips during the
+                      // match; the client steps toward it, wotm_lockstep.hpp LocalSchedule). Older peers ignore it and keep the
+                      // Start delay, which stays in sync either way
     };
 
     struct Join
@@ -103,6 +107,10 @@ namespace wotm_net::proto
     {
         uint8_t player = 0;   // the server fills it in; a client sends its own slot as 0
         bool away = false;
+    };
+    struct Pace
+    {
+        uint32_t delay = 0;
     };
 
     class Writer
@@ -378,17 +386,88 @@ namespace wotm_net::proto
         return r.done();
     }
 
-    // Input delay (frames) for each player's round-trip time to the server (ms): a player's input goes to the server and from there
-    // to the others, so the worst path is half the slowest round trip plus half the second slowest; plus 1 frame of slack for frame
-    // phase. Clamped to 2..15.
-    inline uint32_t pickDelay(std::vector<uint32_t> rttMs, uint32_t frameMs)
+    inline std::vector<uint8_t> encode(const Pace &m)
     {
-        std::sort(rttMs.begin(), rttMs.end(), [](uint32_t a, uint32_t b) { return a > b; });
-        const uint32_t a = rttMs.size() > 0 ? rttMs[0] : 0u, b = rttMs.size() > 1 ? rttMs[1] : 0u;
-        const uint32_t oneWay = (a + b + 1u) / 2u;
-        const uint32_t frames = frameMs ? (oneWay + frameMs - 1u) / frameMs + 1u : 2u;
-        return std::clamp(frames, 2u, 15u);
+        Writer w(Type::Pace);
+        w.u32(m.delay);
+        return w.take();
     }
+    inline bool decode(const std::vector<uint8_t> &b, Pace &m)
+    {
+        Reader r(b, Type::Pace);
+        m.delay = r.u32();
+        return r.done();
+    }
+
+    // fields per game frame in a match of this many players: 3 or more switch the game to its own 30 Hz mode (WOTM_FIXEDSTEP)
+    inline int matchStep(int players) { return players >= 3 ? 2 : 1; }
+    inline double frameMs(int players) { return matchStep(players) * 1000.0 / 60.0; }
+
+    // Input delay (frames) of `player`, from each player's round trip to the server (ms, the high end of the recent ones: RttWindow):
+    // the input goes to the server and from there to every other player, so its path is half its own round trip plus half the
+    // slowest other player's, plus kDelayMarginMs for sending and handling. Clamped to 1..15.
+    constexpr double kDelayMarginMs = 3.0;
+    // the path in frames (0 when nobody else is there to reach)
+    inline double pathFrames(const std::vector<uint32_t> &rttMs, size_t player, double frameMs)
+    {
+        uint32_t other = 0;
+        bool alone = true;
+        for (size_t q = 0; q < rttMs.size(); ++q)
+            if (q != player)
+                other = std::max(other, rttMs[q]), alone = false;
+        if (alone || player >= rttMs.size())
+            return 0.0;
+        return ((rttMs[player] + other) / 2.0 + kDelayMarginMs) / frameMs;
+    }
+    inline uint32_t framesFor(double frames) { return static_cast<uint32_t>(std::clamp(std::ceil(frames - 1e-9), 1.0, 15.0)); }
+    inline uint32_t playerDelay(const std::vector<uint32_t> &rttMs, size_t player, double frameMs)
+    {
+        return framesFor(pathFrames(rttMs, player, frameMs));
+    }
+
+    // The delay to advise a player whose delay is `current` during the match: it rises as soon as the path needs another frame, but
+    // only falls when the lower delay leaves half a frame to spare, so a ping sitting on a frame boundary does not flap
+    inline uint32_t adviseDelay(uint32_t current, const std::vector<uint32_t> &rttMs, size_t player, double frameMs)
+    {
+        const double frames = pathFrames(rttMs, player, frameMs);
+        const uint32_t up = framesFor(frames), down = framesFor(frames + 0.5);
+        return up >= current ? up : std::min(current, down);
+    }
+
+    // the delay everyone starts with (the frames before it are neutral for every player): the largest player's, and at least 2,
+    // since a browser's ping is 0 until its first pong (the advice brings a LAN player down to 1 during the match)
+    inline uint32_t startDelay(const std::vector<uint32_t> &rttMs, double frameMs)
+    {
+        uint32_t d = 2;
+        for (size_t p = 0; p < rttMs.size(); ++p)
+            d = std::max(d, playerDelay(rttMs, p, frameMs));
+        return d;
+    }
+
+    // The highest of a player's last kSamples round trips: a jittery ping counts at its high end, and a spike only lowers the delay
+    // again once it has left the window
+    class RttWindow
+    {
+    public:
+        static constexpr size_t kSamples = 8;
+        void add(uint32_t ms)
+        {
+            samples_[at_] = ms;
+            at_ = (at_ + 1) % kSamples;
+            n_ = std::min(n_ + 1, kSamples);
+        }
+        uint32_t high() const
+        {
+            uint32_t h = 0;
+            for (size_t i = 0; i < n_; ++i)
+                h = std::max(h, samples_[i]);
+            return h;
+        }
+
+    private:
+        uint32_t samples_[kSamples] = {};
+        size_t at_ = 0, n_ = 0;
+    };
 
     // ---- lobby (TCP, one text line per message) ----
     // Whoever creates the lobby is the owner: only the owner changes the stage, wins and modifiers and starts the match; if the owner leaves, the
