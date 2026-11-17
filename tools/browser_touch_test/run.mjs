@@ -177,14 +177,14 @@ const scenarios = {
     const padLines = (await p.logSince(logIndex)).filter((l) => /\[pad\] t=.*gamepad 0 left=/.test(l));
     check(rows, 'the game\'s own pad log saw the stick ramp up and return', padLines.some((l) => /left=\+0\.9/.test(l)) && /left=\+0\.00,\+0\.00/.test(padLines.at(-1) ?? ''), padLines.slice(-3).join(' | '));
 
-    // a tap shorter than a frame is still read: sample the pad every 8 ms while a 20 ms tap happens
-    await p.page.evaluate(() => { window.__seen = false; window.__sampler = setInterval(() => { if (navigator.getGamepads()[0]?.buttons[2].pressed) window.__seen = true; }, 8); });
+    // a tap shorter than a frame is still held when the finger lifts (read at that very event), and let go a moment later
+    await p.page.evaluate(() => { window.__atLift = null; document.addEventListener('pointerup', () => { window.__atLift = navigator.getGamepads()[0]?.buttons[2].pressed ?? null; }, { once: true }); });
     const square = await p.centre('square');
     await p.touch('touchStart', [{ id: 1, x: square.x, y: square.y }]);
     await sleep(20);
     await p.touch('touchEnd', []);
-    await sleep(200);
-    check(rows, 'a 20 ms tap on Square is still held at the next pad read', await p.page.evaluate(() => { clearInterval(window.__sampler); return window.__seen; }));
+    await sleep(400);
+    check(rows, 'a 20 ms tap on Square is still held as the finger lifts, and released after', (await p.page.evaluate(() => window.__atLift)) === true && (await p.pad(0)).down.length === 0, JSON.stringify(await p.page.evaluate(() => window.__atLift)));
 
     // the look zone is the right stick
     await p.touch('touchStart', [{ id: 1, x: 560, y: 200 }]);
