@@ -1,12 +1,12 @@
-// wotm_settings.hpp: opcoes do jogador que valem ao vivo (painel "recompiled options" do menu principal, wotm_mainmenu.inc). O launcher
-// nao as tem: so tira as variaveis do ambiente ao abrir o jogo.
+// wotm_settings.hpp: player options that apply live (the "recompiled options" panel in the main menu, wotm_mainmenu.inc). The launcher
+// doesn't have them: it only removes the environment variables when it opens the game.
 //
-// Arquivo: settings.ini ao lado do save.json (a pasta acima do mc0/, a do ELF: discroot\ no run_live), uma linha CHAVE=valor por
-// opcao, com o nome da variavel de ambiente de cada uma. Ordem na abertura: padrao (o de antes, sem variavel), depois o arquivo,
-// depois as variaveis de ambiente que estiverem definidas (testes e lotes); WOTM_SETTINGS=0 ignora o arquivo (nem le nem grava).
-// O painel grava o arquivo inteiro com os valores do momento a cada mudanca.
+// File: settings.ini next to save.json (the folder above mc0/, the ELF's folder: discroot\ in run_live), one KEY=value line per
+// option, using each option's environment variable name. Order at startup: default (the old one, with no variable), then the file,
+// then whichever environment variables are set (tests and batches); WOTM_SETTINGS=0 ignores the file (neither reads nor writes it).
+// The panel writes the whole file with the current values on every change.
 //
-// Cada valor e um std::atomic<int>: a thread do EE (ganchos dos mods, painel) e a da janela (video) leem a cada uso.
+// Each value is a std::atomic<int>: the EE thread (mod hooks, panel) and the window thread (video) read it on every use.
 #pragma once
 
 #include <algorithm>
@@ -21,33 +21,41 @@
 #include <mutex>
 #include <string>
 
+#include "net/wotm_modifiers.hpp"
+
 namespace wotm::settings
 {
 enum Key
 {
-    Res,          // altura do quadro nativo (linhas); 0 = a da janela
-    Aspect,       // 0 = dinamica (segue a janela); 1.. = kAspectNames[i]
-    Display,      // 0 janela, 1 tela cheia sem borda, 2 tela cheia exclusiva
-    Rate,         // Hz da apresentacao; 0 = a do monitor
+    Res,          // native frame height (lines); 0 = the window's
+    Aspect,       // 0 = dynamic (follows the window); 1.. = kAspectNames[i]
+    Display,      // 0 windowed, 1 borderless fullscreen, 2 exclusive fullscreen
+    Rate,         // presentation Hz; 0 = the monitor's
     Vsync,        // 0/1
-    LockToggle,   // QoL: lock-on alternado no R1
-    EnemyBars,    // QoL: barras de vida e energia sobre os inimigos
-    DamagePop,    // QoL: numeros de dano
-    KbSeparate,   // teclado e um jogador a parte
-    Prompts,      // icones de botao: kPromptNames (0 = automatico pelo ultimo dispositivo usado; 1 = os 3D do jogo)
-    MenuConfirm,  // nos menus, com gamepad: 0 = o de baixo confirma (o jogo), 1 = o da direita confirma e o de baixo volta
-    Camera,       // 0 = classica (a do jogo), 1 = moderna (orbital: analogico direito, controle relativo a tela; wotm_orbit.inc)
-    CamRecenter,  // camera moderna: volta devagar para as costas do monstro depois de ~1,5 s sem mexer, com ele andando
-    CloseCam,     // 1 = a camera de perto do jogo (vista unificada); 0 = nunca entra nela
-    CamSens,      // camera moderna: velocidade do analogico direito, 1..10 (5 = a de antes; cada ponto e 20%)
-    CamInvertY,   // camera moderna: 1 = inverte o eixo vertical do analogico direito e do mouse (padrao: para cima olha para cima, a camera desce)
-    RenderScale,  // escala do quadro nativo sobre a Res, em %: 50..200 (acima de 100 = supersampling)
-    Msaa,         // amostras do MSAA do quadro nativo: 0 (desligado), 2, 4, 8
-    TexFilter,    // filtro das texturas do jogo: 0 bilinear (o do GS), 1 trilinear (mipmaps), 2/4/8/16 anisotropico
-    Announcer,    // narrador da selecao (wotm_narrator.inc): 0 desligado, 1 a voz (MP3 com o nome), 2 o grito do proprio monstro
-    SkipIntro,    // pula os dois filmes do boot (wotm_fmv.hpp); lido uma vez, no primeiro filme: vale no proximo boot
-    Vibration,    // vibracao dos gamepads (wotm_rumble.inc)
-    Interp,       // interpolacao de quadros (wotm_live.inc, "interpolacao"), ligada por padrao: acima de 60 Hz (g_presentHz) ou com o jogo a 30
+    LockToggle,   // QoL: lock-on toggled with R1
+    EnemyBars,    // QoL: health and energy bars over enemies
+    DamagePop,    // QoL: damage numbers
+    KbSeparate,   // keyboard is a separate player
+    Prompts,      // button icons: kPromptNames (0 = automatic, from the last device used; 1 = the game's 3D ones)
+    MenuConfirm,  // in menus, with a gamepad: 0 = bottom button confirms (the game's), 1 = right button confirms and bottom goes back
+    Camera,       // 0 = classic (the game's), 1 = modern (orbital: right stick, screen-relative controls; wotm_orbit.inc)
+    CamRecenter,  // modern camera: slowly swings back behind the monster after ~1.5 s untouched, while it's walking
+    CloseCam,     // 1 = the game's close-up camera (unified view); 0 = never switches to it
+    CamSens,      // modern camera: right stick speed, 1..10 (5 = the old speed; each step is 20%)
+    CamInvertY,   // modern camera: 1 = inverts the vertical axis of the right stick and mouse (default: up looks up, the camera moves down)
+    RenderScale,  // native frame scale over Res, in %: 50..200 (above 100 = supersampling)
+    Msaa,         // native frame MSAA samples: 0 (off), 2, 4, 8
+    TexFilter,    // game texture filter: 0 bilinear (the GS's), 1 trilinear (mipmaps), 2/4/8/16 anisotropic
+    Announcer,    // select-screen announcer (wotm_narrator.inc): 0 off, 1 the voice (MP3 with the name), 2 the monster's own roar
+    SkipIntro,    // skips the two boot movies (wotm_fmv.hpp); read once, on the first movie: takes effect on the next boot
+    Vibration,    // gamepad vibration (wotm_rumble.inc)
+    Interp,       // frame interpolation (wotm_live.inc, "interpolacao"), on by default: above 60 Hz (g_presentHz) or with the game at 30
+    SuperJump,    // gameplay modifiers (net/wotm_modifiers.hpp, wotm_modifiers.inc): 0/1 each, latched at fight start
+    FastMonsters,
+    Turbo,
+    VolSfx,       // this PC's effects volume, 0..100 % on top of the game's own (AUDIO tab; wotm_snd.hpp setPlayerVolume)
+    VolMusic,     // this PC's music volume, 0..100 %
+    HudWide,      // the HUD at the edges of a window wider than 4:3 (Scene::drawHudAtEdges); 0 = where the game puts it, in the 4:3 middle
     kKeys
 };
 
@@ -55,15 +63,17 @@ inline constexpr const char *kEnv[kKeys] = {"WOTM_RES",        "WOTM_ASPECT",   
                                             "WOTM_LOCKTOGGLE", "WOTM_ENEMYBARS", "WOTM_DAMAGEPOP",  "WOTM_KBSEPARATE",
                                             "WOTM_PROMPTS",    "WOTM_MENUCONFIRM", "WOTM_CAMERA",    "WOTM_CAMRECENTER", "WOTM_CLOSECAM",
                                             "WOTM_CAMSENS",    "WOTM_CAMINVERT",   "WOTM_RENDERSCALE", "WOTM_MSAA",      "WOTM_TEXFILTER",
-                                            "WOTM_ANNOUNCER",  "WOTM_SKIPINTRO",   "WOTM_VIBRATION",   "WOTM_INTERP"};
-inline constexpr int kDefault[kKeys] = {720, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1, 5, 0, 100, 0, 0, 1, 0, 1, 1};
+                                            "WOTM_ANNOUNCER",  "WOTM_SKIPINTRO",   "WOTM_VIBRATION",   "WOTM_INTERP",
+                                            "WOTM_SUPERJUMP",  "WOTM_FASTMONSTERS", "WOTM_TURBO",     "WOTM_VOL_SFX",   "WOTM_VOL_MUSIC",
+                                            "WOTM_HUDWIDE"};
+inline constexpr int kDefault[kKeys] = {720, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1, 5, 0, 100, 0, 0, 1, 0, 1, 1, 0, 0, 0, 100, 100, 1};
 inline constexpr const char *kPromptNames[] = {"auto", "original", "keyboard", "xbox", "playstation", "nintendo"};
 inline constexpr int kPromptStyles = 6;
 enum PromptStyle { PromptAuto, PromptOriginal, PromptKeyboard, PromptXbox, PromptPs, PromptNintendo };
 inline constexpr const char *kConfirmNames[] = {"bottom", "right"};
 
-// Escolhas que o painel percorre
-inline constexpr int kResolutions[] = {0, 448, 720, 1080, 1440, 2160};   // 0 = a da janela
+// Choices the panel cycles through
+inline constexpr int kResolutions[] = {0, 448, 720, 1080, 1440, 2160};   // 0 = the window's
 inline constexpr int kRenderScales[] = {50, 75, 100, 125, 150, 200};
 inline constexpr int kMsaaLevels[] = {0, 2, 4, 8};
 inline constexpr int kTexFilters[] = {0, 1, 2, 4, 8, 16};
@@ -72,23 +82,31 @@ inline constexpr const char *kAspectNames[] = {"dynamic", "4:3", "16:9", "16:10"
 inline constexpr float kAspectRatio[] = {0.f, 4.f / 3.f, 16.f / 9.f, 16.f / 10.f, 21.f / 9.f, 32.f / 9.f};
 inline constexpr int kAspects = 6;
 
-inline std::atomic<int> g_val[kKeys] = {720, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1, 5, 0, 100, 0, 0, 1, 0, 1, 1};
-inline std::filesystem::path g_path;   // vazio: sem arquivo (WOTM_SETTINGS=0 ou antes do load)
+inline std::atomic<int> g_val[kKeys] = {720, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1, 5, 0, 100, 0, 0, 1, 0, 1, 1, 0, 0, 0, 100, 100, 1};
+inline std::filesystem::path g_path;   // empty: no file (WOTM_SETTINGS=0 or before load)
 inline std::mutex g_fileMutex;
-inline bool g_pathPending = false;   // o load achou teclas de um layout anterior: regrava o arquivo no fim do load
-// Taxa de apresentacao em vigor (initPresentRate, wotm_live.inc; 0 = ainda nao aberta): a opcao Interp so vale acima de 60
+inline bool g_pathPending = false;   // load found keys from an older layout: rewrites the file at the end of load
+// Presentation rate in effect (initPresentRate, wotm_live.inc; 0 = not opened yet): the Interp option only applies above 60
 inline std::atomic<int> g_presentHz{0};
 
-// Partida em rede (WOTM_NET; ligado no load): as opcoes que mudam o estado do jogo valem um perfil fixo, igual em todos os PCs. A
-// camera moderna escreve a camera do jogo com o mouse, a sensibilidade e a inversao deste PC, e o lock-on alternado muda o que os
-// botoes fazem. O arquivo e o painel continuam com as do jogador (o painel as mostra travadas), que voltam fora da rede.
-inline constexpr Key kNetKeys[] = {LockToggle, Camera, CamRecenter, CloseCam, CamSens, CamInvertY};
-inline constexpr int kNetValues[] = {0, 0, 1, 1, 5, 0};
+// Network match (WOTM_NET; turned on in load): options that change game state the same way for everyone take a fixed profile, the
+// same on every PC: toggled lock-on changes what the buttons do, and the close camera unifies the shared view. The modern camera's
+// options (Camera, CamRecenter, CamSens, CamInvertY) stay each player's own: they travel with that player's input
+// (wotm_camsettings.hpp). The file and the panel keep the player's values (the panel shows them locked), which come back outside
+// network play.
+inline constexpr Key kNetKeys[] = {LockToggle, CloseCam};
+inline constexpr int kNetValues[] = {0, 1};
 inline std::atomic<bool> g_netProfile{false};
+// The lobby's modifiers (WOTM_MODIFIERS, wotm::modifiers bits): forced on the three modifier keys in a network match
+inline std::atomic<int> g_netMods{0};
+inline constexpr Key kModKeys[wotm::modifiers::kCount] = {SuperJump, FastMonsters, Turbo};   // bit i = kModKeys[i]
 
-// Valor do perfil da rede para `k`, ou -1 se a opcao e livre
+// Network profile value for `k`, or -1 if the option is free
 inline int netValue(Key k)
 {
+    for (int i = 0; i < wotm::modifiers::kCount; ++i)
+        if (kModKeys[i] == k)
+            return (g_netMods.load(std::memory_order_relaxed) >> i) & 1;
     for (size_t i = 0; i < sizeof kNetKeys / sizeof kNetKeys[0]; ++i)
         if (kNetKeys[i] == k)
             return kNetValues[i];
@@ -99,14 +117,44 @@ inline bool forced(Key k) { return g_netProfile.load(std::memory_order_relaxed) 
 inline int get(Key k) { return forced(k) ? netValue(k) : g_val[k].load(std::memory_order_relaxed); }
 inline bool on(Key k) { return get(k) != 0; }
 
-// Proporcao fixa da opcao Aspect (0 = dinamica)
+// Active modifiers as wotm::modifiers bits (the lobby's in a network match)
+inline int modifiers()
+{
+    int bits = 0;
+    for (int i = 0; i < wotm::modifiers::kCount; ++i)
+        bits |= on(kModKeys[i]) ? 1 << i : 0;
+    return bits;
+}
+
+// WOTM_MODIFIERS=<list> (launcher, lobby): sets the three keys; false (nothing changes) on an unknown name
+inline bool applyModifierList(const char *list)
+{
+    int bits = 0;
+    if (!wotm::modifiers::parse(list ? list : "", bits))
+        return false;
+    for (int i = 0; i < wotm::modifiers::kCount; ++i)
+        g_val[kModKeys[i]].store((bits >> i) & 1);
+    return true;
+}
+
+// The lobby's WOTM_MODIFIERS in a network match (null = none): false on an unknown name, which plays as none (the config hash parses
+// the list the same way, so every PC agrees)
+inline bool setNetModifiers(const char *list)
+{
+    int bits = 0;
+    const bool known = wotm::modifiers::parse(list ? list : "", bits);
+    g_netMods.store(bits);
+    return known;
+}
+
+// Fixed aspect ratio from the Aspect option (0 = dynamic)
 inline float aspectRatio()
 {
     const int a = get(Aspect);
     return a > 0 && a < kAspects ? kAspectRatio[a] : 0.f;
 }
 
-// Texto -> valor, com as regras de cada variavel de antes (mesmo significado no arquivo e no ambiente)
+// Text -> value, with each old variable's rules (same meaning in the file and in the environment)
 inline bool parse(Key k, const char *s, int &out)
 {
     if (!s) return false;
@@ -147,7 +195,7 @@ inline bool parse(Key k, const char *s, int &out)
         if (!*s || !std::strcmp(s, "dynamic") || !std::strcmp(s, "0")) { out = 0; return true; }
         float w = 0.f, h = 0.f;
         if (std::sscanf(s, "%f:%f", &w, &h) != 2 || w <= 0.f || h <= 0.f) return false;
-        // a da lista mais proxima
+        // the nearest one in the list
         const float r = w / h;
         int best = 1;
         for (int i = 2; i < kAspects; ++i)
@@ -164,9 +212,14 @@ inline bool parse(Key k, const char *s, int &out)
         out = std::clamp(v, 1, 10);
         return true;
     }
+    case VolSfx:
+    case VolMusic:
+        if ((*s < '0' || *s > '9') && *s != '-') return false;
+        out = std::clamp(std::atoi(s), 0, 100);
+        return true;
     case Vsync: out = *s == '0' ? 0 : 1; return true;
     case Announcer: out = std::clamp(std::atoi(s), 0, 2); return true;
-    case Interp: out = std::atoi(s) > 0 || !std::strcmp(s, "on") ? 1 : 0; return true;   // "redraw" (diagnostico da etapa 0) nao liga
+    case Interp: out = std::atoi(s) > 0 || !std::strcmp(s, "on") ? 1 : 0; return true;   // "redraw" (stage-0 diagnostic) doesn't turn it on
     case KbSeparate: out = *s == '1' ? 1 : 0; return true;
     case Prompts:
     case MenuConfirm:
@@ -175,7 +228,7 @@ inline bool parse(Key k, const char *s, int &out)
         for (int i = 0; i < n; ++i)
             if (!std::strcmp(s, k == Prompts ? kPromptNames[i] : kConfirmNames[i]))
             {
-                // "playstation" saiu da lista (era igual ao original, com os face buttons do jogo): vira "original"
+                // "playstation" was dropped from the list (it was the same as original, with the game's face buttons): becomes "original"
                 out = k == Prompts && i == PromptPs ? int(PromptOriginal) : i;
                 return true;
             }
@@ -197,26 +250,26 @@ inline std::string format(Key k, int v)
     return std::to_string(v);
 }
 
-// ------------------------------------------------------------------ mapa de teclas e botoes (aba CONTROLS do painel)
-// Cada botao do PS2 recebe ate duas teclas do teclado e um botao de gamepad. Codigos do raylib (KeyboardKey, GamepadButton); 0 = nada.
-// Os gamepads tem um mapa por jogador (kPadPlayers): o gamepad usa o do jogador que ele alimenta (wotm_pad::playerOfPad); o teclado
-// tem um so. No arquivo: KB_<BOTAO>=TECLA[,TECLA], PAD_<BOTAO>=BOTAO (jogador 1) e PAD2_/PAD3_/PAD4_<BOTAO>=BOTAO, com os nomes de
-// kKeyNames/kPadButtonNames. Sem variavel de ambiente.
-// Acoes so do teclado (etapa 8 da camera orbital, 75f5be1:docs/investigacoes/2026-10-22/camera_orbital_plano.md): viram botoes do PS2 conforme o
-// lock-on alternado (WOTM_LOCKTOGGLE muda quais botoes travam, defendem e andam de lado; wotm_pad.inc, keyboard) ou pedem a troca de
-// alvo direto ao lock-on (wotm_mouse.hpp). Supoem o CONTROL TYPE A (configuracao 0) do jogo.
+// ------------------------------------------------------------------ key and button map (panel's CONTROLS tab)
+// Each PS2 button gets up to two keyboard keys and one gamepad button. raylib codes (KeyboardKey, GamepadButton); 0 = nothing.
+// Gamepads have one map per player (kPadPlayers): a gamepad uses the map of the player it feeds (wotm_pad::playerOfPad); the keyboard
+// has only one. In the file: KB_<BUTTON>=KEY[,KEY], PAD_<BUTTON>=BUTTON (player 1) and PAD2_/PAD3_/PAD4_<BUTTON>=BUTTON, with the names from
+// kKeyNames/kPadButtonNames. No environment variable.
+// Keyboard-only actions (step 8 of the orbital camera, 75f5be1:docs/investigacoes/2026-10-22/camera_orbital_plano.md): they become PS2 buttons according to
+// toggled lock-on (WOTM_LOCKTOGGLE changes which buttons lock, block and strafe; wotm_pad.inc, keyboard) or request a target switch
+// directly from lock-on (wotm_mouse.hpp). They assume the game's CONTROL TYPE A (configuration 0).
 enum Bind
 {
-    BUp, BDown, BLeft, BRight,                 // direcional
+    BUp, BDown, BLeft, BRight,                 // D-pad
     BCross, BCircle, BSquare, BTriangle,
     BL1, BR1, BL2, BR2,
-    BL1R1,                                     // so teclado: L1 e R1 juntos
+    BL1R1,                                     // keyboard only: L1 and R1 together
     BStart, BSelect, BL3, BR3,
-    BStickUp, BStickDown, BStickLeft, BStickRight,   // so teclado: analogico esquerdo
-    BLock, BBlock, BStrafeL, BStrafeR,         // so teclado: travar, defender, andar de lado (botoes conforme o lock-on alternado)
-    BTargetNext, BTargetPrev,                  // so teclado: proximo alvo / anterior (com alvo travado)
-    BTriCircle, BCrossSquare,                  // so teclado: triangulo e bola juntos, X e quadrado juntos (especiais)
-    BWalk,                                     // so teclado: segurado, o analogico vai so ate parte do curso (andar)
+    BStickUp, BStickDown, BStickLeft, BStickRight,   // keyboard only: left stick
+    BLock, BBlock, BStrafeL, BStrafeR,         // keyboard only: lock on, block, strafe (buttons depend on toggled lock-on)
+    BTargetNext, BTargetPrev,                  // keyboard only: next / previous target (with a target locked)
+    BTriCircle, BCrossSquare,                  // keyboard only: triangle and circle together, X and square together (specials)
+    BWalk,                                     // keyboard only: while held, the stick only goes part of the way (walking)
     kBinds
 };
 inline constexpr const char *kBindNames[kBinds] = {"UP",     "DOWN",   "LEFT",   "RIGHT",    "CROSS",     "CIRCLE",     "SQUARE",
@@ -224,17 +277,17 @@ inline constexpr const char *kBindNames[kBinds] = {"UP",     "DOWN",   "LEFT",  
                                                    "SELECT", "L3",     "R3",     "STICK_UP", "STICK_DOWN", "STICK_LEFT", "STICK_RIGHT",
                                                    "LOCK",   "BLOCK",  "STRAFE_LEFT", "STRAFE_RIGHT", "TARGET_NEXT", "TARGET_PREV",
                                                    "TRIANGLE_CIRCLE", "CROSS_SQUARE", "WALK"};
-// Bits do scePadRead (1 = o botao)
+// scePadRead bits (1 = the button)
 inline constexpr uint16_t kBindMask[kBinds] = {0x0010, 0x0040, 0x0080, 0x0020, 0x4000, 0x2000, 0x8000, 0x1000, 0x0400, 0x0800, 0x0100,
                                                0x0200, 0x0C00, 0x0008, 0x0001, 0x0002, 0x0004, 0,      0,      0,      0,
                                                0,      0,      0,      0,      0,      0,      0x3000, 0xC000, 0};
 inline constexpr bool bindOnPad(Bind b) { return b != BL1R1 && b < BStickUp; }
 
 struct KeyName { int code; const char *name; };
-// Codigos do mouse no mapa do teclado (fora dos KeyboardKey do raylib): botoes 1000 + MouseButton, rodinha 1010 (cima) e 1011 (baixo)
+// Mouse codes in the keyboard map (outside raylib's KeyboardKey): buttons 1000 + MouseButton, wheel 1010 (up) and 1011 (down)
 inline constexpr int kMouseBase = 1000, kWheelUp = 1010, kWheelDown = 1011;
-// Teclas que podem ser escolhidas (Esc cancela a escolha, mas vale no padrao; F1..F12 sao do runtime: menu de debug, camera livre,
-// fotos, tela cheia). Os nomes do mouse e do Esc sao os do atlas de icones (wotm_prompts.h).
+// Keys that can be picked (Esc cancels picking, but works as a default; F1..F12 belong to the runtime: debug menu, free camera,
+// screenshots, fullscreen). The mouse and Esc names are the ones from the icon atlas (wotm_prompts.h).
 inline constexpr KeyName kKeyNames[] = {
     {256, "ESC"},
     {1000, "MOUSE_LEFT"}, {1001, "MOUSE_RIGHT"}, {1002, "MOUSE_MIDDLE"}, {1003, "MOUSE_SIDE"}, {1004, "MOUSE_EXTRA"},
@@ -252,26 +305,28 @@ inline constexpr KeyName kKeyNames[] = {
     {329, "KP9"}, {330, "KPDECIMAL"}, {331, "KPDIVIDE"}, {332, "KPMULTIPLY"}, {333, "KPMINUS"}, {334, "KPPLUS"}, {335, "KPENTER"},
     {340, "LSHIFT"}, {341, "LCTRL"}, {342, "LALT"}, {344, "RSHIFT"}, {345, "RCTRL"}, {346, "RALT"},
 };
-// GamepadButton do raylib 1..17, pela posicao no controle (os icones por estilo vem depois)
+// raylib GamepadButton 1..17, by position on the controller (the per-style icons come later)
 inline constexpr const char *kPadButtonNames[18] = {"",        "DPAD_UP", "DPAD_RIGHT", "DPAD_DOWN", "DPAD_LEFT", "FACE_UP",
                                                     "FACE_RIGHT", "FACE_DOWN", "FACE_LEFT", "L1",    "L2",        "R1",
                                                     "R2",      "BACK",    "GUIDE",      "START",     "L3",        "R3"};
 inline constexpr int kPadButtons = 18;
 
-// Padrao do teclado (layout 2, do dono, 2026-10-22): WASD anda (analogico), mouse gira a camera, botao esquerdo ataque fraco
-// (quadrado), direito forte (triangulo), Espaco pula (X), F ou botao lateral agarra (bola), Shift defende, Q ou botao do meio trava,
-// Tab/R ou a rodinha trocam o alvo, Z/X andam de lado, 1 e 2 os especiais (triangulo+bola, X+quadrado), Alt anda devagar, Enter ou
-// Esc pausam (Esc volta nos menus), Ctrl provoca (Select), setas no direcional. L1, R1, L2, R2 e L1+R1 sem tecla: as acoes cuidam.
+// Default keyboard (layout 3): WASD moves (left stick), the mouse turns the camera, left button light attack (square), right button
+// heavy (triangle), Space jumps (X), E or F grabs (circle), Shift blocks, Q or the middle button locks on, Tab/R or the wheel switch
+// targets, Z/C strafe, 1 and 2 the specials (triangle+circle, X+square), Alt walks slowly, Enter or Esc pause (Esc and Backspace go
+// back in the menus, wotm_pad.inc), G or Ctrl taunts (Select), arrows on the D-pad. L1, R1, L2, R2 and L1+R1 have no key: the actions
+// above drive them.
 inline constexpr uint32_t kbPair(int a, int b = 0) { return uint32_t(a) | (uint32_t(b) << 16); }
-inline constexpr uint32_t kDefaultKb[kBinds] = {kbPair(265), kbPair(264), kbPair(263), kbPair(262),           // direcional: setas
-                                                kbPair(32), kbPair(70, 1003), kbPair(1000), kbPair(1001),    // X, bola, quadrado, triangulo
+inline constexpr uint32_t kDefaultKb[kBinds] = {kbPair(265), kbPair(264), kbPair(263), kbPair(262),           // D-pad: arrows
+                                                kbPair(32), kbPair(69, 70), kbPair(1000), kbPair(1001),      // X, circle, square, triangle
                                                 0, 0, 0, 0, 0,                                               // L1, R1, L2, R2, L1+R1
-                                                kbPair(257, 256), kbPair(341), 0, 0,                         // Start, Select, L3, R3
-                                                kbPair(87), kbPair(83), kbPair(65), kbPair(68),              // analogico: WASD
-                                                kbPair(81, 1002), kbPair(340), kbPair(90), kbPair(88),       // trava, defende, lados
-                                                kbPair(258, 1011), kbPair(82, 1010),                         // proximo, anterior
-                                                kbPair(49), kbPair(50), kbPair(342)};                        // especiais, andar
-inline constexpr int kKbLayout = 2;   // KB_LAYOUT do settings.ini: as KB_ de um arquivo de layout anterior sao ignoradas
+                                                kbPair(257, 256), kbPair(71, 341), 0, 0,                     // Start, Select, L3, R3
+                                                kbPair(87), kbPair(83), kbPair(65), kbPair(68),              // left stick: WASD
+                                                kbPair(81, 1002), kbPair(340), kbPair(90), kbPair(67),       // lock-on, block, strafe
+                                                kbPair(258, 1011), kbPair(82, 1010),                         // next, previous target
+                                                kbPair(49), kbPair(50), kbPair(342)};                        // specials, walk
+// KB_LAYOUT in settings.ini: the KB_ lines of a file from an older layout are ignored (the player gets the new defaults)
+inline constexpr int kKbLayout = 3;
 inline constexpr int kDefaultPad[kBinds] = {1, 3, 4, 2, 7, 6, 8, 5, 9, 11, 10, 12, 0, 15, 13, 16, 17, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
 inline std::atomic<uint32_t> g_kb[kBinds];
@@ -285,7 +340,7 @@ inline const bool g_bindsInit = [] {
     }
     return true;
 }();
-// Prefixo do mapa de gamepad do jogador p (0..3) no arquivo
+// Prefix of player p's (0..3) gamepad map in the file
 inline std::string padPrefix(int p) { return p == 0 ? std::string("PAD_") : "PAD" + std::to_string(p + 1) + "_"; }
 
 inline uint32_t kb(Bind b) { return g_kb[b].load(std::memory_order_relaxed); }
@@ -325,7 +380,7 @@ inline int parsePad(const std::string &s)
 }
 
 inline void save();
-// Tecla nova para o botao b (a anterior sai); se ela era de outro botao, ele fica com a que b tinha (troca)
+// New key for button b (the previous one is removed); if it belonged to another button, that button gets the one b had (swap)
 inline void bindKey(Bind b, int code)
 {
     const uint32_t old = kb(b);
@@ -342,7 +397,7 @@ inline void bindKey(Bind b, int code)
     g_kb[b].store(kbPair(code));
     save();
 }
-// Botao novo do gamepad para o botao b no mapa do jogador `player` (troca com quem o tinha, como no teclado)
+// New gamepad button for button b in player `player`'s map (swaps with whoever had it, like the keyboard)
 inline void bindPad(Bind b, int button, int player)
 {
     player = std::clamp(player, 0, kPadPlayers - 1);
@@ -353,7 +408,7 @@ inline void bindPad(Bind b, int button, int player)
     g_pad[player][b].store(button);
     save();
 }
-// `map`: -1 = teclado, 0..3 = gamepads do jogador
+// `map`: -1 = keyboard, 0..3 = player gamepads
 inline void clearBind(Bind b, int map)
 {
     (map < 0 ? (void)g_kb[b].store(0) : (void)g_pad[std::clamp(map, 0, kPadPlayers - 1)][b].store(0));
@@ -373,13 +428,13 @@ inline void save()
     std::ofstream f(g_path, std::ios::trunc);
     if (!f)
     {
-        std::fprintf(stderr, "[settings] nao consegui gravar %s\n", g_path.string().c_str());
+        std::fprintf(stderr, "[settings] could not write %s\n", g_path.string().c_str());
         return;
     }
-    f << "# Recompiled options (menu principal); mesma chave das variaveis de ambiente\n";
+    f << "# Recompiled options (main menu); same keys as the environment variables\n";
     for (int k = 0; k < kKeys; ++k)
         f << kEnv[k] << '=' << format(Key(k), get(Key(k))) << '\n';
-    f << "# Teclas (KB_) e botoes de gamepad de cada botao do PS2 (PAD_ = jogador 1, PAD2_..PAD4_ = jogadores 2 a 4): aba CONTROLS\n";
+    f << "# Keys (KB_) and gamepad buttons for each PS2 button (PAD_ = player 1, PAD2_..PAD4_ = players 2 to 4): CONTROLS tab\n";
     f << "KB_LAYOUT=" << kKbLayout << '\n';
     for (int b = 0; b < kBinds; ++b)
         f << "KB_" << kBindNames[b] << '=' << formatKb(kb(Bind(b))) << '\n';
@@ -395,7 +450,7 @@ inline void set(Key k, int v, bool write = true)
     if (write) save();
 }
 
-// Variaveis de ambiente por cima dos valores atuais; quantas valeram
+// Environment variables over the current values; returns how many took effect
 inline int applyEnv()
 {
     int n = 0;
@@ -408,10 +463,21 @@ inline int applyEnv()
             }
     return n;
 }
-// Ja na inicializacao estatica: quem nao passa pelo load (o replay --vu1cmp, sem os ganchos) fica com o ambiente, como antes
+// Already at static initialization: whatever doesn't go through load (replay --vu1cmp, without the hooks) gets the environment, as before
 inline const int g_envAtStart = applyEnv();
 
-// Uma vez, na instalacao dos ganchos (antes do primeiro quadro). `dir` = pasta do save.json.
+// Card 1's folder (mc0); save.json and settings.ini sit in its parent. `saveDir` (WOTM_SAVEDIR, the browser version's /save) wins;
+// otherwise the runtime's card folder, or mc0 next to the ELF. Shared by wotm_save.inc and the settings load in wotm_overrides.cpp.
+inline std::filesystem::path cardRoot(const std::filesystem::path &mcRoot, const std::filesystem::path &elfDirectory, const char *saveDir)
+{
+    if (saveDir && *saveDir)
+        return (std::filesystem::path(saveDir) / "mc0").lexically_normal();
+    if (!mcRoot.empty())
+        return mcRoot.lexically_normal();
+    return ((!elfDirectory.empty() ? elfDirectory : std::filesystem::current_path()) / "mc0").lexically_normal();
+}
+
+// Once, when the hooks are installed (before the first frame). `dir` = save.json's folder.
 inline void load(const std::filesystem::path &dir)
 {
     static std::once_flag once;
@@ -451,7 +517,7 @@ inline void load(const std::filesystem::path &dir)
                                 g_pad[p][b].store(parsePad(val)), ++fromFile;
                 }
             }
-            // teclas do arquivo so no layout de agora; de um anterior (o I/J/K/L de antes) fica o padrao novo, e o arquivo e regravado
+            // keys from the file only for the current layout; from an older one (the old I/J/K/L) the new default stays, and the file is rewritten
             int kbFromFile = 0;
             for (int b = 0; b < kBinds; ++b)
                 kbFromFile += kbSeen[b];
@@ -464,17 +530,28 @@ inline void load(const std::filesystem::path &dir)
             }
             else if (kbFromFile)
             {
-                std::fprintf(stderr, "[settings] teclas do layout %d ignoradas: teclado no layout %d (WASD e mouse)\n", kbLayout, kKbLayout);
+                std::fprintf(stderr, "[settings] keys from layout %d ignored: keyboard on layout %d (WASD and mouse)\n", kbLayout, kKbLayout);
                 g_pathPending = true;
             }
         }
         fromEnv = applyEnv();
-        std::fprintf(stderr, "[settings] %s: %d do arquivo, %d do ambiente\n", useFile ? g_path.string().c_str() : "arquivo ignorado (WOTM_SETTINGS=0)",
+        std::fprintf(stderr, "[settings] %s: %d from file, %d from environment\n", useFile ? g_path.string().c_str() : "file ignored (WOTM_SETTINGS=0)",
                      fromFile, fromEnv);
-        if (const char *net = std::getenv("WOTM_NET"); net && *net)
+        // WOTM_MODIFIERS offline: over the three keys, like any variable; in a network match: forced, the player's own values stay
+        const char *modList = std::getenv("WOTM_MODIFIERS");
+        const char *net = std::getenv("WOTM_NET");
+        const bool netMatch = net && *net;
+        if (modList && !netMatch && !applyModifierList(modList))
+            std::fprintf(stderr, "[settings] WOTM_MODIFIERS=%s: unknown modifier (known: jump, fast, turbo); ignored\n", modList);
+        if (netMatch)
         {
+            // the lobby's list, unset = none (never this PC's own choice: every PC must play the same modifiers)
+            if (!setNetModifiers(modList))
+                std::fprintf(stderr, "[settings] network match: WOTM_MODIFIERS=%s: unknown modifier (known: jump, fast, turbo); playing none\n",
+                             modList);
+            std::fprintf(stderr, "[settings] network match: modifiers \"%s\"\n", wotm::modifiers::format(g_netMods.load()).c_str());
             g_netProfile.store(true);
-            std::fprintf(stderr, "[settings] partida em rede: perfil fixo (camera classica, lock-on do jogo, camera de perto, sem mouse)\n");
+            std::fprintf(stderr, "[settings] network match: fixed profile (the game's lock-on, close camera; the camera options stay each player's own)\n");
         }
         if (g_pathPending)
             save();

@@ -1,6 +1,9 @@
-// JSON minimo (objeto, array, string, numero inteiro, booleano, null) para os arquivos que o port deixa legiveis: o save
-// (wotm_save.inc) e, depois, o que os mods precisarem. Guarda a ordem das chaves e as chaves que o codigo nao conhece, para que
-// reescrever um arquivo nao apague o que um mod pos nele. Numeros com fracao sao lidos e truncados (o save so tem inteiros).
+// Minimal JSON (object, array, string, integer, boolean, null) for the files the port keeps human-readable: the save
+// (wotm_save.inc) and, later, whatever mods need. Keeps the key order and the keys the code doesn't know about, so that
+// rewriting a file doesn't erase what a mod put in it. A number with a fraction or an exponent keeps its value in `num` (`frac` set;
+// `i` holds it truncated, so integer readers see what they always saw). The float conversions live in wotm_json.cpp, built with
+// strict float (link it next to wotm_detmath.cpp): every build and every machine reads the same bits (stage.json positions reach
+// the game).
 #pragma once
 
 #include <cstdint>
@@ -16,6 +19,8 @@ namespace wotm::json
         enum Type { Null, Bool, Int, Str, Arr, Obj } type = Null;
         bool b = false;
         int64_t i = 0;
+        double num = 0;      // the exact value when frac is set
+        bool frac = false;   // a number written with a fraction or an exponent
         std::string s;
         std::vector<Value> arr;
         std::vector<std::pair<std::string, Value>> obj;
@@ -23,6 +28,7 @@ namespace wotm::json
         Value() = default;
         static Value boolean(bool v) { Value r; r.type = Bool; r.b = v; return r; }
         static Value integer(int64_t v) { Value r; r.type = Int; r.i = v; return r; }
+        static Value number(double v);   // wotm_json.cpp (strict float)
         static Value string(std::string v) { Value r; r.type = Str; r.s = std::move(v); return r; }
         static Value array() { Value r; r.type = Arr; return r; }
         static Value object() { Value r; r.type = Obj; return r; }
@@ -36,7 +42,7 @@ namespace wotm::json
                     return &kv.second;
             return nullptr;
         }
-        // Cria a chave no fim se faltar; transforma em objeto o que nao for.
+        // Creates the key at the end if missing; turns a non-object into an object.
         Value &at(const std::string &key)
         {
             if (type != Obj)
@@ -50,10 +56,18 @@ namespace wotm::json
         bool isInt() const { return type == Int || type == Bool; }
         int64_t asInt(int64_t def = 0) const { return type == Int ? i : type == Bool ? (b ? 1 : 0) : def; }
         bool asBool(bool def = false) const { return type == Bool ? b : type == Int ? i != 0 : def; }
+        bool isNum() const { return type == Int; }
+        double asNum(double def = 0) const { return type == Int ? (frac ? num : static_cast<double>(i)) : def; }
     };
 
     namespace detail
     {
+        // Decimal digits * 10^exp10 as a double (wotm_json.cpp, built with strict float like wotm_detmath.cpp: a caller built with
+        // /fp:fast, such as ps2_runtime.cpp through wotm_mods.hpp, must not get its own contracted or reciprocal copy). Up to 2^53
+        // digits with |exp10| <= 22 it is one exact product or quotient, so the nearest double; past that, repeated * or / 10:
+        // not always the nearest double, but the same bits on every machine as long as it is compiled with strict float.
+        double decimal(uint64_t digits, int exp10);
+
         struct Parser
         {
             const char *p, *end;
@@ -74,13 +88,13 @@ namespace wotm::json
             {
                 for (const char *q = w; *q; ++q, ++p)
                     if (p >= end || *p != *q)
-                        return fail("palavra invalida");
+                        return fail("invalid word");
                 return true;
             }
             bool str(std::string &out)
             {
                 if (p >= end || *p != '"')
-                    return fail("esperava string");
+                    return fail("expected string");
                 ++p;
                 while (p < end && *p != '"')
                 {
@@ -91,7 +105,7 @@ namespace wotm::json
                         continue;
                     }
                     if (p >= end)
-                        return fail("escape no fim");
+                        return fail("escape at end");
                     c = *p++;
                     switch (c)
                     {
@@ -103,7 +117,7 @@ namespace wotm::json
                     case 'u':
                     {
                         if (end - p < 4)
-                            return fail("\\u curto");
+                            return fail("\\u too short");
                         unsigned cp = 0;
                         for (int k = 0; k < 4; ++k)
                         {
@@ -129,17 +143,17 @@ namespace wotm::json
                     }
                 }
                 if (p >= end)
-                    return fail("string sem fim");
+                    return fail("unterminated string");
                 ++p;
                 return true;
             }
             bool value(Value &v, int depth)
             {
                 if (depth > 64)
-                    return fail("aninhamento demais");
+                    return fail("nested too deep");
                 ws();
                 if (p >= end)
-                    return fail("fim inesperado");
+                    return fail("unexpected end");
                 const char c = *p;
                 if (c == '{')
                 {
@@ -156,7 +170,7 @@ namespace wotm::json
                             return false;
                         ws();
                         if (p >= end || *p != ':')
-                            return fail("esperava ':'");
+                            return fail("expected ':'");
                         ++p;
                         Value child;
                         if (!value(child, depth + 1))
@@ -170,7 +184,7 @@ namespace wotm::json
                         }
                         if (p < end && *p == '}')
                             return ++p, true;
-                        return fail("esperava ',' ou '}'");
+                        return fail("expected ',' or '}'");
                     }
                 }
                 if (c == '[')
@@ -194,7 +208,7 @@ namespace wotm::json
                         }
                         if (p < end && *p == ']')
                             return ++p, true;
-                        return fail("esperava ',' ou ']'");
+                        return fail("expected ',' or ']'");
                     }
                 }
                 if (c == '"')
@@ -214,21 +228,71 @@ namespace wotm::json
                     if (neg)
                         ++p;
                     int64_t n = 0;
-                    bool any = false;
+                    uint64_t digits = 0;   // the first 19 significant digits
+                    int kept = 0, exp10 = 0;
+                    bool any = false, frac = false, big = false;   // big: more digits than int64 holds, read as a number
+                    auto digit = [&](int d, bool fraction) {
+                        if (kept < 19)
+                        {
+                            digits = digits * 10 + static_cast<uint64_t>(d);
+                            kept += digits != 0;
+                            exp10 -= fraction;
+                        }
+                        else
+                            exp10 += !fraction;
+                    };
                     while (p < end && *p >= '0' && *p <= '9')
-                        n = n * 10 + (*p++ - '0'), any = true;
+                    {
+                        const int d = *p++ - '0';
+                        if (n > (INT64_MAX - d) / 10)
+                            big = true;
+                        else
+                            n = n * 10 + d;
+                        any = true;
+                        digit(d, false);
+                    }
                     if (!any)
-                        return fail("numero invalido");
-                    if (p < end && *p == '.')   // fracao: lida e descartada
-                        for (++p; p < end && *p >= '0' && *p <= '9'; ++p) {}
+                        return fail("invalid number");
+                    if (p < end && *p == '.')
+                    {
+                        frac = true;
+                        ++p;
+                        if (p >= end || *p < '0' || *p > '9')
+                            return fail("invalid number");
+                        for (; p < end && *p >= '0' && *p <= '9'; ++p)
+                            digit(*p - '0', true);
+                    }
                     if (p < end && (*p == 'e' || *p == 'E'))
-                        return fail("expoente nao suportado");
-                    v = Value::integer(neg ? -n : n);
+                    {
+                        frac = true;
+                        ++p;
+                        const bool eneg = p < end && *p == '-';
+                        if (p < end && (*p == '-' || *p == '+'))
+                            ++p;
+                        if (p >= end || *p < '0' || *p > '9')
+                            return fail("invalid number");
+                        int e = 0;
+                        for (; p < end && *p >= '0' && *p <= '9'; ++p)
+                            e = e < 100000 ? e * 10 + (*p - '0') : e;
+                        exp10 += eneg ? -e : e;
+                    }
+                    if (!frac && !big)
+                    {
+                        v = Value::integer(neg ? -n : n);
+                        return true;
+                    }
+                    const double d = decimal(digits, exp10);
+                    v = Value::number(neg ? -d : d);
                     return true;
                 }
-                return fail("caractere inesperado");
+                return fail("unexpected character");
             }
         };
+
+        // The shortest text that reads back (through decimal()) to the same double, in plain decimal when the exponent is
+        // between -5 and 15 (120.0, 0.00001), otherwise %g's exponent form; '.' whatever the C locale says; ".0" on whole
+        // numbers so they read back as numbers with a fraction; -0 stays -0.0. In wotm_json.cpp (strict float).
+        void number(std::string &out, double d);
 
         inline void quote(std::string &out, const std::string &s)
         {
@@ -251,7 +315,7 @@ namespace wotm::json
             out += '"';
         }
 
-        // Array so de escalares fica numa linha (os 4 trajes, os 2 controles); o resto, um item por linha.
+        // An array of scalars only goes on one line (the 4 costumes, the 2 pads); everything else gets one item per line.
         inline bool flat(const Value &v)
         {
             if (v.type != Value::Arr)
@@ -269,7 +333,12 @@ namespace wotm::json
             {
             case Value::Null: out += "null"; break;
             case Value::Bool: out += v.b ? "true" : "false"; break;
-            case Value::Int: out += std::to_string(v.i); break;
+            case Value::Int:
+                if (v.frac)
+                    number(out, v.num);
+                else
+                    out += std::to_string(v.i);
+                break;
             case Value::Str: quote(out, v.s); break;
             case Value::Arr:
                 if (v.arr.empty())
@@ -314,11 +383,11 @@ namespace wotm::json
         }
     }
 
-    // false com `err` preenchido se o texto nao for JSON valido (inclusive lixo depois do valor).
+    // false with `err` filled in if the text isn't valid JSON (including garbage after the value).
     inline bool parse(const std::string &text, Value &out, std::string *err = nullptr)
     {
         detail::Parser ps{text.data(), text.data() + text.size(), {}};
-        // BOM do UTF-8 (o Bloco de Notas pode gravar)
+        // UTF-8 BOM (Notepad may write one)
         if (text.size() >= 3 && static_cast<unsigned char>(text[0]) == 0xEF && static_cast<unsigned char>(text[1]) == 0xBB &&
             static_cast<unsigned char>(text[2]) == 0xBF)
             ps.p += 3;
@@ -327,14 +396,14 @@ namespace wotm::json
         {
             ps.ws();
             if (ps.p != ps.end)
-                ok = ps.fail("lixo depois do valor");
+                ok = ps.fail("garbage after the value");
         }
         if (!ok && err)
         {
             int line = 1;
             for (const char *q = text.data(); q < ps.p && q < ps.end; ++q)
                 line += *q == '\n';
-            *err = ps.err + " (linha " + std::to_string(line) + ")";
+            *err = ps.err + " (line " + std::to_string(line) + ")";
         }
         return ok;
     }

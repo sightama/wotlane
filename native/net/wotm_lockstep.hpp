@@ -1,27 +1,36 @@
-// ABOUTME: Linha do tempo das entradas do lockstep: por jogador e por quadro, o estado do controle (6 bytes) que todos os PCs aplicam.
-// ABOUTME: Sem dependencia do jogo nem da rede; usada pelo cliente (wotm.exe) e pelo servidor.
+// ABOUTME: Lockstep input timeline (per player and per frame, the pad, mouse and camera settings state every PC applies) and the delay schedule.
+// ABOUTME: No dependency on the game or the network; used by the client (wotm.exe) and the server.
 #pragma once
 
 #include <algorithm>
 #include <cstdint>
 #include <map>
+#include <utility>
 #include <vector>
 
 namespace wotm_net
 {
-    // Estado de um controle como o runtime o guarda (PadInputState do Pad.cpp): botoes ativos em 0, analogicos com centro em 0x80
+    // Pad state as the runtime stores it (PadInputState in Pad.cpp): buttons are active-low, analog sticks centered at 0x80. mouseX/Y:
+    // the mouse motion (pixels) of the keyboard's player on this frame, which turns that player's modern camera (wotm_orbit.inc). cam:
+    // that player's camera settings (wotm_camsettings.hpp; 0 = not carried), which every PC uses to turn that player's camera
     struct PadState
     {
         uint16_t buttons = 0xFFFFu;
         uint8_t rx = 0x80u, ry = 0x80u, lx = 0x80u, ly = 0x80u;
-        bool operator==(const PadState &o) const { return buttons == o.buttons && rx == o.rx && ry == o.ry && lx == o.lx && ly == o.ly; }
+        int16_t mouseX = 0, mouseY = 0;
+        uint16_t cam = 0;
+        bool operator==(const PadState &o) const
+        {
+            return buttons == o.buttons && rx == o.rx && ry == o.ry && lx == o.lx && ly == o.ly && mouseX == o.mouseX && mouseY == o.mouseY &&
+                   cam == o.cam;
+        }
         bool operator!=(const PadState &o) const { return !(*this == o); }
     };
 
-    // Quadro F (contado desde a carga da fase) so roda quando todo jogador tem entrada para F. A entrada local amostrada no quadro F vale
-    // no quadro F + atraso; os quadros 0 .. atraso - 1 ficam neutros para todos (ninguem tinha como manda-los a tempo). Um jogador que
-    // caiu fica neutro do quadro da queda em diante. Cada (jogador, quadro) recebe um valor so: o primeiro que chega (os pacotes repetem
-    // entradas ja enviadas).
+    // Frame F (counted from the stage load) only runs once every player has input for F. Local input sampled on frame F applies on
+    // frame F + delay; frames 0 .. delay - 1 are neutral for everyone (nobody could have sent them in time). A player who dropped is
+    // neutral from the drop frame onward. Each (player, frame) gets exactly one value: the first one to arrive (packets resend
+    // inputs that were already sent).
     class InputTimeline
     {
     public:
@@ -60,7 +69,7 @@ namespace wotm_net
             return it != p->frames.end() ? it->second : PadState{};
         }
 
-        // primeiro quadro sem entrada deste jogador (tudo antes dele ja chegou)
+        // first frame with no input from this player (everything before it has arrived)
         uint32_t nextMissing(int player) const
         {
             const Player *p = find(player);
@@ -76,7 +85,7 @@ namespace wotm_net
             advance(*p);
         }
 
-        // entrada local amostrada no quadro sampledFrame: devolve o quadro em que ela vale
+        // local input sampled on frame sampledFrame: returns the frame it applies on
         uint32_t scheduleLocal(int player, uint32_t sampledFrame, const PadState &s)
         {
             const uint32_t frame = sampledFrame + delay_;
@@ -100,7 +109,7 @@ namespace wotm_net
             return p && frame >= p->dropFrame;
         }
 
-        // quadros antes de `frame` nao serao mais lidos (ja rodaram em todo lugar que importa)
+        // frames before `frame` won't be read again (they already ran everywhere that matters)
         void discardBefore(uint32_t frame)
         {
             for (Player &p : players_)
@@ -114,9 +123,9 @@ namespace wotm_net
         struct Player
         {
             std::map<uint32_t, PadState> frames;
-            uint32_t base = 0;                    // quadros antes deste ja foram descartados
-            uint32_t contiguous = 0;              // primeiro quadro que falta
-            uint32_t dropFrame = 0xFFFFFFFFu;     // neutro daqui em diante
+            uint32_t base = 0;                    // frames before this one were already discarded
+            uint32_t contiguous = 0;              // first missing frame
+            uint32_t dropFrame = 0xFFFFFFFFu;     // neutral from here on
         };
 
         static void advance(Player &p)
@@ -135,5 +144,74 @@ namespace wotm_net
 
         uint32_t delay_;
         std::vector<Player> players_;
+    };
+
+    // This PC's own input delay, which may change during the match (the server's advice, proto::Pace). The sample taken at frame S
+    // fills frame S + delay. Growing by one repeats the previous frame (with no mouse motion) and shrinking by one skips a sample (its
+    // mouse motion goes into the next), so every frame of this player still gets exactly one input, whenever and however often the
+    // delay moves: the other PCs only see a value per frame, and stay in sync. A step waits for a sample with the same buttons as the
+    // previous one, so it neither repeats nor drops a press (a repeated or skipped stick sample only shifts the stick by a frame, and
+    // a held stick is never exactly still); growing goes ahead anyway after kForceGrowAfter samples, repeating whatever the previous
+    // frame held (a delay that is too short stalls everyone). Steps are kStepGap samples apart.
+    class LocalSchedule
+    {
+    public:
+        static constexpr uint32_t kStepGap = 8, kForceGrowAfter = 30;
+
+        explicit LocalSchedule(uint32_t delay = 0) : delay_(delay), target_(delay), next_(delay) {}
+
+        uint32_t delay() const { return delay_; }
+        uint32_t target() const { return target_; }
+        void setTarget(uint32_t t)
+        {
+            if (t != target_)
+                target_ = t, waiting_ = 0;
+        }
+
+        // the frames the next sample fills, in order (none when it is skipped)
+        std::vector<std::pair<uint32_t, PadState>> push(PadState s)
+        {
+            std::vector<std::pair<uint32_t, PadState>> out;
+            const bool steady = s.buttons == prev_.buttons;
+            const bool canStep = sinceStep_ >= kStepGap;
+            ++sinceStep_;
+            if (target_ > delay_ && canStep && (steady || waiting_ >= kForceGrowAfter))
+            {
+                PadState repeat = prev_;
+                repeat.mouseX = repeat.mouseY = 0;
+                out.push_back({next_++, repeat});
+                ++delay_;
+                step();
+            }
+            else if (target_ < delay_ && canStep && steady && delay_ > 1u)
+            {
+                carryX_ += s.mouseX;
+                carryY_ += s.mouseY;
+                --delay_;
+                step();
+                return out;
+            }
+            else if (target_ != delay_)
+                ++waiting_;
+            s.mouseX = clampMouse(s.mouseX + carryX_);
+            s.mouseY = clampMouse(s.mouseY + carryY_);
+            carryX_ = carryY_ = 0;
+            out.push_back({next_++, s});
+            prev_ = s;
+            return out;
+        }
+
+    private:
+        static int16_t clampMouse(int v) { return static_cast<int16_t>(std::clamp(v, -32768, 32767)); }
+        void step()
+        {
+            sinceStep_ = 0;
+            waiting_ = 0;
+        }
+
+        uint32_t delay_, target_, next_;
+        PadState prev_;   // the state of frame next_ - 1 (the frames before the first delay are neutral)
+        uint32_t sinceStep_ = kStepGap, waiting_ = 0;
+        int carryX_ = 0, carryY_ = 0;
     };
 }

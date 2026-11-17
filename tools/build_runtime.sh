@@ -1,0 +1,62 @@
+#!/bin/sh
+# Builds the runtime with the native layer (macOS/Linux counterpart of build_runtime.bat + tools/build_runtime.ps1): wotm (the game)
+# and ps2EntryRunner (the test build with the emulated VU1/GS). Run it after every change in native/; ninja doesn't track native/,
+# so this script touches ps2_runtime.cpp first. It also (re)generates <build>/wotm_gen/: the version header, the embedded resources
+# and the translated VU0 microprograms (game code, outside the repo).
+set -eu
+. "$(dirname "$0")/posix_env.sh"
+
+usage() {
+    cat <<EOF
+usage: sh tools/build_runtime.sh [build dir name [target...]]
+  build dir name  folder inside the runtime folder (default: build_dev, configured by sh tools/setup_runtime.sh)
+  target          what to build (default: ps2EntryRunner wotm; the browser build, tools/build_web.sh, builds only wotm)
+Full compiler output goes to <runtime>/logs/<build>.log; on failure the first errors are printed.
+EOF
+}
+case ${1:-} in -h|--help) usage; exit 0 ;; esac
+build=${1:-build_dev}
+[ $# -gt 0 ] && shift
+targets=${*:-ps2EntryRunner wotm}
+rt=$(runtime_dir)
+bdir=$rt/$build
+[ -f "$bdir/build.ninja" ] || fail "$bdir isn't configured (run sh tools/setup_runtime.sh)"
+need cmake ninja python3 git
+
+gen=$bdir/wotm_gen
+mkdir -p "$gen" "$rt/logs"
+touch "$rt/PS2Recomp/ps2xRuntime/src/lib/ps2_runtime.cpp"
+
+# build version (native/wotm_version.hpp: in the log and the window title); rewritten only when it changes, so ninja doesn't
+# recompile everything that includes it
+ver=$(git -C "$REPO" describe --tags --always --dirty 2>/dev/null || echo dev)
+ver_text="#define WOTM_VERSION \"$ver\""
+[ -f "$gen/wotm_version.gen.h" ] && [ "$(cat "$gen/wotm_version.gen.h")" = "$ver_text" ] || printf '%s\n' "$ver_text" >"$gen/wotm_version.gen.h"
+
+# VU0 microprograms as C++ (without the .inc the runtime only uses the interpreter)
+vu0=$gen/wotm_vu0_native.gen.inc
+elf=$REPO/disc/SCUS_971.97
+if [ -f "$elf" ] && { [ ! -f "$vu0" ] || [ "$REPO/tools/vu0native.py" -nt "$vu0" ]; }; then
+    python3 "$REPO/tools/vu0native.py" "$elf" "$vu0" >"$rt/logs/vu0native.log" 2>&1 || fail "vu0native.py failed (see $rt/logs/vu0native.log)"
+    # wotm_vu0_native.cpp includes it through __has_include, so ninja misses a new or changed one: drop the object that includes it
+    find "$bdir" -name 'wotm_vu0_native.cpp.o' -delete
+fi
+# wotm has no VU0 interpreter: without the microprograms the game skips them and draws a black scene
+case " $targets " in
+    *" wotm "*) [ -f "$vu0" ] || fail "no VU0 microprograms ($vu0): put the game's SCUS_971.97 in $REPO/disc/ (sh tools/setup_runtime.sh extracts the disc there)" ;;
+esac
+
+# button atlas and font from native/wotm.rc as byte arrays (Windows reads them from the .exe resources; native/wotm_embedded.hpp)
+python3 "$REPO/tools/embed_resources.py" "$REPO/native/wotm.rc" "$gen/wotm_resources.gen.h" || fail "embed_resources.py failed"
+
+log=$rt/logs/$build.log
+start=$(date +%s)
+if ! cmake --build "$bdir" --target $targets >"$log" 2>&1; then
+    grep -m 40 -E 'error:|error [A-Z][0-9]+|undefined reference|Undefined symbols|ld: ' "$log" >&2 || tail -n 30 "$log" >&2
+    fail "build failed after $(( $(date +%s) - start ))s; full log: $log"
+fi
+# build identity for online play (wotm.buildid next to the exe; every PC in a match needs the same one), as build_runtime.ps1 does
+if bid=$(python3 "$REPO/tools/build_id.py" --runtime "$rt" --build "$build" --write); then echo "build $bid"
+else echo "warning: build_id.py failed: no wotm.buildid (online matches will refuse this build)"; fi
+echo "built in $(( $(date +%s) - start ))s:"
+for exe in $targets; do echo "  $bdir/ps2xRuntime/$exe"; done

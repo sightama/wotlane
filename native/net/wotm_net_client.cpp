@@ -1,8 +1,6 @@
-// ABOUTME: Implementacao do cliente da partida em rede: thread ENet que entra com a ficha, repassa entradas com confirmacao e
-// ABOUTME: redundancia, aplica quedas e para na dessincronia. O jogo so chama pushLocal/waitFrame/input da thread dele.
+// ABOUTME: Network match client implementation: a thread that joins with the token over the match transport (ENet or WebSocket),
+// ABOUTME: relays inputs with acks and redundancy, applies drops and stops on desync. The game only calls pushSample/waitFrame/input.
 #include "wotm_net_client.hpp"
-
-#include <enet/enet.h>
 
 #include <algorithm>
 
@@ -14,35 +12,18 @@ namespace wotm_net
     {
         stop();
         cfg_ = c;
-        if (enet_initialize() != 0)
+        net_ = makeTransport(c.host);
+        if (!net_->open(c.host, c.port, err))
         {
-            err = "enet_initialize falhou";
+            net_.reset();
             return false;
         }
-        enetUp_ = true;
-        host_ = enet_host_create(nullptr, 1, proto::kChannels, 0, 0);
-        if (!host_)
-        {
-            err = "nao consegui abrir um socket UDP";
-            return false;
-        }
-        ENetAddress a;
-        if (enet_address_set_host(&a, c.host.c_str()) != 0)
-        {
-            err = "endereco invalido: " + c.host;
-            return false;
-        }
-        a.port = c.port;
-        peer_ = enet_host_connect(host_, &a, proto::kChannels, 0);
-        if (!peer_)
-        {
-            err = "enet_host_connect falhou";
-            return false;
-        }
+        connected_ = false;
+        const std::string where = isWebSocketAddress(c.host) ? c.host : c.host + ":" + std::to_string(c.port);
         {
             std::lock_guard<std::mutex> lk(mu_);
             status_ = Status::Connecting;
-            message_ = "conectando a " + c.host + ":" + std::to_string(c.port);
+            message_ = "connecting to " + where;
         }
         stop_ = false;
         thread_ = std::thread([this] { run(); });
@@ -56,17 +37,12 @@ namespace wotm_net
             stop_ = true;
             thread_.join();
         }
-        if (host_)
+        if (net_)
         {
-            enet_host_destroy(host_);
-            host_ = nullptr;
-            peer_ = nullptr;
+            net_->close();
+            net_.reset();
         }
-        if (enetUp_)
-        {
-            enet_deinitialize();
-            enetUp_ = false;
-        }
+        connected_ = false;
         std::lock_guard<std::mutex> lk(mu_);
         if (status_ == Status::Connecting || status_ == Status::Waiting || status_ == Status::Running)
             status_ = Status::Idle;
@@ -82,58 +58,38 @@ namespace wotm_net
 
     void MatchClient::run()
     {
+        const std::string where = isWebSocketAddress(cfg_.host) ? cfg_.host : cfg_.host + ":" + std::to_string(cfg_.port);
         while (!stop_)
         {
-            ENetEvent ev;
+            TransportEvent ev;
             int wait = 1;
-            while (enet_host_service(host_, &ev, static_cast<enet_uint32>(wait)) > 0)
+            while (net_->poll(ev, wait))
             {
                 wait = 0;
-                if (ev.type == ENET_EVENT_TYPE_CONNECT)
+                if (ev.kind == TransportEvent::Kind::Connected)
                 {
-                    enet_peer_ping_interval(peer_, 100);
-                    enet_peer_timeout(peer_, 0, 10000, 20000);
+                    connected_ = true;
                     proto::Join j;
                     j.token = cfg_.token, j.buildId = cfg_.buildId, j.configHash = cfg_.configHash, j.name = cfg_.name;
-                    const std::vector<uint8_t> b = proto::encode(j);
-                    enet_peer_send(peer_, proto::kControl, enet_packet_create(b.data(), b.size(), ENET_PACKET_FLAG_RELIABLE));
+                    net_->send(proto::kControl, proto::encode(j), true);
                 }
-                else if (ev.type == ENET_EVENT_TYPE_RECEIVE)
-                {
-                    const std::vector<uint8_t> data(ev.packet->data, ev.packet->data + ev.packet->dataLength);
-                    enet_packet_destroy(ev.packet);
-                    handle(data);
-                }
-                else if (ev.type == ENET_EVENT_TYPE_DISCONNECT)
+                else if (ev.kind == TransportEvent::Kind::Message)
+                    handle(ev.data);
+                else
                 {
                     std::lock_guard<std::mutex> lk(mu_);
                     if (status_ == Status::Connecting)
-                        setStatus(Status::Lost, "sem resposta do servidor " + cfg_.host + ":" + std::to_string(cfg_.port));
+                        setStatus(Status::Lost, "no answer from the server " + where);
                     else if (status_ != Status::Rejected && status_ != Status::Desynced)
-                        setStatus(Status::Lost, "conexao com o servidor caiu");
-                    peer_ = nullptr;
+                        setStatus(Status::Lost, "connection to the server dropped");
+                    connected_ = false;
                 }
             }
-            if (peer_)
+            if (connected_)
             {
-                rtt_ = peer_->roundTripTime;
+                rtt_ = net_->rttMs();
                 sendInput(Clock::now());
             }
-        }
-        if (peer_)
-        {
-            enet_peer_disconnect(peer_, 0);
-            ENetEvent ev;
-            const auto until = Clock::now() + std::chrono::milliseconds(500);
-            while (Clock::now() < until && enet_host_service(host_, &ev, 10) >= 0)
-            {
-                if (ev.type == ENET_EVENT_TYPE_RECEIVE)
-                    enet_packet_destroy(ev.packet);
-                else if (ev.type == ENET_EVENT_TYPE_DISCONNECT)
-                    break;
-            }
-            enet_peer_reset(peer_);
-            peer_ = nullptr;
         }
     }
 
@@ -148,7 +104,7 @@ namespace wotm_net
             if (proto::decode(data, w))
             {
                 local_ = w.player, players_ = w.players;
-                setStatus(Status::Waiting, "esperando os outros jogadores");
+                setStatus(Status::Waiting, "waiting for the other players");
             }
             break;
         }
@@ -156,7 +112,7 @@ namespace wotm_net
         {
             proto::Reject r;
             proto::decode(data, r);
-            setStatus(Status::Rejected, "recusado pelo servidor: " + r.reason);
+            setStatus(Status::Rejected, "rejected by the server: " + r.reason);
             break;
         }
         case proto::Type::Start:
@@ -164,14 +120,14 @@ namespace wotm_net
             proto::Start s;
             if (proto::decode(data, s) && local_ >= 0)
             {
-                delay_ = s.delay;
+                schedule_ = LocalSchedule(s.delay);
                 names_ = s.names;
-                inputs_ = InputTimeline(players_, delay_);
+                inputs_ = InputTimeline(players_, s.delay);
                 for (const auto &d : drops_)
                     inputs_.drop(d.first, d.second);
-                serverAck_ = delay_;
+                serverAck_ = s.delay;
                 sentAcks_.assign(static_cast<size_t>(players_), 0u);
-                setStatus(Status::Running, "partida em andamento");
+                setStatus(Status::Running, "match in progress");
             }
             break;
         }
@@ -191,11 +147,11 @@ namespace wotm_net
                 }
             if (changed)
             {
-                dirty_ = true;   // confirma o que chegou
+                dirty_ = true;   // acknowledge what arrived
                 cv_.notify_all();
             }
             else if (!in.runs.empty())
-                dirty_ = true;   // repeticao: a confirmacao anterior se perdeu
+                dirty_ = true;   // a resend: the previous ack was lost
             break;
         }
         case proto::Type::Drop:
@@ -210,13 +166,31 @@ namespace wotm_net
             }
             break;
         }
+        case proto::Type::Away:
+        {
+            proto::Away a;
+            if (proto::decode(data, a))
+            {
+                if (away_.size() <= a.player)
+                    away_.resize(a.player + 1u, false);
+                away_[a.player] = a.away;
+            }
+            break;
+        }
+        case proto::Type::Pace:
+        {
+            proto::Pace p;
+            if (proto::decode(data, p) && status_ == Status::Running)
+                schedule_.setTarget(p.delay);
+            break;
+        }
         case proto::Type::Desync:
         {
             proto::Desync d;
             if (proto::decode(data, d))
             {
                 desyncFrame_ = d.frame;
-                setStatus(Status::Desynced, "dessincronia: " + d.detail);
+                setStatus(Status::Desynced, "desync: " + d.detail);
             }
             break;
         }
@@ -225,15 +199,17 @@ namespace wotm_net
         }
     }
 
-    // manda as entradas locais que o servidor nao confirmou e as confirmacoes do que chegou: logo que ha novidade, e a cada 16 ms enquanto
-    // o servidor estiver atrasado
+    // sends the local inputs the server hasn't acknowledged and the acks for what has arrived: as soon as there is something new, and
+    // every 16 ms while the server is behind
     void MatchClient::sendInput(Clock::time_point now)
     {
         std::vector<uint8_t> packet;
+        std::vector<proto::Away> aways;
         std::vector<proto::Hash> hashes;
         {
             std::lock_guard<std::mutex> lk(mu_);
             hashes.swap(hashQueue_);
+            aways.swap(awayQueue_);
             if (status_ == Status::Running && local_ >= 0)
             {
                 const uint32_t have = inputs_.nextMissing(local_);
@@ -259,11 +235,12 @@ namespace wotm_net
         }
         for (const proto::Hash &h : hashes)
         {
-            const std::vector<uint8_t> b = proto::encode(h);
-            enet_peer_send(peer_, proto::kControl, enet_packet_create(b.data(), b.size(), ENET_PACKET_FLAG_RELIABLE));
+            net_->send(proto::kControl, proto::encode(h), true);
         }
+        for (const proto::Away &a : aways)
+            net_->send(proto::kControl, proto::encode(a), true);
         if (!packet.empty() && !(cfg_.dropInputPercent > 0 && static_cast<int>(rng_() % 100u) < cfg_.dropInputPercent))
-            enet_peer_send(peer_, proto::kInputs, enet_packet_create(packet.data(), packet.size(), 0));
+            net_->send(proto::kInputs, packet, false);
     }
 
     MatchClient::Status MatchClient::status() const
@@ -301,7 +278,7 @@ namespace wotm_net
     uint32_t MatchClient::delay() const
     {
         std::lock_guard<std::mutex> lk(mu_);
-        return delay_;
+        return schedule_.delay();
     }
 
     std::vector<std::string> MatchClient::names() const
@@ -316,6 +293,16 @@ namespace wotm_net
         if (status_ != Status::Running || local_ < 0)
             return;
         inputs_.set(local_, frame, s);
+        dirty_ = true;
+    }
+
+    void MatchClient::pushSample(const PadState &s)
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        if (status_ != Status::Running || local_ < 0)
+            return;
+        for (const auto &f : schedule_.push(s))
+            inputs_.set(local_, f.first, f.second);
         dirty_ = true;
     }
 
@@ -345,10 +332,38 @@ namespace wotm_net
         return out;
     }
 
-    void MatchClient::sendHash(uint32_t frame, uint64_t hash)
+    void MatchClient::setAway(bool away)
     {
         std::lock_guard<std::mutex> lk(mu_);
-        hashQueue_.push_back({frame, hash});
+        awayQueue_.push_back({0, away});
+    }
+
+    bool MatchClient::away(int player) const
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        return player >= 0 && static_cast<size_t>(player) < away_.size() && away_[static_cast<size_t>(player)];
+    }
+
+    std::string MatchClient::waitingText(uint32_t frame) const
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        std::string s;
+        for (int q = 0; q < players_; ++q)
+        {
+            if (inputs_.has(q, frame))
+                continue;
+            s += s.empty() ? "Waiting for " : ", ";
+            s += q < static_cast<int>(names_.size()) ? names_[static_cast<size_t>(q)] : "player " + std::to_string(q + 1);
+            if (static_cast<size_t>(q) < away_.size() && away_[static_cast<size_t>(q)])
+                s += " (their game tab is in the background)";
+        }
+        return s;
+    }
+
+    void MatchClient::sendHash(uint32_t frame, uint64_t hash, std::vector<uint64_t> blocks)
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        hashQueue_.push_back({frame, hash, std::move(blocks)});
     }
 
     bool MatchClient::waitAcked(int ms)

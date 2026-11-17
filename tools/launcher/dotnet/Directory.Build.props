@@ -1,0 +1,7 @@
+<!-- ABOUTME: Keeps the .NET build output of tools/launcher/dotnet in native/net/build/launcher (ignored by git with the rest of build/). -->
+<Project>
+  <PropertyGroup>
+    <BaseOutputPath>$(MSBuildThisFileDirectory)../../../native/net/build/launcher/bin/</BaseOutputPath>
+    <BaseIntermediateOutputPath>$(MSBuildThisFileDirectory)../../../native/net/build/launcher/obj/$(MSBuildProjectName)/</BaseIntermediateOutputPath>
+  </PropertyGroup>
+</Project>

@@ -17,7 +17,7 @@ public class W {
  [StructLayout(LayoutKind.Sequential)] public struct RECT { public int L,T,R,B; }
 }
 "@
-$vk = @{ ENTER=0x0D; SPACE=0x20; X=0x20; C=0x43; V=0x56; Z=0x5A; UP=0x26; DOWN=0x28; LEFT=0x25; RIGHT=0x27; F8=0x77; F1=0x70; PAUSE=0x13 }   # PAUSE = TogglePause do PCSX2
+$vk = @{ ENTER=0x0D; SPACE=0x20; X=0x20; C=0x43; V=0x56; Z=0x5A; UP=0x26; DOWN=0x28; LEFT=0x25; RIGHT=0x27; F8=0x77; F1=0x70; PAUSE=0x13 }   # PAUSE = PCSX2's TogglePause
 function Get-Emu { Get-Process pcsx2-qt -ErrorAction SilentlyContinue | Select-Object -First 1 }
 switch ($cmd) {
  'start' {   # start <elf-name> : launches (the keyboard bindings live permanently in PCSX2.ini; see README)

@@ -1,7 +1,7 @@
-"""Varre o .text de um ELF por sqrt.s/rsqrt.s e classifica a codificacao.
-R5900: SQRT.S fd, ft  -> fonte em ft, fs=0   (forma retail)
-MIPS32: sqrt.s fd, fs -> fonte em fs, ft=0   (forma errada no EE)
-Uso: python scan_sqrt.py elf [tabela de funcoes: config/status.csv]"""
+"""Scans an ELF's .text for sqrt.s/rsqrt.s and classifies the encoding.
+R5900: SQRT.S fd, ft  -> source in ft, fs=0   (retail form)
+MIPS32: sqrt.s fd, fs -> source in fs, ft=0   (wrong form on the EE)
+Usage: python scan_sqrt.py elf [function table: config/status.csv]"""
 import struct, sys, csv, bisect, os
 
 def load(elf):
@@ -17,7 +17,7 @@ def load(elf):
         name = d[stroff + n: d.index(b"\0", stroff + n)].decode()
         if name.startswith(".text") or name == ".nm_extra":
             out.append((name, addr, d[off:off + size]))
-        elif name == ".cod":  # build NM: codigo + dados; so ate o fim do .text retail
+        elif name == ".cod":  # NM build: code + data; only up to the end of the retail .text
             out.append((name, addr, d[off:off + min(size, 0x251020 - addr)]))
     return out
 
@@ -56,4 +56,4 @@ if __name__ == "__main__":
         key = (rows[j][2], rows[j][3]) if j >= 0 and a < rows[j][0] + rows[j][1] else ("?", hex(a))
         seen[key] = seen.get(key, 0) + 1
     for (tu, fn), n in sorted(seen.items()):
-        print(f"    ERRADO {tu}  {fn}  x{n}")
+        print(f"    WRONG {tu}  {fn}  x{n}")

@@ -51,6 +51,17 @@ The port comes first; the decompilation only covers what modders need.
 Architecture, and what lives in the repo versus what is generated locally: [docs/PLANO.md](docs/PLANO.md). What is known about the executable: [docs/ANALYSIS.md](docs/ANALYSIS.md).
 File formats: [docs/FORMATOS.md](docs/FORMATOS.md).
 
+## Building the port (macOS and Linux)
+A native build for the machine's own CPU (Apple Silicon included, through sse2neon), with the same steps as on Windows:
+1. Install the tools. macOS: `brew install cmake ninja pkgconf ffmpeg sevenzip` plus the Xcode Command Line Tools. Linux: git, Python 3,
+   CMake 3.24+, Ninja, gcc or clang, pkg-config, the FFmpeg development packages and 7-Zip.
+2. Put your ISO in `ISO/` and run `sh tools/setup_runtime.sh`. It extracts the disc, sets up PS2Recomp in `runtime/`, generates the
+   recompiled code and runs the first build.
+3. `sh tools/build_runtime.sh` rebuilds after changes; `sh runtime/run_live.sh --auto 0` runs the game (log in `runtime/live.err.log`).
+4. `sh tools/vu0bench.sh` checks that the native VU0 code gives bit-identical results to the interpreter on this machine.
+
+Not available yet outside Windows: rumble, the launcher and a packaged release.
+
 ## Building the decompilation (WSL/Ubuntu)
 ```sh
 sudo apt install binutils-mips-linux-gnu ninja-build python3-venv
@@ -87,15 +98,15 @@ Before committing changes to decompiled code, run `sh tools/wsl/gate.sh` (build 
   emulated VU1/GS and the renderer check).
 - `run_live.bat -Auto 0` runs the game to play with the keyboard; `tools/launcher/` is a small launcher with options such as starting a match directly (`WOTM_MATCH`) and cheats.
 - **Online play (this fork, 2 to 8 players, each on their own PC):** deterministic lockstep through a small server (`native/net`, `wotm_server`, no game
-  code). Setup, hosting, router and lobby steps: [docs/en/ONLINE.md](docs/en/ONLINE.md).
+  code). Setup, hosting, router and lobby steps: [docs/ONLINE.md](docs/ONLINE.md).
 - `mods/` holds the project's own mods (the Goliath Prime custom monster, the "Recompiled" logo): JSON and original art only. Every launch mirrors them into
   `<runtime>\discroot\mods\` (`tools/sync_mods.ps1`), where the game reads mods from; your own mods live there too. See [docs/passos/MODS.md](docs/passos/MODS.md).
 
-Keyboard controls, environment variables and runtime details: [docs/passos/RUNTIME.md](docs/passos/RUNTIME.md) and [docs/passos/NATIVO.md](docs/passos/NATIVO.md).
+Keyboard controls, environment variables and runtime details: [docs/passos/RUNTIME.md](docs/passos/RUNTIME.md) and [docs/passos/NATIVO.md](docs/passos/NATIVO.md). The browser version: [docs/passos/WEB.md](docs/passos/WEB.md).
 
 ## Contributing
 See [CONTRIBUTING.md](CONTRIBUTING.md). The rules in [CLAUDE.md](CLAUDE.md) apply to humans too: no game files or game assembly in the repo, issues or PRs, and the ROM must keep matching
-the retail SHA1. Most project documentation is currently written in Portuguese; English translations are in [docs/en/](docs/en/README.md).
+the retail SHA1. The documentation is in English; some file names (`docs/passos/` "steps", `NATIVO.md`, `GLOSSARIO.md`) are still the inherited Portuguese ones.
 
 ## License
 The code in this repository is [GPL-3.0](LICENSE). It only covers what is here (decompilation, tools, native layer) and grants no rights over the game, which still belongs to its owners.

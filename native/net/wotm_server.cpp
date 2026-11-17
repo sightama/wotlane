@@ -1,5 +1,6 @@
-// ABOUTME: wotm_server: servidor dedicado do netcode do wotlane (lobbies criados pelos jogadores, com codigo e senha opcional, e partidas em lockstep), sem codigo do jogo.
-// ABOUTME: Uso: wotm_server [--port 7777] [--lobbies 16] [--players 8] [--delay N]. Encaminhe TCP e UDP da porta no roteador.
+// ABOUTME: wotm_server: dedicated server for wotlane netcode (player-created lobbies with a code and optional password, lockstep matches),
+// ABOUTME: no game code; or, with --master, the master server that lists the public ones. Forward the ports in the router (see usage).
+#include "wotm_net_master.hpp"
 #include "wotm_net_server.hpp"
 
 #include <atomic>
@@ -16,11 +17,19 @@ namespace
 
     int usage()
     {
-        std::printf("uso: wotm_server [--port 7777] [--lobbies 16] [--players 8] [--delay <quadros>]\n"
-                    "  --port     porta TCP (lobby) e UDP (partida); encaminhe as duas no roteador para jogar pela internet\n"
-                    "  --lobbies  quantos lobbies podem estar abertos ao mesmo tempo (padrao 16)\n"
-                    "  --players  jogadores por lobby (2 a 8; padrao 8)\n"
-                    "  --delay    atraso de entrada fixo em quadros (padrao: pelo ping de cada partida)\n");
+        std::printf("usage: wotm_server [--port 7777] [--lobbies 16] [--players 8] [--delay <frames>] [--announce <host>[:7778] [--name <name>]]\n"
+                    "                   [--ws-port <port> [--ws-bind 127.0.0.1]]\n"
+                    "       wotm_server --master [--port 7778]\n"
+                    "  --port      TCP (lobby) and UDP (match) port; forward both in the router to play over the internet\n"
+                    "              (with --master: the TCP port clients and servers reach the master on)\n"
+                    "  --lobbies   how many lobbies can be open at the same time (default 16)\n"
+                    "  --players   players per lobby (2 to 8; default 8)\n"
+                    "  --delay     fixed input delay in frames (default: from each match's ping)\n"
+                    "  --announce  list this server publicly on that master (every 10 s; players then see it with net_lobby.py --browse)\n"
+                    "  --name      the name in the public list (letters, digits, - and _; up to 16; default wotlane)\n"
+                    "  --ws-port   also take browser players: lobby and match over WebSocket on this TCP port (paths /lobby and /match)\n"
+                    "  --ws-bind   the address the WebSocket port listens on (default 127.0.0.1: a web server in front serves HTTPS)\n"
+                    "  --master    run the master server instead: the list of servers that announce themselves\n");
         return 2;
     }
 }
@@ -28,25 +37,65 @@ namespace
 int main(int argc, char **argv)
 {
     wotm_net::ServerConfig cfg;
+    bool master = false, portGiven = false;
     for (int i = 1; i < argc; ++i)
     {
         const std::string a = argv[i];
         const bool hasValue = i + 1 < argc;
         if (a == "--port" && hasValue)
+        {
             cfg.port = static_cast<uint16_t>(std::atoi(argv[++i]));
+            portGiven = true;
+        }
         else if (a == "--lobbies" && hasValue)
             cfg.lobbies = std::atoi(argv[++i]);
         else if (a == "--players" && hasValue)
             cfg.maxPlayers = std::atoi(argv[++i]);
         else if (a == "--delay" && hasValue)
             cfg.forcedDelay = static_cast<uint32_t>(std::atoi(argv[++i]));
+        else if (a == "--announce" && hasValue)
+        {
+            const std::string v = argv[++i];   // host or host:port
+            const size_t colon = v.rfind(':');
+            cfg.announceHost = v.substr(0, colon);
+            if (colon != std::string::npos)
+                cfg.announcePort = static_cast<uint16_t>(std::atoi(v.c_str() + colon + 1));
+        }
+        else if (a == "--name" && hasValue)
+        {
+            cfg.name = wotm_net::proto::cleanName(argv[++i]);
+            if (cfg.name.empty())
+                return usage();
+        }
+        else if (a == "--ws-port" && hasValue)
+            cfg.wsPort = static_cast<uint16_t>(std::atoi(argv[++i]));
+        else if (a == "--ws-bind" && hasValue)
+            cfg.wsBind = argv[++i];
+        else if (a == "--master")
+            master = true;
         else
             return usage();
     }
     std::signal(SIGINT, onSignal);
     std::signal(SIGTERM, onSignal);
-    wotm_net::Server server(cfg);
     std::string err;
+    if (master)
+    {
+        wotm_net::MasterConfig mc;
+        if (portGiven)
+            mc.port = cfg.port;
+        wotm_net::Master m(mc);
+        if (!m.start(err))
+        {
+            std::fprintf(stderr, "wotm_server: %s\n", err.c_str());
+            return 1;
+        }
+        while (!g_stop)
+            m.poll(5);
+        std::printf("[master] shut down\n");
+        return 0;
+    }
+    wotm_net::Server server(cfg);
     if (!server.start(err))
     {
         std::fprintf(stderr, "wotm_server: %s\n", err.c_str());
@@ -54,6 +103,6 @@ int main(int argc, char **argv)
     }
     while (!g_stop)
         server.poll(5);
-    std::printf("[servidor] encerrado\n");
+    std::printf("[server] shut down\n");
     return 0;
 }

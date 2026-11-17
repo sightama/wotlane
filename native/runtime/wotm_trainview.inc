@@ -1,10 +1,10 @@
-// Modo treino, lado do desenho (incluido pelo wotm_live.inc): volumes do corpo lidos na thread do EE (capture, chamada pelo
-// wotmCaptureFrame), esferas dos golpes e dano vindos dos ganchos (native/runtime/wotm_training.inc), desenho por cima da cena (sem
-// teste de profundidade), painel de dano e numeros das barras do HUD. Estado compartilhado em native/wotm_training.h.
+// Training mode, drawing side (included by wotm_live.inc): body volumes read on the EE thread (capture, called from
+// wotmCaptureFrame), attack spheres and damage coming from the hooks (native/runtime/wotm_training.inc), drawn over the scene (no
+// depth test), damage panel and numbers on the HUD bars. Shared state in native/wotm_training.h.
 
 #include "wotm_training.h"
 
-namespace wotm_padsel   // wotm_padsel.inc (incluido depois): glifos da fonte do jogo
+namespace wotm_padsel   // wotm_padsel.inc (included later): game font glyphs
 {
 static void text(std::vector<wotm::TextQuad> &out, const wotm::Ram &ram, uint64_t tex0, int rw, int rh, const char *s, float cx, float cy, float h,
                  Color c, float spacing);
@@ -14,9 +14,9 @@ namespace wotm_trainview
 {
 using namespace wotm_training;
 constexpr uint32_t kSlots = 0x120380u;
-constexpr float kPanelTop = 0.43f;   // topo do painel e dos comandos (fracao da altura): abaixo dos dois HUDs, que vao ate y 91 de 224
+constexpr float kPanelTop = 0.43f;   // top of the panel and the inputs (fraction of height): below both HUDs, which reach y 91 of 224
 
-// ---- cascos de colisao do corpo (nos op 10 do hier do monstro): planos {n, d} no espaco do no, dentro = n.p <= d
+// ---- body collision hulls (op 10 nodes in the monster's hier): planes {n, d} in node space, inside = n.p <= d
 
 void hullSegments(const wotm::Ram &ram, uint32_t node, const wotm::M4 &m, std::vector<float> &seg)
 {
@@ -30,7 +30,7 @@ void hullSegments(const wotm::Ram &ram, uint32_t node, const wotm::M4 &m, std::v
             n[i][k] = ram.f32(node + 0x20 + 16 * i + 4 * k);
         d[i] = ram.f32(node + 0x20 + 16 * i + 12);
     }
-    for (int sign = 1; sign >= -1; sign -= 2)   // se nenhum vertice fica dentro com n.p <= d, tenta a outra convencao
+    for (int sign = 1; sign >= -1; sign -= 2)   // if no vertex ends up inside with n.p <= d, try the other convention
     {
         struct V { float p[3]; uint32_t tight; };
         std::vector<V> vs;
@@ -76,7 +76,7 @@ void hullSegments(const wotm::Ram &ram, uint32_t node, const wotm::M4 &m, std::v
             for (size_t j = i + 1; j < vs.size(); ++j)
             {
                 const uint32_t both = vs[i].tight & vs[j].tight;
-                if ((both & (both - 1)) == 0)   // menos de dois planos em comum: nao e aresta
+                if ((both & (both - 1)) == 0)   // fewer than two shared planes: not an edge
                     continue;
                 float a[3], b[3];
                 wotm::xform(m, vs[i].p[0], vs[i].p[1], vs[i].p[2], a);
@@ -87,7 +87,7 @@ void hullSegments(const wotm::Ram &ram, uint32_t node, const wotm::M4 &m, std::v
     }
 }
 
-// Percurso so do que leva aos cascos (o mesmo caminho de matrizes do Scene::walk, sem LOD por distancia: o filho 0)
+// Walks only what leads to the hulls (the same matrix path as Scene::walk, without distance LOD: child 0)
 void hullWalk(const wotm::Ram &ram, uint32_t node, const wotm::M4 &m, uint32_t atMat, int depth, int &budget, std::vector<float> &seg)
 {
     using namespace wotm;
@@ -104,11 +104,11 @@ void hullWalk(const wotm::Ram &ram, uint32_t node, const wotm::M4 &m, uint32_t a
     case 10:   // COLLISION_VOLUME
         hullSegments(ram, node, m, seg);
         break;
-    case 1:    // GROUP: visual (bit 0) e colisao (bit 1)
+    case 1:    // GROUP: visual (bit 0) and collision (bit 1)
         if (ram.u16(node + 0xA) & 3)
             kids(node + 0x20, ram.u16(node + 8), m, atMat);
         break;
-    case 2:    // LOD: o mais detalhado
+    case 2:    // LOD: the most detailed
         if (ram.u32(node + 4) > 0 && ram.u32(node + 4) < 16)
             if (const uint32_t c = ram.u32(node + 0x28); ram.ok(c))
                 hullWalk(ram, c, m, atMat, depth + 1, budget, seg);
@@ -136,7 +136,7 @@ void hullWalk(const wotm::Ram &ram, uint32_t node, const wotm::M4 &m, uint32_t a
     case 35:
         kids(node + 0xC, ram.u32(node + 4), m, atMat);
         break;
-    case 25:   // CHAR_INSTANCE: matrizes da animacao
+    case 25:   // CHAR_INSTANCE: animation matrices
         kids(node + 0x2C, ram.u32(node + 0x28), m, ram.u32(node + 0xC));
         break;
     case 17: { // ANIM_XFORM
@@ -166,7 +166,7 @@ void hullWalk(const wotm::Ram &ram, uint32_t node, const wotm::M4 &m, uint32_t a
     }
 }
 
-// Na thread do EE (wotmCaptureFrame): cascos, capsulas e vida de cada monstro deste quadro
+// On the EE thread (wotmCaptureFrame): hulls, capsules and health of every monster this frame
 void capture(const wotm::Ram &ram)
 {
     if (!g_on.load(std::memory_order_relaxed))
@@ -183,9 +183,9 @@ void capture(const wotm::Ram &ram)
         health[i] = ram.f32(mon + 0x44C);
         maxHealth[i] = ram.f32(mon + 0x448);
         stamina[i] = ram.f32(mon + 0x470);      // StaminaMeter (+0x460): cur
-        staminaMax[i] = ram.f32(mon + 0x460);   // max (a furia passa dele ate o maxLevel, +0x468)
+        staminaMax[i] = ram.f32(mon + 0x460);   // max (rage goes past it up to maxLevel, +0x468)
         const uint32_t cs = ram.u32(mon + 0xC) & 0x1FFFFFFFu;
-        if (!ram.ok(cs, 0xB0) || !ram.u8(cs + 0xC))   // drawMe: monstro escondido (fora da luta, desligado)
+        if (!ram.ok(cs, 0xB0) || !ram.u8(cs + 0xC))   // drawMe: monster hidden (out of the fight, disabled)
             continue;
         wotm::M4 m = wotm::readM4(ram, cs + 0x20);
         m.m[3][0] = ram.f32(cs + 0x10);
@@ -195,7 +195,7 @@ void capture(const wotm::Ram &ram)
         m.m[3][3] = 1.f;
         if (opts & kShowCapsule)
         {
-            // capsula do collisResolveCsToCsCollisions: ponto +0x3F0 no espaco do cs, eixo = z do cs, comprimento +0x400, raio +0x404
+            // collisResolveCsToCsCollisions' capsule: point +0x3F0 in cs space, axis = cs z, length +0x400, radius +0x404
             Capsule c{};
             c.owner = int8_t(i);
             wotm::xform(m, ram.f32(mon + 0x3F0), ram.f32(mon + 0x3F4), ram.f32(mon + 0x3F8), c.a);
@@ -236,7 +236,7 @@ void capture(const wotm::Ram &ram)
     sh.hudShown = ram.u32(wotm::sym::gHudEnable) && !ram.u32(wotm::sym::x_3Hud_m_letterbox + 0x2Cu);
 }
 
-// ---- janela
+// ---- window
 
 struct View
 {
@@ -259,12 +259,12 @@ struct View
     PunchCfg table[kPunchTypes];
     int tableTier = 0;
     bool tableWeapon = false;
-    std::vector<Move> fav;   // golpes favoritos da MOVE LIST, na ordem em que foram marcados (vazio: a caixa mostra os 6 da posicao)
-    uint32_t p1State = 0;    // offset do estado do P1 (acende a linha MkOther)
-    uint32_t p1StateAnim = 0;   // +0x50 do estado (Move::variant dos golpes do agarrao)
+    std::vector<Move> fav;   // MOVE LIST favorite moves, in the order they were marked (empty: the box shows the 6 for the position)
+    uint32_t p1State = 0;    // offset of P1's state (lights up the MkOther row)
+    uint32_t p1StateAnim = 0;   // the state's +0x50 (Move::variant of grab moves)
 };
 
-// copia o estado compartilhado (descartando as esferas velhas e guardando os ultimos danos)
+// copies the shared state (dropping old spheres and keeping the latest damage)
 View snapshot()
 {
     constexpr uint32_t kSweepLife = 10, kHitsKept = 64;
@@ -324,14 +324,14 @@ View snapshot()
 Color ownerColor(int owner, int players, unsigned char a)
 {
     if (owner >= 0 && owner < players)
-        return Color{80, 200, 255, a};   // jogador: azul claro
+        return Color{80, 200, 255, a};   // player: light blue
     if (owner >= 0)
-        return Color{255, 150, 40, a};   // IA: laranja
+        return Color{255, 150, 40, a};   // AI: orange
     return Color{220, 220, 220, a};
 }
 
-// Cone de golpe em arame: arestas, aro e a calota (o alcance e uma distancia do vertice). flat: setor no plano do chao (perpendicular
-// a k.up), com o eixo projetado nele
+// Wireframe attack cone: edges, rim and cap (the reach is a distance from the apex). flat: a sector on the ground plane
+// (perpendicular to k.up), with the axis projected onto it
 void drawCone(const Cone &k, Color c)
 {
     auto v3 = [](float x, float y, float z) { return Vector3{x, y, z}; };
@@ -369,7 +369,7 @@ void drawCone(const Cone &k, Color c)
     const Vector3 u = norm(cross(ax, ref)), w = cross(ax, u);
     constexpr int kRim = 20, kEdges = 8, kCap = 6;
     const float rc = k.len * std::cos(th), rs = k.len * std::sin(th);
-    auto onSphere = [&](float t, float phi) {   // ponto a angulo t do eixo, phi em volta dele, a distancia len do vertice
+    auto onSphere = [&](float t, float phi) {   // point at angle t from the axis, phi around it, at distance len from the apex
         const float s = k.len * std::sin(t), cc = k.len * std::cos(t);
         return add(add(add(apex, ax, cc), u, s * std::cos(phi)), w, s * std::sin(phi));
     };
@@ -388,7 +388,7 @@ void drawCone(const Cone &k, Color c)
         DrawLine3D(apex, onSphere(th, phi), c);
         if (e % 2)
             continue;
-        Vector3 q = onSphere(0.f, phi);   // meridiano da calota, do eixo ate o aro
+        Vector3 q = onSphere(0.f, phi);   // cap meridian, from the axis to the rim
         for (int j = 1; j <= kCap; ++j)
         {
             const Vector3 p = onSphere(th * float(j) / kCap, phi);
@@ -398,7 +398,7 @@ void drawCone(const Cone &k, Color c)
     }
 }
 
-// Dentro do BeginMode3D da vista cheia, depois da cena
+// Inside the full view's BeginMode3D, after the scene
 void draw3d()
 {
     if (!g_on.load(std::memory_order_relaxed) || windowsHidden())
@@ -428,12 +428,12 @@ void draw3d()
             const float r = std::max(s.r, 2.f);
             if (s.a[0] == s.b[0] && s.a[1] == s.b[1] && s.a[2] == s.b[2])
                 DrawSphereWires(pa, r, 6, 10, c);
-            else if (s.r <= 0.f)   // linha de visada (fogo, cone): sem raio
+            else if (s.r <= 0.f)   // line of sight (fire, cone): no radius
                 DrawLine3D(pa, pb, c);
             else
                 DrawCapsuleWires(pa, pb, r, 10, 3, c);
         }
-    // o soco que ainda vai testar: a esfera do punho em cada localizador, apagada, ate a janela abrir (dai saem as esferas do teste)
+    // a punch that has yet to test: the fist sphere at each locator, dimmed, until the window opens (then the test spheres take over)
     if (opts & kMoveTable)
         for (int i = 0; i < 16; ++i)
         {
@@ -460,7 +460,7 @@ const char *sourceName(int s)
 {
     switch (s)
     {
-    // HitEvent::source (s_takeHitInfo +0x10), os vistos no treino e nas investigacoes
+    // HitEvent::source (s_takeHitInfo +0x10), the ones seen in training and in the investigations
     case -1: return "OVER TIME";
     case 2: case 11: return "MELEE";
     case 3: return "OBJECT";
@@ -479,17 +479,17 @@ std::string slotName(int s, int players)
     char b[16];
     if (s < players)
         std::snprintf(b, sizeof b, "P%d", s + 1);
-    else if (s >= 4)   // as IAs ficam em m_monsters[4 + i]
+    else if (s >= 4)   // AIs live in m_monsters[4 + i]
         std::snprintf(b, sizeof b, "CPU%d", s - 3);
     else
         std::snprintf(b, sizeof b, "#%d", s);
     return b;
 }
 
-// Seta da direcao (notacao do teclado numerico; 5 = neutro, um ponto) num quadrado de lado `sz` centrado em (cx, cy)
+// Direction arrow (numpad notation; 5 = neutral, a dot) in a square of side `sz` centered on (cx, cy)
 void drawDir(int dir, float cx, float cy, float sz, Color c)
 {
-    const float dx = float((dir - 1) % 3 - 1), dy = -float((dir - 1) / 3 - 1);   // tela: y para baixo
+    const float dx = float((dir - 1) % 3 - 1), dy = -float((dir - 1) / 3 - 1);   // screen: y points down
     if (dx == 0.f && dy == 0.f)
     {
         DrawCircleV(Vector2{cx, cy}, sz * 0.12f, Color{c.r, c.g, c.b, 140});
@@ -500,13 +500,13 @@ void drawDir(int dir, float cx, float cy, float sz, Color c)
     const Vector2 base{tip.x - ux * sz * 0.35f, tip.y - uy * sz * 0.35f};
     DrawLineEx(tail, base, sz * 0.14f, c);
     const Vector2 p1{base.x - uy * sz * 0.28f, base.y + ux * sz * 0.28f}, p2{base.x + uy * sz * 0.28f, base.y - ux * sz * 0.28f};
-    // o raylib so desenha um dos sentidos (o outro e descartado): manda os dois
+    // raylib only draws one winding (the other is culled): send both
     DrawTriangle(tip, p1, p2, c);
     DrawTriangle(tip, p2, p1, c);
 }
 
-// Texto com a fonte do jogo (os glifos do atlas do quadro, wotm_padsel::text) num quadro rw x rh: cor do raylib (255 = 1,0), contorno
-// preto opcional. Sem atlas (nenhum texto do jogo ainda), a fonte do raylib.
+// Text in the game font (the frame atlas's glyphs, wotm_padsel::text) on an rw x rh frame: raylib color (255 = 1.0), optional
+// black outline. Without an atlas (no game text yet), raylib's font.
 struct GameText
 {
     const wotm::Ram &ram;
@@ -514,17 +514,17 @@ struct GameText
     int rw, rh;
     std::vector<wotm::TextQuad> quads;
 
-    // A fonte do jogo deixa uma letra de vao (o passo do wotm_padsel::text e a celula inteira, 1,6 x a altura): aqui a celula e
-    // estreitada para 78% e o passo e esse (celulas sobrepostas se cortam no drawQuads). Sem '/', '>' e '+' no atlas: tracos desenhados.
+    // The game font leaves a letter-wide gap (wotm_padsel::text advances by the whole cell, 1.6 x the height): here the cell is
+    // narrowed to 78% and that is the advance (overlapping cells clip each other in drawQuads). No '/', '>' or '+' in the atlas: drawn strokes.
     static constexpr float kTight = 0.78f;
-    float wv(float h) const { return 1.6f * h * 224.f / float(rh); }   // largura da celula em unidades da tela do jogo
+    float wv(float h) const { return 1.6f * h * 224.f / float(rh); }   // cell width in game screen units
     float adv(float h) const
     {
         const wotm::GsScreenRect gr = wotm::gsScreenRect(float(rw), float(rh));
         return kTight * wv(h) * gr.w / 640.f;
     }
     float width(const char *s, float h) const { return tex0 ? adv(h) * float(std::strlen(s)) : float(MeasureText(s, int(h))); }
-    // os sinais que faltam no atlas, numa celula de largura a (centro cx, cy), altura h
+    // the symbols missing from the atlas, in a cell of width a (center cx, cy), height h
     static void glyphLines(char ch, float cx, float cy, float a, float h, float t, Color c)
     {
         const float hw = a * 0.32f, hh = h * 0.38f;
@@ -541,7 +541,7 @@ struct GameText
             DrawLineEx(Vector2{cx, cy - hw}, Vector2{cx, cy + hw}, t, c);
         }
     }
-    // texto com o canto esquerdo em x0 e o meio da altura em cy
+    // text with its left edge at x0 and its vertical middle at cy
     void put(const char *s, float x0, float cy, float h, Color c, bool outline = false)
     {
         if (!tex0)
@@ -569,7 +569,7 @@ struct GameText
                 wotm_padsel::text(quads, ram, tex0, rw, rh, buf, cx + (k & 1 ? o : -o), cy + (k & 2 ? o : -o), h, gs(Color{0, 0, 0, c.a}), sp);
         wotm_padsel::text(quads, ram, tex0, rw, rh, buf, cx, cy, h, gs(c), sp);
         for (size_t i = first; i < quads.size(); ++i)
-            quads[i].x1 = quads[i].x0 + kTight * wv(h);   // celula estreitada, sem sobrepor a vizinha
+            quads[i].x1 = quads[i].x0 + kTight * wv(h);   // narrowed cell, not overlapping its neighbor
     }
     void center(const char *s, float cx, float cy, float h, Color c, bool outline = false) { put(s, cx - width(s, h) * 0.5f, cy, h, c, outline); }
     void flush(wotm::Scene &scene)
@@ -580,11 +580,11 @@ struct GameText
     }
 };
 
-// linhas do historico dos comandos: 12, ou 8 com a tabela dos socos embaixo (as duas cabem na altura)
+// input history rows: 12, or 8 with the punch table below (so both fit in the height)
 inline int inputRows() { return (g_opts.load(std::memory_order_relaxed) & kMoveTable) ? 8 : 12; }
 
-// Historico dos comandos (P1 e o primeiro boneco), no lado esquerdo da faixa 4:3, abaixo do HUD, de cima para baixo do mais novo para
-// o mais velho: quadros segurados, direcao (relativa ao monstro: 8 frente) e botoes, nos icones do dispositivo do jogador
+// Input history (P1 and the first dummy), on the left of the 4:3 strip, below the HUD, top to bottom from newest to oldest:
+// frames held, direction (relative to the monster: 8 = forward) and buttons, in the player's device icons
 // (wotm_prompts.inc)
 void drawInputs(wotm::Scene &scene, GameText &gt, const View &v)
 {
@@ -635,12 +635,12 @@ void drawInputs(wotm::Scene &scene, GameText &gt, const View &v)
     gt.flush(scene);
 }
 
-// Tabela dos socos do P1, no lado esquerdo abaixo dos comandos: os 6 tipos da posicao do combo em que ele esta (HIT 1 fora do soco),
-// com a janela do teste (% da animacao), o dano pedido, o raio da esfera e o atordoamento (> 100 atordoa; K: derruba). Tipos pelo
-// PadFlags::curMappedAction que o StatePunch::transitionOK aceita: 5 quadrado, 3 frente + quadrado, 4 tras + quadrado, 0 triangulo,
-// 1 frente + triangulo, 2 tras + triangulo. Embaixo, o soco em curso: a janela na barra e o ponto da animacao.
-// Com um objeto na mao, a tabela e a dos golpes com objeto (StateBatSwipe, mesmos botoes): WEAPON HIT n, e a coluna do dano traz o
-// multiplicador do dano do objeto ("x1.5").
+// P1's punch table, on the left below the inputs: the 6 types for the combo position P1 is at (HIT 1 outside a punch), with the
+// test window (% of the animation), the requested damage, the sphere radius and the stun (> 100 stuns; K: knocks down). Types by
+// the PadFlags::curMappedAction that StatePunch::transitionOK accepts: 5 square, 3 forward + square, 4 back + square, 0 triangle,
+// 1 forward + triangle, 2 back + triangle. Below, the punch in progress: the window on the bar and the animation's position.
+// With an object in hand, the table is the object attacks' (StateBatSwipe, same buttons): WEAPON HIT n, and the damage column shows
+// the object's damage multiplier ("x1.5").
 void drawMoveTable(wotm::Scene &scene, GameText &gt, const View &v, float top)
 {
     namespace st = wotm::settings;
@@ -652,9 +652,9 @@ void drawMoveTable(wotm::Scene &scene, GameText &gt, const View &v, float top)
     static constexpr Row kRows[kPunchTypes] = {{5, 5, st::BSquare, "LT"}, {3, 8, st::BSquare, "LT"}, {4, 2, st::BSquare, "LT"},
                                                {0, 5, st::BTriangle, "HV"}, {1, 8, st::BTriangle, "HV"}, {2, 2, st::BTriangle, "HV"}};
     const bool favs = !v.fav.empty();
-    const float a = gt.adv(fh), cIcons = x, cWin = x + isz * 2.f + 8.f + (favs ? a * 2.6f : 0.f);   // com favoritos, lugar do "x n"/"W"
-    // os textos das 4 colunas de cada linha antes de desenhar: a largura de cada coluna e a do maior texto dela (os favoritos trazem
-    // alcances de 4 algarismos e danos com decimal, que nao cabem numa largura fixa)
+    const float a = gt.adv(fh), cIcons = x, cWin = x + isz * 2.f + 8.f + (favs ? a * 2.6f : 0.f);   // with favorites, room for the "x n"/"W"
+    // the 4 column texts of every row, before drawing: each column is as wide as its widest text (favorites bring 4-digit reaches and
+    // damage with decimals, which don't fit a fixed width)
     struct Cell { char win[16], dmg[16], rad[16], stun[16]; PunchCfg cfg; };
     Cell cells[16];
     const int nFav = favs ? std::min(int(v.fav.size()), 16) : kPunchTypes;
@@ -672,7 +672,7 @@ void drawMoveTable(wotm::Scene &scene, GameText &gt, const View &v, float top)
         const PunchCfg &c = ce.cfg;
         const bool otherMv = mv && mv->kind == MkOther;
         if (!c.valid) { std::snprintf(ce.win, sizeof ce.win, "-"); ce.dmg[0] = ce.rad[0] = ce.stun[0] = 0; continue; }
-        if (otherMv && !(c.fim > 0.f)) std::snprintf(ce.win, sizeof ce.win, "-");   // janela so quando existe (levantar)
+        if (otherMv && !(c.fim > 0.f)) std::snprintf(ce.win, sizeof ce.win, "-");   // window only when there is one (getting up)
         else std::snprintf(ce.win, sizeof ce.win, "%.0f-%.0f", c.ini * 100.f, c.fim * 100.f);
         if (c.weapon) std::snprintf(ce.dmg, sizeof ce.dmg, "x%.1f", c.dmg);
         else if (otherMv && !(c.dmg > 0.f)) std::snprintf(ce.dmg, sizeof ce.dmg, "-");
@@ -691,8 +691,8 @@ void drawMoveTable(wotm::Scene &scene, GameText &gt, const View &v, float top)
     const float cDmg = cWin + wWin + gap, cRad = cDmg + wDmg + gap, cStun = cRad + wRad + gap, right = cStun + wStun + gap * 0.5f;
     const PunchLive &p = v.live[0];
     const bool now = p.frame && v.frame - p.frame <= 1u && p.cfg.valid;
-    // com favoritos da MOVE LIST, a caixa mostra esses golpes (icone do botao, "x n" nos combos, "W" nos de objeto) no lugar dos 6
-    // tipos da posicao; a linha acende quando o golpe em curso e esse botao (no combo, enquanto a posicao nao passar do fim dele)
+    // with MOVE LIST favorites, the box shows those moves (button icon, "x n" on combos, "W" on object moves) instead of the 6 types
+    // for the position; a row lights up when the move in progress is that button (for a combo, until the position passes its end)
     const int nRows = favs ? int(v.fav.size()) : kPunchTypes;
     const int rows = nRows + 2;
     DrawRectangle(int(x) - 6, int(top) - 6, int(right - x) + 12, int(rowH * float(rows) + fh * 1.2f) + 12, Color{0, 0, 0, 130});
@@ -721,7 +721,7 @@ void drawMoveTable(wotm::Scene &scene, GameText &gt, const View &v, float top)
         const Cell &ce = cells[r];
         const PunchCfg &c = ce.cfg;
         const float y = top + rowH * float(r + 2), cy = y + isz * 0.5f;
-        // MkOther: o estado do P1 e, nos golpes do agarrao (mesmo estado), a animacao +0x50 (0xBA = o especial, GRAB: HEAVY)
+        // MkOther: P1's state and, for grab moves (same state), the animation at +0x50 (0xBA = the special, GRAB: HEAVY)
         bool cur = otherMv ? (v.p1State != 0 && v.p1State == mv->state && (mv->variant == 0 || (mv->variant == 2) == (v.p1StateAnim == 0xBAu)))
                            : (now && p.type == row.type);
         if (mv && !otherMv && cur)
@@ -730,7 +730,7 @@ void drawMoveTable(wotm::Scene &scene, GameText &gt, const View &v, float top)
         if (cur)
             DrawRectangle(int(x) - 4, int(y) - 1, int(right - x) + 8, int(rowH), Color{255, 230, 120, 50});
         if (otherMv)
-        {   // nome curto no lugar dos icones (letras menores para caber ate a coluna da janela)
+        {   // short name instead of the icons (smaller letters so it fits up to the window column)
             const float nw = gt.width(mv->name, fh), avail = cWin - cIcons - 6.f, nh = nw > avail ? fh * avail / nw : fh * 0.9f;
             gt.put(mv->name, cIcons, cy, nh, Color{255, 230, 120, al});
         }
@@ -758,7 +758,7 @@ void drawMoveTable(wotm::Scene &scene, GameText &gt, const View &v, float top)
         gt.put(ce.rad, cRad, cy, fh, t);
         gt.put(ce.stun, cStun, cy, fh, c.stun > 100.f ? Color{255, 150, 40, 255} : t);
     }
-    // barra do soco em curso: a janela (azul) e o ponto da animacao (branco); vazia fora do soco
+    // bar for the punch in progress: the window (blue) and the animation's position (white); empty outside a punch
     const float by = top + rowH * float(rows) + fh * 0.2f, bw = right - x, bh = fh * 0.6f;
     DrawRectangle(int(x), int(by), int(bw), int(bh), Color{70, 70, 70, 200});
     if (now)
@@ -772,8 +772,8 @@ void drawMoveTable(wotm::Scene &scene, GameText &gt, const View &v, float top)
     gt.flush(scene);
 }
 
-// Numeros por cima das barras do HUD (o do jogador 1 e o do boneco, o HUD 1 do jogo: trainingHud no wotm_split4.inc): vida "atual / maxima"
-// no meio da barra e, na stamina vertical, o valor atual com os algarismos empilhados dentro dela; contorno preto para ler sobre a cor
+// Numbers over the HUD bars (player 1's and the dummy's, the game's HUD 1: trainingHud in wotm_split4.inc): health "current / max"
+// in the middle of the bar and, on the vertical stamina bar, the current value with digits stacked inside it; black outline to read over the color
 void drawHudNumbers(GameText &gt, const View &v)
 {
     if (!(g_opts.load() & kTrainHud) || v.players != 1 || !v.hudShown)
@@ -782,7 +782,7 @@ void drawHudNumbers(GameText &gt, const View &v)
     const wotm::GsScreenRect gr = wotm::gsScreenRect(float(gt.rw), float(gt.rh));
     const float sx = gr.w / 640.f, sy = float(gt.rh) / 224.f;
     auto mid = [&](const th::Box &b) { return Vector2{gr.x0 + 0.5f * (b.x0 + b.x1) * sx, 0.5f * (b.y0 + b.y1) * sy}; };
-    const float hh = 5.2f * sy, sh = 4.4f * sy;   // altura das letras: a barra de vida tem 5,4 de 224; a stamina, 11 de 640 de largura
+    const float hh = 5.2f * sy, sh = 4.4f * sy;   // letter height: the health bar is 5.4 of 224 tall; stamina, 11 of 640 wide
     int cpu = -1;
     for (int i = 1; i < 16 && cpu < 0; ++i)
         if (v.maxHealth[i] > 0.f)
@@ -808,11 +808,11 @@ void drawHudNumbers(GameText &gt, const View &v)
     }
 }
 
-// Painel de dano, dentro do quadro nativo (rw x rh; sai nas fotos do WOTM_SHOTS, some no modo foto, na pausa e fora da luta); tambem
-// os comandos e os numeros do HUD. Linhas curtas: a fonte do jogo e larga.
+// Damage panel, inside the native frame (rw x rh; shows in WOTM_SHOTS screenshots, hidden in photo mode, while paused and outside a
+// fight); also the inputs and the HUD numbers. Short lines: the game font is wide.
 void drawPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t frameTex0, int rw, int rh)
 {
-    // atlas do fontSetTexId (a luta nao escreve texto do jogo); sem ele ainda, o do ultimo quadro com texto
+    // fontSetTexId's atlas (the fight writes no game text); until there is one, the atlas from the last frame with text
     const uint64_t known = g_fontTex0.load(std::memory_order_relaxed), tex0 = known ? known : frameTex0;
     if (!g_on.load() || windowsHidden() || !tex0)
         return;
@@ -824,7 +824,7 @@ void drawPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t frameTex0, int
         drawInputs(scene, gt, v);
     if (g_opts.load() & kMoveTable)
     {
-        // abaixo da caixa dos comandos (as linhas todas, cheia), ou no lugar dela
+        // below the inputs box (all rows, full), or in its place
         const float ifh = std::max(12.f, float(rh) / 50.f);
         float top = float(rh) * kPanelTop;
         if (g_opts.load() & kShowInputs)
@@ -842,14 +842,14 @@ void drawPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t frameTex0, int
     if (!v.hits.empty())
     {
         const Hit &last = v.hits.back();
-        // o dano pedido pelo golpe (base) so aparece quando o aplicado foi outro (bloqueio, furia, dificuldade)
+        // the damage the attack asked for (base) only shows when the applied damage differed (block, rage, difficulty)
         if (last.base >= 0.f && std::fabs(last.base - last.applied) > 0.05f)
             std::snprintf(b, sizeof b, "LAST %.1f %s  BASE %.1f", last.applied, sourceName(last.source), last.base);
         else
             std::snprintf(b, sizeof b, "LAST %.1f %s", last.applied, sourceName(last.source));
         lines.push_back({b, kText});
-        // combo: o da thread do EE (golpes que a vitima levou sem se recuperar, wotm_training.inc, takeDamage); terminou quando a reacao
-        // depois do ultimo golpe fechou (o StunRec so entra no fim dela) ou 3 s sem golpe
+        // combo: the EE thread's (hits the victim took without recovering, wotm_training.inc, takeDamage); it ended when the reaction
+        // after the last hit closed (the StunRec is only added at its end) or after 3 s without a hit
         const Combo &c = v.combo;
         bool ended = v.frame - c.last > 180u;
         for (const StunRec &s : v.stuns)
@@ -868,8 +868,8 @@ void drawPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t frameTex0, int
             lines.push_back({b, kDimText});
         }
     }
-    // dados de quadro: os ultimos golpes (inicio = primeiro quadro com teste de golpe; ativo = quadros com teste; total = o estado inteiro)
-    // e, no que acertou, quanto a vitima ficou sem agir (reacoes seguidas somadas) e a vantagem (fim da reacao - fim do golpe)
+    // frame data: the latest attacks (startup = first frame with a hit test; active = frames with a test; total = the whole state)
+    // and, for the one that hit, how long the victim couldn't act (back-to-back reactions summed) and the advantage (end of reaction - end of attack)
     if (!v.moves.empty())
     {
         lines.push_back({"", kText});
@@ -878,7 +878,7 @@ void drawPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t frameTex0, int
         for (auto it = v.moves.rbegin(); it != v.moves.rend() && shown < 3; ++it, ++shown)
         {
             const MoveRec &mv = *it;
-            if (mv.chain >= 0)   // cadeia = posicao na sequencia (0-based), passo = tipo do soco (tabela kMoveTypeNames)
+            if (mv.chain >= 0)   // chain = position in the sequence (0-based), step = punch type (kMoveTypeNames table)
                 std::snprintf(b, sizeof b, "%s %s HIT %d %s", slotName(mv.owner, v.players).c_str(), mv.name, mv.chain + 1,
                               mv.step >= 0 && mv.step < kPunchTypes ? kMoveTypeNames[mv.step] : "?");
             else
@@ -905,7 +905,7 @@ void drawPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t frameTex0, int
                         s1 = s.end;
                         sname = s.name;
                     }
-                    else if (sname && s.start == s1)   // reacao emendada (recuo -> derrubado)
+                    else if (sname && s.start == s1)   // chained reaction (knockback -> knocked down)
                         s1 = s.end;
                 }
                 if (sname)
@@ -919,7 +919,7 @@ void drawPanel(wotm::Scene &scene, const wotm::Ram &ram, uint64_t frameTex0, int
     float w = 0.f;
     for (const Line &l : lines)
         w = std::max(w, gt.width(l.s.c_str(), fh));
-    // a direita, dentro da faixa 4:3 do jogo, abaixo do HUD do boneco (que desce ate ~40% da altura)
+    // on the right, inside the game's 4:3 strip, below the dummy's HUD (which reaches down to ~40% of the height)
     const wotm::GsScreenRect gr = wotm::gsScreenRect(float(rw), float(rh));
     const float x = gr.x0 + gr.w - w - 2.f * pad - fh, top = float(rh) * kPanelTop;
     DrawRectangle(int(x - pad), int(top - pad), int(w + 2.f * pad), int(float(lines.size()) * lineH + 2.f * pad), Color{0, 0, 0, 150});

@@ -1,19 +1,21 @@
-// Texturas de mod em PNG (MODS.md): o mod traz so a imagem e o desenho nativo a usa no lugar da textura do jogo.
-// O jogo continua carregando o .TEX/.RTX do disco (VRAM, ids e paletas intactos); so o que a janela desenha muda.
-// Nome do arquivo, em qualquer pasta do mod, como o tools/tex.py export (e o tools/modkit.py) os grava:
-//   <arquivo>_t<texId>.png       textura do <arquivo>.TEX       (mods/meu_mod/MON/lizard0_t0004.png)
-//   <arquivo>_rtx_t<texId>.png   imagem residente do <arquivo>.RTX (retratos, telas e fontes do menu)
-// texId e o do arquivo no disco (antes da relocacao da carga). Qualquer resolucao: os UVs do desenho sao normalizados (u / 4096) e
-// os quadrados de tela (fonte, retratos) escalam o trecho pela razao entre o PNG e a textura original. Vale para todas as paletas
-// que usam a textura. Alfa do PNG: 255 = opaco (0x80 do GS); se a textura original passa de 0x80, 255 = 0xFF (loadPng). Nao vale na imagem do GS emulado do ps2EntryRunner (a referencia da
-// checagem VU1) nem na poeira composta (montada na VRAM). Particulas (Scene::modParticle) e o monstro 3D das telas (wotm_model.hpp) usam o PNG.
+// PNG mod textures (MODS.md): the mod ships only the image, and the native renderer uses it in place of the game's texture.
+// The game still loads the .TEX/.RTX from disc (VRAM, ids and palettes untouched); only what the window draws changes.
+// File name, in any folder of the mod, as tools/tex.py export (and tools/modkit.py) write them:
+//   <file>_t<texId>.png       texture from <file>.TEX       (mods/meu_mod/MON/lizard0_t0004.png)
+//   <file>_rtx_t<texId>.png   resident image from <file>.RTX (portraits, screens and menu fonts)
+// texId is the one in the file on disc (before the load relocates it). Any resolution works: draw UVs are normalized (u / 4096) and
+// screen quads (font, portraits) scale their region by the ratio between the PNG and the original texture. Applies to every palette
+// that uses the texture. PNG alpha: 255 = opaque (GS 0x80); if the original texture goes above 0x80, 255 = 0xFF (loadPng). Doesn't apply to the image from ps2EntryRunner's emulated GS (the
+// reference for the VU1 check) nor to the composited dust (assembled in VRAM). Particles (Scene::modParticle) and the screens' 3D monster (wotm_model.hpp) use the PNG.
 #pragma once
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <map>
+#include <mutex>
 #include <string>
 #include <utility>
 #include <vector>
@@ -24,29 +26,64 @@
 namespace wotm::texmods {
 
 struct Png {
-    std::string host;   // arquivo no PC
-    std::string mod;    // pasta do mod
-    std::string rel;    // caminho no mod (para o log)
+    std::string host;   // file on the PC
+    std::string mod;    // mod folder
+    std::string rel;    // path inside the mod (for the log)
 };
 
 class Index {
 public:
     static Index &get() { static Index i; return i; }
 
-    // (ARQUIVO, rtx, texId) -> PNG. Montado na primeira consulta, depois da varredura de mods/ (Registry::scan).
+    // (FILE, rtx, texId) -> PNG. Built on the first lookup, after the mods/ scan (Registry::scan). Read on the window thread while
+    // add() runs on the EE thread: every access takes m_m, and the Png a caller got stays valid and unchanged (add retires a
+    // replaced entry instead of rewriting or freeing it).
     const Png *find(const std::string &stem, bool rtx, uint32_t texId) {
-        build();
+        std::lock_guard<std::mutex> lk(m_m);
+        buildLocked();
         const auto it = m_png.find(Key{upper(stem), rtx, texId});
         return it == m_png.end() ? nullptr : &it->second;
     }
-    bool empty() { build(); return m_png.empty(); }
+    bool empty() {
+        std::lock_guard<std::mutex> lk(m_m);
+        buildLocked();
+        return m_png.empty();
+    }
+    // A skin PNG registered after boot (Registry::addSkin): same naming rules as the build's skin loop. Replaces the entry of the
+    // same (stem, rtx, texId), so an overwritten skin's new PNG wins.
+    void add(const mods::SkinPng &sp) {
+        std::lock_guard<std::mutex> lk(m_m);
+        buildLocked();
+        addSkinPngLocked(sp);
+    }
+    // A skin saved again (the character creator's overwrite): every entry of `stem` ("LIZARD4") is retired, never freed (a find()
+    // caller may still hold its Png), then `pngs` (the registry's skinPngs() of that stem) go in. A texture the new save dropped
+    // has no entry left, so the base costume's own texture serves. Bumps gen(): window-thread caches of decoded textures for that
+    // costume (the selection's models) reload.
+    void replaceSkin(const std::string &stem, const std::vector<mods::SkinPng> &pngs) {
+        {
+            std::lock_guard<std::mutex> lk(m_m);
+            buildLocked();
+            const std::string up = upper(stem);
+            // every entry of the stem, including another mod's PNG named for it (a fixed name for a run-time costume index: nonsense)
+            for (auto it = m_png.begin(); it != m_png.end();) {
+                const auto next = std::next(it);
+                if (it->first.stem == up) m_retired.push_back(m_png.extract(it));
+                it = next;
+            }
+            for (const mods::SkinPng &sp : pngs) addSkinPngLocked(sp);
+        }
+        m_gen.fetch_add(1, std::memory_order_release);
+    }
+    // Bumped by every replaceSkin: a cache of textures decoded through find() compares it and drops what it holds when it changed
+    uint32_t gen() const { return m_gen.load(std::memory_order_acquire); }
 
     // "lizard0_t0004.png" -> (LIZARD0, false, 4); "shell_rtx_t0012.png" -> (SHELL, true, 12)
     static bool parseName(const std::string &file, std::string &stem, bool &rtx, uint32_t &id) {
         std::string n = upper(file);
         if (n.size() < 7 || n.compare(n.size() - 4, 4, ".PNG") != 0) return false;
         n.resize(n.size() - 4);
-        static const std::string kGray = "_SEMPALETA";   // tools/tex.py export sem a paleta achada (sai em cinza); o nome vale igual
+        static const std::string kGray = "_SEMPALETA";   // tools/tex.py export without the palette found (comes out gray); the name works the same
         if (n.size() > kGray.size() && n.compare(n.size() - kGray.size(), kGray.size(), kGray) == 0) n.resize(n.size() - kGray.size());
         const size_t t = n.rfind("_T");
         if (t == std::string::npos || t == 0 || t + 2 >= n.size()) return false;
@@ -67,14 +104,35 @@ private:
         std::string stem; bool rtx; uint32_t id;
         bool operator<(const Key &o) const { return stem != o.stem ? stem < o.stem : rtx != o.rtx ? rtx < o.rtx : id < o.id; }
     };
+    std::mutex m_m;   // m_png, m_retired, m_built
     std::map<Key, Png> m_png;
+    std::vector<std::map<Key, Png>::node_type> m_retired;   // replaced entries: a find() caller may still be reading one
     bool m_built = false;
+    std::atomic<uint32_t> m_gen{0};
 
     static std::string upper(std::string s) {
         for (char &c : s) c = char(std::toupper(static_cast<unsigned char>(c)));
         return s;
     }
-    void build() {
+    // Skin PNGs (mods/<mod>/skins/<folder>/): the number in the name counts, the file is the skin's costume's. Accepts the name from
+    // the base costume's export ("lizard1_t0004.png", "lizard1_rtx_t0011.png") or just "t0004.png"/"rtx_t0011.png".
+    void addSkinPngLocked(const mods::SkinPng &sp) {
+        const std::string base = sp.host.filename().string();
+        std::string stem; bool rtx = false; uint32_t id = 0;
+        if (!parseName(base, stem, rtx, id) && !parseName("X_" + base, stem, rtx, id)) {
+            std::fprintf(stderr, "[mods] png %s: name without _tNNNN, ignored\n", sp.rel.c_str());
+            return;
+        }
+        if (upper(base).rfind("RTX_T", 0) == 0) rtx = true;
+        const Key k{sp.stem, rtx, id};
+        Png p{sp.host.string(), sp.mod, sp.rel};
+        if (const auto it = m_png.find(k); it != m_png.end()) {
+            if (it->second.host == p.host && it->second.mod == p.mod && it->second.rel == p.rel) return;
+            m_retired.push_back(m_png.extract(it));
+        }
+        m_png.emplace(k, std::move(p));
+    }
+    void buildLocked() {
         const mods::Registry &reg = mods::Registry::get();
         if (m_built || !reg.ready()) return;
         m_built = true;
@@ -84,49 +142,35 @@ private:
             if (!parseName(base, stem, rtx, id)) continue;
             Png &p = m_png[Key{stem, rtx, id}];
             if (!p.host.empty())
-                std::fprintf(stderr, "[mods] png %s: %s/%s vence %s/%s\n", base.c_str(), f.mod.c_str(), rel.c_str(), p.mod.c_str(), p.rel.c_str());
+                std::fprintf(stderr, "[mods] png %s: %s/%s overrides %s/%s\n", base.c_str(), f.mod.c_str(), rel.c_str(), p.mod.c_str(), p.rel.c_str());
             p.host = f.host.string();
             p.mod = f.mod;
             p.rel = rel;
         }
-        // PNGs das skins (mods/<mod>/skins/<pasta>/): o numero do nome vale, o arquivo e o do traje da skin. Aceita o nome do
-        // export do traje base ("lizard1_t0004.png", "lizard1_rtx_t0011.png") ou so "t0004.png"/"rtx_t0011.png".
-        for (const mods::SkinPng &sp : reg.skinPngs()) {
-            const std::string base = sp.host.filename().string();
-            std::string stem; bool rtx = false; uint32_t id = 0;
-            if (!parseName(base, stem, rtx, id) && !parseName("X_" + base, stem, rtx, id)) {
-                std::fprintf(stderr, "[mods] png %s: nome sem _tNNNN, ignorado\n", sp.rel.c_str());
-                continue;
-            }
-            if (upper(base).rfind("RTX_T", 0) == 0) rtx = true;
-            Png &p = m_png[Key{sp.stem, rtx, id}];
-            p.host = sp.host.string();
-            p.mod = sp.mod;
-            p.rel = sp.rel;
-        }
-        // Retrato dos monstros custom ("portrait" do monster.json): a imagem do .RTX do traje que eles usam
+        for (const mods::SkinPng &sp : reg.skinPngs()) addSkinPngLocked(sp);
+        // Portrait of custom monsters ("portrait" in monster.json): the image in the .RTX of the costume they use
         for (const mods::Custom &cu : reg.customs()) {
             if (cu.portrait.empty() || cu.portraitTex < 0) continue;
             Png &p = m_png[Key{upper(cu.prefix + std::to_string(cu.costume)), true, uint32_t(cu.portraitTex)}];
             p.host = cu.portrait.string();
             p.mod = cu.mod;
-            std::error_code ec;   // caminho no mod, para o log
+            std::error_code ec;   // path inside the mod, for the log
             p.rel = std::filesystem::relative(cu.portrait, cu.dir.parent_path().parent_path(), ec).generic_string();
             if (ec || p.rel.empty()) p.rel = cu.portrait.filename().string();
         }
-        if (!m_png.empty()) std::fprintf(stderr, "[mods] %zu textura(s) em PNG\n", m_png.size());
+        if (!m_png.empty()) std::fprintf(stderr, "[mods] %zu PNG texture(s)\n", m_png.size());
     }
 };
 
-// Le o PNG em RGBA (r | g << 8 | b << 16 | a << 24). rawAlpha: alfa como o GS (255 -> 0x80, resto / 2), para o que o Scene::draw
-// mistura como o GS; senao, 0..255. tcc = false: so RGB (TEX0.TCC = 0), alfa sempre 1,0. Loga a primeira carga de cada PNG.
-// hiAlpha: a textura original usa alfa acima de 0x80 (a maioria das do jogo vai de 0 a 0xFF; o logo do titulo e desenhado com o
-// vertice em meia opacidade e conta com o 0xFF). O PNG entao vale cru: 255 = 0xFF, como o tools/tex.py export o grava (fix_alpha).
+// Reads the PNG as RGBA (r | g << 8 | b << 16 | a << 24). rawAlpha: alpha as the GS sees it (255 -> 0x80, the rest / 2), for what Scene::draw
+// blends like the GS; otherwise 0..255. tcc = false: RGB only (TEX0.TCC = 0), alpha always 1.0. Logs the first load of each PNG.
+// hiAlpha: the original texture uses alpha above 0x80 (most of the game's go from 0 to 0xFF; the title logo is drawn with the
+// vertex at half opacity and relies on the 0xFF). The PNG is then taken raw: 255 = 0xFF, as tools/tex.py export writes it (fix_alpha).
 inline bool loadPng(const Png &png, const std::string &what, uint32_t origW, uint32_t origH, bool rawAlpha, bool tcc,
                     std::vector<uint32_t> &px, uint32_t &w, uint32_t &h, bool hiAlpha = false) {
     Image img = LoadImage(png.host.c_str());
     if (!img.data || img.width <= 0 || img.height <= 0) {
-        std::fprintf(stderr, "[mods] png %s (%s): nao abriu\n", png.rel.c_str(), png.mod.c_str());
+        std::fprintf(stderr, "[mods] png %s (%s): failed to open\n", png.rel.c_str(), png.mod.c_str());
         if (img.data) UnloadImage(img);
         return false;
     }
@@ -137,17 +181,17 @@ inline bool loadPng(const Png &png, const std::string &what, uint32_t origW, uin
     UnloadImage(img);
     for (uint32_t &c : px) {
         uint32_t a = tcc ? c >> 24 : (hiAlpha && rawAlpha ? 0x80 : 255);
-        if (hiAlpha) { if (tcc && !rawAlpha) a = std::min(255u, a * 2); }   // cru; 0..255 com 0x80 saturado, como o gs::fixAlpha
+        if (hiAlpha) { if (tcc && !rawAlpha) a = std::min(255u, a * 2); }   // raw; 0..255 with 0x80 saturated, like gs::fixAlpha
         else if (rawAlpha) a = a >= 255 ? 0x80 : a / 2;
         c = (c & 0x00FFFFFFu) | (a << 24);
     }
     const bool ratio = uint64_t(w) * origH == uint64_t(h) * origW;
-    std::fprintf(stderr, "[mods] %s <- %s/%s (%ux%u; jogo %ux%u%s)%s\n", what.c_str(), png.mod.c_str(), png.rel.c_str(), w, h, origW, origH,
-                 hiAlpha ? "; alfa cru, 255 = 0xFF" : "", ratio ? "" : " AVISO: proporcao diferente da original, a imagem sai esticada");
+    std::fprintf(stderr, "[mods] %s <- %s/%s (%ux%u; game %ux%u%s)%s\n", what.c_str(), png.mod.c_str(), png.rel.c_str(), w, h, origW, origH,
+                 hiAlpha ? "; raw alpha, 255 = 0xFF" : "", ratio ? "" : " WARNING: aspect ratio differs from the original, the image comes out stretched");
     return true;
 }
 
-// Pacotes de um .TEX/.RTX (ja descompactado): deslocamento do pacote no arquivo -> texId do disco. Mesmo laco do tools/tex.py parse.
+// Packets of a .TEX/.RTX (already decompressed): packet offset in the file -> texId on disc. Same loop as tools/tex.py parse.
 inline std::map<uint32_t, uint32_t> packetIds(const std::vector<uint8_t> &d) {
     std::map<uint32_t, uint32_t> out;
     if (d.size() < 8) return out;
@@ -167,16 +211,8 @@ inline std::map<uint32_t, uint32_t> packetIds(const std::vector<uint8_t> &d) {
     return out;
 }
 
-// Arquivo do disco descompactado (zip com o magic "IE\3\4", como no Scene::loadRtx). Vazio se nao abriu.
-inline std::vector<uint8_t> readUnzipped(const std::string &path) {
-    std::vector<uint8_t> raw;
-    if (FILE *f = std::fopen(path.c_str(), "rb")) {
-        std::fseek(f, 0, SEEK_END);
-        raw.resize(size_t(std::max(0L, std::ftell(f))));
-        std::fseek(f, 0, SEEK_SET);
-        if (std::fread(raw.data(), 1, raw.size(), f) != raw.size()) raw.clear();
-        std::fclose(f);
-    }
+// A disc file's contents decompressed (zip with the magic "IE\3\4", as in Scene::loadRtx); other files come back as they are
+inline std::vector<uint8_t> unzipped(std::vector<uint8_t> raw) {
     static const uint8_t kMagic[4] = {'I', 'E', 3, 4};
     if (raw.size() < 34 || std::memcmp(raw.data(), kMagic, 4) != 0) return raw;
     uint32_t csize = 0;

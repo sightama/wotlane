@@ -1,14 +1,14 @@
-// wotm_legend.inc: desenho da legenda de baixo e da dica grande que o wotm_padsel.inc e o wotm_mainmenu.inc publicam (wotm_legend::post
-// e hint, no wotm_prompts.inc). Incluido por wotm_live.inc depois do wotm_optscreen.inc e chamado no quadro, antes dos
-// fades do jogo, em pixels do quadro (rw x rh).
-//   - Legenda: uma faixa preta por cima da do jogo (a legenda dele, "X SELECT  TRIANGULO BACK", some atras) com icones 2D do
-//     atlas do Kenney e o texto na fonte do jogo, centrada como a dele.
-//   - Dica: o texto da opcao selecionada do painel, na fonte do jogo, reto na tela, sobre os carros abaixo do telao (a camera do painel
-//     deixa essa faixa livre: wotm_mainmenu::frameCamera).
+// wotm_legend.inc: draws the bottom legend and the big hint that wotm_padsel.inc and wotm_mainmenu.inc publish (wotm_legend::post
+// and hint, in wotm_prompts.inc). Included by wotm_live.inc after wotm_optscreen.inc and called each frame, before the game's
+// fades, in frame pixels (rw x rh).
+//   - Legend: a black strip over the game's own (its legend, "X SELECT  TRIANGULO BACK", disappears behind it) with 2D icons from the
+//     Kenney atlas and the text in the game font, centered like the game's.
+//   - Hint: the text of the selected panel option, in the game font, flat on the screen, over the cars below the big screen (the panel camera
+//     leaves that strip clear: wotm_mainmenu::frameCamera).
 namespace wotm_legend
 {
-constexpr float kBarTop = 0.893f;   // a faixa preta de baixo do menu (48 de 448 linhas do PS2), em fracao da altura
-constexpr float kBarMid = 0.929f;   // onde o jogo centra os icones dela
+constexpr float kBarTop = 0.893f;   // the menu's bottom black strip (48 of the PS2's 448 lines), as a fraction of the height
+constexpr float kBarMid = 0.929f;   // where the game centers its icons
 
 static void drawLegend(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0, float rw, float rh)
 {
@@ -27,7 +27,7 @@ static void drawLegend(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0, 
     const float cy = rh * kBarMid;
     float iconGap = S * 0.12f, textGap = S * 0.35f, itemGap = S * 1.2f;
     const int irw = int(rw), irh = int(rh);
-    // celula de um icone no estilo de agora (-1: sem celula; o nome da tecla vai numa moldura)
+    // cell of an icon in the current style (-1: no cell; the key name goes in a frame)
     auto cellOf = [&](const Icon &ic) {
         if (style == st::PromptKeyboard && ic.key)
             return wotm_prompts::keyCell(ic.key);
@@ -39,7 +39,7 @@ static void drawLegend(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0, 
         if (boxed(ic)) return wotm_mainmenu::textWidth(tex0, irw, irh, ic.key, th) + S * 0.5f;
         return cellOf(ic) >= 0 ? S : 0.f;
     };
-    // segunda tecla do botao (so quando a legenda mostra teclas): lado a lado com a primeira
+    // the button's second key (only when the legend shows keys): side by side with the first
     auto second = [&](const Icon &ic) { return ic.key2 && (style == st::PromptKeyboard || ic.pad <= 0) ? Icon{0, ic.key2} : Icon{}; };
     auto iconW = [&](const Icon &ic) {
         const float w1 = iconW1(ic), w2 = iconW1(second(ic));
@@ -58,7 +58,7 @@ static void drawLegend(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0, 
         }
     };
     measure();
-    // muitos itens (modo foto): tudo menor ate caber na janela, com folga nas pontas
+    // many items (photo mode): shrink everything until it fits in the window, with some margin at the ends
     if (const float maxW = rw * 0.96f; total > maxW)
     {
         const float k = maxW / total;
@@ -69,7 +69,7 @@ static void drawLegend(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0, 
         itemGap *= k;
         measure();
     }
-    // texto na cor da legenda do jogo (cinza claro), um pouco mais claro para ler
+    // text in the game legend's color (light gray), a little lighter for readability
     const Color tc{0x5C, 0x5A, 0x54, static_cast<unsigned char>(0x80 * a)};
     std::vector<wotm::TextQuad> q;
     auto drawIcon1 = [&](const Icon &ic, float x) {
@@ -111,7 +111,7 @@ static void drawLegend(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0, 
     scene.drawQuads(q, rw, rh);
 }
 
-// Quebra `s` em ate duas linhas de no maximo `maxChars` letras (a fonte do jogo e monoespacada), no espaco mais perto do meio
+// Wraps `s` into at most two lines of at most `maxChars` characters (the game font is monospaced), at the space closest to the middle
 static int wrap(const std::string &s, size_t maxChars, std::string out[2])
 {
     if (s.size() <= maxChars)
@@ -133,7 +133,7 @@ static int wrap(const std::string &s, size_t maxChars, std::string out[2])
     return 2;
 }
 
-// A dica com a fonte do jogo (a mesma da lista do menu), centrada na faixa sobre os carros, com uma faixa escura atras
+// The hint in the game font (the same as the menu list), centered on the strip over the cars, with a dark strip behind it
 static void drawHint(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0, float rw, float rh)
 {
     const float a = std::clamp(g_hintAlpha, 0.f, 1.f);
@@ -151,7 +151,7 @@ static void drawHint(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0, fl
     const int n = wrap(s, size_t(std::max(8.f, maxW / adv)), line);
     float wmax = 0.f;
     for (int i = 0; i < n; ++i) wmax = std::max(wmax, wotm_mainmenu::textWidth(tex0, irw, irh, line[i].c_str(), th));
-    if (wmax > maxW)   // linha longa demais mesmo quebrada: letras menores
+    if (wmax > maxW)   // line too long even when wrapped: smaller letters
     {
         th *= maxW / wmax;
         wmax = maxW;
@@ -161,7 +161,7 @@ static void drawHint(wotm::Scene &scene, const wotm::Ram &ram, uint64_t tex0, fl
     DrawRectangleRounded(Rectangle{gr.x0 + gr.w * 0.5f - wmax * 0.5f - padX, top - padY, wmax + padX * 2.f, lineH * float(n) + padY * 2.f}, 0.35f, 8,
                          Color{0, 0, 0, static_cast<unsigned char>(160.f * a)});
     std::vector<wotm::TextQuad> q;
-    const Color shadow{0, 0, 0, static_cast<unsigned char>(0x70 * a)}, fill{121, 118, 111, static_cast<unsigned char>(0x80 * a)};   // escala do GS
+    const Color shadow{0, 0, 0, static_cast<unsigned char>(0x70 * a)}, fill{121, 118, 111, static_cast<unsigned char>(0x80 * a)};   // GS scale
     for (int i = 0; i < n; ++i)
     {
         const float x = gr.x0 + gr.w * 0.5f, y = top + lineH * (float(i) + 0.5f);

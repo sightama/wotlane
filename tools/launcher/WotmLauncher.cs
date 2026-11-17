@@ -1,6 +1,6 @@
-// Launcher do jogo ao vivo: janela com caixas de marcar para as flags de ambiente (WOTM_*, PS2X_*) e um botao que roda o
-// run_live.ps1 do runtime com elas. Para adicionar uma flag, acrescente uma linha em Flags. O estado fica em WotM_Launcher.ini,
-// ao lado do executavel. Compilar: tools\launcher\build.bat (csc do .NET Framework, C# 5).
+// Launcher for the live game: a window with checkboxes for the environment flags (WOTM_*, PS2X_*) and a button that runs the
+// runtime's run_live.ps1 with them. To add a flag, add a line to Flags. The state is kept in WotM_Launcher.ini, next to the
+// executable. Build: tools\launcher\build.bat (.NET Framework csc, C# 5).
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -19,7 +19,7 @@ class Flag
     }
 }
 
-// GroupBox com borda e titulo desenhados aqui no tema escuro: com estilo visual o titulo sai na cor do tema e ignora ForeColor.
+// GroupBox with border and title drawn here in the dark theme: with visual styles the title takes the theme color, ignoring ForeColor.
 class DarkGroupBox : GroupBox
 {
     protected override void OnPaint(PaintEventArgs e)
@@ -36,8 +36,8 @@ class DarkGroupBox : GroupBox
     }
 }
 
-// CheckBox desenhada aqui no tema escuro (caixa escura; marcada, azul com o visto branco): o desenho do Windows nao tem versao escura
-// que respeite a cor do texto.
+// CheckBox drawn here in the dark theme (dark box; when checked, blue with a white tick): the Windows drawing has no dark version
+// that respects the text color.
 class DarkCheckBox : CheckBox
 {
     bool hover;
@@ -77,14 +77,14 @@ class DarkCheckBox : CheckBox
 
 class Launcher : Form
 {
-    // Chaves com ':' sao parametros do run_live.ps1; as outras viram variaveis de ambiente (=1 quando marcadas, removidas quando nao).
-    // Diagnosticos sem caixa continuam valendo pela variavel (WOTM_RATEMIN=0, WOTM_VU0_INTERP, PS2X_PAD_DEADZONE; tabela no NATIVO.md).
-    // Caixas de investigacoes fechadas sairam (buracos nos monstros: NOSKIN/NOVCOL/OPAQUE/ONEPASS; giro sozinho: TURNLOG/PS2X_PADLOG).
+    // Keys starting with ':' are run_live.ps1 parameters; the others become environment variables (=1 when checked, removed when not).
+    // Diagnostics with no checkbox still work via their variable (WOTM_RATEMIN=0, WOTM_VU0_INTERP, PS2X_PAD_DEADZONE; table in NATIVO.md).
+    // Checkboxes of closed investigations are gone (holes in monsters: NOSKIN/NOVCOL/OPAQUE/ONEPASS; self-turning: TURNLOG/PS2X_PADLOG).
     static readonly Flag[] Flags = {
         new Flag("Run", ":Auto", false, "Scripted input up to a stage", "-Auto 1: a scripted pad plays up to a stage (~50 s). Unchecked: you play with the keyboard."),
         new Flag("Run", "WOTM_FOTOS", false, "Debug photos (F7 pauses, F6 steps, F8 photo with a note)", "F8 saves the frame (a VU1 vs native check snapshot, ~40 MB), a PNG of the window and your note in <runtime>\\fotos\\<date>. Delete the photos once the issue is fixed."),
         new Flag("Run", "WOTM_AIVSAI", false, "Player controlled by AI", "Player 1's monster becomes an AI (playerInit -> aiInit): AI vs AI fight. For batches without the menu use tools\\lote.ps1."),
-        new Flag("Run", "WOTM_WATCHDOG=0", false, "Turn off the freeze watchdog", "By default, g_frame stuck for 8 s (outside movies) writes [vigia] to live.err.log and ram_/vram_vigia_<g_frame>.bin to discroot; game frames below 25/s log a [vigia] LENTO warning."),
+        new Flag("Run", "WOTM_WATCHDOG=0", false, "Turn off the freeze watchdog", "By default, g_frame stuck for 8 s (outside movies) writes [watchdog] to live.err.log and ram_/vram_vigia_<g_frame>.bin to discroot; game frames below 25/s log a [watchdog] SLOW warning."),
         new Flag("Run", "WOTM_FMV_MUTE", false, "Mute movies", ""),
 
         new Flag("Rendering diagnostics", "WOTM_NOFX", false, "No particles/effects", "Turns off the fx[] particles and the wotm_fx effects."),
@@ -104,7 +104,7 @@ class Launcher : Form
     Launcher()
     {
         Text = "WotM - options";
-        try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch (Exception) { }   // o do exe (native\wotm.ico)
+        try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch (Exception) { }   // the exe's own (native\wotm.ico)
         Font = new Font("Segoe UI", 9f);
         AutoSize = true;
         AutoSizeMode = AutoSizeMode.GrowAndShrink;
@@ -114,7 +114,7 @@ class Launcher : Form
 
         var tips = new ToolTip { AutoPopDelay = 30000 };
         var root = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, Padding = new Padding(10), WrapContents = false };
-        // duas colunas: partida e trapacas a esquerda; as caixas de Flags a direita
+        // two columns: match and cheats on the left; the Flags checkboxes on the right
         var cols = new FlowLayoutPanel { FlowDirection = FlowDirection.LeftToRight, AutoSize = true, WrapContents = false, Margin = new Padding(0) };
         var left = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, WrapContents = false };
         var right = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, WrapContents = false };
@@ -163,6 +163,7 @@ class Launcher : Form
             matchLevel.SelectedIndex = 0;
             for (int i = 0; i < matchAIs.Length; ++i) { matchAIs[i].SelectedIndex = i == 0 ? 1 : 0; matchAISkins[i].SelectedIndex = 0; }
             foreach (CheckBox c in cheatBoxes) c.Checked = false;
+            foreach (CheckBox c in modBoxes) c.Checked = false;
             cheatStamina.SelectedIndex = 0;
             cheatWin.Value = 0;
         };
@@ -173,28 +174,38 @@ class Launcher : Form
         tips.SetToolTip(modkit, "Extract textures and sounds from the disc, edit them and pack them into mods\\<mod>\\ (docs\\passos\\MODS.md).");
         buttons.Controls.Add(modkit);
         buttons.Controls.Add(reset);
+        var toSimple = new Button { Text = "Simple", AutoSize = true };
+        toSimple.Click += delegate { ShowMode(true); };
+        tips.SetToolTip(toSimple, "Back to the simple window: name, monster, Host / Join / Play offline.");
+        buttons.Controls.Add(toSimple);
         root.Controls.Add(buttons);
         status.AutoSize = true;
         status.MaximumSize = new Size(420, 0);
         root.Controls.Add(status);
+        advancedRoot = root;
         Controls.Add(root);
+        simpleRoot = SimplePanel(tips);
+        Controls.Add(simpleRoot);
         if (Dark) ApplyDark(this);
-        AcceptButton = play;
+        StyleSimple();
+        playButton = play;
+        string mode;
+        ShowMode(!saved.TryGetValue(":Mode", out mode) || mode != "advanced");
         FormClosing += delegate { SaveIni(); };
     }
 
-    // Partida direta (WOTM_MATCH=<jogador>[:<skin>][,<ia>[:<skin>]...],<fase>; sem IA = sozinho na fase): indices do GLOSSARIO.md. O runtime
-    // aceita ate 7 IAs (8 monstros). Skin = figurino 0..3 (arquivos <PREFIXO>0-3 em disc\MON); "Random" (monstro ou skin) e sorteado no Play.
-    // Fora da lista: Spider (6) e Ogre (12), cortados, e os chefes (13..15).
+    // Direct match (WOTM_MATCH=<player>[:<skin>][,<ai>[:<skin>]...],<stage>; no AI = alone on the stage): indices from GLOSSARIO.md. The
+    // runtime accepts up to 7 AIs (8 monsters). Skin = costume 0..3 (files <PREFIX>0-3 in disc\MON); "Random" (monster or skin) is drawn on Play.
+    // Left out of the list: Spider (6) and Ogre (12), which were cut, and the bosses (13..15).
     static readonly int[] MonsterIds = { 1, 2, 3, 4, 5, 7, 8, 9, 10, 11 };
     static readonly string[] MonsterNames = { "Congar", "Robo-47", "Togera", "Ultra V", "Preytor", "Kineticlops", "Magmo", "Raptros", "Agamo", "Zorgulon" };
     static readonly int[] LevelIds = { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 16 };
     static readonly string[] LevelNames = { "Midtown Park", "Gamblers Gulch", "Rosdale Canyon", "Metro City", "Century Airfield", "Atomic Island",
         "Baytown", "Club Caldera", "Tsunopolis", "UFO", "Capitol", "Lake Powell", "Mini Baytown", "Volcano", "Tokyo Deathmatch" };
     const int MatchMaxAIs = 7;
-    const int RandomId = -1;   // id salvo no ini para "Random" (monstro e skin)
+    const int RandomId = -1;   // id saved in the ini for "Random" (monster and skin)
     static readonly Random rng = new Random();
-    // Nome do jogo e prefixo dos arquivos em MON\ de cada monstro de MonsterIds (o skin.json aceita os dois)
+    // In-game name and MON\ file prefix of each monster in MonsterIds (skin.json accepts either)
     static readonly string[] MonsterGameNames = { "congar", "robo-47", "togera", "ultra-v", "preytor", "kineticlops", "magmo", "raptros", "agamo", "zorgulon" };
     static readonly string[] MonsterPrefixes = { "MONKEY", "ROBOT", "LIZARD", "SHOGUN", "MANTIS", "ENERGY", "LAVA", "DRAGON", "ROCK", "ALIEN" };
 
@@ -204,8 +215,12 @@ class Launcher : Form
     readonly ComboBox[] matchAIs = new ComboBox[MatchMaxAIs];
     readonly ComboBox matchPlayerSkin = SkinBox(120);
     readonly ComboBox[] matchAISkins = new ComboBox[MatchMaxAIs];
+    // gameplay modifiers, in LobbyClient.ModifierNames order
+    readonly CheckBox[] modBoxes = new CheckBox[3];
 
-    // Item da caixa de skin: o texto e o valor do WOTM_MATCH ("0".."3", o id da skin de mod, "random")
+    string ModsValue() { return LobbyClient.ModifierList(modBoxes[0].Checked, modBoxes[1].Checked, modBoxes[2].Checked); }
+
+    // Skin box item: the text and the WOTM_MATCH value ("0".."3", the mod skin id, "random")
     class SkinItem
     {
         public string Label, Value;
@@ -214,7 +229,7 @@ class Launcher : Form
     }
     const string RandomSkin = "random";
 
-    // Skins de mod (discroot\mods\<mod>\skins\<pasta>\skin.json, MODS.md) por indice em MonsterIds: (nome, id)
+    // Mod skins (discroot\mods\<mod>\skins\<folder>\skin.json, MODS.md) by index in MonsterIds: (name, id)
     readonly List<KeyValuePair<string, string>>[] modSkins = new List<KeyValuePair<string, string>>[10];
 
     static string Norm(string s)
@@ -229,8 +244,8 @@ class Launcher : Form
         return m.Success ? m.Groups[1].Value : null;
     }
 
-    // Mesma regra do runtime (wotm_mods.hpp): pastas com '_' ou '.' no comeco ficam de fora; sem id, o nome da pasta; mesmo
-    // monstro e id em dois mods, vale o ultimo em ordem alfabetica.
+    // Same rule as the runtime (wotm_mods.hpp): folders starting with '_' or '.' are skipped; without an id, the folder name is used;
+    // with the same monster and id in two mods, the last one in alphabetical order wins.
     void LoadModSkins()
     {
         for (int k = 0; k < modSkins.Length; ++k) modSkins[k] = new List<KeyValuePair<string, string>>();
@@ -265,8 +280,8 @@ class Launcher : Form
         foreach (var kv in byKey) modSkins[kv.Value.Key].Add(kv.Value.Value);
     }
 
-    // Monstros custom (discroot\mods\<mod>\monsters\<pasta>\monster.json, MODS.md): (nome, id), em ordem de id. So para o jogador: um
-    // custom de chefe como IA rodaria a IA do chefe, que precisa da fase dele.
+    // Custom monsters (discroot\mods\<mod>\monsters\<folder>\monster.json, MODS.md): (name, id), in id order. Player only: a custom
+    // boss as an AI would run the boss AI, which needs its own stage.
     readonly List<KeyValuePair<string, string>> modCustoms = new List<KeyValuePair<string, string>>();
     void LoadModCustoms()
     {
@@ -295,7 +310,7 @@ class Launcher : Form
         }
         foreach (var kv in byId) modCustoms.Add(new KeyValuePair<string, string>(kv.Value, kv.Key));
     }
-    // Indice do custom na caixa do jogador (depois dos 10 e do Random), ou -1
+    // Index of the custom monster in the player box (after the 10 and Random), or -1
     int CustomIndex(int sel) { int c = sel - MonsterIds.Length - 1; return c >= 0 && c < modCustoms.Count ? c : -1; }
 
     static ComboBox SkinBox(int width)
@@ -303,7 +318,7 @@ class Launcher : Form
         return new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = width, DropDownWidth = 180 };
     }
 
-    // Itens da caixa de skin para o monstro k (indice em MonsterIds; fora dele = Random: so os 4 do disco)
+    // Skin box items for monster k (index in MonsterIds; outside it = Random: only the 4 from the disc)
     void FillSkins(ComboBox cb, int k, string keep)
     {
         cb.BeginUpdate();
@@ -314,14 +329,14 @@ class Launcher : Form
         cb.Items.Add(new SkinItem("Random", RandomSkin));
         cb.EndUpdate();
         cb.SelectedIndex = 0;
-        if (keep == RandomId.ToString()) keep = RandomSkin;   // ini de antes das skins de mod
+        if (keep == RandomId.ToString()) keep = RandomSkin;   // ini from before mod skins existed
         for (int i = 0; i < cb.Items.Count; ++i)
             if (((SkinItem)cb.Items[i]).Value == keep) cb.SelectedIndex = i;
     }
 
     static string SkinId(ComboBox cb) { return cb.SelectedItem == null ? "0" : ((SkinItem)cb.SelectedItem).Value; }
 
-    // Monstro escolhido numa caixa (indice em MonsterIds; Random = MonsterIds.Length)
+    // Monster picked in a box (index in MonsterIds; Random = MonsterIds.Length)
     void WireSkins(ComboBox monster, ComboBox skin, int offset, string saved)
     {
         FillSkins(skin, monster.SelectedIndex - offset, saved);
@@ -363,8 +378,26 @@ class Launcher : Form
         foreach (int id in LevelIds) matchLevel.Items.Add(id + "  " + LevelNames[Array.IndexOf(LevelIds, id)]);
         matchLevel.SelectedIndex = IndexOrZero(LevelIds, saved, ":MatchLevel");
         tips.SetToolTip(matchLevel, "Number = stage index in GLOSSARIO.md. Every stage fits 8 monsters: the monsters load above 32 MB (64 MB runtime); " +
-            "Metro City with 8 still has ~21 MB to spare.");
+            "Metro City with 8 still has ~17 MB to spare up to the map reserve.");
         inner.Controls.Add(Row("Stage", matchLevel));
+
+        var modsRow = new FlowLayoutPanel { FlowDirection = FlowDirection.LeftToRight, AutoSize = true, WrapContents = false, Margin = new Padding(0) };
+        modsRow.Controls.Add(new Label { Text = "Modifiers:", AutoSize = true, Margin = new Padding(3, 6, 3, 0) });
+        string[] modTips = {
+            "Moon gravity: everyone jumps about twice as high and thrown monsters float.",
+            "Monsters walk, run and dash 1.5x faster; animations and attacks keep their speed.",
+            "The whole game runs at 2x speed (sound stays at normal speed)." };
+        for (int i = 0; i < modBoxes.Length; ++i)
+        {
+            var cb = new DarkCheckBox { Text = LobbyClient.ModifierLabels[i], AutoSize = true };
+            cb.Checked = saved.TryGetValue(":Mod_" + LobbyClient.ModifierNames[i], out v) && v == "1";
+            tips.SetToolTip(cb, modTips[i] + " Offline, or the host's choice for the lobby (sent to the server; joiners play the host's). " +
+                "With all three off, offline uses the in-game panel's MODIFIERS tab.");
+            cb.CheckedChanged += delegate { if (lobbyOwner) NetSend("SET mods=" + ModsValue()); };
+            modBoxes[i] = cb;
+            modsRow.Controls.Add(cb);
+        }
+        inner.Controls.Add(modsRow);
 
         inner.Controls.Add(new Label { Text = "AI opponents (up to 7; none = play solo on the stage):", AutoSize = true, Margin = new Padding(3, 6, 3, 0) });
         var foes = new FlowLayoutPanel { FlowDirection = FlowDirection.LeftToRight, AutoSize = true, MaximumSize = new Size(420, 0), WrapContents = true };
@@ -414,8 +447,8 @@ class Launcher : Form
     void UpdateMatch()
     {
         bool on = matchOn.Checked;
-        // monstro e fase valem tambem para a partida em rede (grupo Online); as IAs e os trajes so na partida direta
-        matchPlayerSkin.Enabled = on && CustomIndex(matchPlayer.SelectedIndex) < 0;   // o custom tem o traje dele
+        // monster and stage also apply to the network match (Online group); the AIs and costumes only to the direct match
+        matchPlayerSkin.Enabled = on && CustomIndex(matchPlayer.SelectedIndex) < 0;   // the custom monster has its own costume
         for (int i = 0; i < matchAIs.Length; ++i)
         {
             matchAIs[i].Enabled = on;
@@ -427,12 +460,12 @@ class Launcher : Form
         matchInfo.Text = txt;
     }
 
-    // "<monstro>:<skin>", com os "Random" sorteados aqui (k = indice em MonsterIds, MonsterIds.Length = Random). Skin aleatoria:
-    // entre os 4 do disco e as skins de mod do monstro sorteado.
+    // "<monster>:<skin>", with any "Random" drawn here (k = index in MonsterIds, MonsterIds.Length = Random). Random skin: one of
+    // the 4 from the disc and the mod skins of the drawn monster.
     string MatchEntry(int k, ComboBox skin)
     {
         int c = CustomIndex(k);
-        if (c >= 0) return modCustoms[c].Value;   // o runtime le o id (WOTM_MATCH=goliath,...)
+        if (c >= 0) return modCustoms[c].Value;   // the runtime reads the id (WOTM_MATCH=goliath,...)
         if (k >= MonsterIds.Length) k = rng.Next(MonsterIds.Length);
         string s = SkinId(skin);
         if (s == RandomSkin)
@@ -452,11 +485,11 @@ class Launcher : Form
         return string.Join(",", parts.ToArray());
     }
 
-    // Partida em rede pelo wotm_server (native/net): o launcher fala com o lobby (LobbyClient.cs). Quem cria um lobby e o dono (codigo de
-    // 4 letras, senha opcional): so ele escolhe a fase (a "Stage" do grupo Match) e as vitorias e comeca. Os outros entram pelo codigo ou
-    // pela lista. Na partida o launcher fica minimizado e continua no lobby; quando o jogo fecha (QUIT no jogo) ele volta, no mesmo lobby.
-    // "Host on this PC" roda o wotm_server desta pasta escondido, filho do launcher (ServerHost.cs; tools\build_net.bat o compila), cria
-    // um lobby nele e mostra os enderecos para os amigos; tenta abrir a porta no roteador por UPnP.
+    // Network match through wotm_server (native/net): the launcher talks to the lobby (LobbyClient.cs). Whoever creates a lobby owns it
+    // (4-letter code, optional password): only the owner picks the stage (the "Stage" of the Match group) and the wins, and starts. The
+    // others join by code or from the list. During the match the launcher stays minimized and in the lobby; when the game closes (QUIT
+    // in the game) it comes back, in the same lobby. "Host on this PC" runs this folder's wotm_server hidden, as a child of the launcher
+    // (ServerHost.cs; tools\build_net.bat builds it), creates a lobby on it and shows the addresses for friends; tries UPnP on the router.
     readonly TextBox netServer = new TextBox { Width = 200 };
     readonly TextBox netName = new TextBox { Width = 160 };
     readonly TextBox netLobbyName = new TextBox { Width = 160 };
@@ -467,9 +500,18 @@ class Launcher : Form
     readonly Button netStart = new Button { Text = "Start match", AutoSize = true, Enabled = false };
     readonly Label netInfo = new Label { AutoSize = true, MaximumSize = new Size(400, 0) };
     readonly TextBox netShare = new TextBox { Width = 390, Height = 92, Multiline = true, ReadOnly = true, Visible = false, ScrollBars = ScrollBars.Vertical };
+    // public server list: a master server (wotm_server --master) lists the servers that announce themselves to it
+    readonly TextBox netMaster = new TextBox { Width = 160 };
+    readonly Button netBrowse = new Button { Text = "Browse public servers", AutoSize = true };
+    readonly ListBox netServers = new ListBox { Width = 390, Height = 64 };
+    readonly List<LobbyClient.ServerInfo> netServerInfos = new List<LobbyClient.ServerInfo>();
+    readonly CheckBox netPublic = new DarkCheckBox { Text = "List publicly as", AutoSize = true };
+    readonly TextBox netPublicName = new TextBox { Width = 120 };
     ServerHost hosted;
+    string hostedPublic = "";   // "<master> <name>" the hosted server announces to, "" when private
     List<string> hostedLines = new List<string>();
     string hostedRouter = "";
+    bool hostedRouterChecked;   // the UPnP attempt returned, or the server is not this launcher's (no attempt)
     readonly Timer netTimer = new Timer { Interval = 200 };
     readonly List<LobbyClient.LobbyInfo> netLobbies = new List<LobbyClient.LobbyInfo>();
     LobbyClient lobby;
@@ -483,12 +525,21 @@ class Launcher : Form
         var inner = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, Dock = DockStyle.Fill, WrapContents = false };
         gb.Controls.Add(inner);
         string v;
-        netServer.Text = saved.TryGetValue(":NetServer", out v) && v.Length > 0 ? v : "127.0.0.1:7777";
+        netServer.Text = saved.TryGetValue(":NetServer", out v) && v.Length > 0 ? v : LobbyClient.DefaultServer;
         tips.SetToolTip(netServer, "host:port of a wotm_server (your own with 'Host on this PC', a friend's public IP, or a VPN address). " +
             "The host forwards this port, TCP and UDP, on the router.");
         inner.Controls.Add(Row("Server", netServer));
         netName.Text = saved.TryGetValue(":NetName", out v) && v.Length > 0 ? v : LobbyClient.CleanName(Environment.UserName);
         inner.Controls.Add(Row("Your name", netName));
+
+        netMaster.Text = saved.TryGetValue(":NetMaster", out v) ? v : "";
+        tips.SetToolTip(netMaster, "host or host:port of a master server (default port " + LobbyClient.MasterPort + "): the list of public servers.");
+        tips.SetToolTip(netBrowse, "Lists the public servers on the master server, with a ping from this PC. Pick one to use it as Server.");
+        tips.SetToolTip(netServers, "Pick a server: it becomes the Server above and its lobbies show in the list below.");
+        var masterRow = Row("Master server", netMaster);
+        masterRow.Controls.Add(netBrowse);
+        inner.Controls.Add(masterRow);
+        inner.Controls.Add(netServers);
 
         netLobbyName.Text = saved.TryGetValue(":NetLobbyName", out v) && v.Length > 0 ? v : "Friends";
         var hostLobby = new Button { Text = "Host lobby", AutoSize = true };
@@ -527,6 +578,14 @@ class Launcher : Form
         row.Controls.Add(leave);
         row.Controls.Add(host);
         inner.Controls.Add(row);
+        netPublic.Checked = saved.TryGetValue(":NetPublic", out v) && v == "1";
+        netPublicName.Text = saved.TryGetValue(":NetPublicName", out v) && v.Length > 0 ? v : netName.Text;
+        tips.SetToolTip(netPublic, "With 'Host on this PC': your server shows up in the public list of the Master server, under this name. " +
+            "Players still need your port forwarded (or UPnP) to reach it.");
+        var publicRow = new FlowLayoutPanel { FlowDirection = FlowDirection.LeftToRight, AutoSize = true, WrapContents = false, Margin = new Padding(0) };
+        publicRow.Controls.Add(netPublic);
+        publicRow.Controls.Add(netPublicName);
+        inner.Controls.Add(publicRow);
 
         hostLobby.Click += delegate { NetCreate(); };
         joinCode.Click += delegate { NetJoin(netCode.Text.Trim()); };
@@ -541,8 +600,11 @@ class Launcher : Form
         netStart.Click += delegate { NetStart(); };
         netWins.ValueChanged += delegate { if (lobbyOwner) NetSend("SET wins=" + (int)netWins.Value); };
         matchLevel.SelectedIndexChanged += delegate { if (lobbyOwner) NetSend("SET stage=" + LevelIds[matchLevel.SelectedIndex]); };
+        matchPlayer.SelectedIndexChanged += delegate { NetMonsterChanged(); };
         leave.Click += delegate { NetSend("LEAVE"); };
         host.Click += delegate { NetHost(); };
+        netBrowse.Click += delegate { NetBrowse(); };
+        netServers.SelectedIndexChanged += delegate { NetPickServer(); };
         netInfo.ForeColor = DimColor;
         netInfo.Text = "Pick your monster and stage in Match, then host a lobby or join one. Online play uses the build in this folder.";
         inner.Controls.Add(netInfo);
@@ -558,7 +620,7 @@ class Launcher : Form
         return gb;
     }
 
-    // wotm.buildid ao lado do wotm.exe do runtime (o mesmo que o jogo manda ao servidor)
+    // wotm.buildid next to the runtime's wotm.exe (the same one the game sends to the server)
     string BuildId()
     {
         string rt = RuntimeDir();
@@ -602,7 +664,7 @@ class Launcher : Form
         NetSend("LIST");
     }
 
-    // nome e monstro deste jogador, ou null com a mensagem do que falta
+    // this player's name and monster, or null with a message saying what is missing
     string NetMe(out int monster)
     {
         monster = 0;
@@ -642,16 +704,43 @@ class Launcher : Form
         NetSend("JOIN " + code + " " + name + " " + monster + NetPassword());
     }
 
-    // o dono manda a fase e as vitorias de agora e comeca
+    // in a lobby, a new pick in the monster box goes to the server (MONSTER); the server's MEMBERS line, or its ERROR, sets the box back
+    // to what the match will really use (ShowServerMonster)
+    bool showingServerMonster;
+    void NetMonsterChanged()
+    {
+        if (showingServerMonster || lobbyMembers == null) return;
+        int k = matchPlayer.SelectedIndex;
+        if (k < 0 || k >= MonsterIds.Length) { netInfo.Text = "Online needs a monster from the disc (not Random or a mod monster)."; ShowServerMonster(); return; }
+        NetSend("MONSTER " + MonsterIds[k]);
+    }
+
+    void ShowServerMonster()
+    {
+        int k = Array.IndexOf(MonsterIds, LobbyClient.MemberMonster(lobbyMembers, LobbyClient.CleanName(netName.Text)));
+        if (k < 0 || k == matchPlayer.SelectedIndex) return;
+        showingServerMonster = syncingSimple = true;
+        matchPlayer.SelectedIndex = k;
+        if (k < simpleMonster.Items.Count) simpleMonster.SelectedIndex = k;
+        showingServerMonster = syncingSimple = false;
+    }
+
+    // the owner's stage, wins and modifiers for the lobby
+    string NetSetLine()
+    {
+        return "SET stage=" + LevelIds[matchLevel.SelectedIndex] + " wins=" + (int)netWins.Value + " mods=" + ModsValue();
+    }
+
+    // the owner sends the current settings, then starts
     void NetStart()
     {
         if (!lobbyOwner) { netInfo.Text = "Only the lobby host starts the match."; return; }
-        NetSend("SET stage=" + LevelIds[matchLevel.SelectedIndex] + " wins=" + (int)netWins.Value);
+        NetSend(NetSetLine());
         NetSend("START");
     }
 
-    // jogador como host: sobe o servidor (ou usa o que ja esta na porta), entra nele por 127.0.0.1 e cria o lobby; o UPnP roda numa
-    // thread (leva segundos) e completa os enderecos quando volta
+    // player as host: starts the server (or uses the one already on the port), connects to it on 127.0.0.1 and creates the lobby; UPnP
+    // runs on a thread (it takes seconds) and fills in the addresses when it returns
     void NetHost()
     {
         if (hosted != null && hosted.Running && lobbyCode.Length > 0) { netInfo.Text = "You are already hosting lobby " + lobbyCode + "."; return; }
@@ -660,12 +749,23 @@ class Launcher : Form
         int colon = s.LastIndexOf(':');
         int port = colon > 0 ? ParseInt(s.Substring(colon + 1)) : 7777;
         if (port <= 0 || port > 65535) port = 7777;
-        if (hosted == null || !hosted.Running || hosted.Port != port)
+        string master = netMaster.Text.Trim(), publicName = LobbyClient.CleanName(netPublicName.Text);
+        if (netPublic.Checked && master.Length == 0) { netInfo.Text = "Type the Master server's address to list your server publicly."; return; }
+        if (netPublic.Checked && publicName.Length == 0) publicName = LobbyClient.CleanName(netName.Text);
+        netPublicName.Text = publicName;
+        string wantPublic = netPublic.Checked ? master + " " + publicName : "";
+        if (hosted == null || !hosted.Running || hosted.Port != port || (hosted.Owned && hostedPublic != wantPublic))
         {
             if (hosted != null) hosted.Dispose();
-            try { hosted = ServerHost.Start(exe, port, Path.Combine(exeDir, "wotm_server.log"), 3000); }
+            try
+            {
+                hosted = ServerHost.Start(exe, port, Path.Combine(exeDir, "wotm_server.log"), 3000, netPublic.Checked ? master : null, publicName);
+            }
             catch (LobbyError e) { hosted = null; netInfo.Text = "Failed to start the server: " + e.Message; return; }
-            hostedRouter = hosted.Owned ? "Router: trying to open port " + port + " (UPnP)..." : "A server was already running on port " + port + ": using it.";
+            hostedPublic = hosted.Owned ? wantPublic : "";
+            hostedRouter = hosted.Owned ? "Router: trying to open port " + port + " (UPnP)..." : "A server was already running on port " + port + ": using it" +
+                (netPublic.Checked ? " (it isn't listed publicly by this launcher)." : ".");
+            hostedRouterChecked = !hosted.Owned;
             if (hosted.Owned) MapRouterPort(hosted);
         }
         if (lobby != null && lobby.Host != "127.0.0.1") { lobby.Dispose(); lobby = null; }
@@ -686,6 +786,7 @@ class Launcher : Form
                 BeginInvoke((MethodInvoker)delegate
                 {
                     if (hosted != h) return;
+                    hostedRouterChecked = true;
                     if (external != null)
                     {
                         hostedLines = ServerHost.ShareLines(ServerHost.LocalAddresses(), external, h.Port);
@@ -701,11 +802,59 @@ class Launcher : Form
                     ShowShare();
                 });
             }
-            catch (InvalidOperationException) { }   // launcher ja fechou
+            catch (InvalidOperationException) { }   // launcher already closed
         }) { IsBackground = true }.Start();
     }
 
-    // a caixa que o host copia para os amigos: enderecos, codigo do lobby, estado do roteador
+    // public servers from the master server; the pings take up to a second or two, so the list is fetched on a thread
+    void NetBrowse()
+    {
+        string master = netMaster.Text.Trim();
+        if (master.Length == 0) { netInfo.Text = "Type the Master server's address (host or host:" + LobbyClient.MasterPort + ")."; return; }
+        netBrowse.Enabled = false;
+        netInfo.Text = "Asking the master server " + master + "...";
+        new System.Threading.Thread(delegate()
+        {
+            List<LobbyClient.ServerInfo> list = null;
+            string error = null;
+            try { list = LobbyClient.Browse(master, 3000); }
+            catch (LobbyError e) { error = e.Message; }
+            try
+            {
+                BeginInvoke((MethodInvoker)delegate
+                {
+                    netBrowse.Enabled = true;
+                    netServerInfos.Clear();
+                    netServers.Items.Clear();
+                    if (error != null) { netInfo.Text = "Master server: " + error; return; }
+                    foreach (LobbyClient.ServerInfo si in list)
+                    {
+                        netServerInfos.Add(si);
+                        netServers.Items.Add(si.Name + "   " + si.Ip + ":" + si.Port + "   " + si.Open + (si.Open == 1 ? " lobby" : " lobbies") +
+                            " (" + si.Waiting + " waiting)   " + si.Players + (si.Players == 1 ? " player" : " players") + "   " +
+                            LobbyClient.ServerStatus(si));
+                    }
+                    netInfo.Text = list.Count == 0 ? "No public servers right now." : "Pick a server to see its lobbies.";
+                });
+            }
+            catch (InvalidOperationException) { }   // launcher already closed
+        }) { IsBackground = true }.Start();
+    }
+
+    // a server picked in the public list becomes the Server, and its lobbies are listed
+    void NetPickServer()
+    {
+        int i = netServers.SelectedIndex;
+        if (i < 0 || i >= netServerInfos.Count) return;
+        LobbyClient.ServerInfo si = netServerInfos[i];
+        if (lobbyCode.Length > 0) { netInfo.Text = "Leave your lobby first to switch servers."; return; }
+        netServer.Text = si.Ip + ":" + si.Port;
+        if (lobby != null) { lobby.Dispose(); lobby = null; }
+        if (si.Protocol != LobbyClient.Protocol) { netInfo.Text = si.Name + " " + LobbyClient.ServerStatus(si) + "."; return; }
+        NetRefresh();
+    }
+
+    // the box the host copies to friends: addresses, lobby code, router status
     void ShowShare()
     {
         if (hosted == null || (lobby != null && lobby.Host != "127.0.0.1")) { netShare.Visible = false; return; }
@@ -715,14 +864,20 @@ class Launcher : Form
         foreach (string a in hostedLines) l.Add("  " + a);
         if (hostedLines.Count == 0) l.Add("  (no network address found)");
         l.Add(hostedRouter);
+        if (hostedPublic.Length > 0)
+        {
+            int sp = hostedPublic.LastIndexOf(' ');
+            l.Add("Listed publicly as " + hostedPublic.Substring(sp + 1) + " on the master server " + hostedPublic.Substring(0, sp) + ".");
+        }
         if (hosted.Owned) l.Add("If Windows asks whether wotm_server may use the network, allow it.");
         netShare.Text = string.Join(Environment.NewLine, l.ToArray());
         netShare.Visible = true;
+        UpdateSimple();
     }
 
     string netSettings = "";
 
-    // linhas do lobby (Timer da interface): lista, membros, opcoes, erros e o inicio da partida
+    // lobby lines (UI Timer): list, members, settings, errors and the match start
     void NetPoll()
     {
         if (lobby == null) return;
@@ -739,25 +894,30 @@ class Launcher : Form
             else if (l == "END" && netLobbies.Count == 0) netInfo.Text = "No open lobbies on this server: host one.";
             else if (l.StartsWith("CREATED ")) { netCode.Text = l.Substring(8).Trim(); ShowShare(); }
             else if (l.StartsWith("JOINED ")) { lobbyCode = l.Substring(7).Trim(); netCode.Text = lobbyCode; ShowShare(); }
-            else if (l.StartsWith("LEFT ")) { lobbyCode = ""; lobbyOwner = false; netStart.Enabled = false; netInfo.Text = "Left the lobby."; }
+            else if (l.StartsWith("LEFT ")) { lobbyCode = ""; NetNotInLobby(); netInfo.Text = "Left the lobby."; }
             else if (l.StartsWith("SETTINGS "))
             {
                 Dictionary<string, string> kv = LobbyClient.KeyValues(l);
                 int wins = kv.ContainsKey("wins") ? ParseInt(kv["wins"]) : 0;
-                netSettings = "stage " + (kv.ContainsKey("stage") ? kv["stage"] : "?") + ", " + (wins > 0 ? wins + " wins to end" : "endless");
+                netSettings = "stage " + (kv.ContainsKey("stage") ? kv["stage"] : "?") + ", " + (wins > 0 ? wins + " wins to end" : "endless") +
+                    ", " + LobbyClient.ModifierLabel(kv.ContainsKey("mods") ? kv["mods"] : "");
+                ShowLobby();
             }
             else if (l.StartsWith("MEMBERS "))
             {
                 LobbyClient.MemberInfo m = LobbyClient.ParseMembers(l);
                 if (m == null) continue;
+                bool wasOwner = lobbyOwner;
+                lobbyMembers = m;
                 lobbyOwner = m.Host == LobbyClient.CleanName(netName.Text);
                 netStart.Enabled = lobbyOwner;
-                var names = new List<string>();
-                foreach (string n in m.Names) names.Add(n.Split(':')[0]);
-                netInfo.Text = "Lobby " + m.Code + " (code for friends): " + string.Join(", ", names.ToArray()) + ". Host: " + m.Host +
-                    (netSettings.Length > 0 ? " (" + netSettings + ")" : "") + "." + (lobbyOwner ? " Press Start match when everyone is in." : " Waiting for the host to start.");
+                // a joiner plays the host's modifiers (shown in the lobby line), so its own boxes do not apply in the lobby
+                foreach (CheckBox c in modBoxes) c.Enabled = lobbyOwner;
+                if (lobbyOwner && !wasOwner) NetSend(NetSetLine());   // the lobby shows the new host's settings before Start match
+                ShowServerMonster();
+                ShowLobby();
             }
-            else if (l.StartsWith("ERROR ")) netInfo.Text = "Server: " + l.Substring(6);
+            else if (l.StartsWith("ERROR ")) { netInfo.Text = "Server: " + l.Substring(6); ShowServerMonster(); }
             else if (l.StartsWith("MATCH ")) PlayOnline(LobbyClient.MatchEnv(LobbyClient.KeyValues(l), lobbyHost));
         }
         if (lobby.Closed)
@@ -765,13 +925,281 @@ class Launcher : Form
             netInfo.Text = "Connection to the server closed.";
             netTimer.Stop();
             lobby = null;
-            lobbyOwner = false;
-            netStart.Enabled = false;
+            NetNotInLobby();
         }
+    }
+
+    // ---- Simple mode: name, monster, Host a game / Join a game / Play offline, the invite and the players. Its controls mirror the
+    // Advanced ones (netName, matchPlayer, matchLevel, netWins, modBoxes) and its buttons call the same lobby code (NetHost, NetJoin,
+    // NetStart), so both modes show one lobby state and switching keeps the connection. ----
+    FlowLayoutPanel advancedRoot, simpleRoot, simpleJoinRow, simpleLobby, simpleInviteRow, simpleHostSettings;
+    readonly TextBox simpleName = new TextBox { Width = 150 };
+    readonly ComboBox simpleMonster = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 150 };
+    readonly ComboBox simpleStage = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 170 };
+    readonly NumericUpDown simpleWins = new NumericUpDown { Minimum = 0, Maximum = 99, Width = 55 };
+    readonly CheckBox[] simpleMods = new CheckBox[3];
+    readonly TextBox simpleInviteIn = new TextBox { Width = 270 }, simpleInviteOut = new TextBox { Width = 270, ReadOnly = true };
+    readonly Button simpleHost = new Button { Text = "Host a game", Size = new Size(140, 42) },
+                    simpleJoin = new Button { Text = "Join a game", Size = new Size(140, 42) },
+                    simpleOffline = new Button { Text = "Play offline", Size = new Size(140, 42) },
+                    simpleJoinGo = new Button { Text = "Join", AutoSize = true },
+                    simpleCopy = new Button { Text = "Copy code", AutoSize = true },
+                    simpleStart = new Button { Text = "Start match", Size = new Size(160, 38) },
+                    simpleLeave = new Button { Text = "Leave", AutoSize = true };
+    readonly Label simplePlayers = new Label { AutoSize = true, MaximumSize = new Size(440, 0) },
+                   simpleSettings = new Label { AutoSize = true, MaximumSize = new Size(440, 0) },
+                   simpleStatus = new Label { AutoSize = true, MaximumSize = new Size(440, 0), Margin = new Padding(3, 10, 3, 3) };
+    static readonly Color OkColor = Color.FromArgb(70, 180, 90), WaitColor = Color.FromArgb(220, 160, 40), BadColor = Color.FromArgb(225, 80, 70),
+                          AccentColor = Color.FromArgb(45, 110, 200);
+    bool syncingSimple;
+    Button playButton;
+
+    static FlowLayoutPanel Line(params Control[] cs)
+    {
+        var p = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = new Padding(0, 4, 0, 0) };
+        p.Controls.AddRange(cs);
+        return p;
+    }
+    static Label Caption(string text) { return new Label { Text = text, AutoSize = true, Margin = new Padding(3, 7, 3, 0) }; }
+
+    FlowLayoutPanel SimplePanel(ToolTip tips)
+    {
+        var p = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, Padding = new Padding(16), WrapContents = false };
+        var title = new Label { Text = "War of the Monsters - online", AutoSize = true, Font = new Font("Segoe UI", 15f, FontStyle.Bold) };
+        var toAdvanced = new Button { Text = "Advanced", AutoSize = true, Margin = new Padding(40, 6, 3, 3) };
+        toAdvanced.Click += delegate { ShowMode(false); };
+        tips.SetToolTip(toAdvanced, "Everything: public servers, passwords, AI opponents, cheats and diagnostics.");
+        p.Controls.Add(Line(title, toAdvanced));
+
+        simpleMonster.Items.AddRange(MonsterNames);
+        foreach (object o in matchLevel.Items) simpleStage.Items.Add(o);
+        p.Controls.Add(Line(Caption("Your name"), simpleName, Caption("   Monster"), simpleMonster));
+        p.Controls.Add(Line(simpleHost, simpleJoin, simpleOffline));
+        tips.SetToolTip(simpleHost, "Opens a game on the shared server and gives you its 4-letter code. Send the code to your friends.");
+        tips.SetToolTip(simpleJoin, "Type the 4-letter code a friend sent you.");
+        tips.SetToolTip(simpleOffline, "Plays on this PC only, against the computer.");
+
+        simpleJoinRow = Line(Caption("Code"), simpleInviteIn, simpleJoinGo);
+        simpleJoinRow.Visible = false;
+        p.Controls.Add(simpleJoinRow);
+
+        simpleLobby = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, WrapContents = false, Visible = false,
+                                            Margin = new Padding(0, 10, 0, 0) };
+        simpleInviteRow = Line(Caption("Code"), simpleInviteOut, simpleCopy);
+        simpleLobby.Controls.Add(simpleInviteRow);
+        for (int i = 0; i < simpleMods.Length; ++i) simpleMods[i] = new DarkCheckBox { Text = LobbyClient.ModifierLabels[i], AutoSize = true };
+        var mods = Line(Caption("Modifiers"));
+        mods.Controls.AddRange(simpleMods);
+        simpleHostSettings = new FlowLayoutPanel { FlowDirection = FlowDirection.TopDown, AutoSize = true, WrapContents = false, Margin = new Padding(0) };
+        simpleHostSettings.Controls.Add(Line(Caption("Stage"), simpleStage, Caption("   Wins to end (0 = endless)"), simpleWins));
+        simpleHostSettings.Controls.Add(mods);
+        simpleLobby.Controls.Add(simpleHostSettings);
+        simpleLobby.Controls.Add(simpleSettings);
+        simplePlayers.Font = new Font("Segoe UI", 10.5f);
+        simplePlayers.Margin = new Padding(3, 8, 3, 3);
+        simpleLobby.Controls.Add(simplePlayers);
+        simpleLobby.Controls.Add(Line(simpleStart, simpleLeave));
+        p.Controls.Add(simpleLobby);
+        p.Controls.Add(simpleStatus);
+
+        // the simple controls write into the Advanced ones; their change events send SET when this PC hosts the lobby
+        simpleName.TextChanged += delegate { if (!syncingSimple) netName.Text = simpleName.Text; };
+        simpleMonster.SelectedIndexChanged += delegate { if (!syncingSimple && simpleMonster.SelectedIndex >= 0) matchPlayer.SelectedIndex = simpleMonster.SelectedIndex; };
+        simpleStage.SelectedIndexChanged += delegate { if (!syncingSimple && simpleStage.SelectedIndex >= 0) matchLevel.SelectedIndex = simpleStage.SelectedIndex; };
+        simpleWins.ValueChanged += delegate { if (!syncingSimple) netWins.Value = simpleWins.Value; };
+        for (int i = 0; i < simpleMods.Length; ++i)
+        {
+            int k = i;
+            simpleMods[i].CheckedChanged += delegate { if (!syncingSimple) modBoxes[k].Checked = simpleMods[k].Checked; };
+        }
+        simpleHost.Click += delegate { SimpleHost(); };
+        simpleJoin.Click += delegate { simpleJoinRow.Visible = true; simpleInviteIn.Focus(); };
+        simpleJoinGo.Click += delegate { SimpleJoin(); };
+        simpleInviteIn.KeyDown += (s, e) => { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; SimpleJoin(); } };
+        simpleOffline.Click += delegate { matchOn.Checked = true; Play(); };
+        simpleCopy.Click += delegate
+        {
+            if (simpleInviteOut.Text.Length == 0) return;
+            try { Clipboard.SetText(simpleInviteOut.Text); SimpleSay("Code copied: send it to your friends.", OkColor); } catch (Exception) { }
+        };
+        simpleStart.Click += delegate { NetStart(); };
+        simpleLeave.Click += delegate { NetSend("LEAVE"); };
+        netInfo.TextChanged += delegate { UpdateSimple(); };
+        return p;
+    }
+
+    // colors of the big buttons (after the theme, which would repaint them)
+    void StyleSimple()
+    {
+        foreach (Button b in new[] { simpleHost, simpleJoin, simpleStart })
+        {
+            b.FlatStyle = FlatStyle.Flat;
+            b.BackColor = AccentColor;
+            b.ForeColor = Color.White;
+            b.FlatAppearance.BorderSize = 0;
+            b.Font = new Font("Segoe UI", 10.5f, FontStyle.Bold);
+        }
+        simpleOffline.Font = new Font("Segoe UI", 10.5f);
+        // the invite is what the host sends: bright and bold, not the grayed read-only look
+        simpleInviteOut.BackColor = Dark ? InputColor : SystemColors.Window;
+        simpleInviteOut.ForeColor = Dark ? FgColor : SystemColors.WindowText;
+        simpleInviteOut.Font = new Font("Segoe UI", 10.5f, FontStyle.Bold);
+    }
+
+    void ShowMode(bool simple)
+    {
+        if (simple)
+        {
+            syncingSimple = true;
+            simpleName.Text = netName.Text;
+            if (matchPlayer.SelectedIndex >= 0 && matchPlayer.SelectedIndex < MonsterNames.Length) simpleMonster.SelectedIndex = matchPlayer.SelectedIndex;
+            else simpleMonster.SelectedIndex = 0;
+            simpleStage.SelectedIndex = matchLevel.SelectedIndex;
+            simpleWins.Value = netWins.Value;
+            for (int i = 0; i < simpleMods.Length; ++i) simpleMods[i].Checked = modBoxes[i].Checked;
+            syncingSimple = false;
+        }
+        advancedRoot.Visible = !simple;
+        simpleRoot.Visible = simple;
+        Text = simple ? "War of the Monsters" : "WotM - options";
+        AcceptButton = simple ? null : playButton;   // Enter in simple mode must not start an offline game
+        UpdateSimple();
+    }
+
+    void SimpleSay(string text, Color color)
+    {
+        simpleStatus.Text = text;
+        simpleStatus.ForeColor = color;
+    }
+
+    void SimpleHost()
+    {
+        string name = LobbyClient.CleanName(simpleName.Text);
+        if (name.Length == 0) { SimpleSay("Type your name first (letters, digits, _ or -).", BadColor); simpleName.Focus(); return; }
+        simpleJoinRow.Visible = false;
+        netLobbyName.Text = name + "_game";
+        netPassword.Text = "";
+        UseServer(LobbyClient.DefaultServer);   // the shared game server: nothing to open on the router, the invite is the code
+        SimpleSay("Making your game on the server...", WaitColor);
+        NetCreate();
+    }
+
+    // talk to `server` from now on; leaves a lobby on another server first (a public list pick, or this PC's own)
+    void UseServer(string server)
+    {
+        if (lobby != null && netServer.Text.Trim() != server)
+        {
+            if (lobbyCode.Length > 0) NetSend("LEAVE");
+            lobby.Dispose();
+            lobby = null;
+            NetNotInLobby();
+        }
+        netServer.Text = server;
+    }
+
+    void SimpleJoin()
+    {
+        string host, code, why;
+        int port;
+        if (!LobbyClient.ParseInvite(simpleInviteIn.Text, out host, out port, out code, out why)) { SimpleSay(why, BadColor); return; }
+        if (LobbyClient.CleanName(simpleName.Text).Length == 0) { SimpleSay("Type your name first (letters, digits, _ or -).", BadColor); simpleName.Focus(); return; }
+        simpleInviteIn.Text = LobbyClient.FormatInvite(host, port, code);
+        string server = host + ":" + port;
+        UseServer(server);   // the invite's server wins
+        netPassword.Text = "";
+        SimpleSay("Joining game " + code + "...", WaitColor);
+        NetJoin(code);
+    }
+
+    // the simple window from the lobby state (members, settings, invite) and the last message
+    void UpdateSimple()
+    {
+        if (simpleRoot == null) return;
+        LobbyClient.MemberInfo m = lobbyMembers;
+        simpleLobby.Visible = m != null;
+        simpleHost.Enabled = simpleJoin.Enabled = simpleOffline.Enabled = m == null;   // in a lobby: Leave first
+        if (m != null) simpleJoinRow.Visible = false;
+        string info = netInfo.Text;
+        if (m == null)
+        {
+            if (info.StartsWith("Server: ")) SimpleSay(LobbyClient.FriendlyError(info.Substring(8)), BadColor);
+            else if (info.StartsWith("Failed to start the server: ")) SimpleSay("Couldn't start the game server on this PC: " + info.Substring(28), BadColor);
+            else if (info.Length > 0 && !info.StartsWith("Pick your monster")) SimpleSay(info, WaitColor);
+            else SimpleSay("Pick your monster, then host a game or join a friend's.", DimColor);
+            return;
+        }
+        string inviteNote;
+        string invite = SimpleInvite(out inviteNote);
+        simpleInviteRow.Visible = lobbyOwner && invite.Length > 0;
+        simpleInviteOut.Text = invite;
+        simpleHostSettings.Visible = lobbyOwner;
+        simpleSettings.Visible = !lobbyOwner;
+        simpleSettings.Text = netSettings.Length > 0 ? "Stage " + StageName(netSettings) : "";
+        var names = new List<string>();
+        foreach (string n in m.Names)
+        {
+            string who = n.Split(':')[0];
+            int k = Array.IndexOf(MonsterIds, LobbyClient.MemberMonster(m, who));
+            names.Add(who + (k >= 0 ? " (" + MonsterNames[k] + ")" : "") + (who == m.Host ? " (host)" : ""));
+        }
+        simplePlayers.Text = "Players: " + string.Join(", ", names.ToArray());
+        simpleStart.Visible = lobbyOwner;
+        for (int i = 0; i < simpleMods.Length; ++i) simpleMods[i].Enabled = modBoxes[i].Enabled;
+        if (info.StartsWith("Server: ")) SimpleSay(LobbyClient.FriendlyError(info.Substring(8)), BadColor);
+        else if (info.StartsWith("Match")) SimpleSay(info, info.StartsWith("Match running") ? OkColor : WaitColor);
+        else if (lobbyOwner && hosted != null && m.Names.Length < 2 && !inviteNote.StartsWith("Send this invite"))
+            SimpleSay(inviteNote, invite.Length > 0 || !hostedRouterChecked ? WaitColor : BadColor);   // the invite is missing or limited: say why first
+        else if (lobbyOwner) SimpleSay(m.Names.Length < 2 ? "Send the code to your friends. Press Start match when everyone is in." : "Everyone in? Press Start match.",
+                                       m.Names.Length < 2 ? WaitColor : OkColor);
+        else SimpleSay("You're in. Waiting for " + m.Host + " to start the match...", OkColor);
+    }
+
+    // "stage 9, endless, Super Jump" with the stage's name: "9 Tsunopolis, endless, Super Jump"
+    string StageName(string settings)
+    {
+        string rest = settings.StartsWith("stage ") ? settings.Substring(6) : settings;
+        int comma = rest.IndexOf(',');
+        int id = ParseInt(comma > 0 ? rest.Substring(0, comma) : rest);
+        int k = Array.IndexOf(LevelIds, id);
+        return (k >= 0 ? LevelNames[k] : id.ToString()) + (comma > 0 ? rest.Substring(comma) : "");
+    }
+
+    // the invite for friends and who it works for (ServerHost.InviteFor): an internet address only once the router opened the port
+    string SimpleInvite(out string note)
+    {
+        note = "";
+        if (lobby == null || lobbyCode.Length != 4) return "";
+        if (hosted != null && lobby.Host == "127.0.0.1") return ServerHost.InviteFor(hostedLines, lobbyCode, hostedRouterChecked, out note);
+        note = "Send this invite to your friends.";   // a lobby on a reachable server (the shared one: just the code)
+        return LobbyClient.FormatInvite(lobby.Host, lobby.Port, lobbyCode);
+    }
+
+    LobbyClient.MemberInfo lobbyMembers;
+
+    // the lobby line: code, members, host and the lobby's settings
+    void ShowLobby()
+    {
+        LobbyClient.MemberInfo m = lobbyMembers;
+        if (m == null) return;
+        var names = new List<string>();
+        foreach (string n in m.Names) names.Add(n.Split(':')[0]);
+        netInfo.Text = "Lobby " + m.Code + " (code for friends): " + string.Join(", ", names.ToArray()) + ". Host: " + m.Host +
+            (netSettings.Length > 0 ? " (" + netSettings + ")" : "") + "." + (lobbyOwner ? " Press Start match when everyone is in." : " Waiting for the host to start.");
+        UpdateSimple();
+    }
+
+    void NetNotInLobby()
+    {
+        lobbyOwner = false;
+        lobbyMembers = null;
+        netSettings = "";
+        netStart.Enabled = false;
+        foreach (CheckBox c in modBoxes) c.Enabled = true;
+        UpdateSimple();
     }
     static int MonsterId(int k) { return k >= MonsterIds.Length ? RandomId : MonsterIds[k]; }
 
-    // Trapacas do menu F1 ligadas desde o inicio (WOTM_CHEATS=inv,stam|furia,esp,cloak,deus,vencer=N); valem para os jogadores.
+    // F1 menu cheats turned on from the start (WOTM_CHEATS=inv,stam|furia,esp,cloak,deus,vencer=N); they apply to the players.
     static readonly string[] CheatKeys = { "inv", "esp", "cloak", "deus" };
     static readonly string[] CheatLabels = { "Invincible", "Special always ready", "CLOAK", "God mode (no damage, no hit reaction)" };
     readonly CheckBox[] cheatBoxes = new CheckBox[4];
@@ -870,15 +1298,21 @@ class Launcher : Form
         lines.Add(":NetName|" + netName.Text.Trim());
         lines.Add(":NetLobbyName|" + netLobbyName.Text.Trim());
         lines.Add(":NetWins|" + (int)netWins.Value);
+        lines.Add(":Mode|" + (simpleRoot != null && simpleRoot.Visible ? "simple" : "advanced"));
+        for (int i = 0; i < modBoxes.Length; ++i) lines.Add(":Mod_" + LobbyClient.ModifierNames[i] + "|" + (modBoxes[i].Checked ? "1" : "0"));
+        lines.Add(":NetMaster|" + netMaster.Text.Trim());
+        lines.Add(":NetPublic|" + (netPublic.Checked ? "1" : "0"));
+        lines.Add(":NetPublicName|" + netPublicName.Text.Trim());
         try { File.WriteAllLines(IniPath, lines.ToArray()); } catch (IOException) { } catch (UnauthorizedAccessException) { }
     }
 
-    // Video, QoL e teclado separado ficam no painel "Recompiled options" do menu principal (native/wotm_settings.hpp, settings.ini
-    // ao lado do save.json). O launcher nao os passa; uma variavel herdada passaria por cima do arquivo, entao sai do ambiente.
+    // Video, QoL and separate keyboard live in the main menu's "Recompiled options" panel (native/wotm_settings.hpp, settings.ini
+    // next to save.json). The launcher does not pass them; an inherited variable would override the file, so it is removed.
     static readonly string[] SettingsKeys = { "WOTM_RES", "WOTM_ASPECT", "WOTM_FULLSCREEN", "WOTM_HZ", "WOTM_VSYNC",
-        "WOTM_LOCKTOGGLE", "WOTM_ENEMYBARS", "WOTM_DAMAGEPOP", "WOTM_KBSEPARATE", "WOTM_SKIPINTRO", "WOTM_VIBRATION", "WOTM_INTERP" };
+        "WOTM_LOCKTOGGLE", "WOTM_ENEMYBARS", "WOTM_DAMAGEPOP", "WOTM_KBSEPARATE", "WOTM_SKIPINTRO", "WOTM_VIBRATION", "WOTM_INTERP",
+        "WOTM_SUPERJUMP", "WOTM_FASTMONSTERS", "WOTM_TURBO" };
 
-    // A pasta do runtime (a que tem run_live.ps1): WOTM_RECOMP_DIR, depois o .wotm_recomp_dir que o run_live.bat salva na raiz do repo.
+    // The runtime folder (the one with run_live.ps1): WOTM_RECOMP_DIR, then the .wotm_recomp_dir that run_live.bat saves in the repo root.
     string KnownRuntimeDir()
     {
         string env = Environment.GetEnvironmentVariable("WOTM_RECOMP_DIR");
@@ -891,8 +1325,8 @@ class Launcher : Form
         }
         return null;
     }
-    // A pasta mods que o jogo le (wotm_mods.inc): WOTM_MODS; senao mods\ ao lado do ELF (WOTM_DISC ou disc\ do repo, como o
-    // run_live.ps1); sem ela, mods\ do repo. null sem nenhuma.
+    // The mods folder the game reads (wotm_mods.inc): WOTM_MODS; otherwise mods\ next to the ELF (WOTM_DISC or the repo's disc\, as
+    // run_live.ps1 does); failing that, the repo's mods\. null if there is none.
     string ModsDir()
     {
         string env = Environment.GetEnvironmentVariable("WOTM_MODS");
@@ -908,11 +1342,11 @@ class Launcher : Form
             string parent = Path.GetDirectoryName(d);
             if (!Directory.Exists(parent)) continue;
             foreach (string sub in Directory.GetDirectories(parent))
-                if (Path.GetFileName(sub) == "mods") return sub;   // nome exato: "mods" casaria com o MOD\ do disco
+                if (Path.GetFileName(sub) == "mods") return sub;   // exact name: "mods" would also match the disc's MOD\
         }
         return null;
     }
-    // Como o KnownRuntimeDir; sem pasta conhecida, pergunta
+    // Like KnownRuntimeDir; with no known folder, asks
     string RuntimeDir()
     {
         string known = KnownRuntimeDir();
@@ -941,8 +1375,9 @@ class Launcher : Form
         if (psi != null) Launch(psi);
     }
 
-    // partida em rede: o ambiente da linha MATCH no lugar da partida direta; sem IA no controle e sem trapacas (valeriam so neste PC).
-    // O launcher nao fecha: fica minimizado e no lobby (a conexao continua) e volta quando o jogo fecha (QUIT no jogo ou a janela).
+    // network match: the MATCH line's environment instead of the direct match; no AI-controlled player and no cheats (they would only
+    // apply on this PC). The launcher does not close: it stays minimized and in the lobby (the connection stays up) and comes back when
+    // the game closes (QUIT in the game or the window).
     void PlayOnline(Dictionary<string, string> env)
     {
         if (onlineGame != null && !onlineGame.HasExited) { netInfo.Text = "The game is already running."; return; }
@@ -971,12 +1406,29 @@ class Launcher : Form
         catch (Exception e) { status.Text = "Failed: " + e.Message; }
     }
 
+    // Play (offline): the game carries on by itself (independent process), so the launcher closes; on error the window stays open with
+    // the message. Unless this launcher runs the server (Host on this PC): closing would stop it, and the lobby with it, for every
+    // friend in it (#23). Then the launcher stays open and minimized, as in a network match, and comes back when the game closes.
     void Launch(ProcessStartInfo psi)
     {
         try
         {
-            Process.Start(psi);
-            Close();   // o jogo segue sozinho (processo independente); em erro a janela fica com a mensagem
+            if (!ServerHost.KeepsLauncherOpen(hosted)) { Process.Start(psi); Close(); return; }
+            if (onlineGame != null && !onlineGame.HasExited) { netInfo.Text = "The game is already running."; return; }
+            int port = hosted.Port;
+            onlineGame = Process.Start(psi);
+            onlineGame.EnableRaisingEvents = true;
+            onlineGame.Exited += delegate
+            {
+                BeginInvoke((MethodInvoker)delegate
+                {
+                    WindowState = FormWindowState.Normal;
+                    Activate();
+                    netInfo.Text = "Game over. Your server on port " + port + " kept running" + (lobbyCode.Length > 0 ? "; you are still in lobby " + lobbyCode + "." : ".");
+                });
+            };
+            WindowState = FormWindowState.Minimized;
+            netInfo.Text = "Game running. This window stays open (minimized) because it runs your server on port " + port + " for your friends.";
         }
         catch (Exception e) { status.Text = "Failed: " + e.Message; }
     }
@@ -986,7 +1438,7 @@ class Launcher : Form
         SaveIni();
         string rt = RuntimeDir();
         if (rt == null) { status.Text = "Runtime folder not found (run_live.ps1)."; return null; }
-        // partida direta pula o menu: o roteiro do pad (-Auto 1) apertaria botoes no meio da luta
+        // a direct match skips the menu: the scripted pad (-Auto 1) would press buttons mid-fight
         string args = string.Format("-NoProfile -ExecutionPolicy Bypass -File \"{0}\" -Auto {1} -Stats {2} -Build {3}",
             Path.Combine(rt, "run_live.ps1"), On(":Auto") && !direct ? 1 : 0, On(":Stats") ? 1 : 0, "build_dev");
         var psi = new ProcessStartInfo("powershell.exe", args) { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = rt };
@@ -1007,10 +1459,14 @@ class Launcher : Form
         string cheats = CheatsValue();
         if (cheats.Length > 0) psi.EnvironmentVariables["WOTM_CHEATS"] = cheats;
         else psi.EnvironmentVariables.Remove("WOTM_CHEATS");
+        // all off: the panel's MODIFIERS tab (settings.ini) decides; a network match replaces this with the lobby's list
+        string mods = ModsValue();
+        if (mods.Length > 0) psi.EnvironmentVariables["WOTM_MODIFIERS"] = mods;
+        else psi.EnvironmentVariables.Remove("WOTM_MODIFIERS");
         return psi;
     }
 
-    // Kit de mods (tools\modkit_gui.py, docs\passos\MODS.md): pythonw sem console; sem ele, python
+    // Mod kit (tools\modkit_gui.py, docs\passos\MODS.md): pythonw without a console; failing that, python
     void OpenModKit()
     {
         string script = Path.Combine(exeDir, "tools", "modkit_gui.py");
@@ -1032,12 +1488,12 @@ class Launcher : Form
     {
         string rt = RuntimeDir();
         string p = rt == null ? null : Path.Combine(rt, "logs", "live.err.log");
-        if (p != null && !File.Exists(p)) p = Path.Combine(rt, "live.err.log");   // run_live.ps1 antigo grava na raiz
+        if (p != null && !File.Exists(p)) p = Path.Combine(rt, "live.err.log");   // older run_live.ps1 writes it in the root
         if (p != null && File.Exists(p)) Process.Start("notepad.exe", "\"" + p + "\"");
         else status.Text = "No live.err.log yet.";
     }
 
-    // Tema: segue o modo dos aplicativos do Windows (Personalizacao > Cores). Escuro = cores abaixo e barra de titulo escura (DWM).
+    // Theme: follows the Windows app mode (Personalization > Colors). Dark = the colors below and a dark title bar (DWM).
     internal static readonly bool Dark = AppsUseDark();
     static readonly Color BgColor = Color.FromArgb(32, 32, 32), InputColor = Color.FromArgb(51, 51, 51), ButtonColor = Color.FromArgb(58, 58, 58);
     static readonly Color FgColor = Color.FromArgb(232, 232, 232);
@@ -1057,7 +1513,7 @@ class Launcher : Form
     static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
     [DllImport("uxtheme.dll", CharSet = CharSet.Unicode)]
     static extern int SetWindowTheme(IntPtr hwnd, string appName, string idList);
-    // SetPreferredAppMode (sem nome exportado, ordinal 135, Windows 10 1903+): 1 = segue o sistema; sem ele a lista aberta sai clara
+    // SetPreferredAppMode (no exported name, ordinal 135, Windows 10 1903+): 1 = follow the system; without it the open dropdown is light
     [DllImport("uxtheme.dll", EntryPoint = "#135")]
     static extern int SetPreferredAppMode(int mode);
 
@@ -1067,20 +1523,20 @@ class Launcher : Form
         if (!Dark) return;
         int on = 1;
         try
-        {   // DWMWA_USE_IMMERSIVE_DARK_MODE: 20 no Windows 10 20H1+ e 11, 19 antes
+        {   // DWMWA_USE_IMMERSIVE_DARK_MODE: 20 on Windows 10 20H1+ and 11, 19 before
             if (DwmSetWindowAttribute(Handle, 20, ref on, 4) != 0) DwmSetWindowAttribute(Handle, 19, ref on, 4);
         }
         catch (Exception) { }
     }
 
-    // Texto com a cor padrao vira claro; cores escolhidas (cinza das notas, aviso vermelho) ficam.
+    // Text in the default color becomes light; chosen colors (gray notes, red warning) stay.
     static void ApplyDark(Control c)
     {
         if (c.ForeColor == SystemColors.ControlText) c.ForeColor = FgColor;
         if (c is ComboBox)
-        {   // tema escuro nativo do Windows (o das caixas de arquivo): legivel tambem desabilitado, ao contrario do FlatStyle com cores
+        {   // native Windows dark theme (the file dialog one): readable even when disabled, unlike FlatStyle with colors
             c.BackColor = InputColor;
-            c.ForeColor = FgColor;   // o padrao da ComboBox e WindowText (nao ControlText): os itens da lista aberta saiam pretos
+            c.ForeColor = FgColor;   // the ComboBox default is WindowText (not ControlText): the open list's items came out black
             Control cc = c;
             EventHandler theme = delegate { try { SetWindowTheme(cc.Handle, "DarkMode_CFD", null); } catch (Exception) { } };
             if (c.IsHandleCreated) theme(c, EventArgs.Empty);
@@ -1092,7 +1548,7 @@ class Launcher : Form
             ((TextBox)c).BorderStyle = BorderStyle.FixedSingle;
         }
         else if (c is NumericUpDown)
-        {   // a cor tem que ir para a caixa de texto interna (UpDownEdit) tambem
+        {   // the color must go to the inner text box (UpDownEdit) too
             c.BackColor = InputColor;
             ((NumericUpDown)c).BorderStyle = BorderStyle.FixedSingle;
             foreach (Control k in c.Controls) if (k is TextBox) { k.BackColor = InputColor; k.ForeColor = FgColor; }

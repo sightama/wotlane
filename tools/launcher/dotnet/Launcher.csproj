@@ -1,0 +1,18 @@
+<!-- ABOUTME: Compile check of the WinForms launcher (WotM_Launcher.exe) on macOS/Linux: .NET Framework 4.8 reference assemblies and C# 5,
+     ABOUTME: as the Windows csc in tools\launcher\build.bat. The result does not run here; sh tools/test_launcher.sh builds it. -->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <LangVersion>5</LangVersion>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <AssemblyName>WotM_Launcher</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../WotmLauncher.cs;../LobbyClient.cs;../ServerHost.cs" />
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Drawing" />
+    <Reference Include="Microsoft.CSharp" />
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+  </ItemGroup>
+</Project>

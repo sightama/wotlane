@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
-"""Todas as verificacoes de uma TU decompilada num comando so, com uma tabela por funcao no fim (roda no WSL, na raiz do repo):
+"""Every check for a decompiled TU in one command, with a table per function at the end (runs in WSL, from the repo root):
 
     ~/.venvs/wotm/bin/python tools/verify_tu.py game/Monster [game/TheGame ...] [--runs 30] [--no-nm] [--nm-name verify]
 
-Por TU: pontuacao de cada funcao contra o retail com -DNON_MATCHING (tools/ccmatch.py, o que o scoreall.sh faz), difftest das
-equivalentes (tools/difftest_all.py) e, salvo com --no-nm, um ELF com as equivalentes dessas TUs compiladas (tools/wsl/build_nm.sh)
-para comparar com o retail a sequencia de chamadas (nm_calls.py), o layout do codigo linkado (nm_audit.py) e os retornos consumidos
-pelos chamadores (nm_retvals.py; esse olha o fonte e o asm do retail, nao precisa do ELF).
+Per TU: each function's score against retail with -DNON_MATCHING (tools/ccmatch.py, what scoreall.sh does), a difftest of the
+equivalent ones (tools/difftest_all.py) and, unless --no-nm, an ELF with those TUs' equivalent functions compiled in
+(tools/wsl/build_nm.sh) to compare against retail the call sequence (nm_calls.py), the linked code layout (nm_audit.py) and the
+return values the callers consume (nm_retvals.py; that one looks at the source and the retail asm, it doesn't need the ELF).
 
-Colunas da tabela: score (MATCH, ou palavras diferentes/total), difftest (ok/difere/pulado), chamadas (igual/difere/-), layout (ok ou
-quantas palavras diferem), retorno (ok ou "void consumido"). Funcoes que batem (sem NON_MATCHING) so tem a coluna score.
-Sai com erro se alguma equivalente tem difftest "difere", chamadas diferentes ou retorno consumido: sao os bugs que ja passaram.
+Table columns: score (MATCH, or differing words/total), difftest (ok/DIFFERS/pulado = skipped), calls (same/DIFFERS/-), layout (ok
+or how many words differ), return (ok or "void CONSUMED"). Matching functions (no NON_MATCHING) only have the score column.
+Exits with an error if any equivalent function has a difftest that differs, different calls or a consumed return: those are the
+bugs that have already slipped through.
 """
 import os
 import re
@@ -41,7 +42,7 @@ def nm_functions(tu):
 
 
 def score(tu):
-    """{funcao: 'MATCH' | 'n/m' | outro}: a ultima linha do ccmatch, 'project <f1>: <r1>; <f2>: <r2>; ...'."""
+    """{function: 'MATCH' | 'n/m' | other}: from ccmatch's last line, 'project <f1>: <r1>; <f2>: <r2>; ...'."""
     out = run([PY, "tools/ccmatch.py", f"src/{tu}.cpp", f"-DNON_MATCHING {tu_flags(tu)}".strip(), "project"])
     last = [l for l in out.strip().split("\n") if l.strip()][-1] if out.strip() else ""
     last = re.sub(r"^project\s*", "", last)
@@ -54,13 +55,13 @@ def score(tu):
 
 
 def difftest(tus, runs):
-    """{mangled: (status, detalhe)} de difftest_all."""
+    """{mangled: (status, detail)} from difftest_all."""
     out = run([PY, "tools/difftest_all.py", *tus, "--runs", str(runs)])
     res = {}
     for l in out.split("\n"):
         m = re.match(r"^(\S+): (\S+) \[[^\]]*\]: (\w+) \((\d+) ok, (\d+) differ, (\d+) skipped\)", l)
         if m:
-            res[m.group(2)] = (m.group(3), f"{m.group(4)} ok, {m.group(5)} dif, {m.group(6)} pul")
+            res[m.group(2)] = (m.group(3), f"{m.group(4)} ok, {m.group(5)} diff, {m.group(6)} skip")
             continue
         m = re.match(r"^(\S+): (\S+): (unsupported signature|not available|.*)$", l)
         if m and not l.startswith("total"):
@@ -113,7 +114,7 @@ def main(argv):
         return 2
     for tu in tus:
         if not (ROOT / f"src/{tu}.cpp").exists():
-            print(f"nao existe src/{tu}.cpp")
+            print(f"src/{tu}.cpp does not exist")
             return 2
     logs = []
     scores = {}
@@ -135,7 +136,7 @@ def main(argv):
             audit, log = nm_audit(elf)
             logs.append(("nm_audit", log))
         else:
-            print(f"build_nm falhou (veja o log com -v); chamadas e layout sem resultado")
+            print(f"build_nm failed (see the log with -v); no results for calls and layout")
     failures = 0
     for tu in tus:
         nm = set(nm_functions(tu))
@@ -145,16 +146,16 @@ def main(argv):
                 rows.append((name, sc, "", "", "", ""))
                 continue
             d = dt.get(name, ("-", ""))
-            dcol = {"agree": "ok", "differ": "DIFERE", "skipped": "pulado"}.get(d[0], d[0]) + (f" ({d[1]})" if d[1] and d[0] != "pulado" else "")
-            ccol = "-" if elf is None else ("DIFERE" if name in calls_bad else "igual")
-            lcol = "-" if elf is None else (f"{audit[name]} palavras" if name in audit else "ok")
-            rcol = f"{rv[name]} CONSUMIDO" if name in rv else "ok"
+            dcol = {"agree": "ok", "differ": "DIFFERS", "skipped": "pulado"}.get(d[0], d[0]) + (f" ({d[1]})" if d[1] and d[0] != "pulado" else "")
+            ccol = "-" if elf is None else ("DIFFERS" if name in calls_bad else "same")
+            lcol = "-" if elf is None else (f"{audit[name]} words" if name in audit else "ok")
+            rcol = f"{rv[name]} CONSUMED" if name in rv else "ok"
             if d[0] == "differ" or name in calls_bad or name in rv:
                 failures += 1
             rows.append((name, sc, dcol, ccol, lcol, rcol))
-        w = [max(len(r[i]) for r in rows + [("funcao", "score", "difftest", "chamadas", "layout", "retorno")]) for i in range(6)]
-        print(f"== {tu}: {len(rows)} funcoes, {len(nm)} equivalentes")
-        hdr = ("funcao", "score", "difftest", "chamadas", "layout", "retorno")
+        w = [max(len(r[i]) for r in rows + [("function", "score", "difftest", "calls", "layout", "return")]) for i in range(6)]
+        print(f"== {tu}: {len(rows)} functions, {len(nm)} equivalent")
+        hdr = ("function", "score", "difftest", "calls", "layout", "return")
         print("  " + "  ".join(h.ljust(w[i]) for i, h in enumerate(hdr)))
         for r in rows:
             print("  " + "  ".join(c.ljust(w[i]) for i, c in enumerate(r)))
@@ -162,7 +163,7 @@ def main(argv):
         for title, log in logs:
             print(f"\n----- {title} -----\n{log.rstrip()}")
     if failures:
-        print(f"\n{failures} equivalente(s) com problema (difftest difere, chamadas diferentes ou retorno consumido)")
+        print(f"\n{failures} equivalent function(s) with problems (difftest differs, different calls or consumed return)")
     return 1 if failures else 0
 
 

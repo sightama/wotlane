@@ -1,5 +1,5 @@
-// ABOUTME: Socket TCP de linhas de texto (lobby do netcode) e escuta sem bloqueio, para Windows (Winsock) e POSIX.
-// ABOUTME: Usado pelo servidor (aceita e le varias conexoes) e pelos testes e ferramentas que falam com o lobby.
+// ABOUTME: Line-based text TCP socket (the netcode lobby), the LineLink interface it shares with WebSocket, and a non-blocking
+// ABOUTME: listener, for Windows (Winsock) and POSIX. Used by the server and by the tests and tools that talk to the lobby.
 #pragma once
 
 #include <chrono>
@@ -40,7 +40,7 @@ namespace wotm_net
         u_long on = 1;
         ioctlsocket(s, FIONBIO, &on);
     }
-    // WSAStartup e contado pelo Winsock: cada usuario chama uma vez
+    // Winsock reference-counts WSAStartup: each user calls it once
     inline bool socketsInit()
     {
         static const bool ok = [] {
@@ -58,7 +58,7 @@ namespace wotm_net
     inline bool socketsInit() { return true; }
 #endif
 
-    // espera ate `ms` o socket ficar legivel (ou gravavel)
+    // waits up to `ms` for the socket to become readable (or writable)
     inline bool waitSocket(SocketHandle s, int ms, bool write)
     {
         fd_set set;
@@ -69,7 +69,54 @@ namespace wotm_net
         return n > 0;
     }
 
-    class LineSocket
+    // Sending to a peer that already closed raises SIGPIPE on POSIX, which kills the process (wotm_server when a lobby member drops);
+    // with the signal suppressed, send fails and sendLine closes the socket like any other error. Windows has no SIGPIPE.
+#if defined(MSG_NOSIGNAL)
+    constexpr int kSendFlags = MSG_NOSIGNAL;
+#else
+    constexpr int kSendFlags = 0;
+#endif
+
+    // A connection that carries lobby lines: a TCP LineSocket or a WebSocket (WsLink, the browser version); the server and the tests
+    // use either through this
+    class LineLink
+    {
+    public:
+        virtual ~LineLink() = default;
+        virtual bool open() const = 0;
+        // reads whatever has arrived without blocking; false if the connection dropped
+        virtual bool pump() = 0;
+        // next complete line already received (without the \n and \r)
+        virtual bool nextLine(std::string &line) = 0;
+        virtual bool sendLine(const std::string &line) = 0;
+        // round trips: ping() starts a measurement and pingMs() is the last result in ms, -1 for a link that can't measure (TCP) or has not yet
+        virtual void ping() {}
+        virtual int pingMs() const { return -1; }
+        // waits up to `ms` for something to arrive
+        virtual void waitReadable(int ms) = 0;
+
+        // waits up to `timeoutMs` for a line
+        bool readLine(std::string &line, int timeoutMs)
+        {
+            const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+            for (;;)
+            {
+                if (nextLine(line))
+                    return true;
+                if (!pump())
+                    return nextLine(line);
+                if (nextLine(line))
+                    return true;
+                const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(until - std::chrono::steady_clock::now()).count();
+                if (left <= 0)
+                    return false;
+                waitReadable(static_cast<int>(std::min<long long>(left, 50)));
+            }
+        }
+
+    };
+
+    class LineSocket : public LineLink
     {
     public:
         LineSocket() = default;
@@ -87,9 +134,9 @@ namespace wotm_net
             }
             return *this;
         }
-        ~LineSocket() { close(); }
+        ~LineSocket() override { close(); }
 
-        bool open() const { return s_ != kNoSocket; }
+        bool open() const override { return s_ != kNoSocket; }
 
         bool connect(const std::string &host, uint16_t port, int timeoutMs)
         {
@@ -117,16 +164,23 @@ namespace wotm_net
             return ok;
         }
 
-        bool sendLine(const std::string &line)
+        bool sendLine(const std::string &line) override
+        {
+            const std::string s = line + "\n";
+            return sendBytes(s.data(), s.size());
+        }
+
+        // sends all of `data` (waits up to 2 s for room); closes the socket on failure
+        bool sendBytes(const void *data, size_t size)
         {
             if (!open())
                 return false;
-            const std::string s = line + "\n";
+            const char *bytes = static_cast<const char *>(data);
             size_t sent = 0;
             const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(2);
-            while (sent < s.size())
+            while (sent < size)
             {
-                const int n = ::send(s_, s.data() + sent, static_cast<int>(s.size() - sent), 0);
+                const int n = ::send(s_, bytes + sent, static_cast<int>(size - sent), kSendFlags);
                 if (n > 0)
                     sent += static_cast<size_t>(n);
                 else if (n < 0 && wouldBlock() && std::chrono::steady_clock::now() < until)
@@ -140,23 +194,18 @@ namespace wotm_net
             return true;
         }
 
-        // le o que chegou sem bloquear; false se a conexao caiu
-        bool pump()
+        bool pump() override
         {
             if (!open())
                 return false;
             char buf[4096];
-            for (;;)
+            // at most kMaxLine per call: a burst beyond it waits in the system's buffer for the next call
+            while (in_.size() < kMaxLine)
             {
                 const int n = ::recv(s_, buf, sizeof buf, 0);
                 if (n > 0)
                 {
                     in_.append(buf, static_cast<size_t>(n));
-                    if (in_.size() > 65536u)   // linha absurda: corta a conexao
-                    {
-                        close();
-                        return false;
-                    }
                     continue;
                 }
                 if (n < 0 && wouldBlock())
@@ -164,14 +213,18 @@ namespace wotm_net
                 close();
                 return false;
             }
+            return true;
         }
 
-        // proxima linha completa ja recebida (sem o \n e o \r)
-        bool nextLine(std::string &line)
+        bool nextLine(std::string &line) override
         {
             const size_t nl = in_.find('\n');
             if (nl == std::string::npos)
+            {
+                if (in_.size() >= kMaxLine)   // absurdly long line: drop the connection
+                    close();
                 return false;
+            }
             line = in_.substr(0, nl);
             in_.erase(0, nl + 1);
             if (!line.empty() && line.back() == '\r')
@@ -179,23 +232,18 @@ namespace wotm_net
             return true;
         }
 
-        // espera ate `timeoutMs` por uma linha
-        bool readLine(std::string &line, int timeoutMs)
+        void waitReadable(int ms) override
         {
-            const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
-            for (;;)
-            {
-                if (nextLine(line))
-                    return true;
-                if (!pump())
-                    return nextLine(line);
-                if (nextLine(line))
-                    return true;
-                const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(until - std::chrono::steady_clock::now()).count();
-                if (left <= 0)
-                    return false;
-                waitSocket(s_, static_cast<int>(std::min<long long>(left, 50)), false);
-            }
+            if (open())
+                waitSocket(s_, ms, false);
+        }
+
+        // everything received and not yet taken as lines (a WebSocket reads the raw bytes through this)
+        std::string takeReceived()
+        {
+            std::string out;
+            out.swap(in_);
+            return out;
         }
 
         void close()
@@ -213,6 +261,9 @@ namespace wotm_net
             setNonBlocking(s_);
             int one = 1;
             setsockopt(s_, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<const char *>(&one), sizeof one);
+#ifdef SO_NOSIGPIPE   // macOS: no MSG_NOSIGNAL, the socket option does the same
+            setsockopt(s_, SOL_SOCKET, SO_NOSIGPIPE, reinterpret_cast<const char *>(&one), sizeof one);
+#endif
         }
         bool connectedOk()
         {
@@ -221,6 +272,7 @@ namespace wotm_net
             return getsockopt(s_, SOL_SOCKET, SO_ERROR, reinterpret_cast<char *>(&err), &len) == 0 && err == 0;
         }
 
+        static constexpr size_t kMaxLine = 65536;
         SocketHandle s_ = kNoSocket;
         std::string in_;
     };
@@ -229,7 +281,8 @@ namespace wotm_net
     {
     public:
         ~Listener() { close(); }
-        bool listen(uint16_t port)
+        // `bindAddr`: an IPv4 address to listen on only (e.g. 127.0.0.1, behind a proxy); null = every interface
+        bool listen(uint16_t port, const char *bindAddr = nullptr)
         {
             if (!socketsInit())
                 return false;
@@ -241,6 +294,11 @@ namespace wotm_net
             sockaddr_in a{};
             a.sin_family = AF_INET;
             a.sin_addr.s_addr = htonl(INADDR_ANY);
+            if (bindAddr && inet_pton(AF_INET, bindAddr, &a.sin_addr) != 1)
+            {
+                close();
+                return false;
+            }
             a.sin_port = htons(port);
             if (bind(s_, reinterpret_cast<sockaddr *>(&a), sizeof a) != 0 || ::listen(s_, 16) != 0)
             {
@@ -250,14 +308,21 @@ namespace wotm_net
             setNonBlocking(s_);
             return true;
         }
-        // conexao nova, se houver
-        bool accept(LineSocket &out)
+        // a new connection, if there is one; `peerIp` (optional) gets the address it came from
+        bool accept(LineSocket &out, std::string *peerIp = nullptr)
         {
             if (s_ == kNoSocket)
                 return false;
-            const SocketHandle c = ::accept(s_, nullptr, nullptr);
+            sockaddr_in from{};
+            socklen_t len = sizeof from;
+            const SocketHandle c = ::accept(s_, reinterpret_cast<sockaddr *>(&from), &len);
             if (c == kNoSocket)
                 return false;
+            if (peerIp)
+            {
+                char buf[INET_ADDRSTRLEN] = {};
+                *peerIp = inet_ntop(AF_INET, &from.sin_addr, buf, sizeof buf) ? buf : "";
+            }
             out = LineSocket(c);
             return true;
         }

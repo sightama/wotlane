@@ -1,5 +1,5 @@
-// ABOUTME: Teste do LobbyClient.cs contra o wotm_server de verdade (native\net\build\wotm_server.exe): lista, entra, comeca e confere
-// ABOUTME: o ambiente de cada jogador. Compilar e rodar: tools\launcher\test.bat (sai com 0 se passar).
+// ABOUTME: Test of LobbyClient.cs and ServerHost.cs against the real wotm_server (native\net\build\wotm_server.exe, and a master):
+// ABOUTME: lists, joins, starts, each player's environment, the public server list. Run: tools\launcher\test.bat (0 on success).
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -14,48 +14,56 @@ static class LobbyTest
     static void Check(bool ok, string what)
     {
         ++checks;
-        if (!ok) { ++failures; Console.WriteLine("  FALHOU " + what); }
+        if (!ok) { ++failures; Console.WriteLine("  FAILED " + what); }
     }
 
     static int Main(string[] args)
     {
         string server = args.Length > 0 ? args[0] : Path.Combine(AppDomain.CurrentDomain.BaseDirectory, @"..\..\native\net\build\wotm_server.exe");
-        if (!File.Exists(server)) { Console.WriteLine("nao achei " + server + " (tools\\build_net.bat)"); return 2; }
-        const int port = 7897;
+        if (!File.Exists(server)) { Console.WriteLine("could not find " + server + " (tools\\build_net.bat)"); return 2; }
+        const int port = 7897, masterPort = 7896;
         var p = Process.Start(new ProcessStartInfo(server, "--port " + port) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true });
+        var master = Process.Start(new ProcessStartInfo(server, "--master --port " + masterPort)
+        {
+            UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true
+        });
         try
         {
             Thread.Sleep(300);
-            Run("lista_e_partida", delegate
+            Run("list_and_match", delegate
             {
                 using (var watcher = new LobbyClient("127.0.0.1", port, "b1", 2000))
                 using (var a = new LobbyClient("127.0.0.1", port, "b1", 2000))
                 using (var b = new LobbyClient("127.0.0.1", port, "b1", 2000))
                 {
-                    Check(watcher.Lobbies == 0, "nenhum lobby aberto");
-                    Check(watcher.List(2000).Count == 0, "lista inicial vazia");
+                    Check(watcher.Lobbies == 0, "no open lobby");
+                    Check(watcher.List(2000).Count == 0, "initial list empty");
                     string code = a.Create("Sala", "Ana", 3, null, 2000);
-                    Check(code.Length == 4, "codigo de 4 letras");
-                    Check(a.Settings["stage"] == "1" && a.Settings["wins"] == "0", "fase e vitorias iniciais");
+                    Check(code.Length == 4, "4-letter code");
+                    Check(a.Settings["stage"] == "1" && a.Settings["wins"] == "0", "initial stage and wins");
                     b.Join(code.ToLowerInvariant(), "Bia", 1, null, 2000);
                     List<LobbyClient.LobbyInfo> l = watcher.List(2000);
-                    Check(l.Count == 1 && l[0].Code == code && l[0].State == "waiting" && !l[0].Locked, "lobby na lista");
-                    Check(l[0].Name == "Sala" && l[0].Host == "Ana" && l[0].Names.Length == 2 && l[0].Names[1] == "Bia", "nome, dono e membros");
+                    Check(l.Count == 1 && l[0].Code == code && l[0].State == "waiting" && !l[0].Locked, "lobby in the list");
+                    Check(l[0].Name == "Sala" && l[0].Host == "Ana" && l[0].Names.Length == 2 && l[0].Names[1] == "Bia", "name, owner and members");
                     Dictionary<string, string> s = a.Set(4, 2, 2000);
-                    Check(s["stage"] == "4" && s["wins"] == "2", "SET do dono");
+                    Check(s["stage"] == "4" && s["wins"] == "2", "owner's SET");
+                    Check(s["mods"] == "", "no modifiers at first");
+                    s = a.SetMods("turbo,jump", 2000);
+                    Check(s["mods"] == "jump,turbo" && s["stage"] == "4", "owner's SET mods, stored in canonical order");
                     a.Send("START");
                     Dictionary<string, string> ea = LobbyClient.MatchEnv(LobbyClient.KeyValues(a.Expect("MATCH", 2000)), "127.0.0.1");
                     Dictionary<string, string> eb = LobbyClient.MatchEnv(LobbyClient.KeyValues(b.Expect("MATCH", 2000)), "127.0.0.1");
                     Check(ea["WOTM_MATCH"] == "3,1,4" && eb["WOTM_MATCH"] == "3,1,4", "WOTM_MATCH");
-                    Check(ea["WOTM_KILLTARGET"] == "2" && eb["WOTM_KILLTARGET"] == "2", "vitorias");
-                    Check(ea["WOTM_PLAYERS"] == "2" && ea["WOTM_FIXEDSTEP"] == "1", "jogadores e passo");
-                    Check(ea["WOTM_SEED"] == eb["WOTM_SEED"], "mesma semente");
-                    Check(ea["WOTM_LOCALPLAYER"] == "1" && eb["WOTM_LOCALPLAYER"] == "2", "jogador local");
-                    Check(ea["WOTM_NETNAME"] == "Ana" && eb["WOTM_NETNAME"] == "Bia", "nomes");
-                    Check(ea["WOTM_NET"] == "127.0.0.1:" + port && ea["WOTM_NETTOKEN"] != eb["WOTM_NETTOKEN"], "endereco e fichas");
+                    Check(ea["WOTM_KILLTARGET"] == "2" && eb["WOTM_KILLTARGET"] == "2", "wins");
+                    Check(ea["WOTM_MODIFIERS"] == "jump,turbo" && eb["WOTM_MODIFIERS"] == "jump,turbo", "modifiers");
+                    Check(ea["WOTM_PLAYERS"] == "2" && ea["WOTM_FIXEDSTEP"] == "1", "players and step");
+                    Check(ea["WOTM_SEED"] == eb["WOTM_SEED"], "same seed");
+                    Check(ea["WOTM_LOCALPLAYER"] == "1" && eb["WOTM_LOCALPLAYER"] == "2", "local player");
+                    Check(ea["WOTM_NETNAME"] == "Ana" && eb["WOTM_NETNAME"] == "Bia", "names");
+                    Check(ea["WOTM_NET"] == "127.0.0.1:" + port && ea["WOTM_NETTOKEN"] != eb["WOTM_NETTOKEN"], "address and tokens");
                 }
             });
-            Run("senha_e_dono", delegate
+            Run("password_and_owner", delegate
             {
                 using (var a = new LobbyClient("127.0.0.1", port, "b1", 2000))
                 using (var b = new LobbyClient("127.0.0.1", port, "b1", 2000))
@@ -63,92 +71,245 @@ static class LobbyTest
                     string code = a.Create("Amigos", "Ana", 3, "pw", 2000);
                     bool wrong = false;
                     try { b.Join(code, "Bia", 1, null, 2000); }
-                    catch (LobbyError e) { wrong = e.Message.Contains("senha"); }
-                    Check(wrong, "sem senha nao entra");
+                    catch (LobbyError e) { wrong = e.Message.Contains("password"); }
+                    Check(wrong, "no password, no entry");
                     b.Join(code, "Bia", 1, "pw", 2000);
                     bool notHost = false;
                     try { b.Set(2, 1, 2000); }
-                    catch (LobbyError e) { notHost = e.Message.Contains("dono"); }
-                    Check(notHost, "so o dono muda as opcoes");
+                    catch (LobbyError e) { notHost = e.Message.Contains("owner"); }
+                    Check(notHost, "only the owner changes the settings");
+                    notHost = false;
+                    try { b.SetMods("jump", 2000); }
+                    catch (LobbyError e) { notHost = e.Message.Contains("owner"); }
+                    Check(notHost, "only the owner changes the modifiers");
+                    Check(a.SetMods("fast", 2000)["mods"] == "fast", "owner sets fast");
+                    bool unknown = false;
+                    try { a.SetMods("jump,moon", 2000); }
+                    catch (LobbyError e) { unknown = e.Message.Contains("unknown modifier"); }
+                    Check(unknown, "an unknown modifier is refused");
+                    Check(a.Set(2, 1, 2000)["mods"] == "fast", "the refused list changed nothing");
+                    Check(a.SetMods("", 2000)["mods"] == "", "empty list = none");
                     LobbyClient.MemberInfo m = LobbyClient.ParseMembers("MEMBERS " + code + " Ana Ana:3,Bia:1");
-                    Check(m != null && m.Code == code && m.Host == "Ana" && m.Names.Length == 2 && m.Names[1] == "Bia:1", "linha MEMBERS");
+                    Check(m != null && m.Code == code && m.Host == "Ana" && m.Names.Length == 2 && m.Names[1] == "Bia:1", "MEMBERS line");
                 }
             });
-            Run("erro_vira_excecao", delegate
+            Run("change_monster_in_lobby", delegate
+            {
+                using (var a = new LobbyClient("127.0.0.1", port, "b1", 2000))
+                using (var b = new LobbyClient("127.0.0.1", port, "b1", 2000))
+                {
+                    string code = a.Create("Monstros", "Ana", 3, null, 2000);
+                    b.Join(code, "Bia", 1, null, 2000);
+                    LobbyClient.MemberInfo m = b.ChangeMonster(5, 2000);
+                    Check(LobbyClient.MemberMonster(m, "Bia") == 5 && LobbyClient.MemberMonster(m, "Ana") == 3, "Bia is now monster 5");
+                    Check(LobbyClient.MemberMonster(m, "Cid") == -1, "a name not in the lobby has no monster");
+                    LobbyClient.MemberInfo skinned = LobbyClient.ParseMembers("MEMBERS ABCD Ana Ana:3:green,Bia:1");   // protocol 5: <monster>:<skin>
+                    Check(LobbyClient.MemberMonster(skinned, "Ana") == 3 && LobbyClient.MemberMonster(skinned, "Bia") == 1, "a member with a skin keeps its monster");
+                    bool refused = false;
+                    try { b.ChangeMonster(6, 2000); }
+                    catch (LobbyError e) { refused = e.Message.Contains("monster"); }
+                    Check(refused, "a monster the disc does not have is refused");
+                    Check(LobbyClient.FriendlyError("monster has no free costume in the lobby (all its costumes are taken)").StartsWith("Someone in this game already has that monster"),
+                          "costume clash in plain words");
+                }
+            });
+            Run("error_becomes_exception", delegate
             {
                 using (var a = new LobbyClient("127.0.0.1", port, "b1", 2000))
                 {
                     bool threw = false;
                     try { a.Join("QQQQ", "Ana", 3, null, 2000); }
-                    catch (LobbyError e) { threw = e.Message.Contains("inexistente"); }
-                    Check(threw, "lobby inexistente vira LobbyError");
+                    catch (LobbyError e) { threw = e.Message.Contains("no such lobby"); }
+                    Check(threw, "missing lobby becomes LobbyError");
                 }
             });
-            Run("sem_servidor", delegate
+            Run("no_server", delegate
             {
                 bool threw = false;
                 try { using (new LobbyClient("127.0.0.1", port + 1, "b1", 500)) { } }
                 catch (LobbyError) { threw = true; }
-                Check(threw, "porta sem servidor vira LobbyError");
+                Check(threw, "port with no server becomes LobbyError");
             });
-            Run("nome_limpo", delegate
+            Run("clean_name", delegate
             {
-                Check(LobbyClient.CleanName("La ne<>!_9-") == "Lane_9-", "caracteres fora");
-                Check(LobbyClient.CleanName("abcdefghijklmnopqrst").Length == 16, "16 no maximo");
+                Check(LobbyClient.CleanName("La ne<>!_9-") == "Lane_9-", "characters dropped");
+                Check(LobbyClient.CleanName("abcdefghijklmnopqrst").Length == 16, "16 at most");
             });
-            Run("servidor_do_jogador", delegate
+            Run("player_server", delegate
             {
                 const int own = 7898;
                 string log = Path.Combine(Path.GetTempPath(), "wotm_server_teste.log");
                 using (ServerHost h = ServerHost.Start(server, own, log, 3000))
                 {
-                    Check(h.Owned, "este launcher roda o servidor");
-                    Check(ServerHost.PortOpen(own, 500), "porta aberta");
+                    Check(h.Owned, "this launcher runs the server");
+                    Check(ServerHost.PortOpen(own, 500), "port open");
                     using (var a = new LobbyClient("127.0.0.1", own, "b1", 2000))
-                        Check(a.Create("Casa", "Ana", 3, null, 2000).Length == 4, "lobby no servidor do jogador");
-                    Check(h.Running, "servidor rodando");
+                        Check(a.Create("Casa", "Ana", 3, null, 2000).Length == 4, "lobby on the player's server");
+                    Check(h.Running, "server running");
+                    Check(ServerHost.KeepsLauncherOpen(h), "Play keeps the launcher open while it runs the server");
                 }
-                Check(!ServerHost.PortOpen(own, 500), "servidor fechado com o launcher");
-                Check(File.Exists(log), "log do servidor");
+                Check(!ServerHost.PortOpen(own, 500), "server closed with the launcher");
+                Check(!ServerHost.KeepsLauncherOpen(null), "Play closes the launcher with no server of its own");
+                Check(File.Exists(log), "server log");
             });
-            Run("servidor_ja_rodando", delegate
+            Run("server_already_running", delegate
             {
                 using (ServerHost h = ServerHost.Start(server, port, null, 3000))
                 {
-                    Check(!h.Owned, "usa o servidor que ja esta na porta");
-                    Check(h.Running, "servidor existente rodando");
+                    Check(!h.Owned, "uses the server already on the port");
+                    Check(h.Running, "existing server running");
+                    Check(!ServerHost.KeepsLauncherOpen(h), "a server the launcher did not start does not hold it open");
                 }
-                Check(ServerHost.PortOpen(port, 500), "nao fecha um servidor que nao e dele");
+                Check(ServerHost.PortOpen(port, 500), "does not close a server it does not own");
             });
-            Run("servidor_que_nao_sobe", delegate
+            Run("server_that_fails_to_start", delegate
             {
                 bool threw = false;
                 try { using (ServerHost.Start(server + ".nao_existe", 7899, null, 1000)) { } }
                 catch (LobbyError) { threw = true; }
-                Check(threw, "sem o wotm_server.exe vira LobbyError");
+                Check(threw, "missing wotm_server.exe becomes LobbyError");
             });
-            Run("enderecos_para_amigos", delegate
+            Run("addresses_for_friends", delegate
             {
-                Check(ServerHost.Kind(IPAddress.Parse("100.101.2.3")) == "Tailscale", "100.64.0.0/10 e Tailscale");
-                Check(ServerHost.Kind(IPAddress.Parse("100.63.0.1")) == "public", "100.63 nao e Tailscale");
+                Check(ServerHost.Kind(IPAddress.Parse("100.101.2.3")) == "Tailscale", "100.64.0.0/10 is Tailscale");
+                Check(ServerHost.Kind(IPAddress.Parse("100.63.0.1")) == "public", "100.63 is not Tailscale");
                 Check(ServerHost.Kind(IPAddress.Parse("192.168.1.5")) == "LAN", "192.168/16");
                 Check(ServerHost.Kind(IPAddress.Parse("10.0.0.2")) == "LAN", "10/8");
                 Check(ServerHost.Kind(IPAddress.Parse("172.20.1.1")) == "LAN", "172.16/12");
-                Check(ServerHost.Kind(IPAddress.Parse("172.32.0.1")) == "public", "172.32 nao e LAN");
-                Check(ServerHost.Kind(IPAddress.Parse("127.0.0.1")) == null, "loopback fora");
-                Check(ServerHost.Kind(IPAddress.Parse("169.254.3.4")) == null, "link-local fora");
+                Check(ServerHost.Kind(IPAddress.Parse("172.32.0.1")) == "public", "172.32 is not LAN");
+                Check(ServerHost.Kind(IPAddress.Parse("127.0.0.1")) == null, "loopback excluded");
+                Check(ServerHost.Kind(IPAddress.Parse("169.254.3.4")) == null, "link-local excluded");
                 List<string> s = ServerHost.ShareLines(new[] { IPAddress.Parse("192.168.1.5"), IPAddress.Parse("127.0.0.1"),
                                                                IPAddress.Parse("100.101.2.3") }, "203.0.113.7", 7777);
                 Check(s.Count == 3 && s[0] == "Internet: 203.0.113.7:7777" && s[1] == "Tailscale: 100.101.2.3:7777" &&
-                      s[2] == "LAN: 192.168.1.5:7777", "ordem: internet, Tailscale, LAN (" + string.Join(" | ", s.ToArray()) + ")");
-                Check(ServerHost.ShareLines(new IPAddress[0], null, 7777).Count == 0, "sem enderecos");
+                      s[2] == "LAN: 192.168.1.5:7777", "order: internet, Tailscale, LAN (" + string.Join(" | ", s.ToArray()) + ")");
+                Check(ServerHost.ShareLines(new IPAddress[0], null, 7777).Count == 0, "no addresses");
+            });
+            Run("server_rows", delegate
+            {
+                LobbyClient.ServerInfo s = LobbyClient.ParseServer("SERVER 203.0.113.7 7777 " + LobbyClient.Protocol + " 3 1 5 16 Lanes_PC");
+                Check(s != null && s.Ip == "203.0.113.7" && s.Port == 7777 && s.Protocol == LobbyClient.Protocol, "address and protocol");
+                Check(s.Open == 3 && s.Waiting == 1 && s.Players == 5 && s.MaxLobbies == 16 && s.Name == "Lanes_PC", "counts and name");
+                Check(LobbyClient.ParseServer("LOBBY ABCD waiting 1/8 open Sala Ana Ana") == null, "not a SERVER row");
+                Check(LobbyClient.ParseServer("SERVER 1.2.3.4 7777 2") == null, "short row");
+                s.Ping = 12;
+                Check(LobbyClient.ServerStatus(s) == "12 ms", "ping (" + LobbyClient.ServerStatus(s) + ")");
+                s.Ping = -1;
+                Check(LobbyClient.ServerStatus(s) == "unreachable", "no answer");
+                s.Protocol = LobbyClient.Protocol + 1;
+                Check(LobbyClient.ServerStatus(s).StartsWith("needs another version"), "other protocol (" + LobbyClient.ServerStatus(s) + ")");
+            });
+            Run("master_address", delegate
+            {
+                string h;
+                int mp;
+                LobbyClient.SplitAddress("master.example.org", LobbyClient.MasterPort, out h, out mp);
+                Check(h == "master.example.org" && mp == 7778, "default master port");
+                LobbyClient.SplitAddress(" 192.168.2.243:9000 ", LobbyClient.MasterPort, out h, out mp);
+                Check(h == "192.168.2.243" && mp == 9000, "explicit port");
+            });
+            Run("invite", delegate
+            {
+                string host, code, why = null;
+                int invitePort;
+                Func<string, string> parse = s => LobbyClient.ParseInvite(s, out host, out invitePort, out code, out why) ? host + "|" + invitePort + "|" + code : null;
+                Check(parse("203.0.113.7:7777/7TXQ") == "203.0.113.7|7777|7TXQ", "canonical");
+                Check(parse("203.0.113.7:7777 7TXQ") == "203.0.113.7|7777|7TXQ", "space instead of slash");
+                Check(parse("  203.0.113.7:7777/7txq  ") == "203.0.113.7|7777|7TXQ", "spaces and lower case");
+                Check(parse("203.0.113.7/7TXQ") == "203.0.113.7|7777|7TXQ", "default port");
+                Check(parse("wotm://203.0.113.7:7777/7TXQ") == "203.0.113.7|7777|7TXQ", "wotm:// prefix");
+                Check(parse("myhost.example.org:7000/ABCD") == "myhost.example.org|7000|ABCD", "host name");
+                foreach (string bad in new[] { "", "7TX", "203.0.113.7:7777", ":7777/ABCD", "203.0.113.7:0/ABCD", "203.0.113.7:70000/ABCD",
+                                               "203.0.113.7:7777/AB-D", "203.0.113.7:7777/ABCDE" })
+                {
+                    Check(parse(bad) == null, "not an invite: '" + bad + "'");
+                    Check(!string.IsNullOrEmpty(why), "says what is missing: '" + bad + "'");
+                }
+                Check(LobbyClient.FormatInvite("203.0.113.7", 7777, "7txq") == "203.0.113.7:7777/7TXQ", "format");
+                // the shared game server: the invite is just the code, and a bare code joins there
+                string dh;
+                int dp;
+                LobbyClient.SplitAddress(LobbyClient.DefaultServer, LobbyClient.DefaultPort, out dh, out dp);
+                Check(parse(" 7txq ") == dh + "|" + dp + "|7TXQ", "a bare code is a lobby on the default server");
+                Check(parse("wotm://7TXQ") == dh + "|" + dp + "|7TXQ", "bare code with wotm://");
+                Check(LobbyClient.FormatInvite(dh, dp, "7txq") == "7TXQ", "an invite to the default server is just the code");
+            });
+            Run("invite_only_where_it_works", delegate
+            {
+                string note;
+                var internet = new List<string> { "Internet: 203.0.113.7:7777", "Tailscale: 100.101.2.3:7777", "LAN: 192.168.2.10:7777" };
+                var noRouter = new List<string> { "Tailscale: 100.101.2.3:7777", "LAN: 192.168.2.10:7777" };
+                var lanOnly = new List<string> { "LAN: 192.168.2.10:7777" };
+                Check(ServerHost.InviteFor(internet, "ABCD", true, out note) == "203.0.113.7:7777/ABCD" && note.StartsWith("Send this invite"), "internet address once the router opened the port");
+                Check(ServerHost.InviteFor(noRouter, "ABCD", false, out note) == "" && note.Contains("router"), "no invite while the router is still asked");
+                Check(ServerHost.InviteFor(noRouter, "ABCD", true, out note) == "100.101.2.3:7777/ABCD" && note.Contains("Tailscale") && note.Contains("only"), "router refused: Tailscale, said plainly");
+                Check(ServerHost.InviteFor(lanOnly, "ABCD", true, out note) == "192.168.2.10:7777/ABCD" && note.Contains("same home network") && note.Contains("only"), "router refused: home network only, said plainly");
+                Check(ServerHost.InviteFor(new List<string>(), "ABCD", true, out note) == "" && note.Length > 0, "no address: no invite, a reason");
+                Check(ServerHost.InviteFor(internet, "", true, out note) == "", "no lobby code yet: no invite");
+            });
+            Run("friendly_status", delegate
+            {
+                // the texts as LobbyClient and wotm_server produce them
+                Func<string, string, bool> says = (err, start) => LobbyClient.FriendlyError(err).StartsWith(start);
+                Check(says("no answer from 1.2.3.4:7777 (is wotm_server running? is the TCP port open?)", "Can't reach the host"), "unreachable");
+                Check(says("the server closed the connection", "Can't reach the host"), "closed");
+                Check(says("different protocol (the server speaks 3; update wotlane)", "Your game version"), "protocol");
+                Check(says("build differs from the lobby's (wl-1); everyone needs the same wotlane", "Your game version"), "build");
+                Check(says("rejected by the server: game configuration differs from the others (a vs b)", "Your game files"), "config");
+                Check(says("no such lobby (check the code)", "That invite is no longer open"), "no lobby");
+                Check(says("wrong password (the lobby has a password)", "This game needs a password"), "password");
+                Check(says("lobby is in a match; wait for it to end", "That game has already started"), "in a match");
+                Check(says("name already taken in the lobby", "Someone in that game already uses your name"), "name taken");
+                Check(says("lobby is full", "That game is full"), "full");
+                Check(LobbyClient.FriendlyError("unknown command: X") == "Problem: unknown command: X", "anything else stays readable");
+            });
+            Run("modifier_list", delegate
+            {
+                Check(LobbyClient.ModifierList(false, false, false) == "", "none");
+                Check(LobbyClient.ModifierList(true, false, true) == "jump,turbo", "canonical order");
+                Check(LobbyClient.ModifierList(true, true, true) == "jump,fast,turbo", "all three");
+                Check(LobbyClient.ModifierLabel("") == "no modifiers", "label of none");
+                Check(LobbyClient.ModifierLabel("jump,fast,turbo") == "Super Jump, Fast Monsters, Turbo", "label of all three");
+                var m = LobbyClient.KeyValues("MATCH lobby=ABCD players=2 stage=1 wins=0 monsters=3,1 names=Ana,Bia seed=7 step=1 you=0 token=t port=7777");
+                Check(LobbyClient.MatchEnv(m, "h")["WOTM_MODIFIERS"] == "", "a MATCH without mods= sets none");
+            });
+            Run("no_master", delegate
+            {
+                bool threw = false;
+                try { LobbyClient.Browse("127.0.0.1:" + (masterPort - 2), 500); }
+                catch (LobbyError) { threw = true; }
+                Check(threw, "missing master becomes LobbyError");
+            });
+            Run("public_server_list", delegate
+            {
+                Check(LobbyClient.Browse("127.0.0.1:" + masterPort, 2000).Count == 0, "empty list at first");
+                const int pub = 7895;
+                using (ServerHost h = ServerHost.Start(server, pub, null, 3000, "127.0.0.1:" + masterPort, "Lanes_PC"))
+                {
+                    Check(h.Owned, "this launcher runs the announcing server");
+                    LobbyClient.ServerInfo found = null;
+                    for (int waited = 0; found == null && waited < 5000; waited += 250)
+                    {
+                        foreach (LobbyClient.ServerInfo s in LobbyClient.Browse("127.0.0.1:" + masterPort, 2000))
+                            if (s.Name == "Lanes_PC") found = s;
+                        if (found == null) Thread.Sleep(250);
+                    }
+                    Check(found != null, "the announced server is listed");
+                    if (found != null)
+                    {
+                        Check(found.Port == pub && found.Protocol == LobbyClient.Protocol, "its port and protocol");
+                        Check(found.Ip == "127.0.0.1" && found.Ping >= 0, "address seen by the master, and a ping (" + found.Ping + ")");
+                        Check(LobbyClient.ServerStatus(found).EndsWith(" ms"), "status is the ping");
+                    }
+                }
             });
         }
         finally
         {
             try { p.Kill(); } catch (Exception) { }
+            try { master.Kill(); } catch (Exception) { }
         }
-        Console.WriteLine(checks + " checagens, " + failures + " falha(s)");
+        Console.WriteLine(checks + " checks, " + failures + " failure(s)");
         return failures == 0 ? 0 : 1;
     }
 
@@ -156,7 +317,7 @@ static class LobbyTest
     {
         int before = failures;
         try { t(); }
-        catch (Exception e) { ++failures; Console.WriteLine("  EXCECAO " + e.Message); }
-        Console.WriteLine((failures == before ? "ok      " : "FALHOU  ") + name);
+        catch (Exception e) { ++failures; Console.WriteLine("  EXCEPTION " + e.Message); }
+        Console.WriteLine((failures == before ? "ok      " : "FAILED  ") + name);
     }
 }

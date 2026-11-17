@@ -1,10 +1,10 @@
 #!/bin/sh
-# Rascunhos do m2c em lote, fora do repo (build/m2c/<tu>/<funcao>.c), para nao esperar o m2c a cada funcao. Roda no WSL.
-#   sh tools/m2c_batch.sh                       toda a fila de config/boot_coverage_asm.csv (funcoes ainda em asm que o jogo chama)
-#   sh tools/m2c_batch.sh config/outra.csv      outra fila (colunas tu,function,...)
-#   sh tools/m2c_batch.sh game/Monster [tu...]  todas as funcoes INCLUDE_ASM dessas TUs (asm/nonmatchings/<tu>/*.s)
-# Variaveis: JOBS (padrao 8), M2C/PYTHON (como no m2c.sh). So gera o que falta ou esta mais velho que o .s; falhas viram .c com a
-# mensagem do m2c no fim ("m2c falhou"). O rascunho e so um ponto de partida: leia o asm (CLAUDE.md, "Fluxo por funcao").
+# Batch m2c drafts, outside the repo (build/m2c/<tu>/<function>.c), so you don't wait for m2c on every function. Runs in WSL.
+#   sh tools/m2c_batch.sh                       the whole queue in config/boot_coverage_asm.csv (functions still in asm that the game calls)
+#   sh tools/m2c_batch.sh config/other.csv      another queue (columns tu,function,...)
+#   sh tools/m2c_batch.sh game/Monster [tu...]  every INCLUDE_ASM function of those TUs (asm/nonmatchings/<tu>/*.s)
+# Variables: JOBS (default 8), M2C/PYTHON (as in m2c.sh). Only generates what is missing or older than the .s; failures become a .c with
+# m2c's message at the end ("m2c failed"). The draft is only a starting point: read the asm (CLAUDE.md, "Per-function workflow").
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root" || exit 1
 out=build/m2c
@@ -20,7 +20,7 @@ for a in "$@"; do
     esac
 done
 total=$(wc -l < "$list")
-echo "m2c em lote: $total funcoes -> $out/ (JOBS=${JOBS:-8})"
+echo "batch m2c: $total functions -> $out/ (JOBS=${JOBS:-8})"
 sort -u "$list" | xargs -P "${JOBS:-8}" -I{} sh -c '
     p="{}"; tu=${p%/*}; fn=${p##*/}
     s="asm/nonmatchings/$tu/$fn.s"; c="'"$out"'/$tu/$fn.c"
@@ -28,9 +28,9 @@ sort -u "$list" | xargs -P "${JOBS:-8}" -I{} sh -c '
     [ -f "$c" ] && [ "$c" -nt "$s" ] && exit 0
     mkdir -p "'"$out"'/$tu"
     if ! sh tools/m2c.sh "$tu" "$fn" > "$c.tmp" 2>&1; then
-        printf "\n/* m2c falhou: veja acima */\n" >> "$c.tmp"
+        printf "\n/* m2c failed: see above */\n" >> "$c.tmp"
     fi
     mv "$c.tmp" "$c"
 '
 rm -f "$list"
-echo "pronto: $(find "$out" -name '*.c' | wc -l) rascunhos em $out/"
+echo "done: $(find "$out" -name '*.c' | wc -l) drafts in $out/"

@@ -1,25 +1,31 @@
-// ABOUTME: Protocolo do netcode: mensagens binarias da partida (ENet) e linhas de texto do lobby (TCP), com codificacao e leitura.
-// ABOUTME: Sem dependencia do jogo nem de sockets; usado pelo cliente (wotm.exe), pelo servidor (wotm_server) e pelos testes.
+// ABOUTME: Netcode protocol: binary match messages (ENet) and lobby text lines (TCP), with encoding and parsing.
+// ABOUTME: No dependency on the game or on sockets; used by the client (wotm.exe), the server (wotm_server) and the tests.
 #pragma once
 
 #include "wotm_lockstep.hpp"
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <map>
 #include <string>
 #include <vector>
 
 namespace wotm_net::proto
 {
-    constexpr uint16_t kProtocol = 2;
-    constexpr int kMaxPlayers = 8;   // 4 nos lugares de jogador do jogo e 4 em lugares de IA guiados pela rede (wotm_multi.inc)
+    constexpr uint16_t kProtocol = 5;   // 3: pad states carry mouse motion and camera settings; 4: Hash carries the 256 block hashes;
+                                        // 5: the lobby carries saved map ids (stage) and skin ids (<monster>:<skin>)
+    constexpr int kMaxPlayers = 8;   // 4 in the game's player slots and 4 in AI slots driven by the network (wotm_multi.inc)
     constexpr uint16_t kDefaultPort = 7777;
-    constexpr size_t kMaxRun = 64;   // quadros de entrada por mensagem (o lockstep nunca deixa mais que o atraso pendente)
+    constexpr uint16_t kDefaultMasterPort = 7778;   // the master server (list of public servers, wotm_net_master.hpp)
+    constexpr const char *kDefaultServer = "35.185.58.174:7777";   // the always-on shared game server (tools/net_lobby.py DEFAULT_SERVER,
+                                                                   // tools/launcher LobbyClient.DefaultServer)
+    constexpr size_t kMaxRun = 64;   // input frames per message (lockstep never leaves more than the delay pending)
 
-    // Canais ENet: controle confiavel (entrada, inicio, queda, hash, dessincronia) e entradas sem confirmacao (cada pacote repete o
-    // que o outro lado ainda nao confirmou, entao perder um nao custa nada)
+    // ENet channels: reliable control (join, start, drop, hash, desync) and unacknowledged inputs (each packet resends whatever the
+    // other side hasn't acknowledged yet, so losing one costs nothing)
     enum Channel : uint8_t
     {
         kControl = 0,
@@ -30,15 +36,20 @@ namespace wotm_net::proto
     enum class Type : uint8_t
     {
         None = 0,
-        Join = 1,     // cliente -> servidor: ficha do lobby e identidade do build
-        Welcome,      // servidor -> cliente: indice do jogador e quantos sao
-        Reject,       // servidor -> cliente: motivo, e a conexao cai
-        Start,        // servidor -> cliente: todos chegaram; atraso de entrada e nomes
-        Input,        // cliente -> servidor: entradas do proprio jogador e o que ja recebeu de cada um
-        Inputs,       // servidor -> cliente: entradas dos outros e o que ja recebeu deste
-        Hash,         // cliente -> servidor: hash do estado num quadro
-        Desync,       // servidor -> cliente: os hashes de um quadro diferem; a partida para
-        Drop,         // servidor -> cliente: um jogador saiu; neutro a partir de um quadro
+        Join = 1,     // client -> server: lobby token and build identity
+        Welcome,      // server -> client: player index and player count
+        Reject,       // server -> client: reason, then the connection closes
+        Start,        // server -> client: everyone arrived; input delay and names
+        Input,        // client -> server: this player's inputs and what it has received from each player
+        Inputs,       // server -> client: the others' inputs and what it has received from this client
+        Hash,         // client -> server: state hash on a frame
+        Desync,       // server -> client: the hashes for a frame differ; the match stops
+        Drop,         // server -> client: a player left; neutral from a given frame
+        Away,         // client -> server: this player's game went to the background or came back (a hidden browser tab);
+                      // server -> client: the same for another player. Older peers ignore it
+        Pace,         // server -> client: the input delay this player should move to (re-picked from the round trips during the
+                      // match; the client steps toward it, wotm_lockstep.hpp LocalSchedule). Older peers ignore it and keep the
+                      // Start delay, which stays in sync either way
     };
 
     struct Join
@@ -67,18 +78,20 @@ namespace wotm_net::proto
     };
     struct Input
     {
-        std::vector<uint32_t> acks;   // por jogador: primeiro quadro que este cliente ainda nao tem
+        std::vector<uint32_t> acks;   // per player: first frame this client doesn't have yet
         InputRun own;
     };
     struct Inputs
     {
-        uint32_t ackOwn = 0;          // primeiro quadro do proprio cliente que o servidor ainda nao tem
+        uint32_t ackOwn = 0;          // first frame of this client's own input the server doesn't have yet
         std::vector<InputRun> runs;
     };
     struct Hash
     {
         uint32_t frame = 0;
         uint64_t hash = 0;
+        std::vector<uint64_t> blocks;   // the 256 hashes of the 128 KB blocks the total came from (empty: only the total), so a
+                                        // desync names the memory block, not just the PC (wotm_sync.inc netHash, server checkHashes)
     };
     struct Desync
     {
@@ -89,6 +102,15 @@ namespace wotm_net::proto
     {
         uint8_t player = 0;
         uint32_t frame = 0;
+    };
+    struct Away
+    {
+        uint8_t player = 0;   // the server fills it in; a client sends its own slot as 0
+        bool away = false;
+    };
+    struct Pace
+    {
+        uint32_t delay = 0;
     };
 
     class Writer
@@ -105,8 +127,12 @@ namespace wotm_net::proto
             u8(static_cast<uint8_t>(n));
             b_.insert(b_.end(), s.begin(), s.begin() + static_cast<std::ptrdiff_t>(n));
         }
-        void pad(const PadState &s) { u16(s.buttons), u8(s.rx), u8(s.ry), u8(s.lx), u8(s.ly); }
-        // estados seguidos iguais custam 1 byte (0); um novo, 1 + 6 bytes
+        void pad(const PadState &s)
+        {
+            u16(s.buttons), u8(s.rx), u8(s.ry), u8(s.lx), u8(s.ly);
+            u16(static_cast<uint16_t>(s.mouseX)), u16(static_cast<uint16_t>(s.mouseY)), u16(s.cam);
+        }
+        // a state equal to the previous one costs 1 byte (0); a new one, 1 + 12 bytes
         void run(const InputRun &r)
         {
             const size_t n = std::min(r.states.size(), kMaxRun);
@@ -175,6 +201,8 @@ namespace wotm_net::proto
             PadState s;
             s.buttons = u16();
             s.rx = u8(), s.ry = u8(), s.lx = u8(), s.ly = u8();
+            s.mouseX = static_cast<int16_t>(u16()), s.mouseY = static_cast<int16_t>(u16());
+            s.cam = u16();
             return s;
         }
         InputRun run()
@@ -303,13 +331,19 @@ namespace wotm_net::proto
     inline std::vector<uint8_t> encode(const Hash &m)
     {
         Writer w(Type::Hash);
-        w.u32(m.frame), w.u64(m.hash);
+        w.u32(m.frame), w.u64(m.hash), w.u16(static_cast<uint16_t>(m.blocks.size()));
+        for (uint64_t h : m.blocks)
+            w.u64(h);
         return w.take();
     }
     inline bool decode(const std::vector<uint8_t> &b, Hash &m)
     {
         Reader r(b, Type::Hash);
         m.frame = r.u32(), m.hash = r.u64();
+        const size_t n = r.u16();
+        m.blocks.clear();
+        for (size_t i = 0; i < n && r.ok(); ++i)
+            m.blocks.push_back(r.u64());
         return r.done();
     }
 
@@ -339,29 +373,121 @@ namespace wotm_net::proto
         return r.done();
     }
 
-    // Atraso de entrada (quadros) para os tempos de ida e volta ao servidor de cada jogador (ms): a entrada de um jogador vai ao servidor
-    // e dele aos outros, entao o pior caminho e meia volta do mais lento mais meia volta do segundo mais lento; mais 1 quadro de folga
-    // para a fase do quadro. Fica entre 2 e 15.
-    inline uint32_t pickDelay(std::vector<uint32_t> rttMs, uint32_t frameMs)
+    inline std::vector<uint8_t> encode(const Away &m)
     {
-        std::sort(rttMs.begin(), rttMs.end(), [](uint32_t a, uint32_t b) { return a > b; });
-        const uint32_t a = rttMs.size() > 0 ? rttMs[0] : 0u, b = rttMs.size() > 1 ? rttMs[1] : 0u;
-        const uint32_t oneWay = (a + b + 1u) / 2u;
-        const uint32_t frames = frameMs ? (oneWay + frameMs - 1u) / frameMs + 1u : 2u;
-        return std::clamp(frames, 2u, 15u);
+        Writer w(Type::Away);
+        w.u8(m.player), w.u8(m.away ? 1u : 0u);
+        return w.take();
+    }
+    inline bool decode(const std::vector<uint8_t> &b, Away &m)
+    {
+        Reader r(b, Type::Away);
+        m.player = r.u8(), m.away = r.u8() != 0;
+        return r.done();
     }
 
-    // ---- lobby (TCP, uma linha de texto por mensagem) ----
-    // Quem cria o lobby e o dono: so ele muda a fase e as vitorias e comeca a partida; se sair, o proximo membro vira dono. O lobby
-    // tem um codigo de 4 letras (para entrar sem a lista) e pode ter senha. Os membros continuam nele durante a partida e, quando ela
-    // acaba (todos sairam dela: o QUIT fecha o jogo), ele volta a esperar com os mesmos membros. Lobby vazio fecha.
-    // cliente: HELLO <protocolo> <build> | LIST | CREATE <lobby> <nome> <monstro> [senha] | JOIN <codigo> <nome> <monstro> [senha] |
-    //          SET [stage=<fase>] [wins=<vitorias>] | START | LEAVE
-    // servidor: WELCOME <lobbies abertos> | LOBBY <codigo> <waiting|playing> <n>/<max> <open|locked> <lobby> <dono> <nomes,...|-> |
-    //           END | CREATED <codigo> | JOINED <codigo> | LEFT <codigo> | SETTINGS <codigo> stage=<fase> wins=<vitorias> |
-    //           MEMBERS <codigo> <dono> <nome:monstro,...> | MATCH <chave=valor>... | ERROR <texto>
+    inline std::vector<uint8_t> encode(const Pace &m)
+    {
+        Writer w(Type::Pace);
+        w.u32(m.delay);
+        return w.take();
+    }
+    inline bool decode(const std::vector<uint8_t> &b, Pace &m)
+    {
+        Reader r(b, Type::Pace);
+        m.delay = r.u32();
+        return r.done();
+    }
+
+    // fields per game frame (WOTM_FIXEDSTEP) in a match of this many players: 3 or more, or a member whose device can't compute 60 game
+    // frames a second (a phone, HELLO hz=30), switch the game to its own 30 Hz mode. A frame is always one step of game time, so a
+    // device that falls short of the rate slows the game itself for everyone; at 30 Hz it does half the frames for the same time
+    inline int matchStep(int players, bool halfRateMember) { return players >= 3 || halfRateMember ? 2 : 1; }
+    inline double frameMs(int step) { return step * 1000.0 / 60.0; }
+
+    // Input delay (frames) of `player`, from each player's round trip to the server (ms, the high end of the recent ones: RttWindow):
+    // the input goes to the server and from there to every other player, so its path is half its own round trip plus half the
+    // slowest other player's, plus kDelayMarginMs for sending and handling. Clamped to 1..15.
+    constexpr double kDelayMarginMs = 3.0;
+    // the path in frames (0 when nobody else is there to reach)
+    inline double pathFrames(const std::vector<uint32_t> &rttMs, size_t player, double frameMs)
+    {
+        uint32_t other = 0;
+        bool alone = true;
+        for (size_t q = 0; q < rttMs.size(); ++q)
+            if (q != player)
+                other = std::max(other, rttMs[q]), alone = false;
+        if (alone || player >= rttMs.size())
+            return 0.0;
+        return ((rttMs[player] + other) / 2.0 + kDelayMarginMs) / frameMs;
+    }
+    inline uint32_t framesFor(double frames) { return static_cast<uint32_t>(std::clamp(std::ceil(frames - 1e-9), 1.0, 15.0)); }
+    inline uint32_t playerDelay(const std::vector<uint32_t> &rttMs, size_t player, double frameMs)
+    {
+        return framesFor(pathFrames(rttMs, player, frameMs));
+    }
+
+    // The delay to advise a player whose delay is `current` during the match: it rises as soon as the path needs another frame, but
+    // only falls when the lower delay leaves half a frame to spare, so a ping sitting on a frame boundary does not flap
+    inline uint32_t adviseDelay(uint32_t current, const std::vector<uint32_t> &rttMs, size_t player, double frameMs)
+    {
+        const double frames = pathFrames(rttMs, player, frameMs);
+        const uint32_t up = framesFor(frames), down = framesFor(frames + 0.5);
+        return up >= current ? up : std::min(current, down);
+    }
+
+    // the delay everyone starts with (the frames before it are neutral for every player): the largest player's, and at least 2,
+    // since a browser's ping is 0 until its first pong (the advice brings a LAN player down to 1 during the match)
+    inline uint32_t startDelay(const std::vector<uint32_t> &rttMs, double frameMs)
+    {
+        uint32_t d = 2;
+        for (size_t p = 0; p < rttMs.size(); ++p)
+            d = std::max(d, playerDelay(rttMs, p, frameMs));
+        return d;
+    }
+
+    // The highest of a player's last kSamples round trips: a jittery ping counts at its high end, and a spike only lowers the delay
+    // again once it has left the window
+    class RttWindow
+    {
+    public:
+        static constexpr size_t kSamples = 8;
+        void add(uint32_t ms)
+        {
+            samples_[at_] = ms;
+            at_ = (at_ + 1) % kSamples;
+            n_ = std::min(n_ + 1, kSamples);
+        }
+        uint32_t high() const
+        {
+            uint32_t h = 0;
+            for (size_t i = 0; i < n_; ++i)
+                h = std::max(h, samples_[i]);
+            return h;
+        }
+
+    private:
+        uint32_t samples_[kSamples] = {};
+        size_t at_ = 0, n_ = 0;
+    };
+
+    // ---- lobby (TCP, one text line per message) ----
+    // Whoever creates the lobby is the owner: only the owner changes the stage, wins and modifiers and starts the match; if the owner leaves, the
+    // next member becomes owner. The lobby has a 4-letter code (to join without the list) and may have a password. Members stay in it
+    // during the match and, when the match ends (everyone has left it: QUIT closes the game), it goes back to waiting with the same
+    // members. An empty lobby closes.
+    // client: HELLO <protocol> <build> | LIST | CREATE <lobby> <name> <monster> [password] | JOIN <code> <name> <monster> [password] |
+    //         SET [stage=<stage>] [wins=<wins>] [mods=<list>] | MONSTER <monster> (any member, while the lobby waits) | START | LEAVE |
+    //         CHAT <text> (printable text up to kMaxChatBytes, kChatBurst lines per kChatWindowMs, only while the lobby waits)
+    // server: WELCOME <open lobbies> | LOBBY <code> <waiting|playing> <n>/<max> <open|locked> <lobby> <owner> <names,...|-> |
+    //         END | CREATED <code> | JOINED <code> | LEFT <code> | SETTINGS <code> stage=<stage> wins=<wins> mods=<list> | CHAT <code> <name> <text> |
+    //         MEMBERS <code> <owner> <name:monster,...> |
+    //         PINGS <code> <name:ms|name:->,... (every second while the lobby waits; - for a member the server can't measure, a TCP one) | MATCH <key=value>... | ERROR <text>
+    // <monster> is "<number>" or "<number>:<skin id>" (Pick); <stage> is a stage number or a saved map's id (validStage)
     constexpr int kMaxWins = 99;
-    constexpr const char *kCodeLetters = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";   // sem I, O, 0 e 1 (confundem ditando o codigo)
+    constexpr size_t kMaxChatBytes = 200;   // a lobby chat line is cut to this many bytes
+    constexpr int kChatBurst = 5, kChatWindowMs = 10000;   // a member may send this many lines per window
+    constexpr const char *kCodeLetters = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";   // no I, O, 0 or 1 (easily confused when reading the code aloud)
     inline std::vector<std::string> words(const std::string &line)
     {
         std::vector<std::string> out;
@@ -389,7 +515,7 @@ namespace wotm_net::proto
         return kv;
     }
 
-    // nome de jogador: letras, digitos, '_' e '-', ate 16
+    // player name: letters, digits, '_' and '-', up to 16
     inline std::string cleanName(const std::string &s)
     {
         std::string out;
@@ -397,5 +523,38 @@ namespace wotm_net::proto
             if ((std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '-') && out.size() < 16u)
                 out += c;
         return out;
+    }
+
+    // A lobby member's monster: "<monster>" or "<monster>:<skin id>" (a mod skin, mods/<mod>/skins/<id>/: a-z, 0-9 and _, up to 32,
+    // not starting with a digit, as WOTM_MATCH reads them). In the MATCH line it is what WOTM_MATCH reads
+    struct Pick
+    {
+        int monster = 0;
+        std::string skin;
+        std::string text() const { return std::to_string(monster) + (skin.empty() ? "" : ":" + skin); }
+    };
+    inline bool parsePick(const std::string &s, Pick &out)
+    {
+        const size_t colon = s.find(':');
+        const std::string num = s.substr(0, colon);
+        if (num.empty() || num.size() > 3 || num.find_first_not_of("0123456789") != std::string::npos)
+            return false;
+        out.monster = std::atoi(num.c_str());
+        out.skin = colon == std::string::npos ? "" : s.substr(colon + 1);
+        // a skin id that starts with a digit would reach WOTM_MATCH as a disc costume number (past the lobby's costume check)
+        if (colon != std::string::npos &&
+            (out.skin.empty() || out.skin.size() > 32u || (out.skin[0] >= '0' && out.skin[0] <= '9') ||
+             out.skin.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789_") != std::string::npos))
+            return false;
+        return true;
+    }
+
+    // A lobby stage: a stock stage number, or a saved map's id (mods/<mod>/stages/<id>/: a letter, then a-z, 0-9 and _, up to 16)
+    inline bool validStage(const std::string &s)
+    {
+        if (!s.empty() && s.size() <= 3u && s.find_first_not_of("0123456789") == std::string::npos)
+            return true;
+        return !s.empty() && s.size() <= 16u && s[0] >= 'a' && s[0] <= 'z' &&
+               s.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789_") == std::string::npos;
     }
 }

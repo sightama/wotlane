@@ -1,9 +1,9 @@
-// Icone do jogo (ps2EntryRunner.exe), ligado pelo CMake do fork (WOTM_NATIVE_DIR). O nome GLFW_ICON faz o GLFW (raylib) usar o
-// mesmo icone na barra de titulo e na barra de tarefas; no Explorer vale o primeiro grupo de icones do executavel, que e este.
+// The game's icon (ps2EntryRunner.exe), linked by the fork's CMake (WOTM_NATIVE_DIR). The name GLFW_ICON makes GLFW (raylib) use the
+// same icon in the title bar and the taskbar; Explorer uses the executable's first icon group, which is this one.
 GLFW_ICON ICON "wotm.ico"
 
-// Icones de botao (Kenney "Input Prompts", CC0; tools/prompts_atlas.py): atlas desenhado no lugar dos icones 3D do jogo (native/runtime/wotm_prompts.inc)
+// Button icons (Kenney "Input Prompts", CC0; tools/prompts_atlas.py): atlas drawn in place of the game's 3D icons (native/runtime/wotm_prompts.inc)
 WOTM_PROMPTS RCDATA "assets/prompts.png"
 
-// Fonte do texto da tela de opcoes do jogo (Oswald Medium, SIL OFL 1.1: assets/Oswald_OFL.txt; native/runtime/wotm_optscreen.inc)
+// Font for the text on the game's options screen (Oswald Medium, SIL OFL 1.1: assets/Oswald_OFL.txt; native/runtime/wotm_optscreen.inc)
 FONT_OSWALD RCDATA "assets/Oswald-Medium.ttf"

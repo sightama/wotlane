@@ -1,5 +1,5 @@
-// ABOUTME: Jogador como host para o launcher: roda o wotm_server escondido como processo filho, espera a porta, lista os enderecos que
-// ABOUTME: os amigos podem usar (internet, Tailscale, LAN) e abre a porta no roteador por UPnP. Testado por LobbyTest.cs.
+// ABOUTME: Player-as-host for the launcher: runs wotm_server hidden as a child process (optionally announced on a master server),
+// ABOUTME: lists the addresses friends can use (internet, Tailscale, LAN) and opens the port via UPnP. Tested by LobbyTest.cs.
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -10,8 +10,8 @@ using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Threading;
 
-// O mesmo wotm_server do servidor dedicado, filho deste launcher: fecha junto com ele. Se a porta ja tem um servidor (outro launcher,
-// a janela do wotm_server), usa esse e nao o fecha.
+// The same wotm_server as the dedicated server, as a child of this launcher: it closes along with it. If the port already has a
+// server (another launcher, the wotm_server window), uses that one and does not close it.
 class ServerHost : IDisposable
 {
     public readonly int Port;
@@ -21,6 +21,9 @@ class ServerHost : IDisposable
 
     public bool Owned { get { return proc != null; } }
     public bool Running { get { return proc != null ? !proc.HasExited : PortOpen(Port, 500); } }
+    // Play (offline) closes the launcher, except while this launcher runs the server: closing it would stop the server, and the lobby,
+    // for every friend in it (#23). A server it only found running (not owned) outlives the launcher anyway.
+    public static bool KeepsLauncherOpen(ServerHost hosted) { return hosted != null && hosted.Owned && hosted.Running; }
 
     ServerHost(int port, Process p, StreamWriter w)
     {
@@ -29,23 +32,31 @@ class ServerHost : IDisposable
         log = w;
     }
 
-    public static ServerHost Start(string exe, int port, string logPath, int timeoutMs)
+    // announce/name: list this server publicly on that master server (wotm_server --announce <master> --name <name>); null = private
+    public static ServerHost Start(string exe, int port, string logPath, int timeoutMs, string announce = null, string name = null)
     {
         if (PortOpen(port, 300)) return new ServerHost(port, null, null);
-        if (!File.Exists(exe)) throw new LobbyError("nao achei " + exe + " (tools\\build_net.bat)");
+        if (!File.Exists(exe)) throw new LobbyError("could not find " + exe + " (tools\\build_net.bat)");
         StreamWriter w = null;
         if (logPath != null) w = new StreamWriter(logPath, false) { AutoFlush = true };
-        var psi = new ProcessStartInfo(exe, "--port " + port)
+        string args = "--port " + port;
+        if (!string.IsNullOrEmpty(announce))
+        {
+            args += " --announce " + announce.Trim();
+            string n = LobbyClient.CleanName(name ?? "");
+            if (n.Length > 0) args += " --name " + n;
+        }
+        var psi = new ProcessStartInfo(exe, args)
         {
             UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true,
             WorkingDirectory = Path.GetDirectoryName(exe)
         };
         Process p = Process.Start(psi);
-        // le as duas saidas sempre: com o cano cheio o servidor travaria no meio da partida
+        // always read both outputs: with a full pipe the server would hang mid-match
         DataReceivedEventHandler write = delegate(object s, DataReceivedEventArgs e)
         {
             if (e.Data == null || w == null) return;
-            try { lock (w) w.WriteLine(e.Data); } catch (ObjectDisposedException) { }   // ultimas linhas depois do Dispose
+            try { lock (w) w.WriteLine(e.Data); } catch (ObjectDisposedException) { }   // last lines after Dispose
         };
         p.OutputDataReceived += write;
         p.ErrorDataReceived += write;
@@ -54,12 +65,12 @@ class ServerHost : IDisposable
         var h = new ServerHost(port, p, w);
         for (int waited = 0; waited < timeoutMs; waited += 100)
         {
-            if (p.HasExited) { h.Dispose(); throw new LobbyError("o wotm_server fechou ao abrir a porta " + port + " (outro programa nela?)"); }
+            if (p.HasExited) { h.Dispose(); throw new LobbyError("wotm_server exited while opening port " + port + " (another program on it?)"); }
             if (PortOpen(port, 100)) return h;
             Thread.Sleep(100);
         }
         h.Dispose();
-        throw new LobbyError("o wotm_server nao abriu a porta " + port);
+        throw new LobbyError("wotm_server did not open port " + port);
     }
 
     public static bool PortOpen(int port, int timeoutMs)
@@ -77,7 +88,7 @@ class ServerHost : IDisposable
         }
     }
 
-    // "Tailscale" (100.64.0.0/10), "LAN" (enderecos privados), "public"; null para loopback e link-local (inuteis para um amigo)
+    // "Tailscale" (100.64.0.0/10), "LAN" (private addresses), "public"; null for loopback and link-local (useless to a friend)
     public static string Kind(IPAddress a)
     {
         if (a.AddressFamily != AddressFamily.InterNetwork) return null;
@@ -88,7 +99,7 @@ class ServerHost : IDisposable
         return "public";
     }
 
-    // linhas para mostrar ao host, na ordem de quem e mais provavel de servir a um amigo: internet (UPnP), Tailscale, LAN
+    // lines to show the host, ordered by how likely each is to work for a friend: internet (UPnP), Tailscale, LAN
     public static List<string> ShareLines(IEnumerable<IPAddress> local, string external, int port)
     {
         var lines = new List<string>();
@@ -99,7 +110,39 @@ class ServerHost : IDisposable
         return lines.Distinct().ToList();
     }
 
-    // Tailscale de qualquer placa; os outros so de placas com gateway (a do WSL/Hyper-V nao tem e nao serve a um amigo)
+    // The invite for the host to send (<host>:<port>/<CODE>) and a plain sentence saying who it works for; "" while there is nothing that
+    // works yet. lines: ShareLines. routerChecked: the UPnP attempt has returned (or this launcher does not own the server). An internet
+    // address only exists once the router opened the port; without it the invite says it only works on Tailscale or the home network.
+    public static string InviteFor(List<string> lines, string code, bool routerChecked, out string note)
+    {
+        note = "";
+        if (code == null || code.Length != 4) return "";
+        string internet = ShareAddress(lines, "Internet"), tailscale = ShareAddress(lines, "Tailscale"), lan = ShareAddress(lines, "LAN");
+        if (internet != null) { note = "Send this invite to your friends."; return InviteAt(internet, code); }
+        if (!routerChecked) { note = "Asking your router to open the port for friends on the internet..."; return ""; }
+        const string refused = "Your router didn't open the port for friends on the internet (README.txt, \"If friends can't reach you\"), so this invite ";
+        if (tailscale != null) { note = refused + "only works for friends on your Tailscale network."; return InviteAt(tailscale, code); }
+        if (lan != null) { note = refused + "only works for friends on the same home network as you."; return InviteAt(lan, code); }
+        note = "This PC has no network address friends could use.";
+        return "";
+    }
+
+    // "<kind>: <host>:<port>" from ShareLines, the address part; null if there is no line of that kind
+    static string ShareAddress(List<string> lines, string kind)
+    {
+        foreach (string l in lines)
+            if (l.StartsWith(kind + ": ")) return l.Substring(kind.Length + 2);
+        return null;
+    }
+    static string InviteAt(string address, string code)
+    {
+        string host;
+        int port;
+        LobbyClient.SplitAddress(address, LobbyClient.DefaultPort, out host, out port);
+        return LobbyClient.FormatInvite(host, port, code);
+    }
+
+    // Tailscale from any adapter; the others only from adapters with a gateway (the WSL/Hyper-V one has none, useless to a friend)
     public static List<IPAddress> LocalAddresses()
     {
         var list = new List<IPAddress>();
@@ -118,7 +161,7 @@ class ServerHost : IDisposable
         return ip.GatewayAddresses.Any(g => g.Address.AddressFamily == AddressFamily.InterNetwork && !g.Address.Equals(IPAddress.Any));
     }
 
-    // o endereco LAN da placa que tem gateway (o roteador encaminha a porta para ele); null sem nenhuma
+    // the LAN address of the adapter with a gateway (the router forwards the port to it); null if there is none
     public static IPAddress RouterFacingAddress()
     {
         foreach (NetworkInterface ni in NetworkInterface.GetAllNetworkInterfaces())
@@ -132,8 +175,8 @@ class ServerHost : IDisposable
         return null;
     }
 
-    // Abre a porta (TCP e UDP) no roteador pelo UPnP do Windows (HNetCfg.NATUPnP). Devolve o IP externo, ou null com o motivo em why.
-    // Demora alguns segundos: chame fora da thread da interface.
+    // Opens the port (TCP and UDP) on the router through Windows UPnP (HNetCfg.NATUPnP). Returns the external IP, or null with the
+    // reason in why. Takes a few seconds: call it off the UI thread.
     public string MapUpnp(out string why)
     {
         why = null;

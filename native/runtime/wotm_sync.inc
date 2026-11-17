@@ -1,15 +1,18 @@
-// ABOUTME: Modo deterministico e partida em rede: passo fixo e relogio virtual (WOTM_FIXEDSTEP), semente fixa (WOTM_SEED), entrada por
-// ABOUTME: quadro (atraso, gravar/repetir, rede WOTM_NET), hash do estado e copia da RAM. Incluido por wotm_overrides.cpp; roda na fronteira do quadro.
+// ABOUTME: Deterministic mode and network match: fixed step and virtual clock (WOTM_FIXEDSTEP), fixed seed (WOTM_SEED), per-frame
+// ABOUTME: input (delay, record/replay, network WOTM_NET), state hash and RAM dump. Included by wotm_overrides.cpp; runs at the frame boundary.
 //
-// Fronteira do quadro: entrada do timerWaitForMinUpdateRate (waitMinRateByVblanks), com o quadro do jogo pronto e o seguinte sem
-// comecar. O indice do quadro recomeca na entrada do Shell::LoadLevelFiles (levelLoad), entao duas execucoes com a mesma WOTM_MATCH
-// comparam o mesmo quadro da luta mesmo com boots de duracao diferente.
-//   WOTM_FIXEDSTEP=<n>: cada quadro vale exatamente n fields (updateRate = 60 / n, dt = n / 60), em vez dos vblanks medidos pelo relogio
-//     do host. Sem ela o dt depende de quanto o quadro demorou nesta maquina.
-//   WOTM_STATEHASH=<arquivo>: por quadro grava {indice, g_frame, hash total, 256 hashes de blocos de 128 KB} dos 32 MB que o jogo ve
-//     (tools/statediff.py compara duas execucoes e diz o primeiro quadro e os blocos que diferem).
-//   WOTM_STATEDUMP=<indice>: grava a RAM do jogo (32 MB) desse quadro em state_<indice>.bin na pasta atual (o discroot).
-//   WOTM_NET=<host>:<porta>, WOTM_NETTOKEN=<ficha>, WOTM_NETNAME=<nome>: partida em rede pelo wotm_server (veja "Partida em rede" abaixo).
+// Frame boundary: entry of timerWaitForMinUpdateRate (waitMinRateByVblanks), with the game's frame finished and the next one not yet
+// started. The frame index restarts at the entry of Shell::LoadLevelFiles (levelLoad), so two runs with the same WOTM_MATCH compare
+// the same frame of the fight even when their boots took different times.
+//   WOTM_FIXEDSTEP=<n>: every frame is exactly n fields (updateRate = 60 / n, dt = n / 60) instead of the vblanks measured by the host
+//     clock. Without it dt depends on how long the frame took on this machine.
+//   WOTM_STATEHASH=<file>: per frame writes {index, g_frame, total hash, 256 hashes of 128 KB blocks} of the 32 MB the game sees
+//     (tools/statediff.py compares two runs and reports the first frame and the blocks that differ).
+//   WOTM_STATEDUMP=<index>: writes the game's RAM (32 MB) at that frame to state_<index>.bin in the current folder (the discroot).
+//   WOTM_CALLTRACE=<file>[,<index>]: register hashes at every guest call while frame <index> is computed (see callTraced).
+//   WOTM_CALLDUMP=<call>[,<call>...]: with WOTM_CALLTRACE, the raw VU0 and FPU registers at those calls of the trace (see dumpRegisters).
+//   WOTM_PADLOG=<frames>: logs every scePad* call the game makes in its first <frames> frames (see padLogged).
+//   WOTM_NET=<host>:<port>, WOTM_NETTOKEN=<token>, WOTM_NETNAME=<name>: network match through wotm_server (see "Network match" below).
 namespace wotm_sync
 {
     constexpr uint32_t kGuestRam = 32u * 1024u * 1024u, kBlocks = 256u, kBlockSize = kGuestRam / kBlocks;
@@ -23,7 +26,7 @@ namespace wotm_sync
 
     uint64_t hashBytes(const uint8_t *p, size_t n)
     {
-        uint64_t h = 0xcbf29ce484222325ull;   // FNV-1a em palavras de 64 bits
+        uint64_t h = 0xcbf29ce484222325ull;   // FNV-1a over 64-bit words
         const uint64_t *w = reinterpret_cast<const uint64_t *>(p);
         for (size_t i = 0; i < n / 8u; ++i)
         {
@@ -33,8 +36,8 @@ namespace wotm_sync
         return h;
     }
 
-    // WOTM_SEED=<n>: semente fixa das duas sortes do jogo (srand e gRand, Mersenne Twister). O mathfRandInit(0) a tira do relogio do
-    // CD (segundo + minuto * 60), entao duas execucoes (ou dois PCs) comecavam a luta com sortes diferentes.
+    // WOTM_SEED=<n>: fixed seed for both of the game's random generators (srand and gRand, Mersenne Twister). mathfRandInit(0) takes
+    // it from the CD clock (second + minute * 60), so two runs (or two PCs) started the fight with different random sequences.
     constexpr uint32_t kRandInit = wotm::fn::mathfRandInit__Fii;
     PS2Runtime::RecompiledFunction g_origRandInit = nullptr;
     long long g_seed = -1;
@@ -43,41 +46,40 @@ namespace wotm_sync
     {
         if (ctx->pc == kRandInit && g_seed >= 0)
         {
-            std::fprintf(stderr, "[sync] semente %lld (o jogo pediu %d)\n", g_seed, static_cast<int32_t>(GPR_U32(ctx, 4)));
+            std::fprintf(stderr, "[sync] seed %lld (the game asked for %d)\n", g_seed, static_cast<int32_t>(GPR_U32(ctx, 4)));
             ctx->r[4] = _mm_set_epi64x(0, g_seed);
         }
         g_origRandInit(rdram, ctx, runtime);
     }
 
-    // Entrada por quadro (base do netcode): o scePadRead(porta, slot, dados) devolve 32 bytes por controle (controle = porta + 2 * slot,
-    // jogadores 1..8) e o jogo le cada controle duas vezes por quadro. Com o passo fixo, o estado de cada controle (botoes e analogicos,
-    // wotm_net::PadState) vem de uma linha do tempo por quadro (native/net/wotm_lockstep.hpp): os dispositivos locais sao amostrados na
-    // fronteira do quadro e valem WOTM_INPUTDELAY quadros depois (o atraso do lockstep; padrao 0), e as duas leituras do quadro veem o
-    // mesmo estado. O runtime o formata como um controle de verdade (setPadOverrideState: modo e pressao vem do estado da porta).
-    //   WOTM_INPUTREC=<arquivo>: grava {quadro, controle, estado} da entrada aplicada em cada quadro desde a carga da fase.
-    //   WOTM_INPUTPLAY=<arquivo>: o jogo ve a entrada gravada (pelo indice do quadro) em vez da dos dispositivos.
+    // Per-frame input (the base of the netcode): scePadRead(port, slot, data) returns 32 bytes per controller (controller = port + 2 *
+    // slot, players 1..8) and the game reads each controller twice per frame. With the fixed step, each controller's state (buttons,
+    // sticks and, on the keyboard's player, the mouse motion for the modern camera: wotm_net::PadState) comes from a per-frame timeline (native/net/wotm_lockstep.hpp): local devices are sampled at the frame
+    // boundary and apply WOTM_INPUTDELAY frames later (the lockstep delay; default 0), and both reads of a frame see the same state.
+    // The runtime formats it like a real controller (setPadOverrideState: mode and pressure come from the port's state).
+    //   WOTM_INPUTREC=<file>: writes {frame, controller, state} of the input applied in every frame since the level load.
+    //   WOTM_INPUTPLAY=<file>: the game sees the recorded input (by frame index) instead of the devices'.
     constexpr uint32_t kPadRead = wotm::fn::scePadRead;
-    constexpr int kControllers = 8;   // 2 portas x 4 slots do multitap: jogadores 1..8 (5..8 nas IAs, wotm_multi.inc)
-    struct InputRecord
-    {
-        uint32_t index;
-        uint32_t controller;
-        wotm_net::PadState state;
-    };
+    constexpr int kControllers = 8;   // 2 ports x 4 multitap slots: players 1..8 (5..8 on the AIs, wotm_multi.inc)
+    using wotm_net::InputRecord;   // the recording file's format: wotm_inputfile.hpp
     PS2Runtime *g_runtime = nullptr;
     PS2Runtime::RecompiledFunction g_origPadRead = nullptr;
     uint32_t g_inputDelay = 0;
     wotm_net::InputTimeline g_inputs(kControllers, 0);
     FILE *g_inputRec = nullptr;
+    bool g_inputRecHeader = false;   // the header goes in with the first fight's records, once its modifiers are latched
     std::vector<InputRecord> g_inputPlay;
-    bool g_levelLoaded = false;   // ja houve carga de fase (a gravacao e a repeticao contam os quadros dela)
-    uint32_t g_index = 0;         // quadro desde a carga da fase (frame)
+    int g_inputPlayMods = -1;        // gameplay modifiers of the recording being replayed (-1 = not recorded: this PC's apply)
+    bool g_levelLoaded = false;   // a level has been loaded (recording and replay count its frames)
+    uint32_t g_index = 0;         // frame since the level load
+    int g_mods = 0;               // gameplay modifiers of the current fight (wotm::modifiers bits; wotm_modifiers.inc latches them)
     bool g_loggedLocal = false, g_loggedApplied = false;
 
-    // Partida em rede (WOTM_NET=<host>:<porta> e WOTM_NETTOKEN=<ficha>, que o lobby da: launcher ou tools/net_lobby.py). Cada PC roda a
-    // simulacao inteira no modo deterministico e so as entradas viajam (native/net). O controle local (teclado e primeiro controle, os do
-    // jogador 1 sem rede) vale para o jogador que o servidor deu a este PC; os outros vem do servidor. Antes da carga da fase a entrada e
-    // neutra (o boot fica igual em todos), e um quadro so comeca com as entradas de todos para ele (netWaitFrame).
+    // Network match (WOTM_NET=<host>:<port> and WOTM_NETTOKEN=<token>, given by the lobby: the launcher or tools/net_lobby.py). Every PC
+    // runs the whole simulation in deterministic mode and only the inputs travel (native/net). The local controller (keyboard and first
+    // controller, player 1's without network) drives the player the server assigned to this PC; the others come from the server.
+    // Before the level load the input is neutral (the boot is the same everywhere), and a frame only starts once it has everyone's
+    // inputs for it (netWaitFrame).
     std::unique_ptr<wotm_net::MatchClient> g_net;
 
     wotm_net::PadState inputFor(int controller, uint32_t frame)
@@ -85,6 +87,67 @@ namespace wotm_sync
         if (g_net)
             return g_levelLoaded && controller < g_net->players() ? g_net->input(controller, frame) : wotm_net::PadState{};
         return g_inputs.get(controller, frame);
+    }
+
+    // Mouse motion of the keyboard's player since the last sample (wotm_mouse.hpp), in whole pixels; the fraction carries over to the
+    // next frame (macOS reports fractional motion). Only the whole pixels travel, so every PC turns the camera by the same amount.
+    // Mouseless test: WOTM_ORBITMOUSE="frame:frames:dx:dy;..." adds (dx, dy) pixels per frame (y down, like the mouse) to the keyboard
+    // player's mouse from the given frame for that many frames. With the fixed step the frame is the input index and the motion is
+    // sampled like a real one (it travels online and gets recorded); without it, wotm_orbit.inc counts Cameras::Update calls.
+    void scriptedMouse(unsigned frame, float &dx, float &dy)
+    {
+        struct Step { unsigned f0, n; float x, y; };
+        static const std::vector<Step> steps = [] {
+            std::vector<Step> v;
+            if (const char *e = std::getenv("WOTM_ORBITMOUSE"))
+                for (const char *p = e; *p;)
+                {
+                    Step s{};
+                    if (std::sscanf(p, "%u:%u:%f:%f", &s.f0, &s.n, &s.x, &s.y) == 4)
+                        v.push_back(s);
+                    const char *semi = std::strchr(p, ';');
+                    if (!semi)
+                        break;
+                    p = semi + 1;
+                }
+            return v;
+        }();
+        for (const Step &s : steps)
+            if (frame >= s.f0 && frame < s.f0 + s.n)
+            {
+                dx += s.x;
+                dy += s.y;
+            }
+    }
+
+    void sampleMouse(wotm_net::PadState &s, uint32_t index)
+    {
+        static float restX = 0.f, restY = 0.f;
+        float dx = 0.f, dy = 0.f;
+        wotm::mouse::take(dx, dy);
+        scriptedMouse(index, dx, dy);
+        dx += restX;
+        dy += restY;
+        const float x = std::clamp(std::trunc(dx), -32768.f, 32767.f), y = std::clamp(std::trunc(dy), -32768.f, 32767.f);
+        restX = dx - x;
+        restY = dy - y;
+        s.mouseX = static_cast<int16_t>(x);
+        s.mouseY = static_cast<int16_t>(y);
+    }
+
+    // This PC's camera settings (the panel's CAMERA tab), packed into every sampled controller's input so that every PC turns that
+    // player's camera with them (wotm_orbit.inc camSettingsFor)
+    wotm::camsettings::Settings localCamSettings()
+    {
+        namespace st = wotm::settings;
+        return {st::on(st::Camera), st::on(st::CamRecenter), st::on(st::CamInvertY), st::get(st::CamSens)};
+    }
+
+    // no button, stick or mouse (the camera settings don't count: they are in every sampled state)
+    bool idle(wotm_net::PadState s)
+    {
+        s.cam = 0;
+        return s == wotm_net::PadState{};
     }
 
     wotm_net::PadState sampleLocal(int controller)
@@ -99,35 +162,54 @@ namespace wotm_sync
             s.lx = d[6];
             s.ly = d[7];
         }
+        s.cam = wotm::camsettings::pack(localCamSettings());
         return s;
     }
 
-    // comeco do quadro `index`: amostra os controles locais (valem em index + atraso)
+    // start of frame `index`: samples the local controllers (they apply at index + delay)
     void sampleInputs(uint32_t index)
     {
         if (!g_inputPlay.empty())
+        {
+            wotm::mouse::clear();   // replay: the recorded motion turns the camera, the live one is dropped
             return;
+        }
         if (g_net)
         {
             if (!g_levelLoaded || g_net->status() != wotm_net::MatchClient::Status::Running)
                 return;
-            const wotm_net::PadState s = sampleLocal(0);
-            g_net->pushLocal(index + g_inputDelay, s);
-            if (!g_loggedLocal && s != wotm_net::PadState{})
+            wotm_net::PadState s = sampleLocal(0);
+            sampleMouse(s, index);   // the mouse is this PC's player's, like game pad 0
+            // personal pause (#16): with this player's own menu open (and until its buttons are released) the monster gets neutral
+            // input, the camera settings still travel; PAUSE MATCH FOR EVERYONE sends one frame of Start alone
+            bool start = false;
+            if (wotmPersonalPause(s.buttons, start))
+            {
+                const uint16_t cam = s.cam;
+                s = wotm_net::PadState{};
+                s.cam = cam;
+                if (start)
+                    s.buttons &= static_cast<uint16_t>(~wotm::personalpause::kStart);
+            }
+            g_net->pushSample(s);   // fills frame index + this player's current delay (the delay may step: LocalSchedule)
+            if (!g_loggedLocal && !idle(s))
             {
                 g_loggedLocal = true;
-                std::fprintf(stderr, "[sync] primeira entrada local: amostra do quadro %u vale no quadro %u\n", index, index + g_inputDelay);
+                std::fprintf(stderr, "[sync] first local input: sample of frame %u applies at frame %u\n", index, index + g_net->delay());
             }
             return;
         }
+        const int kbPlayer = wotm::mouse::g_kbPlayer.load(std::memory_order_relaxed);
         for (int c = 0; c < kControllers; ++c)
         {
-            const wotm_net::PadState s = sampleLocal(c);
+            wotm_net::PadState s = sampleLocal(c);
+            if (c == kbPlayer)
+                sampleMouse(s, index);
             const uint32_t at = g_inputs.scheduleLocal(c, index, s);
-            if (g_levelLoaded && !g_loggedLocal && s != wotm_net::PadState{})
+            if (g_levelLoaded && !g_loggedLocal && !idle(s))
             {
                 g_loggedLocal = true;
-                std::fprintf(stderr, "[sync] primeira entrada local: amostra do quadro %u vale no quadro %u\n", index, at);
+                std::fprintf(stderr, "[sync] first local input: sample of frame %u applies at frame %u\n", index, at);
             }
         }
         g_inputs.discardBefore(index > 64u ? index - 64u : 0u);
@@ -144,22 +226,22 @@ namespace wotm_sync
         if (!ours)
             return;
         ps2_stubs::clearPadOverrideState();
-        if (g_levelLoaded && !g_loggedApplied && s != wotm_net::PadState{})
+        if (g_levelLoaded && !g_loggedApplied && !idle(s))
         {
             g_loggedApplied = true;
-            std::fprintf(stderr, "[sync] primeira entrada nao neutra aplicada no quadro %u\n", g_index);
+            std::fprintf(stderr, "[sync] first non-neutral input applied at frame %u\n", g_index);
         }
     }
 
     int g_fixedStep = 0;
-    uint32_t g_virtualTics = 0;   // relogio do jogo no passo fixo (ticks do timer 1: 9619 por field), avancado em frame()
-    uint32_t g_ticCalls = 0;      // timerGetCurTics do jogo neste quadro
-    // timerGetCurTics no passo fixo: o relogio virtual do quadro mais um quantum por chamada (64 ticks, ~0,1 ms). Assim os lacos que
-    // esperam o relogio andar (fadeOutMusicBlocking: 101 ms) terminam e o tempo que o jogo mede so depende do quadro e de quantas
-    // vezes ele perguntou, nunca de quanto o host demorou.
+    uint32_t g_virtualTics = 0;   // the game's clock in fixed step (timer 1 ticks: 9619 per field), advanced in frame()
+    uint32_t g_ticCalls = 0;      // the game's timerGetCurTics calls in this frame
+    // timerGetCurTics in fixed step: the frame's virtual clock plus one quantum per call (64 ticks, ~0.1 ms). That way the loops that
+    // wait for the clock to move (fadeOutMusicBlocking: 101 ms) finish, and the time the game measures depends only on the frame and
+    // on how many times it asked, never on how long the host took.
     uint32_t callTics() { return g_virtualTics + 64u * g_ticCalls++; }
 
-    // sceGsSyncV devolve a paridade do campo (o jogo a guarda na RAM); no passo fixo ela sai de uma contagem das chamadas
+    // sceGsSyncV returns the field parity (the game keeps it in RAM); in fixed step it comes from a count of the calls
     constexpr uint32_t kSyncV = wotm::fn::sceGsSyncV;
     PS2Runtime::RecompiledFunction g_origSyncV = nullptr;
     uint32_t g_syncCalls = 0;
@@ -173,14 +255,14 @@ namespace wotm_sync
             SET_GPR_U32(ctx, 2, g_syncCalls++ & 1u);
     }
 
-    // sceCdReadClock(sceCdCLOCK *) no passo fixo: data fixa (00:00:00 de 01/01/03, BCD) em vez do relogio do PC; o jogo a usa no
-    // globalTimeString e, com semente 0, para semear a sorte
+    // sceCdReadClock(sceCdCLOCK *) in fixed step: a fixed date (00:00:00 on 01/01/03, BCD) instead of the PC's clock; the game uses it
+    // in globalTimeString and, with seed 0, to seed the random generators
     constexpr uint32_t kReadClock = wotm::fn::sceCdReadClock;
 
     void readClockFixed(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         const uint32_t p = GPR_U32(ctx, 4) & 0x1FFFFFFFu;
-        const uint8_t clock[8] = {0, 0x00, 0x00, 0x00, 0, 0x01, 0x01, 0x03};   // stat, segundo, minuto, hora, -, dia, mes, ano
+        const uint8_t clock[8] = {0, 0x00, 0x00, 0x00, 0, 0x01, 0x01, 0x03};   // stat, second, minute, hour, -, day, month, year
         if (p + sizeof clock <= kGuestRam)
             std::memcpy(rdram + p, clock, sizeof clock);
         SET_GPR_U32(ctx, 2, 1u);
@@ -188,13 +270,148 @@ namespace wotm_sync
     }
     FILE *g_hashFile = nullptr;
     long g_dumpAt = -1;
-    // WOTM_STATERING=<n>: copia da RAM dos ultimos n quadros, gravada (state_<indice>.bin) quando a partida em rede para; a
-    // dessincronia so e vista no hash seguinte (ate 32 quadros depois), entao a copia do primeiro quadro diferente ainda esta aqui
-    // WOTM_STATERING=<n>:<inicio>+<tamanho>,...: so essas faixas (o resto do arquivo sai zerado); copiar os 32 MB por quadro muda o
-    // tempo do quadro o bastante para esconder uma dessincronia que depende dele
+
+    // WOTM_CALLTRACE=<file>[,<index>]: while the game computes frame <index> (default 1, the first update after the frame-0 state)
+    // writes one CallRecord per guest call. Registers only, no RAM: comparing two machines' files (calltrace.py in wotlane-coord),
+    // the first record whose hashes differ names the function that computed the first different value (the one running since the
+    // previous record). Threads are numbered in order of first call, the same on every machine with the one-thread EE scheduler.
+    struct CallRecord
+    {
+        uint32_t index, target, ra, thread;
+        uint64_t gpr, fpr, vu0;
+    };
+    FILE *g_traceFile = nullptr;
+    uint32_t g_traceAt = 1;
+    std::vector<const R5900Context *> g_traceThreads;
+    // WOTM_CALLDUMP=<call>[,<call>...]: at those records of the trace, the raw VU0 and FPU registers in hex on stderr, to see which
+    // register a differing vu0/fpr hash comes from (and whether it holds a NaN/infinity, which x86 and ARM encode differently)
+    std::vector<uint32_t> g_dumpCalls;
+    uint32_t g_traceCalls = 0;
+
+    void dumpRegisters(const R5900Context *ctx, uint32_t call)
+    {
+        auto lanes = [](const __m128 &v, uint32_t (&w)[4]) { std::memcpy(w, &v, sizeof w); };
+        uint32_t w[4];
+        for (int k = 0; k < 32; ++k)
+        {
+            lanes(ctx->vu0_vf[k], w);
+            std::fprintf(stderr, "[sync] call %u vf%02d %08x %08x %08x %08x\n", call, k, w[0], w[1], w[2], w[3]);
+        }
+        lanes(ctx->vu0_acc, w);
+        std::fprintf(stderr, "[sync] call %u acc  %08x %08x %08x %08x\n", call, w[0], w[1], w[2], w[3]);
+        uint32_t q, p, i;
+        std::memcpy(&q, &ctx->vu0_q, 4);
+        std::memcpy(&p, &ctx->vu0_p, 4);
+        std::memcpy(&i, &ctx->vu0_i, 4);
+        std::fprintf(stderr, "[sync] call %u q %08x p %08x i %08x\n", call, q, p, i);
+        for (int k = 0; k < 32; k += 8)
+        {
+            uint32_t f[8];
+            std::memcpy(f, &ctx->f[k], sizeof f);
+            std::fprintf(stderr, "[sync] call %u f%02d-f%02d %08x %08x %08x %08x %08x %08x %08x %08x\n", call, k, k + 7, f[0], f[1], f[2],
+                         f[3], f[4], f[5], f[6], f[7]);
+        }
+    }
+
+    void callTraced(const R5900Context *ctx, uint32_t target)
+    {
+        if (!g_levelLoaded || g_index != g_traceAt || !g_traceFile)
+            return;
+        size_t thread = static_cast<size_t>(std::find(g_traceThreads.begin(), g_traceThreads.end(), ctx) - g_traceThreads.begin());
+        if (thread == g_traceThreads.size())
+            g_traceThreads.push_back(ctx);
+        struct
+        {
+            __m128 vf[32], acc;
+            float q, p, i, pad;
+        } vu{};
+        std::memcpy(vu.vf, ctx->vu0_vf, sizeof vu.vf);
+        vu.acc = ctx->vu0_acc;
+        vu.q = ctx->vu0_q;
+        vu.p = ctx->vu0_p;
+        vu.i = ctx->vu0_i;
+        const CallRecord r{g_index, target, GPR_U32(ctx, 31), static_cast<uint32_t>(thread),
+                           hashBytes(reinterpret_cast<const uint8_t *>(ctx->r), sizeof ctx->r),
+                           hashBytes(reinterpret_cast<const uint8_t *>(ctx->f), sizeof ctx->f),
+                           hashBytes(reinterpret_cast<const uint8_t *>(&vu), sizeof vu)};
+        std::fwrite(&r, sizeof r, 1, g_traceFile);
+        if (std::find(g_dumpCalls.begin(), g_dumpCalls.end(), g_traceCalls) != g_dumpCalls.end())
+            dumpRegisters(ctx, g_traceCalls);
+        ++g_traceCalls;
+    }
+
+    void callTraceInit(const char *spec)
+    {
+        std::string path(spec);
+        if (const size_t comma = path.rfind(','); comma != std::string::npos)
+        {
+            g_traceAt = static_cast<uint32_t>(std::atol(path.c_str() + comma + 1));
+            path.resize(comma);
+        }
+        if (!(g_traceFile = std::fopen(path.c_str(), "wb")))
+            return (void)std::fprintf(stderr, "[sync] WOTM_CALLTRACE: cannot write %s\n", path.c_str());
+        g_wotmCallTrace = &callTraced;
+        std::fprintf(stderr, "[sync] call trace of frame %u into %s\n", g_traceAt, path.c_str());
+        if (const char *e = std::getenv("WOTM_CALLDUMP"); e && *e)
+            for (const char *s = e; *s;)
+            {
+                char *end = nullptr;
+                g_dumpCalls.push_back(static_cast<uint32_t>(std::strtoul(s, &end, 10)));
+                s = *end == ',' ? end + 1 : end + std::strlen(end);
+            }
+    }
+
+    // frame boundary after frame `index`: the traced frame is complete
+    void callTraceFrameDone(uint32_t index)
+    {
+        if (!g_traceFile || !g_levelLoaded || index != g_traceAt)   // boot frames count from 0 too, before the level load
+            return;
+        g_wotmCallTrace = nullptr;
+        const long bytes = std::ftell(g_traceFile);
+        std::fclose(g_traceFile);
+        g_traceFile = nullptr;
+        std::fprintf(stderr, "[sync] call trace of frame %u: %ld calls, %zu thread(s)\n", index, bytes / static_cast<long>(sizeof(CallRecord)),
+                     g_traceThreads.size());
+    }
+    // WOTM_PADLOG=<frames>: logs the game's scePadGetState/InfoMode/SetMainMode/Read calls (port, slot, a2, a3, return value and the
+    // first 8 bytes scePadRead wrote) during frames 0..<frames>-1 after the level load. The pad stubs answer from this machine (ports
+    // open, pad mode, local devices): two machines in one match must log the same lines.
+    uint32_t g_padLogFrames = 0;
+    constexpr uint32_t kPadLogFns[] = {wotm::fn::scePadGetState, wotm::fn::scePadInfoMode, wotm::fn::scePadSetMainMode, wotm::fn::scePadRead};
+    constexpr const char *kPadLogNames[] = {"scePadGetState", "scePadInfoMode", "scePadSetMainMode", "scePadRead"};
+    PS2Runtime::RecompiledFunction g_padLogOrig[4] = {};
+
+    template <int K>
+    void padLogged(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        const uint32_t port = GPR_U32(ctx, 4), slot = GPR_U32(ctx, 5), a2 = GPR_U32(ctx, 6), a3 = GPR_U32(ctx, 7);
+        g_padLogOrig[K](rdram, ctx, runtime);
+        if (!g_levelLoaded || g_index >= g_padLogFrames)
+            return;
+        std::fprintf(stderr, "[padlog] frame %u %s(port %u, slot %u, %08x, %08x) -> %d", g_index, kPadLogNames[K], port, slot, a2, a3,
+                     GPR_S32(ctx, 2));
+        if (K == 3)
+            std::fprintf(stderr, " data %08x %08x", Ps2FastRead32(rdram, a2), Ps2FastRead32(rdram, a2 + 4));
+        std::fputc('\n', stderr);
+    }
+
+    template <int... K>
+    void padLogInstall(PS2Runtime &runtime, std::integer_sequence<int, K...>)
+    {
+        const PS2Runtime::RecompiledFunction hooks[] = {&padLogged<K>...};
+        for (int k = 0; k < 4; ++k)
+            if ((g_padLogOrig[k] = runtime.lookupFunction(kPadLogFns[k])))
+                runtime.registerFunction(kPadLogFns[k], hooks[k]);
+        std::fprintf(stderr, "[sync] pad log of frames 0..%u (WOTM_PADLOG)\n", g_padLogFrames - 1u);
+    }
+
+    // WOTM_STATERING=<n>: copy of the RAM of the last n frames, written (state_<index>.bin) when the network match stops; a desync is
+    // only seen at the next hash (up to 32 frames later), so the copy of the first differing frame is still here
+    // WOTM_STATERING=<n>:<start>+<size>,...: only those ranges (the rest of the file is zeros); copying 32 MB per frame changes the
+    // frame time enough to hide a desync that depends on it
     std::vector<std::vector<uint8_t>> g_ring;
     std::vector<uint32_t> g_ringIndex;
-    std::vector<std::pair<uint32_t, uint32_t>> g_ringRanges;   // {inicio, tamanho}
+    std::vector<std::pair<uint32_t, uint32_t>> g_ringRanges;   // {start, size}
 
     void ringKeep(const uint8_t *rdram, uint32_t index)
     {
@@ -235,30 +452,47 @@ namespace wotm_sync
                 std::fclose(f);
             }
         }
-        std::fprintf(stderr, "[sync] RAM dos ultimos %zu quadros gravada (state_<indice>.bin)\n", g_ring.size());
+        std::fprintf(stderr, "[sync] RAM of the last %zu frames written (state_<index>.bin)\n", g_ring.size());
         g_ring.clear();
     }
 
     void loadInputPlay(const char *path)
     {
+        std::vector<uint8_t> bytes;
         if (FILE *f = std::fopen(path, "rb"))
         {
-            InputRecord r;
-            while (std::fread(&r, sizeof r, 1, f) == 1)
-                g_inputPlay.push_back(r);
+            uint8_t buf[65536];
+            for (size_t n; (n = std::fread(buf, 1, sizeof buf, f)) > 0;)
+                bytes.insert(bytes.end(), buf, buf + n);
             std::fclose(f);
         }
-        std::fprintf(stderr, "[sync] entrada gravada: %zu registros de %s\n", g_inputPlay.size(), path);
+        std::string err;
+        if (!wotm_net::readInputRecords(bytes, g_inputPlay, g_inputPlayMods, err))
+            std::fprintf(stderr, "[sync] %s: %s\n", path, err.c_str());
+        // an explicit WOTM_MODIFIERS wins over the recorded set: one recording replayed with each modifier off and on (modcheck)
+        if (const char *m = std::getenv("WOTM_MODIFIERS"); m && g_inputPlayMods >= 0)
+        {
+            std::fprintf(stderr, "[sync] WOTM_MODIFIERS=%s replaces the recording's modifiers\n", m);
+            g_inputPlayMods = -1;
+        }
+        std::fprintf(stderr, "[sync] recorded input: %zu records from %s, modifiers %s\n", g_inputPlay.size(), path,
+                     g_inputPlayMods < 0 ? "from this PC's settings" : ("\"" + wotm::modifiers::format(g_inputPlayMods) + "\"").c_str());
     }
 
-    // ---- partida em rede ----
+    // ---- network match ----
     bool stopRequested() { return g_runtime && g_runtime->isStopRequested(); }
 
-    // a partida nao pode seguir (recusa, dessincronia, conexao caida): a mensagem fica na tela e o jogo para ate a janela fechar
+    // the match can't go on (refused, desync, dropped connection): the message stays on screen and the game halts until the window closes
+    void netLogBlocks(uint32_t frame);   // below, with netHash
     void netFail(const std::string &why)
     {
-        std::fprintf(stderr, "[net] parado: %s\n", why.c_str());
-        wotm_netstatus::setMessage(why + "  (feche a janela)");
+        std::fprintf(stderr, "[net] stopped: %s\n", why.c_str());
+#ifdef __EMSCRIPTEN__
+        wotmWebNetStall(-1, why.c_str());   // the page shows it with a way back to the front page
+#endif
+        if (g_net && g_net->status() == wotm_net::MatchClient::Status::Desynced)
+            netLogBlocks(g_net->desyncFrame());
+        wotm_netstatus::setMessage(why + "  (close the window)");
         wotm_netstatus::g_waiting = true;
         if (!g_ring.empty())
             ringWrite();
@@ -266,16 +500,7 @@ namespace wotm_sync
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
-    std::string netNames(const std::vector<int> &players)
-    {
-        const std::vector<std::string> names = g_net->names();
-        std::string s;
-        for (int p : players)
-            s += (s.empty() ? "" : ", ") + (p < static_cast<int>(names.size()) ? names[static_cast<size_t>(p)] : "jogador " + std::to_string(p + 1));
-        return s;
-    }
-
-    // Entrada do Shell::LoadLevelFiles: espera todos chegarem a partida (o servidor mede o ping e decide o atraso)
+    // Entry of Shell::LoadLevelFiles: waits for everyone to reach the match (the server measures the ping and picks the delay)
     void netStart()
     {
         using Status = wotm_net::MatchClient::Status;
@@ -285,26 +510,43 @@ namespace wotm_sync
             const Status s = g_net->status();
             if (s != Status::Connecting && s != Status::Waiting)
                 return netFail(g_net->message());
-            wotm_netstatus::setMessage(s == Status::Connecting ? g_net->message() : "Esperando os outros jogadores chegarem a partida");
+            wotm_netstatus::setMessage(s == Status::Connecting ? g_net->message() : "Waiting for the other players to reach the match");
         }
         if (stopRequested())
-            return;   // janela fechada antes de a partida comecar
+            return;   // window closed before the match started
         wotm_netstatus::g_waiting = false;
         wotm_netstatus::setMessage("");
         g_inputDelay = g_net->delay();
         wotm_netstatus::g_delay = g_inputDelay;
-        std::fprintf(stderr, "[net] inicio: jogador %d de %d, atraso %u quadros, ping %u ms\n", g_net->localPlayer() + 1, g_net->players(),
+        wotm::mouse::g_netPlayer.store(g_net->localPlayer(), std::memory_order_relaxed);
+        std::fprintf(stderr, "[net] start: player %d of %d, delay %u frames, ping %u ms\n", g_net->localPlayer() + 1, g_net->players(),
                      g_inputDelay, g_net->rttMs());
     }
 
-    // Fim do quadro: o seguinte so comeca com as entradas de todos para ele. Parado mais de 250 ms, a tela diz quem falta; o tempo
-    // parado sai dos prazos de vsync do EE (sem isso, na volta, os vsyncs vencidos viravam uma rajada de quadros).
+    // End of the frame: the next one only starts with everyone's inputs for it. Stalled for more than 250 ms, the screen says who is
+    // missing; afterwards shiftHostDeadlines drops the vsyncs that fell due during the stall (without that, they became a burst of
+    // frames), and the game scheduler's vblank grid, which kept running, gives the next one on time.
     uint32_t g_netStalls = 0;
     double g_netStallMs = 0.0;
+    // the same, for the current pace window (netPace)
+    uint32_t g_paceStalls = 0;
+    double g_paceStallMs = 0.0;
+
+    // browser: tells the others when this tab is hidden or back, so their "Waiting for" message says why (the game keeps running in a
+    // hidden tab, but the browser may slow or freeze it)
+    void netAwayUpdate()
+    {
+#ifdef __EMSCRIPTEN__
+        static bool sent = false;
+        if (const bool hidden = wotmWebHidden(); hidden != sent)
+            g_net->setAway(sent = hidden);
+#endif
+    }
 
     void netWaitFrame(uint32_t frame)
     {
         wotm_netstatus::g_pingMs = g_net->rttMs();
+        netAwayUpdate();
         if (g_net->waitFrame(frame, 0))
             return;
         const auto t0 = std::chrono::steady_clock::now();
@@ -312,46 +554,116 @@ namespace wotm_sync
         bool shown = false;
         while (!g_net->waitFrame(frame, 50) && !stopRequested())
         {
+            netAwayUpdate();
             if (g_net->status() != wotm_net::MatchClient::Status::Running)
                 return netFail(g_net->message());
             if (std::chrono::steady_clock::now() - t0 > std::chrono::milliseconds(250))
             {
-                wotm_netstatus::setMessage("Esperando " + netNames(g_net->missing(frame)));
+                const std::string text = g_net->waitingText(frame);
+                wotm_netstatus::setMessage(text);
+#ifdef __EMSCRIPTEN__
+                wotmWebNetStall(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count(), text.c_str());
+#endif
                 shown = true;
             }
         }
         if (shown)
+        {
             wotm_netstatus::setMessage("");
+#ifdef __EMSCRIPTEN__
+            wotmWebNetStall(0, "");
+#endif
+        }
         wotm_netstatus::g_waiting = false;
         const auto waited = std::chrono::steady_clock::now() - t0;
         g_runtime->eeScheduler().shiftHostDeadlines(waited);
         ++g_netStalls;
         g_netStallMs += std::chrono::duration<double, std::milli>(waited).count();
+        ++g_paceStalls;
+        g_paceStallMs += std::chrono::duration<double, std::milli>(waited).count();
         if ((g_netStalls & 63u) == 1u)
-            std::fprintf(stderr, "[net] quadro %u: %u esperas pela rede, %.0f ms no total\n", frame, g_netStalls, g_netStallMs);
+            std::fprintf(stderr, "[net] frame %u: %u waits for the network, %.0f ms in total\n", frame, g_netStalls, g_netStallMs);
     }
 
-    // Hash da RAM do jogo para o servidor comparar entre os PCs: 1 MB por quadro, 32 quadros por hash (o custo fica espalhado)
-    constexpr uint32_t kNetHashFrames = 32u, kNetHashSlice = kGuestRam / kNetHashFrames;
+    // Every frame: notes a change of this player's input delay (the server's Pace advice). Every 600 frames: the delay, ping and the
+    // stalls of the window, the numbers the felt lag comes from (tools/net_check.py sums them up per player)
+    constexpr uint32_t kPaceFrames = 600u;
+
+    void netPace(uint32_t frame)
+    {
+        if (const uint32_t d = g_net->delay(); d != wotm_netstatus::g_delay.load())
+        {
+            std::fprintf(stderr, "[net] delay %u -> %u frames at frame %u\n", wotm_netstatus::g_delay.load(), d, frame);
+            wotm_netstatus::g_delay = d;
+        }
+        if (frame == 0u || frame % kPaceFrames != 0u)
+            return;
+        std::fprintf(stderr, "[net] pace: frame %u, delay %u, ping %u ms, %u stalls (%.1f ms) in the last %u frames\n", frame,
+                     g_net->delay(), g_net->rttMs(), g_paceStalls, g_paceStallMs, kPaceFrames);
+        g_paceStalls = 0;
+        g_paceStallMs = 0.0;
+    }
+
+    // Hash of the game's RAM for the server to compare between PCs: 1 MB per frame (its 8 blocks of 128 KB, the same blocks as
+    // WOTM_STATEHASH), 32 frames per hash (spreads the cost). The hash sent is the fold of the 256 block hashes, which go with it, so
+    // a desync names the block (server checkHashes; python tools/statediff.py --blocks). The last two windows stay here: on a desync
+    // the one the server named is written to the log, and two PCs' logs name the block too (statediff.py --logs)
+    constexpr uint32_t kNetHashFrames = 32u, kNetBlocksPerFrame = kBlocks / kNetHashFrames;
     uint64_t g_netHash = 0;
     uint32_t g_netHashes = 0;
+    std::vector<uint64_t> g_netBlocks(kBlocks);
+    struct NetWindow { uint32_t frame = 0xFFFFFFFFu; std::vector<uint64_t> blocks; } g_netWindows[2];
 
     void netHash(const uint8_t *rdram, uint32_t index)
     {
         const uint32_t k = index % kNetHashFrames;
         if (k == 0u)
             g_netHash = 0xcbf29ce484222325ull;
-        g_netHash = (g_netHash ^ hashBytes(rdram + k * kNetHashSlice, kNetHashSlice)) * 0x100000001b3ull;
+        for (uint32_t j = 0; j < kNetBlocksPerFrame; ++j)
+        {
+            const uint32_t b = k * kNetBlocksPerFrame + j;
+            g_netBlocks[b] = hashBytes(rdram + b * kBlockSize, kBlockSize);
+            g_netHash = (g_netHash ^ g_netBlocks[b]) * 0x100000001b3ull;
+        }
         if (k != kNetHashFrames - 1u)
             return;
-        g_net->sendHash(index, g_netHash);
+        NetWindow &w = g_netWindows[(index / kNetHashFrames) & 1u];
+        w.frame = index;
+        w.blocks = g_netBlocks;
+        g_net->sendHash(index, g_netHash, g_netBlocks);
         if ((g_netHashes++ % 16u) == 0u)
-            std::fprintf(stderr, "[net] hash do quadro %u: %016llx\n", index, static_cast<unsigned long long>(g_netHash));
+            std::fprintf(stderr, "[net] hash of frame %u: %016llx\n", index, static_cast<unsigned long long>(g_netHash));
     }
 
-    // Identidade do build (todos os PCs precisam do mesmo exe): wotm.buildid ao lado do exe, gravado pelo tools\build_runtime.ps1
+    // the 256 block hashes of the window the server reported (frame = the window's last frame), 16 per line, for statediff.py --logs
+    void netLogBlocks(uint32_t frame)
+    {
+        for (const NetWindow &w : g_netWindows)
+        {
+            if (w.frame != frame || w.blocks.size() != kBlocks)
+                continue;
+            std::fprintf(stderr, "[net] blocks of frame %u (%u of %u KB; python tools/statediff.py --logs A.err.log B.err.log):\n", frame, kBlocks,
+                         kBlockSize / 1024u);
+            for (uint32_t b = 0; b < kBlocks; b += 16u)
+            {
+                std::fprintf(stderr, "[net] blocks %3u:", b);
+                for (uint32_t j = 0; j < 16u; ++j)
+                    std::fprintf(stderr, " %016llx", static_cast<unsigned long long>(w.blocks[b + j]));
+                std::fputc('\n', stderr);
+            }
+            return;
+        }
+        std::fprintf(stderr, "[net] blocks of frame %u: not kept here (only the last two windows are)\n", frame);
+    }
+
+    // Build identity (every PC needs the same exe): wotm.buildid next to the exe, written by tools\build_runtime.ps1. The browser
+    // version has no exe folder: the page passes the id from version.json (tools/build_web.sh) in WOTM_BUILDID
     std::string netBuildId()
     {
+#ifdef __EMSCRIPTEN__
+        if (const char *web = std::getenv("WOTM_BUILDID"); web && *web)
+            return web;
+#endif
         char path[1024] = {};
         const unsigned long n = GetModuleFileNameA(nullptr, path, sizeof path);
         std::string dir(path, n);
@@ -366,62 +678,57 @@ namespace wotm_sync
             while (!id.empty() && (id.back() == '\n' || id.back() == '\r' || id.back() == ' '))
                 id.pop_back();
         }
-        return id.empty() ? "sem-buildid" : id;
+        return id.empty() ? "sem-buildid" : id;   // sentinel shared with tools/net_lobby.py and the launcher: keep the three equal
     }
 
-    // Configuracao que muda o estado do jogo (docs/plans/determinism-audit.md 1.7): igual em todos os PCs ou o servidor recusa
+    // Settings that change the game state (docs/plans/determinism-audit.md 1.7): the same on every PC or the server refuses
     std::string netConfigHash()
     {
-        static const char *const kVars[] = {"WOTM_MATCH", "WOTM_PLAYERS", "WOTM_AIVSAI", "WOTM_RATEMIN", "WOTM_FIXEDSTEP", "WOTM_SEED",
-                                            "WOTM_HIGHRAM", "WOTM_ENEMYBARS", "WOTM_CHEATS", "WOTM_CLOAK", "WOTM_SAVEJSON",
-                                            "WOTM_FREECAM", "WOTM_KILLTARGET", "WOTM_30HZ", "WOTM_MODE", "PS2X_FMV", "PS2X_SKIP_MOVIES", "PS2X_SKIP_CMOVIE", "PS2X_NOOP"};
-        std::string all;
-        for (const char *v : kVars)
-        {
-            const char *e = std::getenv(v);
-            all += std::string(v) + "=" + (e ? e : "") + ";";
-        }
-        // os mods ligados mudam os dados do jogo: o mesmo conjunto (nomes e conteudo) em todos os PCs, ou o servidor recusa
+        std::string all = wotm_net::confighash::envText([](const char *name) { return std::getenv(name); });
+        // the enabled mods change the game data: the same set (names and contents) on every PC, or the server refuses. They travel
+        // as the hash's second part, so the refusal can say whether the mods or the settings differ
         char mods[17];
         std::snprintf(mods, sizeof mods, "%016llx", static_cast<unsigned long long>(wotm::mods::digest(wotm::mods::Registry::get().dir())));
-        all += std::string("mods=") + mods + ";";
         std::fprintf(stderr, "[net] mods: %s\n", mods);
-        all.resize((all.size() + 7u) & ~size_t(7), '\0');   // hashBytes le palavras de 8 bytes
+        // gameplay modifiers (the lobby's WOTM_MODIFIERS) in canonical order: "turbo,jump" and "jump,turbo" are the same match
+        int modBits = 0;
+        const char *modList = std::getenv("WOTM_MODIFIERS");
+        wotm::modifiers::parse(modList ? modList : "", modBits);
+        all += "modifiers=" + wotm::modifiers::format(modBits) + ";";
+        all.resize((all.size() + 7u) & ~size_t(7), '\0');   // hashBytes reads 8-byte words
         char out[17];
         std::snprintf(out, sizeof out, "%016llx", static_cast<unsigned long long>(hashBytes(reinterpret_cast<const uint8_t *>(all.data()), all.size())));
-        return out;
+        return wotm_net::confighash::compose(out, mods);
     }
 
     void netInit(const char *addr)
     {
-        std::string a(addr);
-        const size_t colon = a.rfind(':');
         wotm_net::ClientConfig c;
-        c.host = colon == std::string::npos ? a : a.substr(0, colon);
-        c.port = colon == std::string::npos ? wotm_net::proto::kDefaultPort : static_cast<uint16_t>(std::atoi(a.c_str() + colon + 1));
+        wotm_net::splitServerAddress(addr, c.host, c.port);
         const char *token = std::getenv("WOTM_NETTOKEN"), *name = std::getenv("WOTM_NETNAME");
         c.token = token ? token : "";
-        c.name = name && *name ? name : "jogador";
+        c.name = name && *name ? name : "player";
         c.buildId = netBuildId();
         c.configHash = netConfigHash();
         g_net = std::make_unique<wotm_net::MatchClient>();
         std::string err;
         if (!g_net->start(c, err))
         {
-            std::fprintf(stderr, "[net] nao consegui iniciar a rede: %s\n", err.c_str());
+            std::fprintf(stderr, "[net] couldn't start the network: %s\n", err.c_str());
             g_net.reset();
             return;
         }
         wotm_netstatus::g_active = true;
-        wotm_netstatus::setMessage("Conectando a " + c.host + ":" + std::to_string(c.port));
-        std::fprintf(stderr, "[net] conectando a %s:%u como %s (build %s, configuracao %s)\n", c.host.c_str(), c.port, c.name.c_str(),
-                     c.buildId.c_str(), c.configHash.c_str());
+        const std::string where = wotm_net::isWebSocketAddress(c.host) ? c.host : c.host + ":" + std::to_string(c.port);
+        wotm_netstatus::setMessage("Connecting to " + where);
+        std::fprintf(stderr, "[net] connecting to %s as %s (build %s, config %s)\n", where.c_str(), c.name.c_str(), c.buildId.c_str(),
+                     c.configHash.c_str());
     }
 
-    // rtPauseRT (Start ou controle desligado) chama rtReturnToShell(2, campo) com o bit FIELD do CSR do GS, que o escalonador do
-    // runtime vira a cada vblank do host: no mesmo quadro, um PC guardava 1 e o outro 0 (gRtReturn + 4) e a pausa seguia diferente.
-    // No passo fixo o campo vem da paridade virtual, a mesma que o sceGsSyncV devolve (syncVParity). E o unico leitor do bit que
-    // guarda o valor na RAM do jogo (os outros so programam o GS: ieGsPutDispEnv, setPMODE, filmes)
+    // rtPauseRT (Start or controller unplugged) calls rtReturnToShell(2, field) with the FIELD bit of the GS CSR, which the runtime's
+    // scheduler flips on every host vblank: in the same frame one PC stored 1 and the other 0 (gRtReturn + 4) and the pause went on
+    // differently. In fixed step the field comes from the virtual parity, the same one sceGsSyncV returns (syncVParity). It's the only
+    // reader of the bit that keeps the value in the game's RAM (the others only program the GS: ieGsPutDispEnv, setPMODE, movies)
     constexpr uint32_t kRtReturnToShell = wotm::fn::rtReturnToShell__Fii, kRtPauseRT = wotm::fn::rtPauseRT__FUi;
     constexpr uint32_t kRtPauseRTSize = 0x278u;
     PS2Runtime::RecompiledFunction g_origRtReturn = nullptr;
@@ -439,7 +746,7 @@ namespace wotm_sync
         g_runtime = &runtime;
         if (const char *e = std::getenv("WOTM_SEED"); e && *e && (g_origRandInit = runtime.lookupFunction(kRandInit)))
         {
-            g_seed = std::clamp(std::atoll(e), 1LL, 0x7FFFFFFFLL);   // 0 faria o jogo ler o relogio
+            g_seed = std::clamp(std::atoll(e), 1LL, 0x7FFFFFFFLL);   // 0 would make the game read the clock
             runtime.registerFunction(kRandInit, &randInitSeeded);
         }
         if (const char *e = std::getenv("WOTM_FIXEDSTEP"); e && *e)
@@ -460,14 +767,14 @@ namespace wotm_sync
                 g_inputDelay = static_cast<uint32_t>(std::clamp(std::atoi(d), 0, 30));
             g_inputs = wotm_net::InputTimeline(kControllers, g_inputDelay);
             sampleInputs(0);
-            std::fprintf(stderr, "[sync] atraso de entrada: %u quadro(s)\n", g_inputDelay);
+            std::fprintf(stderr, "[sync] input delay: %u frame(s)\n", g_inputDelay);
         }
         if (const char *e = std::getenv("WOTM_NET"); e && *e)
         {
             if (g_fixedStep)
                 netInit(e);
             else
-                std::fprintf(stderr, "[net] WOTM_NET precisa de WOTM_FIXEDSTEP (o launcher e o tools/net_lobby.py a poem): rede desligada\n");
+                std::fprintf(stderr, "[net] WOTM_NET needs WOTM_FIXEDSTEP (the launcher and tools/net_lobby.py set it): network off\n");
         }
         if (const char *e = std::getenv("WOTM_STATEHASH"); e && *e)
             g_hashFile = std::fopen(e, "wb");
@@ -475,16 +782,20 @@ namespace wotm_sync
             g_dumpAt = std::atol(e);
         if (const char *e = std::getenv("WOTM_STATERING"); e && *e)
             ringInit(e);
+        if (const char *e = std::getenv("WOTM_CALLTRACE"); e && *e)
+            callTraceInit(e);
+        if (const char *e = std::getenv("WOTM_PADLOG"); e && (g_padLogFrames = static_cast<uint32_t>(std::atol(e))) > 0)
+            padLogInstall(runtime, std::make_integer_sequence<int, 4>{});
         if (g_fixedStep || g_hashFile || g_dumpAt >= 0)
-            std::fprintf(stderr, "[sync] passo fixo %d field(s), hash %s, copia no quadro %ld\n", g_fixedStep, g_hashFile ? "ligado" : "desligado", g_dumpAt);
+            std::fprintf(stderr, "[sync] fixed step %d field(s), hash %s, dump at frame %ld\n", g_fixedStep, g_hashFile ? "on" : "off", g_dumpAt);
     }
 
-    // Entrada do Shell::LoadLevelFiles (loadLevelFilesTapped): o indice do quadro recomeca ja aqui, antes do primeiro quadro da luta
-    // (as leituras do pad desse quadro usam o indice 0 nas duas execucoes, qualquer que tenha sido a duracao do boot)
+    // Entry of Shell::LoadLevelFiles (loadLevelFilesTapped): the frame index restarts right here, before the fight's first frame
+    // (that frame's pad reads use index 0 in both runs, however long the boot took)
     void levelLoad()
     {
         if (g_net && g_levelLoaded)
-            std::fprintf(stderr, "[net] AVISO: segunda carga de fase na partida em rede (o indice do quadro recomeca; vai dessincronizar)\n");
+            std::fprintf(stderr, "[net] WARNING: second level load in the network match (the frame index restarts; it will desync)\n");
         g_index = 0;
         g_levelLoaded = true;
         if (!g_fixedStep)
@@ -497,23 +808,31 @@ namespace wotm_sync
         sampleInputs(0);
     }
 
-    // fieldCounterAtStart/fieldCounter: D_006F8DC0/D_006F8DBC; fieldsForAverage: D_006F8DE4 (fields desde o timerSetFrameStart)
+    // fieldCounterAtStart/fieldCounter: D_006F8DC0/D_006F8DBC; fieldsForAverage: D_006F8DE4 (fields since timerSetFrameStart)
     void frame(uint8_t *rdram, uint32_t fieldCounter, uint32_t fieldCounterAtStart, uint32_t fieldsForAverage)
     {
         if (g_fixedStep)
         {
-            const uint32_t step = static_cast<uint32_t>(g_fixedStep);
+            const uint32_t step = static_cast<uint32_t>(wotm::modifiers::fieldsPerFrame(g_fixedStep, g_mods));
             Ps2FastWrite32(rdram, fieldCounter, Ps2FastRead32(rdram, fieldCounterAtStart) + step);
             Ps2FastWrite32(rdram, fieldsForAverage, Ps2FastRead32(rdram, fieldsForAverage) + step);
             g_virtualTics += step * 9619u;
             g_ticCalls = 0;
-            wotmSoundFrame(step);   // o som anda o mesmo tanto, na thread do jogo (o fim de cada som vira funcao dos quadros)
+            // sound advances by the frame's real length, on the game thread (when each sound ends becomes a function of the frames);
+            // in a turbo fight that is 1 vsync for 2 fields, so sound keeps its normal speed instead of overfilling the output
+            wotmSoundFrame(static_cast<unsigned>(wotm::modifiers::vsyncsPerFrame(g_fixedStep, g_mods)));
             if (g_inputRec && g_levelLoaded)
             {
+                if (!g_inputRecHeader)
+                {
+                    const std::vector<uint8_t> header = wotm_net::encodeInputHeader(g_mods);
+                    std::fwrite(header.data(), 1, header.size(), g_inputRec);
+                    g_inputRecHeader = true;
+                }
                 for (int c = 0; c < kControllers; ++c)
                 {
-                    const InputRecord r{g_index, static_cast<uint32_t>(c), inputFor(c, g_index)};
-                    std::fwrite(&r, sizeof r, 1, g_inputRec);
+                    const std::vector<uint8_t> r = wotm_net::encodeInputRecord({g_index, static_cast<uint32_t>(c), inputFor(c, g_index)});
+                    std::fwrite(r.data(), 1, r.size(), g_inputRec);
                 }
                 if ((g_index & 63u) == 0u)
                     std::fflush(g_inputRec);
@@ -521,6 +840,7 @@ namespace wotm_sync
             sampleInputs(g_index + 1u);
         }
         const uint32_t index = g_index++;
+        callTraceFrameDone(index);
         if (g_hashFile)
         {
             FrameHash fh;
@@ -542,13 +862,14 @@ namespace wotm_sync
             {
                 std::fwrite(rdram, 1, kGuestRam, f);
                 std::fclose(f);
-                std::fprintf(stderr, "[sync] RAM do quadro %u em %s\n", index, name.c_str());
+                std::fprintf(stderr, "[sync] RAM of frame %u in %s\n", index, name.c_str());
             }
         }
         if (g_net && g_levelLoaded && g_fixedStep)
         {
             netHash(rdram, index);
             netWaitFrame(g_index);
+            netPace(g_index);
         }
     }
 }

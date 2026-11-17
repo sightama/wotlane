@@ -1,31 +1,31 @@
-# ABOUTME: Monta o pacote para amigos que tem o proprio disco: launcher, wotm.exe com as DLLs, wotm_server, mods do repo e um setup que
-# ABOUTME: tira o ELF da ISO de cada um. Nenhum arquivo do disco entra. Saida em dist\wotlane-<buildid>\ e .zip (dist\ fora do git).
+# ABOUTME: Builds the package for friends who own the disc: launcher, wotm.exe with its DLLs, wotm_server, the repo's mods and a setup
+# ABOUTME: that extracts the ELF from each one's ISO. No disc file goes in. Output: dist\wotlane-<buildid>\ and .zip (dist\ not in git).
 #
-# Uso: powershell -File tools\package_friends.ps1. Imprime o caminho da pasta do pacote na ultima linha. Teste: tools\package_check.ps1.
+# Usage: powershell -File tools\package_friends.ps1. Prints the package folder path on the last line. Test: tools\package_check.ps1.
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
 $runtime = (Get-Content (Join-Path $repo '.wotm_recomp_dir') -TotalCount 1).Trim()
 $bin = Join-Path $runtime 'build_dev\ps2xRuntime'
-foreach ($f in 'wotm.exe', 'wotm.buildid') { if (-not (Test-Path (Join-Path $bin $f))) { throw "falta $bin\$f (build_runtime.bat)" } }
+foreach ($f in 'wotm.exe', 'wotm.buildid') { if (-not (Test-Path (Join-Path $bin $f))) { throw "missing $bin\$f (build_runtime.bat)" } }
 $id = (Get-Content (Join-Path $bin 'wotm.buildid')).Trim()
-# o exe tem que ser o do codigo de agora: o servidor recusa builds diferentes, e o pacote seria de outro commit
+# the exe must be built from the current code: the server rejects different builds, and the package would be from another commit
 $now = (& python (Join-Path $PSScriptRoot 'build_id.py') | Select-Object -Last 1).Trim()
-if ($now -ne $id) { throw "wotm.exe e de outro codigo ($id; o atual e $now): rode build_runtime.bat" }
+if ($now -ne $id) { throw "wotm.exe is from other code ($id; current is $now): run build_runtime.bat" }
 
 & cmd /c "`"$repo\tools\build_net.bat`" notest" | Out-Null
 $server = Join-Path $repo 'native\net\build\wotm_server.exe'
-if (-not (Test-Path $server)) { throw 'wotm_server.exe nao compilou (tools\build_net.bat)' }
+if (-not (Test-Path $server)) { throw 'wotm_server.exe did not build (tools\build_net.bat)' }
 & cmd /c "`"$repo\tools\launcher\build.bat`""
-if ($LASTEXITCODE -ne 0) { throw 'o launcher nao compilou (tools\launcher\build.bat)' }
+if ($LASTEXITCODE -ne 0) { throw 'the launcher did not build (tools\launcher\build.bat)' }
 
-# DLLs do MSVC (o exe e o servidor usam a CRT dinamica): da pasta Redist da mesma versao do compilador
+# MSVC DLLs (the exe and the server use the dynamic CRT): from the Redist folder of the same compiler version
 $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
 $crt = $null
 foreach ($vs in & $vswhere -all -products * -property installationPath) {
     $crt = Get-ChildItem "$vs\VC\Redist\MSVC\14.44.*\x64\Microsoft.VC143.CRT" -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($crt) { break }
 }
-if (-not $crt) { throw 'Redist do MSVC 14.44 (Microsoft.VC143.CRT x64) nao encontrado' }
+if (-not $crt) { throw 'MSVC 14.44 Redist (Microsoft.VC143.CRT x64) not found' }
 
 $out = Join-Path $repo "dist\wotlane-$id"
 if (Test-Path $out) { Remove-Item $out -Recurse -Force }
@@ -42,16 +42,16 @@ Copy-Item (Join-Path $repo 'tools\sync_mods.ps1') (Join-Path $out 'tools')
 Copy-Item (Join-Path $repo 'tools\runtime_template\run_live.ps1') (Join-Path $out 'runtime\run_live.template.ps1')
 Copy-Item (Join-Path $PSScriptRoot 'friends\setup.ps1'), (Join-Path $PSScriptRoot 'friends\Setup.bat'), (Join-Path $PSScriptRoot 'friends\README.txt') $out
 foreach ($m in Get-ChildItem (Join-Path $repo 'mods') -Directory) {
-    if ($m.Name.StartsWith('_') -or $m.Name.StartsWith('.')) { continue }   # desligados (como no tools\sync_mods.ps1)
+    if ($m.Name.StartsWith('_') -or $m.Name.StartsWith('.')) { continue }   # disabled (same rule as tools\sync_mods.ps1)
     Copy-Item $m.FullName (Join-Path $out 'mods') -Recurse
 }
 Set-Content (Join-Path $out 'ISO\PUT_YOUR_ISO_HERE.txt') 'Put your own War of the Monsters (USA) .iso in this folder, then run Setup.bat.' -Encoding ascii
 Set-Content (Join-Path $out 'BUILD.txt') "wotlane build $id, commit $(git -C $repo rev-parse --short HEAD)" -Encoding ascii
 
 $bad = @(Get-ChildItem $out -Recurse -File | Where-Object { $_.Name -match '^SCUS|\.(iso|elf|rom)$' })
-if ($bad.Count) { throw "arquivo do disco no pacote: $($bad.FullName -join ', ')" }
+if ($bad.Count) { throw "disc file in the package: $($bad.FullName -join ', ')" }
 $zip = "$out.zip"
 if (Test-Path $zip) { Remove-Item $zip -Force }
 Compress-Archive -Path $out -DestinationPath $zip -CompressionLevel Optimal
-Write-Host "pacote: $zip ($([math]::Round((Get-Item $zip).Length / 1MB)) MB)"
+Write-Host "package: $zip ($([math]::Round((Get-Item $zip).Length / 1MB)) MB)"
 $out

@@ -1,9 +1,9 @@
-# ABOUTME: Setup do pacote wotlane para amigos (tools\package_friends.ps1): acha a ISO do proprio amigo, copia o SCUS_971.97 dela para
-# ABOUTME: runtime\discroot, aponta o run_live.ps1 para a ISO e grava .wotm_recomp_dir. Rodado pelo Setup.bat; pode rodar de novo.
-param([string]$Iso = '', [switch]$NoPause)
+# ABOUTME: Setup for the wotlane friends package (tools\package_friends.ps1): finds the friend's own ISO, copies its SCUS_971.97 to
+# ABOUTME: runtime\discroot, points run_live.ps1 at the ISO, adds a desktop shortcut and opens the launcher. Run by Setup.bat; rerunnable.
+param([string]$Iso = '', [switch]$NoPause, [string]$ShortcutDir = [Environment]::GetFolderPath('Desktop'))
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
-$elfSha1 = '1ed7f8457436a9170d8f85386e267369c7fcdd4f'   # SCUS_971.97 do disco NTSC-U (SCUS-97197)
+$elfSha1 = '1ed7f8457436a9170d8f85386e267369c7fcdd4f'   # SCUS_971.97 from the NTSC-U disc (SCUS-97197)
 
 function Done([int]$code, [string]$msg) {
     Write-Host $msg -ForegroundColor $(if ($code) { 'Red' } else { 'Green' })
@@ -12,7 +12,7 @@ function Done([int]$code, [string]$msg) {
 }
 
 try {
-    # zip baixado: o Windows marca cada arquivo como vindo da internet e bloqueia scripts e DLLs
+    # downloaded zip: Windows marks every file as coming from the internet and blocks scripts and DLLs
     Get-ChildItem $root -Recurse -File | Unblock-File
 
     if (-not $Iso) { $Iso = (Get-ChildItem (Join-Path $root 'ISO') -Filter *.iso -ErrorAction SilentlyContinue | Select-Object -First 1).FullName }
@@ -40,7 +40,17 @@ try {
     $template = Get-Content (Join-Path $root 'runtime\run_live.template.ps1') -Raw
     Set-Content (Join-Path $root 'runtime\run_live.ps1') $template.Replace('@ISO@', $Iso.Replace("'", "''")) -Encoding utf8 -NoNewline
     Set-Content (Join-Path $root '.wotm_recomp_dir') (Join-Path $root 'runtime') -Encoding ascii
-    Done 0 'Setup done. Open WotM_Launcher.exe (see README.txt for playing online).'
+
+    # a shortcut on the desktop (-ShortcutDir: elsewhere, for tests), then the launcher opens by itself
+    $launcher = Join-Path $root 'WotM_Launcher.exe'
+    if ($ShortcutDir -and (Test-Path -LiteralPath $ShortcutDir)) {
+        $lnk = (New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $ShortcutDir 'War of the Monsters online.lnk'))
+        $lnk.TargetPath = $launcher
+        $lnk.WorkingDirectory = $root
+        $lnk.Save()
+    }
+    if (-not $NoPause) { Start-Process -FilePath $launcher -WorkingDirectory $root }
+    Done 0 'Setup done. The launcher opens now; next time use "War of the Monsters online" on your desktop.'
 } catch {
     Done 1 "Setup failed: $($_.Exception.Message)"
 }

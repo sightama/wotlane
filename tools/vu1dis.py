@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Extrai o microcodigo do VU1 do ELF (cadeia DMA em D_00257C10, pacotes MPG) e desmonta.
-Uso: python3 tools/vu1dis.py [--elf disc/SCUS_971.97] [--addr 0x257C10] [--out build/vu1/ucode.txt]
-A saida e codigo do jogo: fica em build/ (ignorado pelo git), nunca cole em docs/issues.
-Tabelas de opcode conferidas com o interpretador VU1 do runtime (ps2_vu1_upper/lower.cpp)."""
+"""Extracts the VU1 microcode from the ELF (DMA chain at D_00257C10, MPG packets) and disassembles it.
+Usage: python3 tools/vu1dis.py [--elf disc/SCUS_971.97] [--addr 0x257C10] [--out build/vu1/ucode.txt]
+The output is game code: it stays in build/ (ignored by git); never paste it into docs/issues.
+Opcode tables checked against the runtime's VU1 interpreter (ps2_vu1_upper/lower.cpp)."""
 import struct, sys, argparse, os
 
 BC = "xyzw"
@@ -147,7 +147,7 @@ def extract(elf, addr):
     while True:
         w0, w1 = struct.unpack("<2I", rd(a, 8))
         qwc, id_ = w0 & 0xFFFF, w0 >> 28 & 7
-        p, end = a + 8, a + 16 + qwc * 16   # as 2 palavras altas da tag tambem sao VIF codes
+        p, end = a + 8, a + 16 + qwc * 16   # the tag's 2 upper words are VIF codes too
         while p < end:
             v = struct.unpack("<I", rd(p, 4))[0]
             p += 4
@@ -155,7 +155,7 @@ def extract(elf, addr):
                 num = (v >> 16 & 0xFF) or 256
                 img[(v & 0xFFFF) * 8] = rd(p, num * 8)
                 p += num * 8
-        if id_ != 1:   # 1 = cnt (dados em seguida); 0 = refe, 7 = end: fim
+        if id_ != 1:   # 1 = cnt (data follows); 0 = refe, 7 = end: stop
             break
         a = end
     return img

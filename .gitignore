@@ -51,3 +51,7 @@ docs/plans/
 
 # pacote para amigos (tools/package_friends.ps1)
 /dist/
+
+# browser multiplayer test (tools/browser_mp_test)
+/tools/browser_mp_test/node_modules/
+/tools/browser_mp_test/package-lock.json

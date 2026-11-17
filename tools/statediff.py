@@ -4,6 +4,8 @@
 """Usage:
   python tools/statediff.py A.hash B.hash                 first differing frame and its blocks
   python tools/statediff.py A.hash B.hash --dumps a.bin b.bin   also list differing symbols (native/wotm_syms.h) between the dumps
+  python tools/statediff.py --blocks 5,131               the symbols inside those 128 KB blocks (the server's desync message lists them)
+  python tools/statediff.py --logs A.err.log B.err.log   compare the "[net] blocks" lines two PCs wrote on a desync, with the symbols
 
 Hash file records (native/runtime/wotm_sync.inc, FrameHash): u32 index, u32 g_frame, u64 total, u64 blocks[256].
 """
@@ -58,6 +60,51 @@ def differing_blocks(ra, rb):
     return [k for k in range(BLOCKS) if ra[3 + k] != rb[3 + k]]
 
 
+def block_symbols(syms, k, limit=12):
+    """Names of the symbols that overlap block k, in address order (at most `limit`, then '...')."""
+    lo, hi = k * BLOCK_SIZE, (k + 1) * BLOCK_SIZE
+    names = [name for a, size, name in syms if a < hi and a + max(size, 1) > lo]
+    return names[:limit] + (['... %d more' % (len(names) - limit)] if len(names) > limit else [])
+
+
+def print_blocks(blocks, syms):
+    for k in blocks:
+        print('  block %3d  0x%07X..0x%07X  %s' % (k, k * BLOCK_SIZE, (k + 1) * BLOCK_SIZE - 1, ', '.join(block_symbols(syms, k)) or '(no symbol)'))
+
+
+def read_log_blocks(path):
+    """The last '[net] blocks of frame N' group of a live.err.log: (frame, [256 hashes]) or (None, [])."""
+    frame, blocks = None, {}
+    for line in Path(path).read_text(encoding='utf-8', errors='replace').splitlines():
+        m = re.match(r'\[net\] blocks of frame (\d+)', line)
+        if m:
+            frame, blocks = int(m.group(1)), {}
+            continue
+        m = re.match(r'\[net\] blocks\s+(\d+):((?:\s+[0-9a-f]{16})+)$', line)
+        if m and frame is not None:
+            for i, h in enumerate(m.group(2).split()):
+                blocks[int(m.group(1)) + i] = int(h, 16)
+    return frame, [blocks.get(k) for k in range(BLOCKS)]
+
+
+def compare_logs(pa, pb, syms):
+    fa, a = read_log_blocks(pa)
+    fb, b = read_log_blocks(pb)
+    if fa is None or fb is None:
+        print('no "[net] blocks of frame" lines in %s' % (pa if fa is None else pb))
+        return 2
+    if fa != fb:
+        print('different windows: %s has frame %d, %s has frame %d' % (pa, fa, pb, fb))
+        return 2
+    blocks = [k for k in range(BLOCKS) if a[k] != b[k]]
+    if not blocks:
+        print('frame %d: the %d blocks are identical' % (fa, BLOCKS))
+        return 0
+    print('frame %d: %d differing 128 KB block(s)' % (fa, len(blocks)))
+    print_blocks(blocks, syms)
+    return 1
+
+
 def compare_dumps(pa, pb, syms, limit=60):
     da, db = Path(pa).read_bytes(), Path(pb).read_bytes()
     groups = {}
@@ -76,6 +123,13 @@ def compare_dumps(pa, pb, syms, limit=60):
 
 
 def main(argv):
+    if '--blocks' in argv:
+        blocks = [int(x, 0) for x in argv[argv.index('--blocks') + 1].split(',') if x]
+        print_blocks(blocks, load_symbols())
+        return 0
+    if '--logs' in argv:
+        i = argv.index('--logs')
+        return compare_logs(argv[i + 1], argv[i + 2], load_symbols())
     if len(argv) < 3:
         print(__doc__)
         return 2

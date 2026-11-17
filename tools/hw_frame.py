@@ -1,17 +1,17 @@
-"""Chamadas por quadro das funcoes de hardware (e do SDK), a partir da cobertura do runtime.
+"""Per-frame calls to the hardware (and SDK) functions, from the runtime's coverage output.
 
-O runtime grava, com PS2X_COVERAGE=<prefixo>, um arquivo <prefixo>.<quadro> a cada 300 quadros da tela, com a contagem
-acumulada de chamadas por endereco ("0xENDERECO contagem"). A diferenca entre dois arquivos da mesma execucao da as chamadas
-naquele trecho; este script divide pelo numero de quadros e agrupa por TU, com o estado de config/status.csv.
+With PS2X_COVERAGE=<prefix>, the runtime writes a file <prefix>.<frame> every 300 screen frames, holding the cumulative
+call count per address ("0xADDRESS count"). The difference between two files from the same run gives the calls made
+in that stretch; this script divides by the number of frames and groups by TU, with the state from config/status.csv.
 
-Uso:
+Usage:
   python tools/hw_frame.py <cov.A> <cov.B> [--modo hw|sce|tudo]
-    hw   (padrao) funcoes em config/hw_funcs.txt ou com estado hw
-    sce  SDK da Sony (sce/*), lib989snd, newlib e libgcc
-    tudo todas as funcoes chamadas no trecho
-  Exemplo (luta IA x IA, uma execucao de 85 s): WOTM_MATCH=3,1,1 WOTM_AIVSAI=1 PS2X_COVERAGE=<pasta>\\cov, depois
-  python tools/hw_frame.py <pasta>\\cov.1800 <pasta>\\cov.4800
-Mapa da fronteira e como ler o resultado: docs/passos/FRONTEIRA.md.
+    hw   (default) functions in config/hw_funcs.txt or with state hw
+    sce  Sony's SDK (sce/*), lib989snd, newlib and libgcc
+    tudo every function called in the stretch
+  Example (AI vs AI fight, one 85 s run): WOTM_MATCH=3,1,1 WOTM_AIVSAI=1 PS2X_COVERAGE=<folder>\\cov, then
+  python tools/hw_frame.py <folder>\\cov.1800 <folder>\\cov.4800
+Map of the boundary and how to read the result: docs/passos/FRONTEIRA.md.
 """
 import argparse
 import csv
@@ -36,7 +36,7 @@ def load_cov(path):
 def frame_of(path):
     g = re.search(r'\.(\d+)$', path)
     if not g:
-        raise SystemExit(f'{path}: o nome tem de terminar em .<quadro>')
+        raise SystemExit(f'{path}: the name must end in .<frame>')
     return int(g.group(1))
 
 
@@ -50,7 +50,7 @@ def main():
     A, B = load_cov(args.a), load_cov(args.b)
     frames = frame_of(args.b) - frame_of(args.a)
     if frames <= 0:
-        raise SystemExit('o segundo arquivo tem de ser de um quadro posterior ao primeiro')
+        raise SystemExit('the second file must be from a later frame than the first')
 
     status = {}
     with open(os.path.join(REPO, 'config', 'status.csv')) as f:
@@ -82,15 +82,15 @@ def main():
             continue
         rows.append((tu, fn, n, st))
 
-    print(f'{frames} quadros da tela; {len(rows)} funcoes no modo {args.modo}')
+    print(f'{frames} screen frames; {len(rows)} functions in mode {args.modo}')
     by_tu = {}
     for r in rows:
         by_tu.setdefault(r[0], []).append(r)
     for tu in sorted(by_tu, key=lambda t: -sum(x[2] for x in by_tu[t])):
         lst = by_tu[tu]
-        print(f'\n## {tu}  ({sum(x[2] for x in lst) / frames:.1f} chamadas/quadro, {len(lst)} funcoes)')
+        print(f'\n## {tu}  ({sum(x[2] for x in lst) / frames:.1f} calls/frame, {len(lst)} functions)')
         for r in sorted(lst, key=lambda x: -x[2]):
-            print(f'   {r[2] / frames:9.2f}/q  {r[1]}  [{r[3]}]')
+            print(f'   {r[2] / frames:9.2f}/f  {r[1]}  [{r[3]}]')
 
 
 if __name__ == '__main__':

@@ -1,8 +1,8 @@
-// Verificador offline do som nativo (wotm_snd.hpp), sem o jogo e sem o runtime: o mesmo motor que o runtime usa ao vivo
-// grava em WAV o que tocaria.
-//   sndplay disc/SND/SHELLMUS.BNK 0 musica.wav [segundos]    som N do banco (0x400 de volume, pan do banco)
-//   sndplay disc/VAG/CITYAMB.VPK - cidade.wav [segundos]      stream .VPK/.VAG
-//   sndplay --all disc/SND                                    toca 3 s de cada som de cada banco e imprime pico/RMS (sem WAV)
+// Offline checker for the native sound (wotm_snd.hpp), without the game or the runtime: the same engine the runtime uses live
+// writes what it would play to a WAV.
+//   sndplay disc/SND/SHELLMUS.BNK 0 music.wav [seconds]      sound N of the bank (volume 0x400, the bank's pan)
+//   sndplay disc/VAG/CITYAMB.VPK - city.wav [seconds]         .VPK/.VAG stream
+//   sndplay --all disc/SND                                    plays 3 s of every sound in every bank and prints peak/RMS (no WAV)
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
@@ -30,7 +30,7 @@ static void writeWav(const std::string &path, const std::vector<s16> &s) {
     std::fclose(f);
 }
 
-// Renderiza ate `secs` segundos ou ate o som acabar; devolve as amostras estereo
+// Renders up to `secs` seconds or until the sound ends; returns the stereo samples
 static std::vector<s16> render(Engine &e, u32 h, double secs) {
     std::vector<s16> out;
     const unsigned chunk = 1024;
@@ -57,7 +57,7 @@ int main(int argc, char **argv) {
         for (auto &ent : std::filesystem::directory_iterator(argv[2])) {
             if (ent.path().extension() != ".BNK") continue;
             const u32 b = e.loadBankData(readFile(ent.path().string()));
-            if (!b) { std::fprintf(stderr, "FALHOU %s\n", ent.path().string().c_str()); return 1; }
+            if (!b) { std::fprintf(stderr, "FAILED %s\n", ent.path().string().c_str()); return 1; }
             ++banks;
             for (size_t i = 0; i < e.bank(b)->sounds.size(); ++i) {
                 const u32 h = e.play(b, int(i), 0x400, -1, 0, 0);
@@ -67,16 +67,16 @@ int main(int argc, char **argv) {
                 stats(s, peak, rms);
                 ++sounds;
                 if (peak == 0) ++silent;
-                std::printf("%-14s som %3zu  %5.2f s  pico %5d  rms %7.1f%s\n", ent.path().filename().string().c_str(), i,
-                            double(s.size()) / 2 / kRate, peak, rms, peak == 0 ? "  (silencio)" : "");
+                std::printf("%-14s sound %3zu  %5.2f s  peak %5d  rms %7.1f%s\n", ent.path().filename().string().c_str(), i,
+                            double(s.size()) / 2 / kRate, peak, rms, peak == 0 ? "  (silent)" : "");
             }
             e.unloadBank(b);
         }
-        std::printf("%d bancos, %d sons, %d em silencio\n", banks, sounds, silent);
+        std::printf("%d banks, %d sounds, %d silent\n", banks, sounds, silent);
         return 0;
     }
     if (argc < 4) {
-        std::fprintf(stderr, "uso: sndplay banco.BNK som saida.wav [segundos] | sndplay stream.VPK - saida.wav [segundos] | sndplay --all disc/SND\n");
+        std::fprintf(stderr, "usage: sndplay bank.BNK sound out.wav [seconds] | sndplay stream.VPK - out.wav [seconds] | sndplay --all disc/SND\n");
         return 1;
     }
     const std::string path = argv[1], which = argv[2], out = argv[3];
@@ -84,7 +84,7 @@ int main(int argc, char **argv) {
     const std::vector<u8> file = readFile(path);
     u32 h;
     if (which == "-") {
-        // o motor le streams por LSN: aqui o "disco" e o proprio arquivo, a partir do setor 0
+        // the engine reads streams by LSN: here the "disc" is the file itself, starting at sector 0
         e.setReader([&file](u32 lsn, u32 sectors, u8 *dst) {
             const size_t at = size_t(lsn) * 2048, n = size_t(sectors) * 2048;
             std::memset(dst, 0, n);
@@ -96,11 +96,11 @@ int main(int argc, char **argv) {
         const u32 b = e.loadBankData(file);
         h = b ? e.play(b, std::atoi(which.c_str()), 0x400, -1, 0, 0) : 0;
     }
-    if (!h) { std::fprintf(stderr, "nao tocou\n"); return 1; }
+    if (!h) { std::fprintf(stderr, "did not play\n"); return 1; }
     const auto s = render(e, h, secs);
     int peak; double rms;
     stats(s, peak, rms);
     writeWav(out, s);
-    std::fprintf(stderr, "%s: %.2f s, pico %d, rms %.1f\n", out.c_str(), double(s.size()) / 2 / kRate, peak, rms);
+    std::fprintf(stderr, "%s: %.2f s, peak %d, rms %.1f\n", out.c_str(), double(s.size()) / 2 / kRate, peak, rms);
     return 0;
 }

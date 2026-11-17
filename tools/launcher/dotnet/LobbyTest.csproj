@@ -1,0 +1,16 @@
+<!-- ABOUTME: Builds LobbyTest (LobbyClient.cs + ServerHost.cs against the real wotm_server) with the .NET SDK on macOS/Linux, in the
+     ABOUTME: C# 5 the Windows csc (tools\launcher\test.bat) accepts. Run through sh tools/test_launcher.sh. -->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>5</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <NoWarn>CA1416</NoWarn>   <!-- UPnP (HNetCfg COM) is Windows-only by design; MapUpnp catches the failure elsewhere -->
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../LobbyTest.cs;../LobbyClient.cs;../ServerHost.cs" />
+  </ItemGroup>
+</Project>

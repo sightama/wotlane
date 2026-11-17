@@ -1,7 +1,7 @@
 #!/bin/sh
-# Barra o commit que mistura história com referência ou deixa item feito no TODO.md (tools/doclint.py; regra no CLAUDE.md,
-# "Documentação"). Ligar uma vez por clone: git config core.hooksPath tools/githooks
-# Só olha os .md que o commit muda; sem Python, deixa passar.
+# Blocks a commit that mixes history into reference docs or leaves a finished item in TODO.md (tools/doclint.py; rule in CLAUDE.md,
+# "Documentation"). Enable once per clone: git config core.hooksPath tools/githooks
+# Only looks at the .md files the commit changes; without Python, lets the commit through.
 git diff --cached --name-only -- '*.md' | grep -q . || exit 0
 root=$(git rev-parse --show-toplevel)
 for py in python python3; do

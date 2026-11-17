@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Oracle em lote: para cada equivalent com VU0/FPU especial e SEM chamadas (folha), gera um harness com
-argumentos derivados do nome mangled, roda retail recompilado x nossa recompilada e classifica.
-Roda dentro do WSL.  Saida: ~/wotm-recomp/work/oracle_all.csv"""
+"""Batch oracle: for each equivalent function with special VU0/FPU instructions and NO calls (a leaf), generates a harness
+with arguments derived from the mangled name, runs the recompiled retail vs our recompiled version and classifies the result.
+Runs inside WSL.  Output: ~/wotm-recomp/work/oracle_all.csv"""
 import csv, os, re, subprocess, sys, glob, concurrent.futures as cf
 
 HOME = os.path.expanduser("~")
@@ -14,7 +14,7 @@ SP = re.compile(r"\b(min\.s|max\.s|madd\.s|msub\.s|mula\.s|madda\.s|msuba\.s|rsq
 
 def parse_sig(mangled):
     if "__" not in mangled: return None
-    # o ultimo "__" separa nome/resto; nomes com "__" interno (ctor "__10AiDodgeRam") sao raros: pular
+    # the last "__" separates name/rest; names with an inner "__" (ctor "__10AiDodgeRam") are rare: skip them
     name, rest = mangled.rsplit("__", 1)[0], mangled.rsplit("__", 1)[1]
     if not name: return None
     args = []; has_this = False
@@ -140,10 +140,10 @@ int main() {
         }
         bool retAp = near(a.f0, b.f0) && (a.v0 == b.v0 || near(a.v0, b.v0));
         if (memAp && retAp) { ++approx; continue; }
-        if (memAp) { ++retonly; continue; }   // memoria igual, so f0/v0 diferem (void ou retorno nao comparavel)
+        if (memAp) { ++retonly; continue; }   // memory matches, only f0/v0 differ (void or a return value that cannot be compared)
         {
             if (diff == 0) {
-                std::printf("1o diff: f0 %08x/%08x v0 %08x/%08x;", a.f0, b.f0, a.v0, b.v0);
+                std::printf("1st diff: f0 %08x/%08x v0 %08x/%08x;", a.f0, b.f0, a.v0, b.v0);
                 for (uint32_t o = 0; o < kCmp; o += 4) if (std::memcmp(&a.mem[o], &b.mem[o], 4)) { uint32_t x, y; std::memcpy(&x,&a.mem[o],4); std::memcpy(&y,&b.mem[o],4); std::printf(" arena+0x%x: %08x/%08x;", o, x, y); break; }
                 for (size_t o = 0; o < a.img.size(); o += 4) if (std::memcmp(&a.img[o], &b.img[o], 4)) { uint32_t x, y; std::memcpy(&x,&a.img[o],4); std::memcpy(&y,&b.img[o],4); std::printf(" img 0x%zx: %08x/%08x;", o + kImg, x, y); break; }
                 std::printf("EOL");
@@ -173,7 +173,7 @@ def work(item):
     if re.search(r"GuestBranchKind::(DirectCall|IndirectCall)", rt_) or re.search(r"GuestBranchKind::(DirectCall|IndirectCall)", nm_):
         return (tu, fn, "nao_folha", "")
     ret_sym = os.path.basename(rf[0])[:-4]; nm_sym = os.path.basename(nf[0])[:-4]
-    # a versao NM que coube no endereco do retail tem o mesmo simbolo: renomear so no lado NM
+    # the NM version that fit at the retail address has the same symbol: rename it on the NM side only
     nm_def = f"-D{nm_sym}={nm_sym}_nm" if nm_sym == ret_sym else ""
     if nm_def: nm_sym += "_nm"
     open(f"{d}/h.cpp", "w").write(TEMPLATE)
@@ -203,7 +203,7 @@ def main():
         spec = parse_sig(r["function"])
         if spec is None: skipped["sig"] += 1; continue
         items.append((r["tu"], r["function"], int(r["address"], 16), spec))
-    print(f"candidatas: {len(items)} (assinatura nao suportada: {skipped['sig']})", flush=True)
+    print(f"candidates: {len(items)} (unsupported signature: {skipped['sig']})", flush=True)
     only = sys.argv[1:]
     if only: items = [i for i in items if any(o in i[1] for o in only)]
     with cf.ThreadPoolExecutor(6) as ex:

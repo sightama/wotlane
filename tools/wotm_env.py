@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Confere a tabela de variaveis WOTM_* de docs/passos/NATIVO.md contra o codigo.
+"""Checks the WOTM_* variable table in docs/passos/NATIVO.md against the code.
 
-O codigo (native/ e o patch do runtime em tools/runtime_patch/) e a fonte: toda
-variavel lida por getenv("WOTM_...") tem que estar na tabela entre os marcadores
-<!-- WOTM_ENV:START --> e <!-- WOTM_ENV:END -->, e toda variavel da tabela tem que
-existir no codigo. As descricoes sao escritas a mao na propria tabela (uma linha
-pode agrupar varias variaveis na primeira coluna).
+The code (native/ and the runtime patch in tools/runtime_patch/) is the source of truth:
+every variable read by getenv("WOTM_...") must be in the table between the markers
+<!-- WOTM_ENV:START --> and <!-- WOTM_ENV:END -->, and every variable in the table must
+exist in the code. The descriptions are written by hand in the table itself (one row
+may group several variables in the first column).
 
-  python tools/wotm_env.py           # lista o que falta na tabela e o que sobrou nela; sai 1 se houver
-  python tools/wotm_env.py --write   # acrescenta ao fim da tabela as que faltam (descricao vazia) e tira as que sobraram
+  python tools/wotm_env.py           # lists what is missing from the table and what is extra in it; exits 1 if any
+  python tools/wotm_env.py --write   # appends the missing ones to the end of the table (empty description) and removes the extra ones
 """
 import os
 import re
@@ -60,19 +60,19 @@ def main():
     missing = sorted(v for v in code if v not in in_doc)
     stale = sorted(v for v in in_doc if v not in code)
     for v in missing:
-        print("FALTA na tabela: %s (%s)" % (v, code[v]))
+        print("MISSING from the table: %s (%s)" % (v, code[v]))
     for v in stale:
-        print("SOBRA na tabela (nao existe no codigo): %s" % v)
+        print("EXTRA in the table (not in the code): %s" % v)
     if not write:
-        print("%d variaveis no codigo, %d na tabela" % (len(code), len(in_doc)))
+        print("%d variables in the code, %d in the table" % (len(code), len(in_doc)))
         return 1 if (missing or stale) else 0
     kept = [r for r in body if not any(v in stale for v in VAR_DOC.findall(r.split("|")[1]))]
     for v in missing:
-        kept.append("| `%s` | (descrever; lida em `%s`) |" % (v, code[v]))
+        kept.append("| `%s` | (describe; read in `%s`) |" % (v, code[v]))
     block = "\n" + "\n".join(head + kept) + "\n"
     with open(DOC, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(text[:a + len(START)] + block + text[b:])
-    print("tabela reescrita: +%d -%d" % (len(missing), len(stale)))
+    print("table rewritten: +%d -%d" % (len(missing), len(stale)))
     return 0
 
 
