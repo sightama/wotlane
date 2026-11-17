@@ -61,7 +61,9 @@
   .card h1 { margin: 0; font-size: 20px; }
   .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   label { color: var(--dim); font-size: 12px; display: grid; gap: 4px; }
-  input, select { background: #0e0e11; color: var(--fg); border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; font: inherit; }
+  input, select, textarea { background: #0e0e11; color: var(--fg); border: 1px solid var(--line); border-radius: 4px; padding: 6px 8px; font: inherit; }
+  textarea { resize: vertical; }
+  #report .note { color: var(--dim); font-size: 12px; margin: 0; }
   #joinCode { width: 6em; text-transform: uppercase; letter-spacing: .2em; }
   #code { font: 700 28px/1 ui-monospace, monospace; letter-spacing: .25em; color: var(--accent); }
   #members { margin: 0; padding-left: 18px; }
@@ -146,7 +148,7 @@
       <div class="row"><button id="leave">Leave</button></div>
     </div>
     <p id="frontMsg"></p>
-    <div class="row"><button id="openSettings">Settings</button></div>
+    <div class="row"><button id="openSettings">Settings</button><button id="openReport" hidden>Send report</button></div>
     <p id="supported">Works in Chrome, Firefox and Edge on a computer, and in Chrome on an Android phone (older phones may be slow).</p>
     <footer id="legal">
       <p>Not affiliated with or endorsed by Sony Interactive Entertainment or Incognito Entertainment. War of the Monsters is a trademark of
@@ -174,6 +176,7 @@
       <label>Your name <input id="settingsName" maxlength="16" autocomplete="nickname"></label>
       <div class="options"></div>
       <div id="onlineNotes"></div>
+      <div class="row"><button id="openReportFromSettings">Send report</button></div>
     </section>
     <section id="panel-game" role="tabpanel" aria-labelledby="tab-game" hidden><div class="options"></div></section>
     <section id="panel-display" role="tabpanel" aria-labelledby="tab-display" hidden><div class="options"></div></section>
@@ -195,6 +198,14 @@
       <p class="note">Keys and gamepad buttons can be changed in the game: main menu, Recompiled options, Controls.</p>
     </section>
     <p id="settingsMsg" class="note">Saved as you change them. Changes apply the next time you press Play.</p>
+  </div>
+  <div id="report" class="card" hidden>
+    <div class="row"><h1 style="flex:1">Send report</h1><button id="closeReport">Back</button></div>
+    <p class="note">Did a match go badly (lag, stutter, a freeze)? This sends the game server your name, your browser and device type, how
+      the game and the network were doing in your last match, and the note below. The report holds no chat, no files and no address.</p>
+    <label>What went wrong? (optional) <textarea id="reportNote" maxlength="200" rows="3"></textarea></label>
+    <div class="row"><button id="sendReport" class="main">Send report</button></div>
+    <p id="reportMsg" class="note" aria-live="polite"></p>
   </div>
 </div>
 <pre id="log"></pre>

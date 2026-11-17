@@ -66,8 +66,13 @@
   // after the save folder's last changes reach the browser's storage (a save folder in memory: wotm_websave.cpp)
   window.wotmQuit = () => {
     syncSaves();
-    Promise.resolve(globalThis.wotmSaveQueue).finally(() => location.reload());
+    Promise.all([globalThis.wotmSaveQueue, finishDiag()]).finally(() => location.reload());
   };
+
+  // an online match's last diagnostics report goes out before the page reloads (web/front.js sets wotmDiagFinish for a match)
+  function finishDiag() {
+    try { return Promise.resolve(window.wotmDiagFinish?.()); } catch { return Promise.resolve(); }
+  }
 
   // writes what changed in a save folder kept in memory to the browser's storage now (a no-op on the OPFS backend)
   function syncSaves() {
@@ -90,7 +95,7 @@
       el.hidden = true;
       canvas.focus();
     });
-    document.getElementById('leaveMatch').addEventListener('click', () => location.reload());
+    document.getElementById('leaveMatch').addEventListener('click', () => finishDiag().finally(() => location.reload()));
     setInterval(() => {
       const wait = waitMs();
       const show = prompt.show(wait);
