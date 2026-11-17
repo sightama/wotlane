@@ -21,7 +21,9 @@ pthreads, WebGL2, `web/data_retry.js` as a `--pre-js`) live in the PS2Recomp sea
 
 ## Run locally
 `python3 tools/serve_web.py --site <runtime>/web_dist --data <folder with SCUS_971.97 and game.iso>` serves the page with the
-cross-origin isolation headers (COOP `same-origin`, COEP `require-corp`) that SharedArrayBuffer needs, and byte ranges for the disc.
+cross-origin isolation headers (COOP `same-origin`, COEP `require-corp`) that SharedArrayBuffer needs, and the disc both as numbered chunk
+files (below; the hashes of each file are computed on first use, a few seconds for the ISO) and as whole files with byte ranges.
+`--chunks only` serves no whole files, as the site does once split; `--chunks off` has no chunk files, as a site that is not split yet.
 For online play start `wotm_server --ws-port <port>`; a page opened from `localhost` or `127.0.0.1` takes `?server=ws://127.0.0.1:<port>`
 (a public page always uses its own host). Use one browser profile per player: tabs of the same profile share the saves.
 
@@ -41,6 +43,23 @@ For online play start `wotm_server --ws-port <port>`; a page opened from `localh
   answers, and after a read that went to the network hands it the bytes to keep. A helper that doesn't answer within 300 ms is left
   alone for 2 s and the read goes to the network, as it did before the helper. The page also fetches `wotm.wasm` from its load on, into the HTTP cache (served with an
   ETag and `no-cache`), so `wotm.js`'s own request only revalidates it.
+- **Disc chunks:** a split site serves the disc as 1 MiB files, so that a CDN caches all of it (Cloudflare Free caches no object over
+  512 MB, and the ISO is 1.2 GiB): `/data/index.json` (`{chunkBytes, files: {name: {digest, size}}}`, the digest being the first 16 hex
+  digits of the file's SHA-256), `/data/<digest>/manifest.json` (`name`, `size`, `chunkBytes`, `chunks`, `sha256[]`) and
+  `/data/<digest>/<n>.bin` (a plain 200, the last chunk shorter, cacheable for good because a new disc is a new digest). The game, the
+  fetch backend and `native/wotm_webdisc.cpp` know nothing of this: they still send HEAD and Range requests for `data/<file>`, and
+  `web/disc_chunks.js` (a script tag in the page; the workers import it from `disc_cache.js`; like it, it is outside the `--pre-js` list, so
+  the build id stays) answers them: a HEAD from the index (the size, `Accept-Ranges` and an ETag of `"<digest>"`), a range GET from the
+  chunk files that cover it, fetched in parallel (12 at a time in a thread) and each checked against `sha256[n]` before use. A chunk that
+  fails its check, or comes the wrong length, is asked for again from `<n>.bin?retry=1` (another URL, so a bad copy kept by the edge or
+  the HTTP cache is not served twice), three tries in all, and then the read fails. The Cache API layer above keeps its caches by the
+  digest instead of the ETag. A 404 for `index.json` means the server is not split: every request goes to the whole-file URL as it does
+  without this layer. An index that fails any other way is an error, not a fallback, so that a broken split is not hidden. Chunks are 1 MiB
+  because the game reads the disc in 1 MiB aligned ranges (`kDiscChunkBytes`), the cache keeps 1 MiB blocks and `boot_chunks.json` lists
+  them: a boot to the title is 27 requests of 1 MiB. Firefox's synchronous XHR path asks the helper first and reads the chunk files
+  itself, one after another with synchronous XHR, when the helper doesn't have the range; it checks them with a JavaScript SHA-256
+  (`sha256Sync`, because SubtleCrypto can't be awaited there) and hands the helper the bytes to keep. The loading counter counts each
+  chunk that arrives, as it counts a range.
 - **Saves and settings:** `/save` is the browser's private file system (OPFS) and the game's working folder (`WOTM_SAVEDIR=/save`), so
   `settings.ini`, the memory card and `mods/` survive a reload.
 - **Disc and saves outside Chromium:** the WASMFS fetch and OPFS backends hand each read to a worker while the game's main thread waits;
@@ -74,6 +93,21 @@ For online play start `wotm_server --ws-port <port>`; a page opened from `localh
   options through the page and checks the game's log for them (`settings_page`).
   A tab whose game runs holds a shared Web Lock (`wotlane-game`, taken in `boot.js`, read by `web/gamelock.js`); another tab's Settings
   turns its options off while it is held, because a running game writes `settings.ini` and the saves again from its own memory.
+- **Startup movies:** Single player plays the two boot movies (`INTRO_M`, then `INT_MAIN`) in an overlay over the canvas (`web/movies.js`)
+  while the game boots behind it, so the movie hides the loading instead of adding to it; the game never sees them, so the wasm and
+  determinism are untouched, and an online match boots straight into the fight with none. The Game tab's Startup movies is
+  **Skippable** (default: Esc, Space, Enter, a tap on the picture or a new gamepad button press skips the movie being shown, the next one
+  starts), **Original** (the movie plays through; keys, taps and pads do nothing) or **Off** (nothing is fetched, not even `movies.json`). The
+  choice is the page's own (`localStorage` `wotlane.movies`), not a `settings.ini` key: the game rewrites that file without keys it does not know.
+  While the overlay is up its keys never reach the game (capture-phase listeners) and the page's audio contexts are held suspended, so the
+  game's title music does not play under the movie (`installAudioHold`), and the game's own gamepad polling (`navigator.getGamepads`) sees no
+  pads until the movies end (`holdGamepads`); the page reads them itself to skip. A
+  movie that fails, or does not start within 15 s, is passed over. The files are made from the disc and never committed:
+  `python3 tools/web_movies.py --iso <game.iso> --out <data>/movies` (FFmpeg needed) writes `intro_m.webm`, `int_main.webm` (VP9 picture, Opus
+  audio, constrained quality: CRF 32, at most 500 kbit/s) and `movies.json`, about 6 MB in all against 85 MB of disc movies. FFmpeg reads the
+  picture of a `.PSS` but not its audio, so the tool takes the audio apart itself (`docs/FORMATOS.md`). The page fetches `data/movies/` through
+  the same data path as the disc (`serve_web.py` serves it from the data folder), and a server without the files plays no movie.
+  `movies.test.mjs` and `tools/test_web_movies.py` cover the page and the tool; `browser_mp_test`'s `movies` session plays all three modes.
 - **Saves tab:** the Settings card's first tab (`web/saves_ui.js`, logic in `web/saves.js`). The memory-card saves are `save.json` and the
   `mc0/` and `mc1/` card folders at the root of the browser's private file system (`settings.ini`, `mods/` and the rest are not saves). The tab
   lists them (files, size, last saved, and from `save.json` the battle tokens and each adventure slot) and offers:
@@ -131,7 +165,7 @@ During a match:
 - **Safari:** not supported, and not a goal (Safari before 27 lacks JSPI). The page says so in a plain message; the front panel names Chrome, Firefox and Edge on a computer as the supported browsers.
 - **Firefox:** the game takes more CPU per frame than in Chrome (it keeps 60 frames per second). The save folder in memory is also synced
   when the tab is hidden and on `pagehide`, and the game's own quit waits for the writes; a tab closed right after a save can lose it.
-- **Movies:** skipped (no FFmpeg in the browser build).
+- **Movies:** the game side skips every movie (no FFmpeg in the browser build, `PS2X_SKIP_MOVIES`); the page plays the two boot movies itself (Startup movies). The endings, the act intros, the credits and the menu's big-screen loop are skipped.
 - **Audio:** raylib's web audio uses a ScriptProcessorNode, which Chrome reports as deprecated.
 - **Loading counter:** two game tabs of the same site on one computer count each other's chunks.
 
@@ -153,7 +187,7 @@ OpenGraph and Twitter tags and JSON-LD (`web/index.html`, tested by `web/legal.t
 - `node --test web/` (the page scripts, with a fake WebSocket and an in-memory file system);
 - `sh tools/test_web.sh` (the native tests built with Emscripten and run under node, the browser-only sources with `-Werror`, then the
   page scripts);
-- `python3 tools/test_serve_web.py`, `python3 tools/test_web_mods.py` and `python3 tools/test_web_boot_chunks.py`;
+- `python3 tools/test_serve_web.py`, `python3 tools/test_web_mods.py`, `python3 tools/test_web_boot_chunks.py` and `python3 tools/test_web_movies.py`;
 - the WebSocket listener and transport: `sh tools/test_net.sh` (`ws_*` tests).
 - online play in real browsers, 1 to 8 players against a local server or the live site: `node tools/browser_mp_test/run.mjs`
   (`tools/browser_mp_test/README.md`; its log readers: `node --test tools/browser_mp_test/test/`).

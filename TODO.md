@@ -39,7 +39,7 @@ How it works today: `docs/passos/MODS.md` ("Skins", "Custom monsters").
 ## Out of order (until the owner chooses)
 - **Firefox online on two computers:** on one Mac Firefox x Firefox and Firefox x Chrome stay in sync but run at 50 to 56 fps against 59.7 for Chrome x Chrome (machine load and a covered window confound it; issue #91); check pace with each browser on its own computer (`docs/passos/WEB.md`).
 - **Browser audio on an AudioWorklet:** raylib's web audio uses the deprecated ScriptProcessorNode; miniaudio supports AudioWorklets (`-sAUDIO_WORKLET`, `-sWASM_WORKERS`). Measure glitches before and after.
-- **Movies in the browser:** skipped today (no FFmpeg); the browser's own video decoding could play them.
+- **More movies in the browser:** only the two boot movies play (`tools/web_movies.py`); the endings, act intros, credits and the menu's big-screen loop are still skipped.
 - **Cloud saves:** an encrypted passphrase vault for carrying saves between browsers, after the owner decides it is wanted (`docs/investigacoes/2026-11-16/cloud_saves.md`).
 - **Saves tab, one adventure slot:** deleting or exporting a single slot needs the card binaries and `save.json` kept consistent (`wotm_save.inc` imports a card's slots when the JSON lacks them); the page only replaces or deletes all saves.
 - **Settings page, key rebinding:** keys and gamepad buttons are changed in the game's panel only; the page's Controls tab could rebind the keyboard (`native/wotm_settings.hpp` `kKeyNames` to the DOM's `event.code`, the `KB_<BUTTON>` lines of `settings.ini`).

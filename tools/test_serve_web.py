@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 # ABOUTME: Tests for tools/serve_web.py (the local server for the browser version): cross-origin isolation headers on every answer,
-# ABOUTME: byte ranges for the streamed disc, and the data/ folder mapped apart from the page. Run: python tools/test_serve_web.py
+# ABOUTME: byte ranges for the streamed disc, the disc as numbered chunk files, and the data/ folder mapped apart from the page.
+# ABOUTME: Run: python tools/test_serve_web.py
+import hashlib
 import http.client
+import json
 import sys
 import tempfile
 import threading
@@ -101,6 +104,94 @@ class ServeWebTest(unittest.TestCase):
     def test_no_escape_from_data(self):
         r, _ = self.get('/data/../site/index.html')
         self.assertIn(r.status, (403, 404))
+
+
+class ServeWebChunksTest(unittest.TestCase):
+    """The disc as the site serves it: /data/index.json, /data/<digest>/manifest.json and /data/<digest>/<n>.bin (web/disc_chunks.js)."""
+    CHUNK = 4096
+
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp = tempfile.TemporaryDirectory()
+        root = Path(cls.tmp.name)
+        (root / 'site').mkdir()
+        (root / 'data').mkdir()
+        (root / 'site' / 'index.html').write_text('<html></html>')
+        cls.blob = bytes((i * 7 + i // 256) % 256 for i in range(10000))   # chunks of 4096, 4096 and 1808
+        (root / 'data' / 'game.iso').write_bytes(cls.blob)
+        (root / 'elsewhere.bin').write_bytes(b'linked')
+        (root / 'data' / 'SCUS_971.97').symlink_to(root / 'elsewhere.bin')
+        cls.root = root
+        cls.servers = {}
+
+    @classmethod
+    def tearDownClass(cls):
+        for server in cls.servers.values():
+            server.shutdown()
+            server.server_close()
+        cls.tmp.cleanup()
+
+    def start(self, chunks):
+        if chunks not in self.servers:
+            server = serve_web.make_server('127.0.0.1', 0, self.root / 'site', self.root / 'data', chunks=chunks, chunk_bytes=self.CHUNK)
+            threading.Thread(target=server.serve_forever, daemon=True).start()
+            self.servers[chunks] = server
+        return self.servers[chunks].server_address[1]
+
+    def get(self, path, chunks='both', method='GET', headers=None):
+        c = http.client.HTTPConnection('127.0.0.1', self.start(chunks), timeout=5)
+        c.request(method, path, headers=headers or {})
+        r = c.getresponse()
+        body = r.read()
+        c.close()
+        return r, body
+
+    def index(self):
+        r, body = self.get('/data/index.json')
+        self.assertEqual(r.status, 200)
+        return json.loads(body)
+
+    def test_index_lists_each_file_with_its_digest_and_size(self):
+        index = self.index()
+        self.assertEqual(index['chunkBytes'], self.CHUNK)
+        self.assertEqual(sorted(index['files']), ['SCUS_971.97', 'game.iso'])
+        self.assertEqual(index['files']['game.iso'], {'digest': hashlib.sha256(self.blob).hexdigest()[:16], 'size': len(self.blob)})
+        self.assertEqual(index['files']['SCUS_971.97']['size'], 6)   # a link to the disc elsewhere is followed
+
+    def test_manifest_has_a_hash_for_every_chunk(self):
+        entry = self.index()['files']['game.iso']
+        r, body = self.get(f"/data/{entry['digest']}/manifest.json")
+        self.assertEqual(r.status, 200)
+        manifest = json.loads(body)
+        self.assertEqual({k: manifest[k] for k in ('name', 'size', 'chunkBytes', 'chunks')}, {'name': 'game.iso', 'size': len(self.blob), 'chunkBytes': self.CHUNK, 'chunks': 3})
+        self.assertEqual(manifest['sha256'], [hashlib.sha256(self.blob[i:i + self.CHUNK]).hexdigest() for i in range(0, len(self.blob), self.CHUNK)])
+
+    def test_chunks_are_plain_200s_that_join_into_the_file(self):
+        digest = self.index()['files']['game.iso']['digest']
+        parts = []
+        for n in range(3):
+            r, body = self.get(f'/data/{digest}/{n}.bin')
+            self.assertEqual(r.status, 200)
+            self.assertEqual(int(r.getheader('Content-Length')), len(body))
+            parts.append(body)
+        self.assertEqual([len(p) for p in parts], [4096, 4096, 1808])
+        self.assertEqual(b''.join(parts), self.blob)
+
+    def test_a_chunk_that_does_not_exist_is_404(self):
+        digest = self.index()['files']['game.iso']['digest']
+        self.assertEqual(self.get(f'/data/{digest}/3.bin')[0].status, 404)
+        self.assertEqual(self.get('/data/0123456789abcdef/0.bin')[0].status, 404)
+        self.assertEqual(self.get(f'/data/{digest}/manifest.json/x')[0].status, 404)
+
+    def test_without_chunks_there_is_no_index_and_the_whole_file_is_served(self):
+        self.assertEqual(self.get('/data/index.json', chunks='off')[0].status, 404)
+        r, body = self.get('/data/game.iso', chunks='off')
+        self.assertEqual((r.status, body), (200, self.blob))
+
+    def test_chunks_only_stops_serving_the_whole_file(self):
+        self.assertEqual(self.get('/data/index.json', chunks='only')[0].status, 200)
+        self.assertEqual(self.get('/data/game.iso', chunks='only')[0].status, 404)
+        self.assertEqual(self.get('/data/game.iso', chunks='only', method='HEAD')[0].status, 404)
 
 
 if __name__ == '__main__':
