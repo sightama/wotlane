@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const { LAYOUT, SCALE_RANGE, unitFor, rectOf, clampSettings, loadSettings, saveSettings, touchRows, ZONE, isTap } = require('./touch.js');
+const { LAYOUT, SCALE_RANGE, unitFor, rectOf, clampSettings, loadSettings, saveSettings, touchRows, ZONE, isTap, ICONS } = require('./touch.js');
 const { STD } = require('./pads.js');
 
 const buttons = LAYOUT.filter((b) => b.press.length > 0);
@@ -93,4 +93,25 @@ test('a tap is a quick touch that hardly moved; a held touch or a drag is not', 
   assert.equal(isTap({ ms: 90, distance: 3 }), true);
   assert.equal(isTap({ ms: 400, distance: 3 }), false, 'resting a thumb is not a tap');
   assert.equal(isTap({ ms: 90, distance: 40 }), false, 'a flick is a drag');
+});
+
+const FACE = ['cross', 'circle', 'square', 'triangle'];
+
+test('the four face buttons are drawn as the same kind of icon, one SVG each, not text glyphs from different fonts', () => {
+  for (const id of FACE) {
+    const item = LAYOUT.find((b) => b.id === id);
+    assert.equal(item.icon, id, `${id} names its icon`);
+    assert.match(ICONS[id], /^<svg[^>]*viewBox="0 0 24 24"/, `${id} is an SVG`);
+  }
+  const strokes = new Set(FACE.map((id) => /stroke-width="([\d.]+)"/.exec(ICONS[id])[1]));
+  assert.equal(strokes.size, 1, 'the same line weight');
+});
+
+test('the face buttons are a little smaller than a thumb pad of 1.6 units, and grab smaller still', () => {
+  for (const id of FACE) {
+    const { w, h } = LAYOUT.find((b) => b.id === id);
+    assert.equal(w, h);
+    assert.ok(w >= 1.1 && w <= 1.4, `${id} is ${w}`);
+  }
+  assert.ok(LAYOUT.find((b) => b.id === 'circle').w < LAYOUT.find((b) => b.id === 'cross').w);
 });

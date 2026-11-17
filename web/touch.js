@@ -9,11 +9,11 @@ const Pads = typeof module !== 'undefined' && module.exports ? require('./pads.j
 // `press` are the standard pad buttons it holds down together; the chords are the game's own combinations (native/wotm_settings.hpp
 // kBindMask: BTriCircle, BCrossSquare, BL1R1).
 const LAYOUT = [
-  { id: 'cross', label: '✕', does: 'Jump (in menus: choose)', press: [Pads.STD.CROSS], anchor: 'br', x: 3.4, y: 1.75, w: 1.6, h: 1.6, cls: 'cross' },
-  { id: 'square', label: '□', does: 'Light attack', press: [Pads.STD.SQUARE], anchor: 'br', x: 4.75, y: 3.1, w: 1.6, h: 1.6, cls: 'square' },
-  { id: 'triangle', label: '△', does: 'Heavy attack (in menus: back)', press: [Pads.STD.TRIANGLE], anchor: 'br', x: 3.4, y: 4.45, w: 1.6, h: 1.6, cls: 'triangle' },
-  { id: 'circle', label: '○', does: 'Grab', press: [Pads.STD.CIRCLE], anchor: 'br', x: 2.0, y: 3.1, w: 1.3, h: 1.3, cls: 'circle' },
-  { id: 'special1', label: 'SP1', does: 'Special attack 1 (△ and ○ together)', press: [Pads.STD.TRIANGLE, Pads.STD.CIRCLE], anchor: 'br', x: 0.85, y: 5.0, w: 0.95, h: 0.95, cls: 'chord' },
+  { id: 'cross', label: '✕', does: 'Jump (in menus: choose)', press: [Pads.STD.CROSS], anchor: 'br', x: 3.3, y: 1.7, w: 1.35, h: 1.35, cls: 'cross', icon: 'cross' },
+  { id: 'square', label: '□', does: 'Light attack', press: [Pads.STD.SQUARE], anchor: 'br', x: 4.55, y: 2.95, w: 1.35, h: 1.35, cls: 'square', icon: 'square' },
+  { id: 'triangle', label: '△', does: 'Heavy attack (in menus: back)', press: [Pads.STD.TRIANGLE], anchor: 'br', x: 3.3, y: 4.2, w: 1.35, h: 1.35, cls: 'triangle', icon: 'triangle' },
+  { id: 'circle', label: '○', does: 'Grab', press: [Pads.STD.CIRCLE], anchor: 'br', x: 2.05, y: 2.95, w: 1.15, h: 1.15, cls: 'circle', icon: 'circle' },
+  { id: 'special1', label: 'SP1', does: 'Special attack 1 (△ and ○ together)', press: [Pads.STD.TRIANGLE, Pads.STD.CIRCLE], anchor: 'br', x: 0.85, y: 4.7, w: 0.95, h: 0.95, cls: 'chord' },
   { id: 'special2', label: 'SP2', does: 'Special attack 2 (✕ and □ together)', press: [Pads.STD.CROSS, Pads.STD.SQUARE], anchor: 'br', x: 0.85, y: 1.2, w: 0.95, h: 0.95, cls: 'chord' },
   { id: 'l2', label: 'L2', does: 'Left shoulder 2', press: [Pads.STD.L2], anchor: 'tl', x: 1.3, y: 0.75, w: 1.9, h: 1.0, cls: 'shoulder' },
   { id: 'l1', label: 'L1', does: 'Left shoulder 1 (strafe left)', press: [Pads.STD.L1], anchor: 'tl', x: 3.4, y: 0.75, w: 1.9, h: 1.0, cls: 'shoulder' },
@@ -24,6 +24,13 @@ const LAYOUT = [
   { id: 'start', label: 'START', does: 'Pause (in menus: start)', press: [Pads.STD.START], anchor: 'tc', x: 1.55, y: 0.5, w: 1.3, h: 0.75, cls: 'small' },
   { id: 'gear', label: '⚙', does: 'Size, opacity and vibration of these controls', press: [], anchor: 'tc', x: 0, y: 0.5, w: 0.8, h: 0.75, cls: 'small' },
 ];
+// The face buttons' symbols, drawn the same way (one line weight, one box) so they match whatever fonts the phone has
+const ICONS = {
+  cross: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M5 5L19 19M19 5L5 19"/></svg>',
+  circle: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="12" cy="12" r="7.5"/></svg>',
+  square: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linejoin="round"><rect x="5" y="5" width="14" height="14"/></svg>',
+  triangle: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linejoin="round"><path d="M12 4.5L20 18.5H4Z"/></svg>',
+};
 const ZONE = { split: 0.46, top: 0.18 };   // the left stick takes the screen left of `split` (a fraction of the width), the look zone the right; both start `top` down
 const SCALE_RANGE = { min: 0.7, max: 1.2 };
 const DEFAULTS = { scale: 1, opacity: 0.6, haptics: true };
@@ -83,6 +90,7 @@ const CSS = `
   opacity: var(--tp-opacity); border-radius: 50%; -webkit-tap-highlight-color: transparent; }
 #touchpad .tp-ctl.shoulder, #touchpad .tp-ctl.small { border-radius: calc(var(--u) * .3); font-size: calc(var(--u) * .36); }
 #touchpad .tp-ctl.chord { font-size: calc(var(--u) * .3); }
+#touchpad .tp-ctl svg { width: 46%; height: 46%; display: block; }
 #touchpad .tp-ctl.cross { color: #8ab4ff; } #touchpad .tp-ctl.circle { color: #ff8a8a; }
 #touchpad .tp-ctl.square { color: #f0a8e0; } #touchpad .tp-ctl.triangle { color: #8af0b4; }
 #touchpad .tp-ctl.down { background: rgba(224,89,42,.9); opacity: 1; }
@@ -183,7 +191,8 @@ class TouchOverlay {
   control(item) {
     const el = this.document.createElement('div');
     el.className = `tp-ctl ${item.cls}`;
-    el.textContent = item.label;
+    if (item.icon) el.innerHTML = ICONS[item.icon];   // fixed markup above, no page text
+    else el.textContent = item.label;
     el.dataset.id = item.id;
     el.setAttribute('role', 'button');
     el.setAttribute('aria-label', item.does);
@@ -418,7 +427,7 @@ function start() {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { LAYOUT, ZONE, SCALE_RANGE, unitFor, rectOf, clampSettings, loadSettings, saveSettings, touchRows, isTap, TouchOverlay };
+  module.exports = { LAYOUT, ZONE, SCALE_RANGE, unitFor, rectOf, clampSettings, loadSettings, saveSettings, touchRows, isTap, ICONS, TouchOverlay };
 } else {
   Object.assign(globalThis, { wotTouchRows: touchRows });
   start();
