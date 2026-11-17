@@ -153,8 +153,8 @@ namespace wotm_net::diag
         uint64_t maxFileBytes = 2ull << 20;         // a file stops growing here (one "truncated" line says so)
     };
 
-    // The files of one folder: one per match (and one per lobby before its match), named <UTC time>-<code>-<kind>.log, plus whatever
-    // loose name the caller appends to. With no folder it does nothing (a server run on a PC to play with friends writes no files).
+    // The files of one folder: one per match (and one per lobby before its match), named <UTC time>-<code>-<kind>.log, plus a loose
+    // reports file per day. With no folder it does nothing (a server run on a PC to play with friends writes no files).
     class Archive
     {
     public:
@@ -191,30 +191,40 @@ namespace wotm_net::diag
             return it == latest_.end() ? std::string{} : it->second;
         }
 
-        // one line (a newline is added) to `file`, created when missing; past the per-file cap lines are dropped
-        void append(const std::string &file, const std::string &line)
+        // the loose file for reports that name a lobby but can't be tied to one: one per UTC day
+        std::string reportsFile() const { return "reports-" + utcNow(true).substr(0, 8) + ".log"; }
+
+        // One line (a newline is added) to `file`, created when missing. Past the file's cap lines are dropped after one "truncated"
+        // line. Lines that come from players (`fromServer` false) only get three quarters of the cap, so a player's reports can't
+        // crowd out the server's own lines.
+        void append(const std::string &file, const std::string &line, bool fromServer = true)
         {
             if (!enabled() || file.empty())
                 return;
             const std::filesystem::path path = std::filesystem::path(dir_) / file;
-            auto it = sizes_.find(file);
-            if (it == sizes_.end())
+            auto it = files_.find(file);
+            if (it == files_.end())
             {
                 std::error_code ec;
                 const auto size = std::filesystem::exists(path, ec) ? std::filesystem::file_size(path, ec) : 0u;
-                it = sizes_.emplace(file, ec ? 0u : static_cast<uint64_t>(size)).first;
+                it = files_.emplace(file, FileState{ec ? 0u : static_cast<uint64_t>(size), false, false}).first;
             }
-            uint64_t &size = it->second;
-            if (size > limits_.maxFileBytes)
+            FileState &st = it->second;
+            bool &closed = fromServer ? st.serverClosed : st.clientClosed;
+            const uint64_t cap = fromServer ? limits_.maxFileBytes : limits_.maxFileBytes - limits_.maxFileBytes / 4;
+            if (closed)
                 return;
-            const std::string text = size + line.size() + 1 > limits_.maxFileBytes ? "(truncated: this file reached its size cap)\n" : line + "\n";
+            std::string text = line + "\n";
+            if (st.size + text.size() > cap)
+            {
+                text = "(truncated: this file reached its size cap)\n";
+                closed = true;
+            }
             std::ofstream out(path, std::ios::binary | std::ios::app);
             if (!out)
                 return;
             out << text;
-            size += text.size();
-            if (text.size() != line.size() + 1)
-                size = limits_.maxFileBytes + 1;   // nothing more goes in
+            st.size += text.size();
         }
 
         // deletes the files older than keepDays, then the oldest while the folder is over maxTotalBytes (the newest file stays)
@@ -256,7 +266,7 @@ namespace wotm_net::diag
                 if (!e)
                 {
                     total -= files[i].size;
-                    sizes_.erase(files[i].path.filename().string());
+                    files_.erase(files[i].path.filename().string());
                 }
             }
         }
@@ -266,6 +276,11 @@ namespace wotm_net::diag
         std::string dir_;
         Limits limits_;
         std::map<std::string, std::string> latest_;   // lobby code -> its newest file
-        std::map<std::string, uint64_t> sizes_;       // bytes written to each file this process has touched
+        struct FileState
+        {
+            uint64_t size = 0;
+            bool serverClosed = false, clientClosed = false;   // the "truncated" line was written for that kind of line
+        };
+        std::map<std::string, FileState> files_;      // every file this process has appended to
     };
 }

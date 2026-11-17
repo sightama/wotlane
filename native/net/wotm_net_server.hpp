@@ -187,7 +187,7 @@ namespace wotm_net
         void diagReport(int c, const std::string &line);
         // a line of the server's own diagnostics, "src=server lobby=<code> <text>", to the journal and to the lobby's file
         void diagEvent(const Lobby &l, const std::string &text);
-        void diagLine(const std::string &file, const std::string &line);
+        void diagLine(const std::string &file, const std::string &line, bool fromServer = true);
         // the server's view of every player of a started match: transport, Hz, delay, round trip, how input packets arrived
         void diagTick(Match &m, const Lobby &l);
         void sampleBehind(Match &m);
