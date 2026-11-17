@@ -82,6 +82,7 @@ namespace wotm_net::ws
     struct Handshake
     {
         std::string path, key;
+        std::string userAgent;   // the browser's User-Agent (empty when it sent none)
     };
 
     // the value of header `name` (any case) in an HTTP head, or nullopt
@@ -132,7 +133,8 @@ namespace wotm_net::ws
         const auto upgrade = header(request, "Upgrade"), key = header(request, "Sec-WebSocket-Key");
         if (!upgrade || !equalsNoCase(*upgrade, "websocket") || !key || key->empty())
             return std::nullopt;
-        return Handshake{std::string(request.substr(4, pathEnd - 4)), *key};
+        const auto ua = header(request, "User-Agent");
+        return Handshake{std::string(request.substr(4, pathEnd - 4)), *key, ua ? *ua : std::string()};
     }
 
     inline std::string handshakeAnswer(std::string_view clientKey)

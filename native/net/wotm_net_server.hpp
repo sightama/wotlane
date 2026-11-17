@@ -144,7 +144,7 @@ namespace wotm_net
 
         void log(const char *fmt, ...);
         void acceptAndReadLobby();
-        void addConn(std::unique_ptr<LineLink> link);
+        void addConn(std::unique_ptr<LineLink> link, bool halfRate = false);   // halfRate: a phone (its WebSocket User-Agent)
         void handleLine(int c, const std::string &line);
         void createLobby(int c, const std::vector<std::string> &w);
         void joinLobby(int c, const std::vector<std::string> &w);

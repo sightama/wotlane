@@ -1458,6 +1458,23 @@ namespace
         // a proxy (Caddy) may send the header names in another case
         const auto lower = wotm_net::ws::parseHandshake("GET /lobby HTTP/1.1\r\nupgrade: WebSocket\r\nsec-websocket-key: abc\r\n\r\n");
         CHECK(lower && lower->path == "/lobby" && lower->key == "abc");
+        const auto ua = wotm_net::ws::parseHandshake("GET /lobby HTTP/1.1\r\nUpgrade: websocket\r\nSec-WebSocket-Key: k\r\n"
+                                                     "User-Agent: Mozilla/5.0 (Linux; Android 15; Pixel 9 Pro XL)\r\n\r\n");
+        CHECK(ua && ua->userAgent == "Mozilla/5.0 (Linux; Android 15; Pixel 9 Pro XL)");
+        CHECK(lower && lower->userAgent.empty());
+    }
+
+    // a phone or tablet's browser (its lobby WebSocket's User-Agent) plays online at 30 Hz, whatever its page says
+    TEST(half_rate_user_agents_are_phones_and_tablets)
+    {
+        CHECK(p::halfRateUserAgent("Mozilla/5.0 (Linux; Android 15; Pixel 9 Pro XL) AppleWebKit/537.36 (KHTML, like Gecko) "
+                                   "Chrome/131.0.0.0 Mobile Safari/537.36"));
+        CHECK(p::halfRateUserAgent("Mozilla/5.0 (Linux; Android 14; SM-X710) AppleWebKit/537.36 (KHTML, like Gecko) "
+                                   "Chrome/131.0.0.0 Safari/537.36"));   // an Android tablet
+        CHECK(!p::halfRateUserAgent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) "
+                                    "Chrome/131.0.0.0 Safari/537.36"));
+        CHECK(!p::halfRateUserAgent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"));
+        CHECK(!p::halfRateUserAgent(""));
     }
 
     TEST(ws_frame_roundtrip_masked)
