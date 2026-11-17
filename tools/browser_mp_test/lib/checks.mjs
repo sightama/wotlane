@@ -762,14 +762,26 @@ export async function moviesSession(run) {
     await b.page.click('#single');
     await b.page.waitForFunction(() => !document.getElementById('movie').hidden && document.getElementById('movieVideo').currentTime > 0.5, null, { timeout: 30000 });
     const hint = await b.page.evaluate(() => document.getElementById('movieHint').hidden);
-    for (const k of ['Escape', 'Space', 'Enter']) await b.page.keyboard.press(k);
-    await sleep(1000);
-    const kept = await state(b.page);
+    // the keys go in at once from inside the page: a game booting behind the movie keeps the page so busy that real key presses can take
+    // longer than the movie
+    const keys = await b.page.evaluate(async () => {
+      const video = document.getElementById('movieVideo');
+      const before = video.getAttribute('src');
+      const prevented = ['Escape', ' ', 'Enter'].map((key) => {
+        const e = new KeyboardEvent('keydown', { key, cancelable: true, bubbles: true });
+        window.dispatchEvent(e);
+        return e.defaultPrevented;
+      });
+      document.getElementById('movie').dispatchEvent(new Event('pointerdown'));
+      await new Promise((r) => setTimeout(r, 300));
+      return { before, after: video.getAttribute('src'), prevented };
+    });
     await b.page.evaluate(() => { const v = document.getElementById('movieVideo'); v.currentTime = v.duration - 0.3; });
-    await sleep(2500);
+    // seeking waits on the network and a loaded machine: give the next movie time to start
+    await b.page.waitForFunction(() => /int_main/.test(document.getElementById('movieVideo').getAttribute('src') ?? ''), null, { timeout: 60000 }).catch(() => {});
     const next = await state(b.page);
-    row('movie_original', hint && kept.shown && /intro_m\.webm$/.test(kept.src) && /int_main\.webm$/.test(next.src),
-      `after Esc, Space and Enter still ${kept.src}; at its end ${next.src}; hint hidden ${hint}`);
+    row('movie_original', hint && keys.prevented.every(Boolean) && keys.before === keys.after && /intro_m\.webm$/.test(keys.after) && /int_main\.webm$/.test(next.src),
+      `Esc, Space, Enter and a tap left ${keys.after} playing (keys swallowed: ${keys.prevented.join(',')}); at its end ${next.src}; hint hidden ${hint}`);
 
     // off: no movie file is requested
     const [c] = await run.openPlayers(1, check + '-off');
