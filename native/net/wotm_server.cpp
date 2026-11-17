@@ -3,6 +3,7 @@
 #include "wotm_net_master.hpp"
 #include "wotm_net_server.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <csignal>
 #include <cstdio>
@@ -18,7 +19,7 @@ namespace
     int usage()
     {
         std::printf("usage: wotm_server [--port 7777] [--lobbies 16] [--players 8] [--delay <frames>] [--announce <host>[:7778] [--name <name>]]\n"
-                    "                   [--ws-port <port> [--ws-bind 127.0.0.1]]\n"
+                    "                   [--ws-port <port> [--ws-bind 127.0.0.1]] [--diag-dir <folder> [--diag-days 7] [--diag-max-mb 64]]\n"
                     "       wotm_server --master [--port 7778]\n"
                     "  --port      TCP (lobby) and UDP (match) port; forward both in the router to play over the internet\n"
                     "              (with --master: the TCP port clients and servers reach the master on)\n"
@@ -29,6 +30,9 @@ namespace
                     "  --name      the name in the public list (letters, digits, - and _; up to 16; default wotlane)\n"
                     "  --ws-port   also take browser players: lobby and match over WebSocket on this TCP port (paths /lobby and /match)\n"
                     "  --ws-bind   the address the WebSocket port listens on (default 127.0.0.1: a web server in front serves HTTPS)\n"
+                    "  --diag-dir  write the players' diagnostics reports and the server's view of each player to one file per match in this\n"
+                    "              folder (they always go to the journal/stdout as [diag] lines); old files are deleted after --diag-days\n"
+                    "              days (default 7) and the oldest beyond --diag-max-mb in all (default 64)\n"
                     "  --master    run the master server instead: the list of servers that announce themselves\n");
         return 2;
     }
@@ -71,6 +75,12 @@ int main(int argc, char **argv)
             cfg.wsPort = static_cast<uint16_t>(std::atoi(argv[++i]));
         else if (a == "--ws-bind" && hasValue)
             cfg.wsBind = argv[++i];
+        else if (a == "--diag-dir" && hasValue)
+            cfg.diagDir = argv[++i];
+        else if (a == "--diag-days" && hasValue)
+            cfg.diagKeepDays = std::max(1, std::atoi(argv[++i]));
+        else if (a == "--diag-max-mb" && hasValue)
+            cfg.diagMaxTotalBytes = static_cast<uint64_t>(std::max(1, std::atoi(argv[++i]))) << 20;
         else if (a == "--master")
             master = true;
         else
