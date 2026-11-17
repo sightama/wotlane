@@ -52,3 +52,13 @@ logs only (the server-side DESYNC and "left the match" checks are local only).
   (a mixed lobby; needs a build with Firefox support). The lobby gets its own window height (`--lobby-height`; the card is taller than 400 px with 8
   members and scrolls) and the game its own size (`--height`).
 - `PS2X_PAD` scripted pads are not used: in the browser build `GetTime()` is a wall-clock time, so a script's seconds never match.
+
+## Desync matrix
+
+`node tools/browser_mp_test/desync.mjs --cases 3,4,5,8+2,5+5 --scenarios baseline,pause,personal,pause_away,away,stall,refresh,leave,mix --reps 3`
+plays full matches to the win screen (`WOTM_CHEATS=vencer`, wins 1) after a scripted trigger and compares every tab's state hashes (and
+locally the server's DESYNC lines). A case `A+B` runs lobbies of A and B at the same time on one server. `--firefox K` and `--mods
+jump,fast,turbo` apply to every lobby; `--target live` needs no password on the open site. A problem with no state difference at a host
+load over twice the cores is `OVERLOAD` (inconclusive), not a failure. Results: `results.md` and `results.json` in `--out`, with each trial's stage and
+seed. Run it under `caffeinate -dis` (display sleep freezes tabs), from the tree the `web_dist` was built from. See
+`docs/investigacoes/2026-11-16/desync-matrix/`.
