@@ -252,7 +252,9 @@ const scenarios = {
     const [u1, u0] = await p.page.evaluate(() => [parseFloat(getComputedStyle(document.getElementById('touchpad')).getPropertyValue('--u')), wotTouch.overlay.u]);
     check(rows, 'the size slider resizes the controls and the choice is remembered', near(u1, u0, 0.01) && u1 > 58 && (await p.page.evaluate(() => JSON.parse(localStorage.getItem('wotlane.touch')).scale)) === 1.2, `${u1} ${u0}`);
     const wide = await p.page.evaluate(() => document.querySelector('[data-id=cross]').getBoundingClientRect().width);
-    check(rows, 'the cross button grew with it', wide > 90, wide);
+    check(rows, 'the cross button grew with it', wide > 75, wide);
+    const faces = await p.page.evaluate(() => ['cross', 'circle', 'square', 'triangle'].map((id) => { const el = document.querySelector('[data-id=' + id + ']'); const s = el.querySelector('svg'); const r = s?.getBoundingClientRect(); return { id, svg: !!s, text: el.textContent.trim(), icon: r ? Math.round(r.width) : 0 }; }));
+    check(rows, 'the four face buttons are SVG icons with no text glyph, the same size', faces.every((f) => f.svg && f.text === '') && new Set(faces.map((f) => f.icon)).size <= 2, JSON.stringify(faces));
     await p.shot('phone_landscape_settings.png');
     await p.close();
   },

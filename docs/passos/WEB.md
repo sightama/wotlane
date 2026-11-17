@@ -210,7 +210,7 @@ connected pad. Everything that feeds it lives in the page (`web/pads.js`, `web/t
   any other device from its first touch. They feed a virtual pad named "Touch screen controls" that takes slot 0 while it is shown, so the
   game sees one more gamepad. Layout (`LAYOUT`, positions in thumb units): a floating left stick anywhere on the left 46% of the screen
   (below the top row), a look zone on the right (a drag is the right stick, which turns the camera), the four face buttons as a diamond at the
-  bottom right with jump, light and heavy attack bigger than grab, two chord buttons (SP1 is triangle and circle, SP2 is cross and square, the
+  bottom right (1.35 thumb units, grab 1.15), drawn as SVG line icons so every symbol has the same weight whatever fonts the phone has, two chord buttons (SP1 is triangle and circle, SP2 is cross and square, the
   game's specials) and one for lock-on (L1 and R1), L2 and L1 at the top left and R1 and R2 (block) at the top right, Select, a gear and Start
   at the top middle. Several fingers work at once; a press stays down at least 80 ms, so a tap shorter than the game's pad reads is still
   read. A quick tap (under 220 ms, under 12 px) on either zone is also a mouse click on the game: menu lines are picked by pointer, and in a
