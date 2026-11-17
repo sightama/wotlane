@@ -126,6 +126,10 @@ export class LobbyClient {
 
   receive(line) {
     const p = parseLine(line);
+    if (p.cmd === 'ERROR' && /^unknown command: DIAG$/.test(p.rest)) {
+      this.diagUnsupported = true;   // a server from before diagnostics: not an answer to any request that waits
+      return;
+    }
     if (p.cmd === 'ERROR') {
       const w = this.waiting.shift();
       if (w) w.reject(new Error(p.rest));
@@ -200,6 +204,21 @@ export class LobbyClient {
 
   // a line of lobby chat, before the match; the server sends it back to everyone, this member included (or an ERROR: too fast)
   chat(text) { this.socket.send(`CHAT ${text}`); }
+
+  // a diagnostics report (web/diag.js); the server never answers it. False, and nothing sent, once the server has said it doesn't know it
+  diag(line) {
+    if (this.diagUnsupported) return false;
+    this.socket.send(line);
+    return true;
+  }
+
+  // a diagnostics report that is known to have reached the server: the LIST sent after it is answered once the server has read the report.
+  // Resolves false when the server has no diagnostics (an older one)
+  async sendDiag(line) {
+    if (!this.diag(line)) return false;
+    await this.list();
+    return !this.diagUnsupported;
+  }
 
   // leaves the lobby and keeps the connection; resolves with the code of the lobby that was left
   async leave() {

@@ -281,3 +281,41 @@ test('LobbyClient hands CHAT lines to onChat and sends chat without waiting for 
   assert.deepEqual(seen, [{ name: 'Ana', text: 'hi all' }]);
   assert.equal(client.waiting.length, 0);
 });
+
+test('LobbyClient sends a diagnostics line without waiting for a reply', async () => {
+  const { ws, client } = await connected();
+  assert.equal(client.diag('DIAG v=1 why=join'), true);
+  assert.equal(ws.sent.at(-1), 'DIAG v=1 why=join');
+  assert.equal(client.waiting.length, 0);
+});
+
+test('a server that does not know DIAG answers ERROR: that refuses no request, and nothing more is sent to it', async () => {
+  const { ws, client } = await connected();
+  const errors = [];
+  client.onError = (text) => errors.push(text);
+  const created = client.create('Ana', 5);
+  client.diag('DIAG v=1 why=join');
+  ws.reply('ERROR unknown command: DIAG');   // the old server's answer to the line, which arrives while CREATE waits
+  assert.equal(client.waiting.length, 1);    // CREATE still waits for its own reply
+  ws.reply('CREATED QZXW');
+  ws.reply('JOINED QZXW');
+  ws.reply('SETTINGS QZXW stage=1 wins=0 mods=');
+  assert.equal(await created, 'QZXW');
+  assert.deepEqual(errors, []);
+  assert.equal(client.diagUnsupported, true);
+  const before = ws.sent.length;
+  assert.equal(client.diag('DIAG v=1 why=periodic'), false);
+  assert.equal(ws.sent.length, before);
+});
+
+test('a diagnostics line is delivered once the server has answered a LIST sent after it', async () => {
+  const { ws, client } = await connected();
+  const done = client.sendDiag('DIAG v=1 why=report note=laggy');
+  assert.equal(ws.sent.at(-2), 'DIAG v=1 why=report note=laggy');
+  assert.equal(ws.sent.at(-1), 'LIST');
+  ws.reply('END');
+  assert.equal(await done, true);
+  const old = await connected();
+  old.client.diagUnsupported = true;
+  assert.equal(await old.client.sendDiag('DIAG v=1'), false);   // nothing sent, nothing to wait for
+});
