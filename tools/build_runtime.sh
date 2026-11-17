@@ -37,8 +37,14 @@ ver_text="#define WOTM_VERSION \"$ver\""
 vu0=$gen/wotm_vu0_native.gen.inc
 elf=$REPO/disc/SCUS_971.97
 if [ -f "$elf" ] && { [ ! -f "$vu0" ] || [ "$REPO/tools/vu0native.py" -nt "$vu0" ]; }; then
-    python3 "$REPO/tools/vu0native.py" "$elf" "$vu0" >"$rt/logs/vu0native.log" 2>&1 || echo "warning: vu0native.py failed, VU0 stays on the interpreter (see $rt/logs/vu0native.log)"
+    python3 "$REPO/tools/vu0native.py" "$elf" "$vu0" >"$rt/logs/vu0native.log" 2>&1 || fail "vu0native.py failed (see $rt/logs/vu0native.log)"
+    # wotm_vu0_native.cpp includes it through __has_include, so ninja misses a new or changed one: drop the object that includes it
+    find "$bdir" -name 'wotm_vu0_native.cpp.o' -delete
 fi
+# wotm has no VU0 interpreter: without the microprograms the game skips them and draws a black scene
+case " $targets " in
+    *" wotm "*) [ -f "$vu0" ] || fail "no VU0 microprograms ($vu0): put the game's SCUS_971.97 in $REPO/disc/ (sh tools/setup_runtime.sh extracts the disc there)" ;;
+esac
 
 # button atlas and font from native/wotm.rc as byte arrays (Windows reads them from the .exe resources; native/wotm_embedded.hpp)
 python3 "$REPO/tools/embed_resources.py" "$REPO/native/wotm.rc" "$gen/wotm_resources.gen.h" || fail "embed_resources.py failed"
