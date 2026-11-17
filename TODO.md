@@ -30,6 +30,7 @@ How it works today: `docs/passos/MODS.md` ("Skins", "Custom monsters").
 - The campaign is for 1 player: the game mode (`m_gameMode`), the cinematics and the stages with bosses (extra slots 0x1C0/0x1E0 in the Capitol, 0x1A0) need to be revisited.
 
 ## Gaps (cheap, at any time)
+- **Browser build without the VU0 microcode:** `tools/build_web.sh` with no `disc/SCUS_971.97` builds without `wotm_vu0_native.gen.inc`, and the browser has no VU0 interpreter, so the game runs but draws black (only a `[vu0]` log line says why). The build should fail instead; adding the `.inc` later also needs `wotm_vu0_native.cpp` rebuilt (ninja does not track it).
 - **Map editor:** the session's lock is held during a save and during the per-frame `toMap` (`wotm_mapedit.inc`, `tick`), so the window can stall for a moment; the "SAVED" message stays after later unsaved edits; map ids such as `con` or `nul` pass the id check but are reserved device names on Windows; F5 does nothing while the editor is open (it keeps the free camera on); `parseScript`, `reset` on a copy and the id check have no tests.
 - **Character creator (#42):** the next steps are parked, not dropped. Step 2 (custom monster: HUD name, announcer line, camera, `ai`) adds little over created skins, which already travel online (lobby protocol 5); step 3 (parts and shapes) needs the `.NGP`/`.PTR` writer that map creator step 3 (#10) would build first.
 
@@ -37,6 +38,8 @@ How it works today: `docs/passos/MODS.md` ("Skins", "Custom monsters").
 - **Off the critical path:** an oracle for functions with calls; coverage with gameplay to feed back into `boot_coverage_asm.csv` (`57d4afd:docs/investigacoes/2026-10-19/pendencias_oracle_cobertura.md`, sections 2 and 3).
 
 ## Out of order (until the owner chooses)
+- **120 Hz interpolation in Chrome:** on an M1 Max at load ~20, Chrome cannot redraw the scene on every 120 Hz frame: frames stall 100 to 300 ms although a redraw is 1.1 ms of GPU time, 3 ms of main-thread work and 380 draws, and it stalls the same without blending (`WOTM_INTERP=redraw`) and at 448 lines. `interp::PaceGuard` falls back to one redraw per game frame. Find what the browser waits on (a Chrome trace of the GPU process) and measure on a quiet machine (`node tools/web_fps.mjs`); Firefox holds ~100 fps with fewer late frames than before.
+- **Display rate read once:** the page measures it at load; a covered window (Chrome gives it 30) or one moved to another screen keeps that rate until the next Play. Re-measure on `visibilitychange` or from the presents themselves.
 - **Firefox online on two computers:** on one Mac Firefox x Firefox and Firefox x Chrome stay in sync but run at 50 to 56 fps against 59.7 for Chrome x Chrome (machine load and a covered window confound it; issue #91); check pace with each browser on its own computer (`docs/passos/WEB.md`).
 - **Browser audio on an AudioWorklet:** raylib's web audio uses the deprecated ScriptProcessorNode; miniaudio supports AudioWorklets (`-sAUDIO_WORKLET`, `-sWASM_WORKERS`). Measure glitches before and after.
 - **More movies in the browser:** only the two boot movies play (`tools/web_movies.py`); the endings, act intros, credits and the menu's big-screen loop are still skipped.

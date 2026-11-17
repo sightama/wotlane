@@ -179,6 +179,42 @@ inline bool project(const M4 &C, const Focus &f, const float w[3], float &x, flo
     y = -f.fv * q[2] / q[1];
     return true;
 }
+// The browser's guard on blending (wotm_live.inc): there the drawing's real cost is in the browser's GPU process, which runs the
+// WebGL calls later, out of sight of this thread's timers; when it falls behind, animation frames come late. So blending is judged by
+// the present interval reached while it is on (a moving average, each sample capped at 4 periods so one long gap, such as a hidden
+// tab, doesn't count): above 1.4 periods it is suspended, then tried again after kFirstRetrySec, twice as long after each failed try
+// (up to kMaxRetrySec), and back to the first wait after a minute of holding the period.
+struct PaceGuard {
+    static constexpr double kFirstRetrySec = 10.0, kMaxRetrySec = 160.0;
+    // t: now, in seconds; hz: the rate the drawing assumes; blending: this present blends. True: blending stays suspended
+    bool update(double t, int hz, bool blending) {
+        const double period = 1000.0 / (hz > 0 ? hz : 60);
+        const double dt = last_ > 0.0 ? std::fmin((t - last_) * 1000.0, 4.0 * period) : period;
+        last_ = t;
+        if (suspended_) {
+            if (t < retryAt_) return true;
+            suspended_ = false;
+            avgMs_ = period;
+            heldSince_ = t;
+            return false;
+        }
+        if (!blending) { avgMs_ = period; heldSince_ = t; return false; }
+        avgMs_ = avgMs_ > 0.0 ? 0.9 * avgMs_ + 0.1 * dt : dt;
+        if (avgMs_ > 1.4 * period) {
+            suspended_ = true;
+            retryAt_ = t + wait_;
+            wait_ = std::fmin(wait_ * 2.0, kMaxRetrySec);
+            return true;
+        }
+        if (t - heldSince_ > 60.0) wait_ = kFirstRetrySec;
+        return false;
+    }
+    double averageMs() const { return avgMs_; }
+
+private:
+    bool suspended_ = false;
+    double last_ = 0.0, avgMs_ = 0.0, retryAt_ = 0.0, heldSince_ = 0.0, wait_ = kFirstRetrySec;
+};
 }   // namespace interp
 
 }  // namespace wotm

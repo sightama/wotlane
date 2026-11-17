@@ -3499,7 +3499,7 @@ public:
     void drawHudAtEdges(const Ram &ram, bool wire) {
         const Matrix proj = rlGetMatrixProjection(), mv = rlGetMatrixModelview();
         const float half43 = proj.m5 != 0.f ? proj.m0 * (4.f / 3.f) / proj.m5 : 1.f;   // half-width of the 4:3 picture, in NDC
-        if (half43 >= 0.999f || hud.empty()) { drawList(ram, hud, wire, -1); return; }
+        if (!hudWide || half43 >= 0.999f || hud.empty()) { drawList(ram, hud, wire, -1); return; }
         std::vector<DrawItem> sides[2];
         for (const DrawItem &it : hud) {
             const float *t = it.m.m[3];
@@ -4026,7 +4026,7 @@ public:
             const Color tint{uint8_t(std::min(255, t.r * k)), uint8_t(std::min(255, t.g * k)), uint8_t(std::min(255, t.b * k)), uint8_t(std::min(255, t.a * 2))};
             // the WINS count goes to the window's edge like the rest of the HUD (drawHudAtEdges): left of center to the left one. Split
             // screen leaves it: its halves are narrower than 4:3
-            const float dx = t.toEdge && !splitEdges ? hudedge::shift(gr.w / rw, t.x0 + t.x1 > 640.f) * rw * 0.5f : 0.f;
+            const float dx = t.toEdge && hudWide && !splitEdges ? hudedge::shift(gr.w / rw, t.x0 + t.x1 > 640.f) * rw * 0.5f : 0.f;
             // Inverted UV (u1 < u0, v1 < v0: ScreenPolys mirrors and polyBuildPrim writes V = 0x80 - v): the GS walks from u0 to u1.
             // DrawTexturePro with negative width mirrors the range [x, x + |w|], so the origin is the smaller of the two.
             DrawTexturePro(tex, texelRect(tex, t.tex0, Rectangle{std::min(t.u0, t.u1), std::min(t.v0, t.v1), t.u1 - t.u0, t.v1 - t.v0}),
@@ -4041,6 +4041,8 @@ public:
     // widescreen the fade darkens the whole window); a smaller one stays in the central 4:3 strip, like the text. In split screen (splitEdges) each
     // edge counts on its own: a view's fade and cinema bars (0..320 or 320..640) reach the window edge on its side.
     bool splitEdges = false;
+    // the HUD and the WINS count go to the edges of a window wider than 4:3 (WIDE HUD option); false: where the game puts them
+    bool hudWide = true;
     // WOTM_LOCALPLAYER: localView >= 0 = only the local player's view on screen (the other views' bars are left out)
     int localView = -1;
     int stripView = -1;   // 3-player split screen: the view that takes the whole bottom row (2), -1 = none

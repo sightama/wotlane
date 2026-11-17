@@ -78,7 +78,7 @@ test('the options the page keeps itself are the startup movies, with the modes m
 test('tabs list their options in order and every option has a tab', () => {
   const ids = TABS.map((t) => t.id);
   for (const o of OPTIONS) assert.ok(ids.includes(o.tab), `${o.key}: tab ${o.tab}`);
-  assert.deepEqual(optionsOf('display').map((o) => o.key.slice(5)), ['RES', 'RENDERSCALE', 'ASPECT', 'MSAA', 'TEXFILTER', 'INTERP']);
+  assert.deepEqual(optionsOf('display').map((o) => o.key.slice(5)), ['RES', 'RENDERSCALE', 'ASPECT', 'MSAA', 'TEXFILTER', 'INTERP', 'HZ', 'HUDWIDE']);
 });
 
 test('parseIni reads KEY=value lines, last one wins, comments and CRLF ignored', () => {
@@ -163,4 +163,10 @@ test('changes made at once all reach the file', async () => {
 test('a file that cannot be read is an error, not an empty file', async () => {
   const root = { getFileHandle: async () => { throw new DOMException('x', 'UnknownError'); } };
   await assert.rejects(readSettings(root), /UnknownError|x/);
+});
+
+test('the display tab offers the wide HUD and a 60 Hz cap on the display rate', () => {
+  const display = (key) => OPTIONS.find((o) => o.key === key && o.tab === 'display');
+  assert.ok(display('WOTM_HUDWIDE'));
+  assert.deepEqual(display('WOTM_HZ').choices.map(([v]) => v), ['0', '60']);
 });

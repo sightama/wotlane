@@ -268,6 +268,46 @@ namespace
         CHECK(near(r.fwd[0] * r.fwd[0] + r.fwd[1] * r.fwd[1] + r.fwd[2] * r.fwd[2], 1.f));
     }
 
+    // The browser's blending guard (PaceGuard): judged by the present interval actually reached, since the drawing's cost is in
+    // the browser's GPU process, out of sight of this thread
+    TEST(pace_guard_keeps_blending_while_frames_keep_the_period)
+    {
+        ip::PaceGuard g;
+        double t = 0.0;
+        for (int i = 0; i < 600; ++i)
+            CHECK(!g.update(t += 1.0 / 120.0, 120, true));
+    }
+
+    TEST(pace_guard_suspends_when_frames_come_late_and_retries_later)
+    {
+        ip::PaceGuard g;
+        double t = 0.0;
+        bool off = false;
+        for (int i = 0; i < 60 && !off; ++i)
+            off = g.update(t += 1.0 / 30.0, 120, true);   // blending, but frames at 30
+        CHECK(off);
+        const double since = t;
+        while (g.update(t += 1.0 / 120.0, 120, false) && t - since < 1000.0) {}   // suspended: no blending, frames at 120 again
+        CHECK(t - since >= ip::PaceGuard::kFirstRetrySec - 0.01 && t - since < ip::PaceGuard::kFirstRetrySec + 0.1);
+        // the retry fails again: the next wait is twice as long
+        off = false;
+        for (int i = 0; i < 60 && !off; ++i)
+            off = g.update(t += 1.0 / 30.0, 120, true);
+        CHECK(off);
+        const double since2 = t;
+        while (g.update(t += 1.0 / 120.0, 120, false) && t - since2 < 1000.0) {}
+        CHECK(t - since2 >= 2 * ip::PaceGuard::kFirstRetrySec - 0.01);
+    }
+
+    TEST(pace_guard_ignores_one_long_gap)
+    {
+        ip::PaceGuard g;
+        double t = 0.0;
+        for (int i = 0; i < 120; ++i) g.update(t += 1.0 / 120.0, 120, true);
+        CHECK(!g.update(t += 2.0, 120, true));   // a hidden tab or a stall: one sample, capped
+        for (int i = 0; i < 120; ++i) CHECK(!g.update(t += 1.0 / 120.0, 120, true));
+    }
+
     TEST(camera_cuts_are_not_blended)
     {
         CHECK(!ip::cameraCut(cam(0, 0, 0, 0), cam(30, 0, 0, 20)));
@@ -433,6 +473,23 @@ namespace
         CHECK(!st::parse(st::VolSfx, "loud", v));
         st::g_netProfile.store(true);
         CHECK(!st::forced(st::VolSfx) && !st::forced(st::VolMusic));
+        st::g_netProfile.store(false);
+    }
+
+    // Wide HUD (FEATURES tab): the HUD at the edges of a wide window, on by default; off keeps the game's 4:3 placement. Drawing only, so
+    // never forced by the network profile
+    TEST(wide_hud_setting_defaults_on_and_is_per_pc)
+    {
+        namespace st = wotm::settings;
+        CHECK(std::string(st::kEnv[st::HudWide]) == "WOTM_HUDWIDE");
+        CHECK(st::kDefault[st::HudWide] == 1);
+        for (int k = 0; k < st::kKeys; ++k)   // the live values start at the defaults
+            CHECK(st::g_val[k].load() == st::kDefault[k]);
+        int v = -1;
+        CHECK(st::parse(st::HudWide, "0", v) && v == 0);
+        CHECK(st::parse(st::HudWide, "1", v) && v == 1);
+        st::g_netProfile.store(true);
+        CHECK(!st::forced(st::HudWide));
         st::g_netProfile.store(false);
     }
 
