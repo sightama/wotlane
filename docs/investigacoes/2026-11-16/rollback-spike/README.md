@@ -165,3 +165,15 @@ Lockstep tuning that is concrete:
 - The latency table is computed from `pickDelay`, not measured on a network with added latency.
 - `TODO.md` lists "Our own netcode (rollback)" under "Discarded by the owner". This spike does not change that line; the lockstep
   tuning item it adds is not rollback.
+
+## Follow-up, 2026-11-17: phase 0 done (PR #104)
+
+- Correction to section 1: the server already relayed each input as soon as it arrived. The 16 ms timer only resends what an ENet
+  player still lacks; nothing waits for the receiver's next packet. So "immediate relay" needed no change.
+- Each player's delay is now their own path (half their round trip plus half the slowest other player's, at the high end of the last
+  4 s, plus 3 ms), re-picked every 500 ms and stepped one frame at a time (`Pace`, `LocalSchedule`).
+- Measured AI vs AI with `tools/net_lagproxy.py` (jitter a quarter of the ping): 1 vs 1 at 20 ms went from 3 to 2 frames, 4 players with
+  one at 120 ms and three at 20 ms from 4 to 3; 60 ms and the other 4 player cases stayed the same, and 1 vs 1 at 120 ms with 30 ms of
+  jitter went from 9 to 10 (the jitter allowance, twice ENet's variation, costs what the old fixed frame of slack did). The full table,
+  with the load of each run, is in PR #104. 8 players passed `tools/browser_mp_test` (match, round, stall) in sync.
+- Rollback is still parked; the synctest above stays the go/no-go if Lane wants it.

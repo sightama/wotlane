@@ -117,9 +117,10 @@ ENet, and the server measures browser round trips with WebSocket pings. Browser,
 is reliable and ordered, so the server sends a browser each input once (an ENet player gets what it lacks again every 16 ms): a browser
 whose network stops is sent only pings, not a growing pile of repeats. A browser that comes back sends everything it queued at once; the
 server reads a connection 64 KB at a time, so any burst is fine (only a lobby line over 64 KB closes the connection).
-The input delay is fixed when the match starts, from the two slowest round trips to the server (`pickDelay` in
-`native/net/wotm_net_proto.hpp`), and is the same for every player: with everyone at 20, 60 and 120 ms it is 3, 5 and 9 frames in a
-1 vs 1 (60 Hz: 50, 83 and 150 ms) and 2, 3 and 5 frames with 3 to 8 players (30 Hz: 67, 100 and 167 ms).
+Each player has their own input delay, re-picked by the server every 500 ms from the round trips (`adviseDelay` in
+`native/net/wotm_net_proto.hpp`, `docs/ONLINE.md`): half their round trip plus half the slowest other player's, at the high end of the
+last 4 s, plus 3 ms. With everyone at a steady 20, 60 and 120 ms that is 2, 4 and 8 frames in a 1 vs 1 (60 Hz) and 1, 2 and 4 frames
+with 3 to 8 players (30 Hz); jitter adds to it. A match starts at the largest player's delay, and at least 2.
 A Mac or Windows build that plays the site must be built from `wip/browser`: its build id (a hash of `native/`) differs from `wotlane/mac`'s, and the server refuses a different build.
 
 During a match:
