@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { Dir } from './fakefs.mjs';
+import { MOVIE_MODES, DEFAULT_MODE } from './movies.js';
 import {
   OPTIONS, TABS, parseIni, setIni, setOption, choiceFor, readSettings, updateSetting, settingsSaved, optionsOf,
 } from './settings.js';
@@ -20,7 +21,7 @@ const kEnv = nativeList('kEnv');
 const kDefault = nativeList('kDefault');
 
 test('every option is a native key, with the native default', () => {
-  for (const o of OPTIONS) {
+  for (const o of OPTIONS.filter((x) => !x.page)) {
     const i = kEnv.indexOf(o.key);
     assert.ok(i >= 0, `${o.key} is not in kEnv`);
     // the native default is a number; the file's text for it is the option's own spelling of it
@@ -64,6 +65,14 @@ test('what an online match fixes matches the native profile', () => {
   keyNames.forEach((k, i) => assert.equal(OPTIONS.find((o) => o.key === enumToEnv[k]).online.fixed, values[i]));
   const lobby = OPTIONS.filter((o) => o.online?.lobby).map((o) => o.key).sort();
   assert.deepEqual(lobby, ['WOTM_FASTMONSTERS', 'WOTM_SUPERJUMP', 'WOTM_TURBO']);
+});
+
+test('the options the page keeps itself are the startup movies, with the modes movies.js plays', () => {
+  const pageOnly = OPTIONS.filter((o) => o.page);
+  assert.deepEqual(pageOnly.map((o) => o.key), ['MOVIES']);
+  assert.deepEqual(pageOnly[0].choices.map(([v]) => v), MOVIE_MODES);
+  assert.equal(pageOnly[0].def, DEFAULT_MODE);
+  assert.ok(!kEnv.includes('MOVIES'));
 });
 
 test('tabs list their options in order and every option has a tab', () => {

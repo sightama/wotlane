@@ -1,5 +1,5 @@
 // ABOUTME: The checks, grouped in sessions that each form a lobby of N browser players: match (lobby, picks, start, inputs, sync, frame
-// ABOUTME: rate, late join, leaving), round (round end, win screen, rematch, quit), stall (frozen player, Away note), creations, single, saves.
+// ABOUTME: rate, late join, leaving), round (round end, win screen, rematch, quit), stall (frozen player, Away note), creations, single, saves, movies.
 import { Player, sleep } from './player.mjs';
 import { Run, formLobby, startMatch, waitAll, hasStart, stopped, MONSTER_IDS } from './session.mjs';
 import { CpuMeter } from './infra.mjs';
@@ -705,6 +705,96 @@ export async function savesSession(run) {
     row('saves_refused', untouched, untouched ? 'a zip that is not a save was refused and nothing changed' : 'the refused zip changed the saves or asked to restore');
   } catch (e) {
     row('saves_error', false, e.stack?.split('\n').slice(0, 2).join(' ') ?? String(e));
+  } finally {
+    await run.saveEvidence(1, check, players, '').catch(() => {});
+    await run.closeAll(players);
+  }
+}
+
+// The startup movies (web/movies.js) on Single player, three browsers: skippable (default: the movie shows while the game boots behind
+// it, Esc skips each of the two), original (Esc does nothing, the movie ends by itself) and off (no movie file is requested). Skipped
+// without the movie files in the data folder (python3 tools/web_movies.py).
+export async function moviesSession(run) {
+  const R = run.report;
+  const check = 'movies';
+  const row = (name, ok, detail) => R.add(1, name, ok ? 'pass' : 'fail', detail);
+  const players = [];
+  const state = (page) => page.evaluate(() => {
+    const v = document.getElementById('movieVideo');
+    return { shown: !document.getElementById('movie').hidden, src: v.getAttribute('src'), time: v.currentTime, paused: v.paused, duration: v.duration };
+  });
+  const choose = async (page, mode) => {
+    await page.click('#openSettings');
+    await page.click('#tab-game');
+    await page.selectOption('#opt_MOVIES', mode);
+    await page.click('#closeSettings');
+  };
+  try {
+    const probe = await fetch(new URL('data/movies/movies.json', run.target.pageUrl));
+    if (!probe.ok) return R.add(1, 'movies', 'skip', 'no data/movies/movies.json (python3 tools/web_movies.py --iso <game.iso> --out <data>/movies)');
+
+    // skippable, the default
+    const [a] = await run.openPlayers(1, check);
+    players.push(a);
+    await a.page.click('#single');
+    await a.page.waitForFunction(() => !document.getElementById('movie').hidden && document.getElementById('movieVideo').currentTime > 0.5, null, { timeout: 30000 });
+    await sleep(8000);
+    await a.pollLog();
+    const first = await state(a.page);
+    const booting = hasLine(a.logText, /\[boot\]/);
+    row('movie_plays_during_boot', first.shown && /intro_m\.webm$/.test(first.src) && !first.paused && booting,
+      `the first movie shows (${first.src}, ${first.time.toFixed(1)} s) while the game's boot log is running: ${booting}`);
+    await a.page.keyboard.press('Escape');
+    await sleep(800);
+    const second = await state(a.page);
+    await a.page.keyboard.press('Escape');
+    await sleep(800);
+    const done = await state(a.page);
+    row('movie_skippable', /int_main\.webm$/.test(second.src) && !done.shown, `Esc moved to ${second.src}; the second Esc ${done.shown ? 'did not' : 'did'} close it`);
+    await sleep(3000);
+    await a.pollLog();
+    row('movie_game_runs', /Running/.test(await a.status()) && !health(players).length, `status ${JSON.stringify(await a.status())}`);
+
+    // original: the keys do nothing; the movie ends when it ends
+    const [b] = await run.openPlayers(1, check + '-original');
+    players.push(b);
+    await choose(b.page, 'original');
+    await b.page.click('#single');
+    await b.page.waitForFunction(() => !document.getElementById('movie').hidden && document.getElementById('movieVideo').currentTime > 0.5, null, { timeout: 30000 });
+    const hint = await b.page.evaluate(() => document.getElementById('movieHint').hidden);
+    // the keys go in at once from inside the page: a game booting behind the movie keeps the page so busy that real key presses can take
+    // longer than the movie
+    const keys = await b.page.evaluate(async () => {
+      const video = document.getElementById('movieVideo');
+      const before = video.getAttribute('src');
+      const prevented = ['Escape', ' ', 'Enter'].map((key) => {
+        const e = new KeyboardEvent('keydown', { key, cancelable: true, bubbles: true });
+        window.dispatchEvent(e);
+        return e.defaultPrevented;
+      });
+      document.getElementById('movie').dispatchEvent(new Event('pointerdown'));
+      await new Promise((r) => setTimeout(r, 300));
+      return { before, after: video.getAttribute('src'), prevented };
+    });
+    await b.page.evaluate(() => { const v = document.getElementById('movieVideo'); v.currentTime = v.duration - 0.3; });
+    // seeking waits on the network and a loaded machine: give the next movie time to start
+    await b.page.waitForFunction(() => /int_main/.test(document.getElementById('movieVideo').getAttribute('src') ?? ''), null, { timeout: 60000 }).catch(() => {});
+    const next = await state(b.page);
+    row('movie_original', hint && keys.prevented.every(Boolean) && keys.before === keys.after && /intro_m\.webm$/.test(keys.after) && /int_main\.webm$/.test(next.src),
+      `Esc, Space, Enter and a tap left ${keys.after} playing (keys swallowed: ${keys.prevented.join(',')}); at its end ${next.src}; hint hidden ${hint}`);
+
+    // off: no movie file is requested
+    const [c] = await run.openPlayers(1, check + '-off');
+    players.push(c);
+    const requested = [];
+    c.page.on('request', (r) => { if (/\/movies\//.test(r.url())) requested.push(r.url()); });
+    await choose(c.page, 'off');
+    await c.page.click('#single');
+    await sleep(6000);
+    const shown = await c.page.evaluate(() => !document.getElementById('movie').hidden);
+    row('movie_off', !requested.length && !shown, requested.length ? `requested ${requested.join(', ')}` : 'no movie file requested and no overlay');
+  } catch (e) {
+    row('movies_error', false, e.stack?.split('\n').slice(0, 2).join(' ') ?? String(e));
   } finally {
     await run.saveEvidence(1, check, players, '').catch(() => {});
     await run.closeAll(players);

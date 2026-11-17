@@ -4,6 +4,7 @@ import { LobbyClient, inviteLink, lastLobbyNotice, lobbyRow, lobbySocketUrl, mat
 import { initCreations, addLobbyChoices } from './creations_ui.js';
 import { initSettings } from './settings_ui.js';
 import { settingsSaved } from './settings.js';
+import { playStartupMovies } from './movies.js';
 
 const MONSTERS = [[1, 'Congar'], [2, 'Robo-47'], [3, 'Togera'], [4, 'Ultra V'], [5, 'Preytor'], [7, 'Kineticlops'], [8, 'Magmo'],
   [9, 'Raptros'], [10, 'Agamo'], [11, 'Zorgulon']];
@@ -323,6 +324,8 @@ function init() {
     stopWatchingLobbies();
     front.hidden = true;
     await settingsSaved();
+    // the boot movies play over the game while it loads (not awaited); in a match they never play
+    playStartupMovies({ mode: recall('movies', 'skippable'), overlay: $('movie'), video: $('movieVideo'), hint: $('movieHint'), log: (t) => window.wotmLog?.push(t) });
     window.wotmStart(null, await buildId());
   });
   $('host').addEventListener('click', () => hostOrJoin(false));
