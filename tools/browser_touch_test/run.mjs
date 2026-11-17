@@ -9,7 +9,7 @@ import { loadPlaywright, REPO } from '../browser_mp_test/lib/infra.mjs';
 const args = process.argv.slice(2);
 const opt = (name, fallback) => { const i = args.indexOf(`--${name}`); return i >= 0 ? args[i + 1] : fallback; };
 if (args.includes('--help')) {
-  console.log('node tools/browser_touch_test/run.mjs --site <web_dist> --data <folder with game.iso and SCUS_971.97> [--out <dir>] [--only <scenario,...>] [--browser chromium|chrome]');
+  console.log('node tools/browser_touch_test/run.mjs (--site <web_dist> --data <folder with game.iso and SCUS_971.97> | --url <a live site, e.g. https://playwotm.com/>) [--out <dir>] [--only <scenario,...>] [--browser chromium|chrome]');
   process.exit(0);
 }
 const runtime = join(REPO, 'runtime');
@@ -272,7 +272,8 @@ const scenarios = {
     check(rows, 'the touch controls step aside', !(await p.overlayVisible()));
     check(rows, 'the game\'s pad 0 is now the real pad', /Xbox/.test((await p.pad(0))?.id ?? ''), JSON.stringify(await p.pad(0)));
     let log = (await p.log()).filter((l) => /\[pad\] player 1/.test(l)).at(-1) ?? '';
-    check(rows, 'the game says player 1 is that pad', /player 1: pad 0 \(Xbox Wireless Controller/.test(log), log);
+    // the game logs a player's devices only when the set of slots changes: the touch pad and the real pad share slot 0, so the line may not repeat
+    check(rows, 'the game keeps player 1 on pad 0', /player 1: pad 0/.test(log) && !/no device/.test(log), log);
     const from = await p.logCount();
     await p.page.evaluate(() => __setPad(0, { id: 'Xbox Wireless Controller (STANDARD GAMEPAD Vendor: 045e Product: 0b13)', axes: [1, 0, 0, 0], down: { 0: 1 } }));
     await sleep(600);
@@ -328,7 +329,7 @@ const scenarios = {
 
 mkdirSync(out, { recursive: true });
 const pw = await loadPlaywright();
-const server = await startServer();
+const server = opt('url') ? { url: opt('url').replace(/\/?$/, '/'), stop() {} } : await startServer();
 const browser = await (opt('browser', 'chromium') === 'chrome'
   ? pw.chromium.launch({ channel: 'chrome', headless: true })
   : pw.chromium.launch({ channel: 'chromium', headless: true, args: ['--use-angle=metal', '--enable-gpu', '--ignore-gpu-blocklist'] }));

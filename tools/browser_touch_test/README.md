@@ -12,7 +12,7 @@ node tools/browser_touch_test/run.mjs --site <web_dist> --data <folder with game
 node tools/browser_touch_test/run.mjs --only gamepads,fight_control
 ```
 
-`--help` lists the options. It starts `tools/serve_web.py` on a free port and stops it at the end. Playwright comes from
+`--help` lists the options. It starts `tools/serve_web.py` on a free port and stops it at the end; with `--url <site>` it tests a live site instead (no `--site` or `--data`). Playwright comes from
 `tools/browser_mp_test/node_modules` or the global npm root. Results (`results.md`, `results.json`, screenshots) go to
 `<runtime>/browser_touch_test/<time>/`, or `--out`. Run it on a quiet machine: a fight is CPU-bound and a loaded one starves the page.
 
