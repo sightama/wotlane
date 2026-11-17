@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
 const { supportProblem, mainThreadFiles, fileSize, guardPointerLock } = createRequire(import.meta.url)('./support.js');
-const chrome = { chromium: true, firefox: false, jspi: true, isolated: true, mobile: false };
+const chrome = { chromium: true, firefox: false, jspi: true, isolated: true, ios: false };
 const firefox = { ...chrome, chromium: false, firefox: true };
 const safari = { ...chrome, chromium: false, firefox: false };
 
@@ -19,7 +19,7 @@ test('Firefox with JSPI runs it (on range reads); without JSPI it asks to update
 });
 
 test('an unsupported browser (Safari): says which browsers work', () => {
-  assert.match(supportProblem(safari), /Chrome, Firefox or Edge on a computer/);
+  assert.match(supportProblem(safari), /Chrome, Firefox or Edge on a computer or an Android phone/);
 });
 
 test('the disc and saves read on the main thread everywhere but Chromium (which keeps its proven worker backends)', () => {
@@ -27,8 +27,10 @@ test('the disc and saves read on the main thread everywhere but Chromium (which 
   assert.equal(mainThreadFiles(firefox), true);
 });
 
-test('a phone or tablet: says it needs a computer', () => {
-  assert.match(supportProblem({ ...chrome, mobile: true }), /computer/);
+test('an iPhone or iPad: says why it can not run, and what does', () => {
+  const msg = supportProblem({ ...safari, ios: true });
+  assert.match(msg, /iPhone/);
+  assert.match(msg, /Android/);
 });
 
 test('an old Chrome without JSPI: asks to update', () => {
