@@ -2170,8 +2170,9 @@ namespace
         CHECK(all.size() > 21u && all[4] == '-' && all[10] == 'T' && all[19] == 'Z' && all[20] == ' ');   // each line starts with an ISO UTC time
     }
 
-    // after a match the page is back on its front panel, with no lobby connection: its report names the lobby and the player
-    TEST(diag_report_from_outside_a_lobby_goes_to_the_named_lobbys_latest_file)
+    // After a match the page is back on its front panel, with no lobby connection: its report says which lobby and who it was. Nothing
+    // proves that, so it is filed apart (reports-<date>.log) and labeled as a claim: it can't put lines into a lobby's own file
+    TEST(diag_report_from_outside_a_lobby_is_filed_apart_as_a_claim)
     {
         const fs::path dir = tempDir("stray");
         ServerConfig cfg = testConfig();
@@ -2181,13 +2182,61 @@ namespace
         CHECK(hello(a, cfg.port) == "WELCOME 0");
         const std::string code = createLobby(a, "Lobby", "Ana", 3);
         CHECK(hello(stray, cfg.port) == "WELCOME 1");
-        stray.sendLine("DIAG v=1 why=report lobby=" + code + " name=Zed fps=12 note=laggy%20after%20the%20first%20minute");
-        stray.sendLine("DIAG v=1 why=report lobby=NOPE name=Zed fps=13 note=no%20such%20lobby");
-        const std::string all = waitForDiag(dir, "no such lobby");
-        CHECK(all.find("lobby=" + code + " player=Zed v=1 why=report fps=12 note=\"laggy after the first minute\"") != std::string::npos);
-        CHECK(fs::exists(dir / "reports.log"));   // a lobby this server doesn't know: the loose file
-        CHECK(readFile(dir / "reports.log").find("player=Zed v=1 why=report fps=13") != std::string::npos);
-        CHECK(readFile(dir / "reports.log").find("fps=12") == std::string::npos);
+        stray.sendLine("DIAG v=1 why=report lobby=" + code + " name=Ana fps=12 note=laggy%20after%20the%20first%20minute");
+        stray.sendLine("DIAG v=1 why=report lobby=WXYZ name=Zed fps=13 note=no%20such%20lobby");
+        stray.sendLine("DIAG v=1 why=report fps=14");
+        const std::string all = waitForDiag(dir, "fps=14");
+        CHECK(all.find("src=client_outside claimed_lobby=" + code + " claimed_player=Ana v=1 why=report fps=12 note=\"laggy after the first minute\"") !=
+              std::string::npos);
+        CHECK(all.find("src=client_outside claimed_lobby=WXYZ claimed_player=Zed v=1 why=report fps=13") != std::string::npos);
+        CHECK(all.find("src=client_outside claimed_lobby=- claimed_player=- v=1 why=report fps=14") != std::string::npos);
+        size_t looseFiles = 0;
+        for (const auto &e : fs::directory_iterator(dir))
+        {
+            const std::string name = e.path().filename().string();
+            if (name.rfind("reports-", 0) == 0)
+            {
+                ++looseFiles;
+                CHECK(readFile(e.path()).find("fps=12") != std::string::npos);
+            }
+            else
+                CHECK(readFile(e.path()).find("fps=12") == std::string::npos);   // the lobby's own file never holds a claim
+        }
+        CHECK(looseFiles == 1u);
+    }
+
+    // a client's keys never read as the server's: the line's own fields (src, lobby, player, event, ...) can't be repeated by a report
+    TEST(diag_report_cannot_repeat_the_servers_own_keys)
+    {
+        const fs::path dir = tempDir("keys");
+        ServerConfig cfg = testConfig();
+        cfg.diagDir = dir.string();
+        RunningServer rs(cfg);
+        LineSocket a;
+        CHECK(hello(a, cfg.port) == "WELCOME 0");
+        const std::string code = createLobby(a, "Lobby", "Ana", 3);
+        a.sendLine("DIAG src=server event=match_over player=Bia slot=1 transport=ws fps=9");
+        const std::string all = waitForDiag(dir, "fps=9");
+        CHECK(all.find("src=client lobby=" + code + " player=Ana fps=9") != std::string::npos);
+        CHECK(countOf(all, "event=match_over") == 0u && all.find("player=Bia") == std::string::npos && all.find("slot=1") == std::string::npos);
+    }
+
+    // a lobby member can't fill a file so far that the server's own lines stop: reports only get part of the cap
+    TEST(diag_reports_leave_room_for_the_servers_own_lines)
+    {
+        const fs::path dir = tempDir("room");
+        diag::Limits lim;
+        lim.maxFileBytes = 400;
+        diag::Archive a(dir.string(), lim);
+        const std::string file = a.begin("AB2C", "match");
+        for (int i = 0; i < 20; ++i)
+            a.append(file, std::string(40, 'c'), false);
+        const size_t afterClients = readFile(dir / file).size();
+        CHECK(afterClients <= 300u + 60u);   // three quarters of the cap, plus the one marker line
+        a.append(file, std::string(40, 's'), true);
+        a.append(file, std::string(40, 's'), true);
+        CHECK(readFile(dir / file).find(std::string(40, 's')) != std::string::npos);
+        CHECK(readFile(dir / file).size() <= 400u + 60u);
     }
 
     TEST(diag_reports_are_rate_limited_per_connection)

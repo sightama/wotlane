@@ -619,14 +619,14 @@ namespace wotm_net
 
     // ---- diagnostics ----
 
-    void Server::diagLine(const std::string &file, const std::string &line)
+    void Server::diagLine(const std::string &file, const std::string &line, bool fromServer)
     {
         if (cfg_.log)
         {
             std::printf("[diag] %s\n", line.c_str());
             std::fflush(stdout);
         }
-        archive_.append(file, diag::utcNow() + " " + line);
+        archive_.append(file, diag::utcNow() + " " + line, fromServer);
     }
 
     void Server::diagEvent(const Lobby &l, const std::string &text)
@@ -634,8 +634,10 @@ namespace wotm_net
         diagLine(l.diagFile, "src=server lobby=" + l.code + " " + text);
     }
 
-    // The player and lobby come from the connection when it is in a lobby. A page back on its front panel after a match has no lobby
-    // connection, so its report says which lobby and who it was (lobby=, name=: routing only, they are not logged as fields)
+    // The player and lobby come from the connection when it is in a lobby (src=client). A page back on its front panel after a match has
+    // no lobby connection, so its report says which lobby and who it was; nothing proves that, so such a report goes to the day's
+    // reports file as a claim (src=client_outside claimed_lobby= claimed_player=) and never into a lobby's own file. The keys the
+    // server's own lines use can't be repeated by a report
     void Server::diagReport(int ci, const std::string &line)
     {
         Conn &c = *conns_[static_cast<size_t>(ci)];
@@ -651,25 +653,19 @@ namespace wotm_net
         if (!diag::parse(proto::words(line), r))
             return;
         const std::string claimedLobby = r.get("lobby"), claimedName = r.get("name");
-        r.fields.erase(std::remove_if(r.fields.begin(), r.fields.end(), [](const auto &f) { return f.first == "lobby" || f.first == "name"; }),
+        static const char *const kServerKeys[] = {"src", "lobby", "name", "player", "event", "slot", "transport", "claimed_lobby", "claimed_player"};
+        r.fields.erase(std::remove_if(r.fields.begin(), r.fields.end(),
+                                      [](const auto &f) { return std::find(std::begin(kServerKeys), std::end(kServerKeys), f.first) != std::end(kServerKeys); }),
                        r.fields.end());
-        std::string code, name, file;
         if (c.lobby >= 0)
         {
             const Lobby &l = lobbies_[static_cast<size_t>(c.lobby)];
-            code = l.code, name = c.name, file = l.diagFile;
+            diagLine(l.diagFile, "src=client lobby=" + l.code + " player=" + c.name + " " + diag::format(r), false);
+            return;
         }
-        else
-        {
-            code = validLobbyCode(claimedLobby) ? claimedLobby : "-";
-            name = proto::cleanName(claimedName);
-            if (name.empty())
-                name = "-";
-            file = code == "-" ? std::string{} : archive_.latest(code);
-            if (file.empty())
-                file = "reports.log";
-        }
-        diagLine(file, "src=client lobby=" + code + " player=" + name + " " + diag::format(r));
+        const std::string code = validLobbyCode(claimedLobby) ? claimedLobby : "-";
+        const std::string name = proto::cleanName(claimedName).empty() ? "-" : proto::cleanName(claimedName);
+        diagLine(archive_.reportsFile(), "src=client_outside claimed_lobby=" + code + " claimed_player=" + name + " " + diag::format(r), false);
     }
 
     // For each player of a started match, every 100 ms: how many frames their inputs are behind the player furthest ahead. A player
