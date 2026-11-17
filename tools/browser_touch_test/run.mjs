@@ -115,8 +115,13 @@ class Phone {
 
   // the game is running and the touch controls are up
   async waitForFight() {
-    await this.page.waitForFunction(() => window.wotTouch && !document.getElementById('touchpad').hidden && (window.wotmLog ?? []).some((l) => /\[turn\]/.test(l)), null, { timeout: 120000 });
-    await sleep(2500);
+    await this.page.waitForFunction(() => window.wotTouch && !document.getElementById('touchpad').hidden && (window.wotmLog ?? []).some((l) => /\[native\] frame \d+x\d+/.test(l)), null, { timeout: 120000 });
+    await sleep(7000);
+  }
+
+  // a picture for the results; a busy machine can time the capture out, which is not a failure of the page
+  async shot(name) {
+    try { await this.page.screenshot({ path: join(out, name), timeout: 90000 }); } catch { /* no picture */ }
   }
 
   async close() { await this.context.close(); }
@@ -129,13 +134,13 @@ const near = (a, b, tol = 0.15) => Math.abs(a - b) <= tol;
 
 const scenarios = {
   // the front panel on a phone: playable (not refused), touch rows listed; an iPhone gets a plain reason
-  async front_phone({ browser, url }) {
-    const rows = [];
+  async front_phone({ browser, url, rows }) {
     let p = await Phone.open(browser, { url });
     await p.page.waitForFunction(() => document.getElementById('monster')?.options.length > 0);
     check(rows, 'Single player is enabled on an Android phone', !(await p.page.isDisabled('#single')));
     check(rows, 'no refusal message', !/computer|phone/i.test(await p.page.textContent('#frontMsg')), await p.page.textContent('#frontMsg'));
-    await p.page.click('#controls summary');
+    await p.page.click('#openSettings');
+    await p.page.click('#tab-controls');
     check(rows, 'the Controls card lists the touch controls', (await p.page.locator('#touchTable tr').count()) >= 14);
     check(rows, 'no touch controls over the front panel', !(await p.overlayVisible()));
     check(rows, 'no page errors', p.errors.length === 0, p.errors.join('; '));
@@ -145,12 +150,10 @@ const scenarios = {
     check(rows, 'an iPhone is told why not', /iPhone/.test(await p.page.textContent('#frontMsg')), await p.page.textContent('#frontMsg'));
     check(rows, 'and the play buttons are off', await p.page.isDisabled('#single'));
     await p.close();
-    return rows;
   },
 
   // two thumbs at once on the real overlay: the stick, buttons and chords reach the game's pad, taps are not lost, the look zone turns the camera
-  async multitouch({ browser, url }) {
-    const rows = [];
+  async multitouch({ browser, url, rows }) {
     const p = await Phone.open(browser, { url, query: FIGHT, env: { PS2X_PADLOG: '1' } });
     await p.waitForFight();
     check(rows, 'the controls are up and the game sees a pad named for the touch screen', (await p.overlayVisible()) && (await p.pad(0))?.id === 'Touch screen controls', JSON.stringify(await p.pad(0)));
@@ -192,16 +195,15 @@ const scenarios = {
     await sleep(200);
     check(rows, 'the game never holds the pointer while the controls are up', await p.page.evaluate(() => document.pointerLockElement === null));
     check(rows, 'no page errors', p.errors.length === 0, p.errors.join('; '));
-    await p.page.screenshot({ path: join(out, 'phone_landscape_fight.png') });
+    await p.shot('phone_landscape_fight.png');
     await p.close();
-    return rows;
   },
 
   // a real fight against the AI: the player's monster stands still until the touch stick moves it
-  async fight_control({ browser, url }) {
-    const rows = [];
+  async fight_control({ browser, url, rows }) {
     const p = await Phone.open(browser, { url, query: FIGHT, env: { PS2X_PADLOG: '1', WOTM_TURNLOG: '1' } });
     await p.waitForFight();
+    await p.page.waitForFunction(() => (window.wotmLog ?? []).some((l) => /\[turn\]/.test(l)), null, { timeout: 120000 });
     const turns = async (from) => (await p.logSince(from)).filter((l) => /\[turn\]/.test(l)).map((l) => ({ mon: /mon=(\w+)/.exec(l)[1], vel: /-> ([+-][\d.]+),([+-][\d.]+),([+-][\d.]+)/.exec(l).slice(1).map(Number), ang: Number(/ang=[^,]*,[^,]*,([+-][\d.]+)/.exec(l)[1]) }));
     const speed = (t) => Math.hypot(...t.vel);
     let from = await p.logCount();
@@ -227,12 +229,10 @@ const scenarios = {
     check(rows, 'it stops when the thumb lifts', settled.length > 0 && Math.max(...settled.map(speed)) < 0.3, JSON.stringify(settled.slice(-1)));
     check(rows, 'no page errors', p.errors.length === 0, p.errors.join('; '));
     await p.close();
-    return rows;
   },
 
   // the keyboard hides the controls, a touch brings them back, the settings panel changes and keeps their look
-  async overlay_behaviour({ browser, url }) {
-    const rows = [];
+  async overlay_behaviour({ browser, url, rows }) {
     const p = await Phone.open(browser, { url, query: FIGHT });
     await p.waitForFight();
     await p.page.keyboard.press('KeyW');
@@ -252,14 +252,12 @@ const scenarios = {
     check(rows, 'the size slider resizes the controls and the choice is remembered', near(u1, u0, 0.01) && u1 > 58 && (await p.page.evaluate(() => JSON.parse(localStorage.getItem('wotlane.touch')).scale)) === 1.2, `${u1} ${u0}`);
     const wide = await p.page.evaluate(() => document.querySelector('[data-id=cross]').getBoundingClientRect().width);
     check(rows, 'the cross button grew with it', wide > 90, wide);
-    await p.page.screenshot({ path: join(out, 'phone_landscape_settings.png') });
+    await p.shot('phone_landscape_settings.png');
     await p.close();
-    return rows;
   },
 
   // gamepads through a mocked Gamepad API: standard and non-standard pads, hot-plug, the toast, players 1 and 2
-  async gamepads({ browser, url }) {
-    const rows = [];
+  async gamepads({ browser, url, rows }) {
     const p = await Phone.open(browser, { url, query: FIGHT, pads: true, env: { PS2X_PADLOG: '1' } });
     await p.waitForFight();
     check(rows, 'before any pad the touch controls are up', await p.overlayVisible());
@@ -288,7 +286,7 @@ const scenarios = {
     await p.page.evaluate(() => __setPad(1, { id: 'USB Gamepad', mapping: '', axes: [0, 0, 0, 0, 0, 0, 0, 0, 0, -1], nbuttons: 12 }));
     await sleep(300);
     check(rows, 'its hat is the d-pad', (await p.pad(1)).down.includes(12), JSON.stringify(await p.pad(1)));
-    await p.page.screenshot({ path: join(out, 'phone_landscape_gamepad_toast.png') });
+    await p.shot('phone_landscape_gamepad_toast.png');
     // unplug both: toasts, then the touch controls come back
     await p.page.evaluate(() => __unplug(1));
     await sleep(1500);
@@ -299,7 +297,6 @@ const scenarios = {
     check(rows, 'no page errors', p.errors.length === 0, p.errors.join('; '));
     void from2;
     await p.close();
-    return rows;
   },
 };
 
@@ -317,8 +314,8 @@ try {
   for (const [name, fn] of Object.entries(scenarios)) {
     if (only.length && !only.includes(name)) continue;
     process.stdout.write(`${name} ... `);
-    let rows;
-    try { rows = await fn({ browser, url: server.url }); } catch (e) { rows = [['scenario ran', false, e.message.split('\n')[0].slice(0, 300)]]; }
+    const rows = [];
+    try { await fn({ browser, url: server.url, rows }); } catch (e) { rows.push(['scenario ran', false, e.message.split('\n')[0].slice(0, 300)]); }
     const bad = rows.filter((r) => !r[1]);
     console.log(bad.length ? `FAIL (${bad.length} of ${rows.length})` : `ok (${rows.length} checks)`);
     for (const [n, ok, detail] of rows) if (!ok) console.log(`    FAIL ${n}${detail ? `: ${detail}` : ''}`);
