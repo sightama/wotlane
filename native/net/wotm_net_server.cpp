@@ -189,10 +189,11 @@ namespace wotm_net
         }
     }
 
-    void Server::addConn(std::unique_ptr<LineLink> link)
+    void Server::addConn(std::unique_ptr<LineLink> link, bool halfRate)
     {
         auto c = std::make_unique<Conn>();
         c->link = std::move(link);
+        c->halfRate = halfRate;
         auto free = std::find(conns_.begin(), conns_.end(), nullptr);
         if (free != conns_.end())
             *free = std::move(c);
@@ -263,7 +264,7 @@ namespace wotm_net
             }
             c.hello = true;
             c.build = w[2];
-            c.halfRate = proto::keyValues(w)["hz"] == "30";   // HELLO <protocol> <build> [hz=30]
+            c.halfRate = c.halfRate || proto::keyValues(w)["hz"] == "30";   // HELLO <protocol> <build> [hz=30], or a phone's User-Agent
             c.link->sendLine("WELCOME " + std::to_string(openLobbies()));
             return;
         }
@@ -624,9 +625,11 @@ namespace wotm_net
         m->created = Clock::now();
         const int players = static_cast<int>(l.members.size());
         const uint32_t seed = static_cast<uint32_t>(rng_() % 0x7FFFFFFEull) + 1u;
-        bool halfRate = false;
+        std::vector<std::string> halfRateNames;   // members whose device asked for 30 Hz
         for (int ci : l.members)
-            halfRate = halfRate || conns_[static_cast<size_t>(ci)]->halfRate;
+            if (conns_[static_cast<size_t>(ci)]->halfRate)
+                halfRateNames.push_back(conns_[static_cast<size_t>(ci)]->name);
+        const bool halfRate = !halfRateNames.empty();
         const int step = proto::matchStep(players, halfRate);
         m->step = step;
         std::vector<std::string> monsters, names;
@@ -652,7 +655,7 @@ namespace wotm_net
                               " token=" + m->slots[static_cast<size_t>(i)].token + " port=" + std::to_string(cfg_.port));
         }
         log("lobby %s: match with %d player(s) (%s), stage %s, %d win(s), seed %u, %d Hz%s", l.code.c_str(), players, join(names, ",").c_str(),
-            l.stage.c_str(), l.wins, seed, 60 / step, halfRate ? " (a member's device asked for 30 Hz)" : "");
+            l.stage.c_str(), l.wins, seed, 60 / step, halfRate ? (" (30 Hz device: " + join(halfRateNames, ",") + ")").c_str() : "");
         l.match = std::move(m);
     }
 
@@ -912,7 +915,10 @@ namespace wotm_net
             std::unique_ptr<WsLink> link = std::move(wsPending_[i]);
             wsPending_.erase(wsPending_.begin() + static_cast<long>(i));
             if (link->path() == "/lobby")
-                addConn(std::move(link));   // lines that arrived with the handshake wait in the link for acceptAndReadLobby
+            {
+                const bool phone = proto::halfRateUserAgent(link->userAgent());
+                addConn(std::move(link), phone);   // lines that arrived with the handshake wait in the link for acceptAndReadLobby
+            }
             else if (link->path() == "/match")
             {
                 auto p = std::make_unique<WsPeer>();
