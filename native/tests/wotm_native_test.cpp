@@ -434,6 +434,23 @@ namespace
         st::g_netProfile.store(false);
     }
 
+    // Wide HUD (FEATURES tab): the HUD at the edges of a wide window, on by default; off keeps the game's 4:3 placement. Drawing only, so
+    // never forced by the network profile
+    TEST(wide_hud_setting_defaults_on_and_is_per_pc)
+    {
+        namespace st = wotm::settings;
+        CHECK(std::string(st::kEnv[st::HudWide]) == "WOTM_HUDWIDE");
+        CHECK(st::kDefault[st::HudWide] == 1);
+        for (int k = 0; k < st::kKeys; ++k)   // the live values start at the defaults
+            CHECK(st::g_val[k].load() == st::kDefault[k]);
+        int v = -1;
+        CHECK(st::parse(st::HudWide, "0", v) && v == 0);
+        CHECK(st::parse(st::HudWide, "1", v) && v == 1);
+        st::g_netProfile.store(true);
+        CHECK(!st::forced(st::HudWide));
+        st::g_netProfile.store(false);
+    }
+
     // The engine applies this PC's volume on top of the game's group volume: the game still reads back its own value
     // (snd_GetMasterVolume), effects and music are separate, 0 is silence
     TEST(sound_player_volume_scales_one_group_only)

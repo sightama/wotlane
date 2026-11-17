@@ -2075,6 +2075,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
         wotm::g_beforeDepthRead = wotm::msaa::readDepthIfMsaa;
         wotm::g_depthReadIsMsaa = [] { return wotm::msaa::g_current != nullptr; };
         S.scene.setTexFilter(wotm_live::g_force43 ? 0 : wotm::settings::get(wotm::settings::TexFilter));
+        S.scene.hudWide = wotm::settings::on(wotm::settings::HudWide);
         if (msaaSamples <= 1)
             for (wotm::msaa::Target &t : S.vms)
                 if (t.on())
