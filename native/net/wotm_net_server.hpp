@@ -3,6 +3,7 @@
 #pragma once
 
 #include "wotm_lockstep.hpp"
+#include "wotm_net_diag.hpp"
 #include "wotm_net_proto.hpp"
 #include "wotm_net_socket.hpp"
 #include "wotm_net_wslink.hpp"
@@ -45,6 +46,13 @@ namespace wotm_net
         // wsBind only: a web server in front of it (HTTPS) is the public entry
         uint16_t wsPort = 0;
         std::string wsBind = "127.0.0.1";
+        // diagnostics: the pages' DIAG reports and the server's own per-player view are journaled and, with diagDir set, also appended to
+        // one file per match there (wotm_net_diag.hpp); the files are rotated by age and by total size
+        std::string diagDir;
+        int diagKeepDays = 7;
+        uint64_t diagMaxTotalBytes = 64ull << 20;
+        uint64_t diagMaxFileBytes = 2ull << 20;
+        int diagEveryMs = 5000;                 // during a match, the server's view of each player is written this often (0: never)
     };
 
     class Server
@@ -75,6 +83,8 @@ namespace wotm_net
             proto::Pick pick;   // monster and skin for the next match
             Clock::time_point chatWindow{};   // start of the current chat window and the lines sent in it
             int chatLines = 0;
+            Clock::time_point diagWindow{};   // the same for DIAG reports
+            int diagLines = 0;
         };
 
         // a browser in a match (WebSocket /match)
@@ -107,6 +117,13 @@ namespace wotm_net
             uint32_t advised = 0;            // the delay last sent to this player (Start or Pace)
             Clock::time_point lastSend{};
             bool dirty = false;
+            // how this player's input packets arrived since the last diagnostics line (Server::diagTick)
+            struct InputWindow
+            {
+                uint32_t packets = 0, behindSamples = 0, behindMax = 0;
+                double gapSumMs = 0, gapMaxMs = 0, behindSum = 0;
+            } window;
+            Clock::time_point lastInput{};
             // per player, the first frame to send next: what the client lacks, except that a WebSocket (reliable and ordered) delivers
             // everything sent, so nothing goes twice (a silent browser isn't sent the same frames every tick until its buffers fill)
             uint32_t sendFrom(size_t player) const { return peer.ws ? std::max(need[player], sent[player]) : need[player]; }
@@ -124,7 +141,7 @@ namespace wotm_net
             InputTimeline inputs{0, 0};
             struct SlotHash { uint64_t hash = 0; std::vector<uint64_t> blocks; };   // blocks: the 256 block hashes, when sent
             std::map<uint32_t, std::vector<std::optional<SlotHash>>> hashes;
-            Clock::time_point created{}, allJoined{}, lastPace{};
+            Clock::time_point created{}, allJoined{}, lastPace{}, lastDiag{}, lastBehind{};
             bool allJoinedSet = false;
         };
 
@@ -140,6 +157,7 @@ namespace wotm_net
             std::string build;
             std::unique_ptr<Match> match;
             Clock::time_point lastPings{};   // the last PINGS line sent to the members
+            std::string diagFile;            // where this lobby's diagnostics go: its own file, then its match's
         };
 
         void log(const char *fmt, ...);
@@ -165,6 +183,14 @@ namespace wotm_net
         std::string settingsLine(const Lobby &l) const;
         void sendSettings(int lobby);
         void startMatch(int lobby);
+        // DIAG <key=value>...: a page's report, journaled and filed under its player and lobby (never answered, never relayed)
+        void diagReport(int c, const std::string &line);
+        // a line of the server's own diagnostics, "src=server lobby=<code> <text>", to the journal and to the lobby's file
+        void diagEvent(const Lobby &l, const std::string &text);
+        void diagLine(const std::string &file, const std::string &line);
+        // the server's view of every player of a started match: transport, Hz, delay, round trip, how input packets arrived
+        void diagTick(Match &m, const Lobby &l);
+        void sampleBehind(Match &m);
         std::string newCode();
         int lobbyByCode(const std::string &code) const;
         int openLobbies() const;
@@ -198,6 +224,8 @@ namespace wotm_net
         std::vector<std::unique_ptr<WsLink>> wsPending_;   // accepted, handshake not done yet
         std::vector<std::unique_ptr<WsPeer>> wsPeers_;     // browsers on /match
         std::vector<Lobby> lobbies_;
+        diag::Archive archive_;
+        Clock::time_point lastPrune_{};
         _ENetHost *host_ = nullptr;
         bool enetUp_ = false;
         std::mt19937_64 rng_;

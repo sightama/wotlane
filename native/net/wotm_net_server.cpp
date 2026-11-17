@@ -38,7 +38,27 @@ namespace wotm_net
         }
     }
 
-    Server::Server(ServerConfig c) : cfg_(c), rng_(std::random_device{}()) { lobbies_.resize(static_cast<size_t>(std::max(1, c.lobbies))); }
+    namespace
+    {
+        diag::Limits diagLimits(const ServerConfig &c)
+        {
+            diag::Limits l;
+            l.keepDays = c.diagKeepDays;
+            l.maxTotalBytes = c.diagMaxTotalBytes;
+            l.maxFileBytes = c.diagMaxFileBytes;
+            return l;
+        }
+
+        bool validLobbyCode(const std::string &code)
+        {
+            return code.size() == 4u && code.find_first_not_of(proto::kCodeLetters) == std::string::npos;
+        }
+    }
+
+    Server::Server(ServerConfig c) : cfg_(c), archive_(c.diagDir, diagLimits(c)), rng_(std::random_device{}())
+    {
+        lobbies_.resize(static_cast<size_t>(std::max(1, c.lobbies)));
+    }
 
     Server::~Server()
     {
@@ -101,6 +121,13 @@ namespace wotm_net
             }
             log("WebSocket (browser) lobby and match on %s:%u (/lobby, /match)", cfg_.wsBind.c_str(), cfg_.wsPort);
         }
+        if (archive_.enabled())
+        {
+            archive_.prune();
+            lastPrune_ = Clock::now();
+            log("diagnostics: one file per match in %s (kept %d days, at most %llu MB in all)", cfg_.diagDir.c_str(), cfg_.diagKeepDays,
+                static_cast<unsigned long long>(cfg_.diagMaxTotalBytes >> 20));
+        }
         if (!cfg_.announceHost.empty())
         {
             log("announcing as %s to the master %s:%u every %d s", cfg_.name.c_str(), cfg_.announceHost.c_str(), cfg_.announcePort,
@@ -120,6 +147,11 @@ namespace wotm_net
         tickMatches();
         tickLobbyPings();
         updateCounts();
+        if (archive_.enabled() && Clock::now() - lastPrune_ >= std::chrono::hours(1))
+        {
+            archive_.prune();
+            lastPrune_ = Clock::now();
+        }
     }
 
     // ---- public listing (master server) ----
@@ -287,6 +319,8 @@ namespace wotm_net
             setLobby(ci, w);
         else if (cmd == "CHAT")
             chat(ci, line);
+        else if (cmd == "DIAG")
+            diagReport(ci, line);
         else if (cmd == "MONSTER" && w.size() >= 2)
             changeMonster(ci, w);
         else if (cmd == "LEAVE")
@@ -374,6 +408,7 @@ namespace wotm_net
         l.mods.clear();
         l.members.clear();
         l.build = c.build;
+        l.diagFile = archive_.begin(l.code, "lobby");
         c.link->sendLine("CREATED " + l.code);
         log("lobby %s (%s): created by %s%s", l.code.c_str(), l.name.c_str(), name.c_str(), password.empty() ? "" : ", with password");
         addMember(ci, li, name, pick);
@@ -425,6 +460,8 @@ namespace wotm_net
         c.link->sendLine("JOINED " + l.code);
         c.link->sendLine(settingsLine(l));
         log("lobby %s: %s joined (monster %s), %zu player(s)", l.code.c_str(), name.c_str(), pick.text().c_str(), l.members.size());
+        diagEvent(l, "event=join player=" + name + " transport=" + (dynamic_cast<WsLink *>(c.link.get()) ? "ws" : "tcp") +
+                         " half_rate=" + (c.halfRate ? "1" : "0") + " members=" + std::to_string(l.members.size()));
         sendMembers(li);
     }
 
@@ -497,7 +534,7 @@ namespace wotm_net
             return false;
         log("lobby %s: empty, closed", l.code.c_str());
         l.open = false;
-        l.code.clear(), l.name.clear(), l.password.clear(), l.build.clear();
+        l.code.clear(), l.name.clear(), l.password.clear(), l.build.clear(), l.diagFile.clear();
         l.host = -1;
         return true;
     }
@@ -536,27 +573,6 @@ namespace wotm_net
         }
     }
 
-    // well-formed UTF-8 (a browser closes a WebSocket that carries a text frame that isn't)
-    static bool validUtf8(const std::string &s)
-    {
-        size_t i = 0;
-        while (i < s.size())
-        {
-            const unsigned char b = static_cast<unsigned char>(s[i]);
-            const size_t more = b < 0x80 ? 0 : b >= 0xC2 && b <= 0xDF ? 1 : b >= 0xE0 && b <= 0xEF ? 2 : b >= 0xF0 && b <= 0xF4 ? 3 : SIZE_MAX;
-            if (more == SIZE_MAX || i + more >= s.size())
-                return false;
-            for (size_t k = 1; k <= more; ++k)
-                if ((static_cast<unsigned char>(s[i + k]) & 0xC0) != 0x80)
-                    return false;
-            if (b == 0xE0 && static_cast<unsigned char>(s[i + 1]) < 0xA0 || b == 0xED && static_cast<unsigned char>(s[i + 1]) > 0x9F ||
-                b == 0xF0 && static_cast<unsigned char>(s[i + 1]) < 0x90 || b == 0xF4 && static_cast<unsigned char>(s[i + 1]) > 0x8F)
-                return false;
-            i += more + 1;
-        }
-        return true;
-    }
-
     void Server::chat(int ci, const std::string &line)
     {
         Conn &c = *conns_[static_cast<size_t>(ci)];
@@ -570,7 +586,7 @@ namespace wotm_net
         for (size_t i = 4; i < line.size(); ++i)
             if (static_cast<unsigned char>(line[i]) >= 0x20 && static_cast<unsigned char>(line[i]) != 0x7f)
                 text += line[i];
-        if (!validUtf8(text))
+        if (!proto::validUtf8(text))
             return void(c.link->sendLine("ERROR chat text is not valid text"));
         const auto trim = [&text] {
             const size_t first = text.find_first_not_of(' '), last = text.find_last_not_of(' ');
@@ -598,6 +614,111 @@ namespace wotm_net
         const std::string out = "CHAT " + l.code + " " + c.name + " " + text;
         for (int m : l.members)
             conns_[static_cast<size_t>(m)]->link->sendLine(out);
+    }
+
+    // ---- diagnostics ----
+
+    void Server::diagLine(const std::string &file, const std::string &line)
+    {
+        if (cfg_.log)
+        {
+            std::printf("[diag] %s\n", line.c_str());
+            std::fflush(stdout);
+        }
+        archive_.append(file, diag::utcNow() + " " + line);
+    }
+
+    void Server::diagEvent(const Lobby &l, const std::string &text)
+    {
+        diagLine(l.diagFile, "src=server lobby=" + l.code + " " + text);
+    }
+
+    // The player and lobby come from the connection when it is in a lobby. A page back on its front panel after a match has no lobby
+    // connection, so its report says which lobby and who it was (lobby=, name=: routing only, they are not logged as fields)
+    void Server::diagReport(int ci, const std::string &line)
+    {
+        Conn &c = *conns_[static_cast<size_t>(ci)];
+        const auto now = Clock::now();
+        if (now - c.diagWindow >= std::chrono::milliseconds(proto::kDiagWindowMs))
+        {
+            c.diagWindow = now;
+            c.diagLines = 0;
+        }
+        if (++c.diagLines > proto::kDiagBurst)
+            return;
+        diag::Report r;
+        if (!diag::parse(proto::words(line), r))
+            return;
+        const std::string claimedLobby = r.get("lobby"), claimedName = r.get("name");
+        r.fields.erase(std::remove_if(r.fields.begin(), r.fields.end(), [](const auto &f) { return f.first == "lobby" || f.first == "name"; }),
+                       r.fields.end());
+        std::string code, name, file;
+        if (c.lobby >= 0)
+        {
+            const Lobby &l = lobbies_[static_cast<size_t>(c.lobby)];
+            code = l.code, name = c.name, file = l.diagFile;
+        }
+        else
+        {
+            code = validLobbyCode(claimedLobby) ? claimedLobby : "-";
+            name = proto::cleanName(claimedName);
+            if (name.empty())
+                name = "-";
+            file = code == "-" ? std::string{} : archive_.latest(code);
+            if (file.empty())
+                file = "reports.log";
+        }
+        diagLine(file, "src=client lobby=" + code + " player=" + name + " " + diag::format(r));
+    }
+
+    // For each player of a started match, every 100 ms: how many frames their inputs are behind the player furthest ahead. A player
+    // whose inputs arrive late holds everyone else's frames back by this much
+    void Server::sampleBehind(Match &m)
+    {
+        const Clock::time_point now = Clock::now();
+        if (now - m.lastBehind < std::chrono::milliseconds(100))
+            return;
+        m.lastBehind = now;
+        uint32_t lead = 0;
+        for (size_t i = 0; i < m.slots.size(); ++i)
+            if (!m.slots[i].gone)
+                lead = std::max(lead, m.inputs.nextMissing(static_cast<int>(i)));
+        for (size_t i = 0; i < m.slots.size(); ++i)
+        {
+            Slot &s = m.slots[i];
+            if (s.gone || !s.peer)
+                continue;
+            const uint32_t behind = lead - m.inputs.nextMissing(static_cast<int>(i));
+            s.window.behindMax = std::max(s.window.behindMax, behind);
+            s.window.behindSum += behind;
+            ++s.window.behindSamples;
+        }
+    }
+
+    void Server::diagTick(Match &m, const Lobby &l)
+    {
+        if (cfg_.diagEveryMs <= 0)
+            return;
+        sampleBehind(m);
+        const Clock::time_point now = Clock::now();
+        if (now - m.lastDiag < std::chrono::milliseconds(cfg_.diagEveryMs))
+            return;
+        m.lastDiag = now;
+        for (size_t i = 0; i < m.slots.size(); ++i)
+        {
+            Slot &s = m.slots[i];
+            Slot::InputWindow w = s.window;
+            s.window = {};
+            if (s.gone || !s.peer)
+                continue;
+            const uint32_t rtt = (s.peer.enet ? s.peer.enet->roundTripTime : s.peer.ws->link->rttMs()) + testRttMs_.load();
+            char stats[200];
+            std::snprintf(stats, sizeof stats, " rtt_ms=%u rtt_high_ms=%u in_pkts=%u in_gap_avg_ms=%.0f in_gap_max_ms=%.0f behind_max=%u behind_avg=%.1f away=%d", rtt,
+                          rttHighOf(s.peer), w.packets, w.packets ? w.gapSumMs / w.packets : 0.0, w.gapMaxMs, w.behindMax,
+                          w.behindSamples ? w.behindSum / w.behindSamples : 0.0, s.away ? 1 : 0);
+            diagEvent(l, "player=" + s.name + " slot=" + std::to_string(i) + " transport=" + (s.peer.ws ? "ws" : "enet") + " hz=" +
+                             std::to_string(60 / m.step) + " delay=" + std::to_string(s.advised) + stats);
+        }
     }
 
     std::string Server::settingsLine(const Lobby &l) const
@@ -654,6 +775,9 @@ namespace wotm_net
         log("lobby %s: match with %d player(s) (%s), stage %s, %d win(s), seed %u, %d Hz%s", l.code.c_str(), players, join(names, ",").c_str(),
             l.stage.c_str(), l.wins, seed, 60 / step, halfRate ? " (a member's device asked for 30 Hz)" : "");
         l.match = std::move(m);
+        l.diagFile = archive_.begin(l.code, "match");
+        diagEvent(l, "event=match_start players=" + std::to_string(players) + " hz=" + std::to_string(60 / step) + " half_rate_member=" +
+                         (halfRate ? "1" : "0") + " stage=" + l.stage + " wins=" + std::to_string(l.wins) + " mods=" + (l.mods.empty() ? "none" : l.mods));
     }
 
     // ---- match ----
@@ -716,6 +840,8 @@ namespace wotm_net
             if (!s.peer || s.gone || d == s.advised)
                 continue;
             log("lobby %s: %s's delay %u -> %u frame(s) (ping ms, high end: %u)", l.code.c_str(), s.name.c_str(), s.advised, d, highs[i]);
+            diagEvent(l, "event=delay player=" + s.name + " from=" + std::to_string(s.advised) + " to=" + std::to_string(d) +
+                             " rtt_high_ms=" + std::to_string(highs[i]));
             s.advised = d;
             send(s.peer, proto::kControl, proto::encode(proto::Pace{d}), true);
         }
@@ -782,6 +908,15 @@ namespace wotm_net
             if (!m || !m->started || !proto::decode(data, in))
                 break;
             Slot &s = m->slots[static_cast<size_t>(si)];
+            const Clock::time_point arrived = Clock::now();
+            if (s.lastInput != Clock::time_point{})
+            {
+                const double gap = std::chrono::duration<double, std::milli>(arrived - s.lastInput).count();
+                s.window.gapSumMs += gap;
+                s.window.gapMaxMs = std::max(s.window.gapMaxMs, gap);
+            }
+            s.lastInput = arrived;
+            ++s.window.packets;
             for (size_t q = 0; q < in.acks.size() && q < s.need.size(); ++q)
                 s.need[q] = std::max(s.need[q], in.acks[q]);
             const uint32_t before = m->inputs.nextMissing(si);
@@ -817,6 +952,7 @@ namespace wotm_net
                     send(m->slots[q].peer, proto::kControl, proto::encode(a), true);
             log("lobby %s: %s's game %s", lobbies_[static_cast<size_t>(m->lobby)].code.c_str(), m->slots[static_cast<size_t>(si)].name.c_str(),
                 a.away ? "went to the background" : "is back");
+            diagEvent(lobbies_[static_cast<size_t>(m->lobby)], "event=away player=" + m->slots[static_cast<size_t>(si)].name + " away=" + (a.away ? "1" : "0"));
             break;
         }
         default:
@@ -966,6 +1102,7 @@ namespace wotm_net
         if (!m.started)
             m.hashes.clear();
         log("lobby %s: %s left the match (neutral from frame %u)", lobbies_[static_cast<size_t>(m.lobby)].code.c_str(), s.name.c_str(), frame);
+        diagEvent(lobbies_[static_cast<size_t>(m.lobby)], "event=left player=" + s.name + " frame=" + std::to_string(frame));
         checkHashes(m);
     }
 
@@ -1028,6 +1165,8 @@ namespace wotm_net
                     for (uint32_t r : rtt)
                         pings += (pings.empty() ? "" : ",") + std::to_string(r);
                     log("lobby %s: start, delay %u frame(s) (ping ms: %s)", l.code.c_str(), st.delay, pings.c_str());
+                    diagEvent(l, "event=start delay=" + std::to_string(st.delay) + " rtt_high_ms=" + (pings.empty() ? "-" : pings));
+                    m->lastDiag = m->lastBehind = now;
                     for (Slot &s : m->slots)
                         if (s.peer && !s.gone)
                         {
@@ -1041,6 +1180,7 @@ namespace wotm_net
             else if (!m->desynced)
             {
                 pace(*m, l);
+                diagTick(*m, l);
                 for (size_t i = 0; i < m->slots.size(); ++i)
                 {
                     Slot &s = m->slots[i];
@@ -1067,6 +1207,7 @@ namespace wotm_net
             {
                 const int li = m->lobby;
                 log("lobby %s: match over; lobby waiting again with %zu member(s)", l.code.c_str(), l.members.size());
+                diagEvent(l, "event=match_over members=" + std::to_string(l.members.size()));
                 l.match.reset();
                 if (!closeIfEmpty(li))
                     sendMembers(li);   // tells the members (each one's launcher) the lobby is waiting again
@@ -1156,6 +1297,8 @@ namespace wotm_net
                 }
                 log("lobby %s: DESYNC %s%s%s", lobbies_[static_cast<size_t>(m.lobby)].code.c_str(), detail.c_str(), blocks.empty() ? "" : "; blocks ",
                     all.c_str());
+                diagEvent(lobbies_[static_cast<size_t>(m.lobby)], "event=desync frame=" + std::to_string(frame) + " differ=" + join(differ, ",") +
+                                                                   " blocks=" + std::to_string(blocks.size()));
                 if (!blocks.empty())
                     detail += "; blocks " + shown;
                 for (Slot &s : m.slots)
