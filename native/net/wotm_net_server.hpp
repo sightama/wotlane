@@ -69,6 +69,7 @@ namespace wotm_net
             std::unique_ptr<LineLink> link;   // TCP or WebSocket
             bool hello = false;
             std::string build;
+            bool halfRate = false;   // HELLO hz=30: the device can't compute 60 game frames a second (a phone); its matches run at 30 Hz
             int lobby = -1;
             std::string name;
             proto::Pick pick;   // monster and skin for the next match
@@ -119,6 +120,7 @@ namespace wotm_net
             std::string refusal;           // the first seat refused (other build or settings): the match never starts
             bool started = false, desynced = false;
             uint32_t delay = 0;
+            int step = 1;                  // fields per game frame (proto::matchStep): a frame lasts proto::frameMs(step)
             InputTimeline inputs{0, 0};
             struct SlotHash { uint64_t hash = 0; std::vector<uint64_t> blocks; };   // blocks: the 256 block hashes, when sent
             std::map<uint32_t, std::vector<std::optional<SlotHash>>> hashes;

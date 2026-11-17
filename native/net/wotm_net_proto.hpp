@@ -399,9 +399,11 @@ namespace wotm_net::proto
         return r.done();
     }
 
-    // fields per game frame in a match of this many players: 3 or more switch the game to its own 30 Hz mode (WOTM_FIXEDSTEP)
-    inline int matchStep(int players) { return players >= 3 ? 2 : 1; }
-    inline double frameMs(int players) { return matchStep(players) * 1000.0 / 60.0; }
+    // fields per game frame (WOTM_FIXEDSTEP) in a match of this many players: 3 or more, or a member whose device can't compute 60 game
+    // frames a second (a phone, HELLO hz=30), switch the game to its own 30 Hz mode. A frame is always one step of game time, so a
+    // device that falls short of the rate slows the game itself for everyone; at 30 Hz it does half the frames for the same time
+    inline int matchStep(int players, bool halfRateMember) { return players >= 3 || halfRateMember ? 2 : 1; }
+    inline double frameMs(int step) { return step * 1000.0 / 60.0; }
 
     // Input delay (frames) of `player`, from each player's round trip to the server (ms, the high end of the recent ones: RttWindow):
     // the input goes to the server and from there to every other player, so its path is half its own round trip plus half the

@@ -2,7 +2,7 @@
 // ABOUTME: tools/net_lobby.py's match_env) and the lobby client's requests and replies over a fake WebSocket. Run: node --test web/
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { PROTOCOL, parseLine, parseMembers, matchEnv, lobbySocketUrl, lastLobbyNotice, inviteLink, lobbyRow, parsePings, parseChat, LobbyClient } from './lobby.js';
+import { PROTOCOL, parseLine, parseMembers, matchEnv, lobbySocketUrl, lastLobbyNotice, inviteLink, lobbyRow, parsePings, parseChat, LobbyClient, halfRateDevice } from './lobby.js';
 
 const MATCH_LINE = 'MATCH lobby=QZXW players=2 stage=9 wins=2 mods=jump,turbo monsters=5,1 names=Ana,Bia ' +
   'seed=12345 step=1 you=1 token=00aa11bb22cc33dd port=7777';
@@ -185,6 +185,22 @@ test('LobbyClient.list reads the LOBBY lines up to END', async () => {
     { code: 'ABCD', playing: false, count: 1, max: 8, locked: false, name: 'Ana', host: 'Ana', names: ['Ana'] },
     { code: 'WXYZ', playing: true, count: 2, max: 8, locked: true, name: 'Bob', host: 'Bob', names: ['Bob', 'Cy'] },
   ]);
+});
+
+test('LobbyClient on a device that cannot compute 60 game frames a second says so in its HELLO (hz=30)', async () => {
+  const ws = new FakeSocket();
+  const client = new LobbyClient(ws, 'wl-1', { halfRate: true });
+  const ready = client.ready;
+  ws.open();
+  assert.equal(ws.sent[0], `HELLO ${PROTOCOL} wl-1 hz=30`);
+  ws.reply('WELCOME 0');
+  await ready;
+});
+
+test('halfRateDevice: a phone or tablet (touch is the primary pointer) plays online at 30 Hz, a desktop at 60', () => {
+  assert.equal(halfRateDevice({ matchMedia: (q) => ({ matches: q === '(pointer: coarse)' }) }), true);
+  assert.equal(halfRateDevice({ matchMedia: () => ({ matches: false }) }), false);
+  assert.equal(halfRateDevice({}), false);
 });
 
 test('LobbyClient: a refused HELLO closes the socket quietly, so the refusal stays on screen', async () => {
