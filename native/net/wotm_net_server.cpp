@@ -534,7 +534,7 @@ namespace wotm_net
         m->created = Clock::now();
         const int players = static_cast<int>(l.members.size());
         const uint32_t seed = static_cast<uint32_t>(rng_() % 0x7FFFFFFEull) + 1u;
-        const int step = players >= 3 ? 2 : 1;   // 3+ players: the game switches to its own 30 Hz mode
+        const int step = proto::matchStep(players);
         std::vector<std::string> monsters, names;
         for (int ci : l.members)
         {
@@ -587,7 +587,45 @@ namespace wotm_net
 
     void *&Server::dataOf(PeerRef peer) { return peer.enet ? peer.enet->data : peer.ws->data; }
 
-    uint32_t Server::rttOf(PeerRef peer) { return peer.enet ? peer.enet->roundTripTime : peer.ws->link->rttMs(); }
+    uint32_t Server::rttHighOf(PeerRef peer) const
+    {
+        const uint32_t rtt = peer.enet ? peer.enet->roundTripTime + 2u * peer.enet->roundTripTimeVariance : peer.ws->link->rttMs();
+        return rtt + testRttMs_.load();
+    }
+
+    // each player's recent round trip at its high end (0 for a player who left: nobody waits for them)
+    std::vector<uint32_t> Server::rttHighs(Match &m)
+    {
+        std::vector<uint32_t> out;
+        for (Slot &s : m.slots)
+            out.push_back(s.peer && !s.gone ? s.rtt.high() : 0u);
+        return out;
+    }
+
+    // During the match, every paceMs: samples each player's round trip and sends a player whose delay should change its new one (Pace).
+    // The window makes a rise immediate and a fall wait until the high samples leave it
+    void Server::pace(Match &m, const Lobby &l)
+    {
+        const Clock::time_point now = Clock::now();
+        if (cfg_.forcedDelay || now - m.lastPace < std::chrono::milliseconds(cfg_.paceMs))
+            return;
+        m.lastPace = now;
+        for (Slot &s : m.slots)
+            if (s.peer && !s.gone)
+                s.rtt.add(rttHighOf(s.peer));
+        const std::vector<uint32_t> highs = rttHighs(m);
+        const double frame = proto::frameMs(static_cast<int>(m.slots.size()));
+        for (size_t i = 0; i < m.slots.size(); ++i)
+        {
+            Slot &s = m.slots[i];
+            const uint32_t d = proto::adviseDelay(s.advised, highs, i, frame);
+            if (!s.peer || s.gone || d == s.advised)
+                continue;
+            log("lobby %s: %s's delay %u -> %u frame(s) (ping ms, high end: %u)", l.code.c_str(), s.name.c_str(), s.advised, d, highs[i]);
+            s.advised = d;
+            send(s.peer, proto::kControl, proto::encode(proto::Pace{d}), true);
+        }
+    }
 
     Server::Match *Server::matchOf(PeerRef peer, int &slot)
     {
@@ -874,16 +912,18 @@ namespace wotm_net
                     m->allJoinedSet = true, m->allJoined = now;
                 if (all && now - m->allJoined >= std::chrono::milliseconds(cfg_.startWaitMs))
                 {
-                    std::vector<uint32_t> rtt;
                     proto::Start st;
                     for (Slot &s : m->slots)
                     {
                         if (s.peer && !s.gone)
-                            rtt.push_back(rttOf(s.peer));
+                            s.rtt.add(rttHighOf(s.peer));
                         st.names.push_back(s.name);
                     }
-                    const uint32_t frameMs = m->slots.size() >= 3 ? 33u : 16u;
-                    st.delay = cfg_.forcedDelay ? cfg_.forcedDelay : proto::pickDelay(rtt, frameMs);
+                    const std::vector<uint32_t> rtt = rttHighs(*m);
+                    st.delay = cfg_.forcedDelay ? cfg_.forcedDelay : proto::startDelay(rtt, proto::frameMs(static_cast<int>(m->slots.size())));
+                    for (Slot &s : m->slots)
+                        s.advised = st.delay;
+                    m->lastPace = now;
                     m->delay = st.delay;
                     m->inputs = InputTimeline(static_cast<int>(m->slots.size()), st.delay);
                     for (size_t i = 0; i < m->slots.size(); ++i)
@@ -906,6 +946,7 @@ namespace wotm_net
             }
             else if (!m->desynced)
             {
+                pace(*m, l);
                 for (size_t i = 0; i < m->slots.size(); ++i)
                 {
                     Slot &s = m->slots[i];
