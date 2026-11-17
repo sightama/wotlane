@@ -322,6 +322,8 @@ class TouchOverlay {
     if (show === !this.root.hidden) return;
     this.root.hidden = !show;
     this.root.classList.toggle('on', show);
+    const bar = this.document.getElementById('bar');   // the page's status bar would sit under the buttons
+    if (bar) bar.hidden = show;
     if (show) {
       this.apply();
       this.document.exitPointerLock?.();   // a locked pointer would zero every touch's coordinates
