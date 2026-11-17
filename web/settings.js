@@ -46,6 +46,10 @@ export const OPTIONS = [
   { key: 'WOTM_ANNOUNCER', tab: 'game', group: 'Sound', label: 'Narrator', def: '1',
     hint: 'A voice calls out the monster and the level you pick, or the monster roars.',
     choices: [['0', 'Off'], ['1', 'Voice'], ['2', 'Monster roar']] },
+  // `page`: kept in this browser by the page (localStorage), not in settings.ini, which the game rewrites without keys it does not know
+  { key: 'MOVIES', page: true, tab: 'game', group: 'Startup', label: 'Startup movies', def: 'skippable',
+    hint: 'The two boot movies play over the game while it loads (about 8 MB, fetched only when they play). Single player only. Off fetches nothing.',
+    choices: [['skippable', 'Skippable'], ['original', 'Original (cannot be skipped)'], ['off', 'Off']] },
   toggle('WOTM_ENEMYBARS', 'game', 'Fighting', 'Enemy bars', 'Shows the health and energy of each enemy above their head.', '0'),
   toggle('WOTM_DAMAGEPOP', 'game', 'Fighting', 'Damage numbers', 'Shows how much damage each hit does.', '0'),
   toggle('WOTM_LOCKTOGGLE', 'game', 'Fighting', 'Lock-on toggle', 'Tap the lock-on button to lock on and again to let go.', '0',
