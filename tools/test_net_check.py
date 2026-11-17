@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 # ABOUTME: Tests for the pure parts of tools/net_check.py: the per-player simulated round trips and the pace summary read from a log.
 # ABOUTME: Run: python tools/test_net_check.py
+import argparse
+import socket
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -35,6 +38,17 @@ class PaceTest(unittest.TestCase):
 
     def test_no_pace_lines(self):
         self.assertIsNone(net_check.pace('[net] start: player 1 of 2, delay 5 frames, ping 61 ms\n'))
+
+
+class ProxyStartTest(unittest.TestCase):
+    def test_a_proxy_that_cannot_listen_stops_the_check(self):
+        busy = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        busy.bind(('127.0.0.1', 0))
+        self.addCleanup(busy.close)
+        a = argparse.Namespace(port=busy.getsockname()[1] - 101, rtt='20', jitter=0.0, players=1)   # player 1 listens on port + 101
+        with tempfile.TemporaryDirectory() as out, self.assertRaises(SystemExit) as stop:
+            net_check.start_proxy(a, Path(out))
+        self.assertIn('lag proxy', str(stop.exception.code))
 
 
 if __name__ == '__main__':

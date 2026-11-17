@@ -70,7 +70,12 @@ def start_proxy(a, out):
     with open(out / 'lagproxy.log', 'w') as log:
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=log, text=True)
     for _ in links:
-        print(f'        lag proxy: {proc.stdout.readline().strip()}')
+        line = proc.stdout.readline().strip()
+        if not line:   # it exited (a port in use, a bad --link)
+            proc.kill()
+            proc.wait()
+            sys.exit(f'the lag proxy did not start: see {out / "lagproxy.log"}')
+        print(f'        lag proxy: {line}')
     return proc
 
 

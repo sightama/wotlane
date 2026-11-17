@@ -146,7 +146,8 @@ to the console) and starts once that many players are in; `--code <code> --name 
 - Input delay: 1 frame on a LAN, about 3 to 8 over the internet (each frame is 16.7 ms; 33 ms with 3 or more players, where the game
   runs its own 30 Hz mode). Each player has their own: the time their input takes to reach the slowest other player (half their ping
   plus half that player's, at the high end of the last few seconds). The server re-measures every half second and the game moves the
-  delay one frame at a time, on a frame where your buttons and sticks did not change, so a press is never lost or doubled.
+  delay one frame at a time, on a frame where your buttons did not change, so a press is not lost or doubled (a delay that must
+  grow while the buttons keep changing for 30 frames goes ahead anyway).
 - **5 to 8 players:** the game itself only has 4 player slots and 4 cameras. Players 5 to 8 drive monsters in the computer-player slots
   (same controls and moves as players 1 to 4), and their screen uses a camera made by wotlane that follows from behind and above, since
   the game has no camera for them. It does not avoid buildings like the game's camera does, which is why it stays high. Every PC
