@@ -90,7 +90,7 @@ frames and compares 40 MB), so 30 minutes of wall clock is fewer game minutes; t
 | Firefox, 8 monsters, 30 Hz | 2 | 30 min | 18 300 | 0 |
 | Chrome, 8 monsters, 30 Hz | 2 | 30 min | 24 900 | 0 |
 | Firefox, 1 vs 1, 60 Hz | 2 | 30 min | 20 400 | 0 |
-| native, 1 vs 1, 60 Hz | 3 | 60 min | (pending) | |
+| native, 1 vs 1, 60 Hz | 3 | 60 min | 84 900 | 0 |
 | native, 1 vs 1, human pressing buttons and turning the camera (`--human`, `PS2X_PAD`, `WOTM_ORBITMOUSE`) | 3 | 3.3 min | 5 700 | 0 |
 | native, 1 vs 1 / 8 monsters, before the blob fix | 2 | 4 min each | 3 600 / 3 600 | 0 until a stream restarted in the window |
 
@@ -108,8 +108,9 @@ logic, no drawing capture); "played frame" is the frame's own work without the p
 | native, 1 vs 1, 60 Hz | 1.88 | 1.82 | 4.78 | 4.73 |
 | native, 8 monsters, 30 Hz | 2.85 | 2.20 | 9.70 | 10.59 |
 
-These come from the long runs, with two browsers and a native game at a time on one machine, so they are high; "Cost, one run at a
-time" below has the same runs alone. In every case a redone frame costs about as much as a played one: the drawing capture is cheap
+These come from the long runs, with two browsers and a native game at a time on one machine, so they are high. The native 60-minute 1 vs
+1 run (3 frames back) averages save 1.71, restore 1.66, redone frame 4.08 and played frame 4.44 ms; its last windows, with the machine
+quieter, 1.0, 1.0, 2.0 to 2.5 and 2.7 to 3.2 ms. In every case a redone frame costs about as much as a played one: the drawing capture is cheap
 next to the game's own logic.
 
 ## Expected latency (hybrid)
