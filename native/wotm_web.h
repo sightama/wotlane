@@ -26,6 +26,11 @@ bool wotmWebHidden();
 // long wait the page offers to keep waiting or leave the match, and a stopped match gets a way back to the front page (web/stall.js)
 void wotmWebNetStall(double ms, const char *text);
 
+// the online match's counters, for the page's diagnostics report (web/diag.js reads them through wotm_web_net_stat; read only, they
+// never reach the game): the game frame, how many times the game waited for the other players and the ms it waited in all, the input
+// delay in frames and the ping in ms; any thread
+void wotmWebNetStats(uint32_t frame, uint32_t waits, double waitMs, uint32_t delay, uint32_t pingMs);
+
 // the game quit (its menu's quit game): the page goes back to its front panel (boot.js wotmQuit); any thread
 void wotmWebQuit();
 

@@ -160,6 +160,26 @@ from `version.json` in `WOTM_BUILDID`.
 
 **Chat:** a text box in the lobby sends `CHAT <text>` (up to 200 bytes of printable text; the server drops control characters and trims the ends, and allows 5 lines per 10 s per member, then answers "chatting too fast"). The server sends `CHAT <code> <name> <text>` to everyone in the lobby, the sender too, and only while the lobby waits (`ERROR chat is only open before the match` after the start). The page shows the last 50 lines as plain text (`textContent`) and clears them when it joins a lobby. `CHAT` is an extra line for older clients to skip, so the protocol number stays 5.
 
+**Diagnostics:** the page reports how an online match runs to the server (`web/diag.js`, written up in `docs/ONLINE.md`, "Diagnostics"). It
+sends `DIAG` lines over the lobby connection, which stays open during the match: one on joining a lobby, one every 5 s of the match and a
+last one when it ends (`wotmDiagFinish`, called by `wotmQuit` and Leave the match in `boot.js` before the page reloads, with a 300 ms wait
+for the socket to empty; `pagehide` also sends it). `DiagReporter` samples every 500 ms (the ping, for its jitter) and builds each report
+from the difference of two samples. Its sources only read: the game loop's presented-frame counter (`globalThis.wotmFrames`), the match
+counters the game publishes (`wotmWebNetStats` in `native/wotm_web.h`, set every game frame in `netPace`, read through the exported
+`wotm_web_net_stat(i)`: frame, waits, wait ms, delay, ping), `FrameWatch` (animation frame intervals), `LongTaskWatch` (a
+`PerformanceObserver` for `longtask`; Firefox has none, so those fields are left out), and `installAudioWatch`, which adds an `audioprocess`
+listener to each `ScriptProcessorNode` the game's audio makes (installed when the page loads; a callback later than 1.5 buffers counts as a
+dropped buffer; a page whose audio doesn't use script processors reports no `au_` fields). Nothing here writes to the game, so determinism is
+untouched; the wasm change adds counters and an export, and changes the build id like any change under `native/`. `LobbyClient.diag()` sends
+a line and stops sending once the server answers `ERROR unknown command: DIAG`; `sendDiag()` resolves once a `LIST` sent after the line is
+answered, which is how the page knows the server read it.
+
+**Send report** (`web/report_ui.js`): the card the front panel's Send report button (shown after a match; the page keeps the last report in
+`sessionStorage` under `wotlane.lastdiag`) and Settings, Online tab, open. It sends the last match's numbers, this device and a note of up
+to 200 characters (`why=report`). From a lobby the player is still in it uses that connection; otherwise a short-lived one (`deliverReport`,
+which gives up after 6 s) whose report the server files as a claim. The card says what is sent: the name, browser and device type, the
+match numbers and the note, and no chat, files or address.
+
 A refusal from the server (name taken, no such lobby, lobby full, lobby in a match, build differs) stays on the message line, as a plain sentence (`web/messages.js` maps every ERROR the lobby sends; a test reads them from `wotm_net_server.cpp`, and an unknown text is shown as it is). The live server runs with `--lobbies 4`: a fifth lobby creator reads "All 4 lobbies are busy. Try again soon." Leave sends `LEAVE` and returns to Host/Join without a reload (`LobbyClient.leave()`). The page's own
 `LobbyClient.close()` silences `onClose`, which only reports a connection that dropped. The panel is a flex column that scrolls
 (`#front` has `overflow-y: auto`, its card `margin: auto`), so a card taller than the window (8 members, a zoomed page) keeps Start
@@ -254,3 +274,6 @@ OpenGraph and Twitter tags and JSON-LD (`web/index.html`, tested by `web/legal.t
 - the WebSocket listener and transport: `sh tools/test_net.sh` (`ws_*` tests).
 - online play in real browsers, 1 to 8 players against a local server or the live site: `node tools/browser_mp_test/run.mjs`
   (`tools/browser_mp_test/README.md`; its log readers: `node --test tools/browser_mp_test/test/`).
+- `node tools/browser_diag_test/run.mjs`: a real Chromium against a local `wotm_server --diag-dir` (no game is loaded): the join,
+  periodic and last reports and a Send report from the front page reach the server's files, with no chat text and no user agent string in
+  them. Needs `sh tools/test_net.sh notest` first and Playwright (see `tools/browser_mp_test/README.md`).

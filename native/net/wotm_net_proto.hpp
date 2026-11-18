@@ -486,7 +486,9 @@ namespace wotm_net::proto
     // members. An empty lobby closes.
     // client: HELLO <protocol> <build> | LIST | CREATE <lobby> <name> <monster> [password] | JOIN <code> <name> <monster> [password] |
     //         SET [stage=<stage>] [wins=<wins>] [mods=<list>] | MONSTER <monster> (any member, while the lobby waits) | START | LEAVE |
-    //         CHAT <text> (printable text up to kMaxChatBytes, kChatBurst lines per kChatWindowMs, only while the lobby waits)
+    //         CHAT <text> (printable text up to kMaxChatBytes, kChatBurst lines per kChatWindowMs, only while the lobby waits) |
+    //         DIAG <key=value>... (a page's diagnostics report, at any time after HELLO: never answered, never relayed; see wotm_net_diag.hpp;
+    //         an older server answers "ERROR unknown command: DIAG", which a client that sends it ignores)
     // server: WELCOME <open lobbies> | LOBBY <code> <waiting|playing> <n>/<max> <open|locked> <lobby> <owner> <names,...|-> |
     //         END | CREATED <code> | JOINED <code> | LEFT <code> | SETTINGS <code> stage=<stage> wins=<wins> mods=<list> | CHAT <code> <name> <text> |
     //         MEMBERS <code> <owner> <name:monster,...> |
@@ -495,6 +497,7 @@ namespace wotm_net::proto
     constexpr int kMaxWins = 99;
     constexpr size_t kMaxChatBytes = 200;   // a lobby chat line is cut to this many bytes
     constexpr int kChatBurst = 5, kChatWindowMs = 10000;   // a member may send this many lines per window
+    constexpr int kDiagBurst = 10, kDiagWindowMs = 10000;  // a connection may send this many DIAG lines per window (a page sends 1 every 5 s)
     constexpr const char *kCodeLetters = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";   // no I, O, 0 or 1 (easily confused when reading the code aloud)
     inline std::vector<std::string> words(const std::string &line)
     {
@@ -531,6 +534,27 @@ namespace wotm_net::proto
             if ((std::isalnum(static_cast<unsigned char>(c)) || c == '_' || c == '-') && out.size() < 16u)
                 out += c;
         return out;
+    }
+
+    // well-formed UTF-8 (a browser closes a WebSocket that carries a text frame that isn't)
+    inline bool validUtf8(const std::string &s)
+    {
+        size_t i = 0;
+        while (i < s.size())
+        {
+            const unsigned char b = static_cast<unsigned char>(s[i]);
+            const size_t more = b < 0x80 ? 0 : b >= 0xC2 && b <= 0xDF ? 1 : b >= 0xE0 && b <= 0xEF ? 2 : b >= 0xF0 && b <= 0xF4 ? 3 : SIZE_MAX;
+            if (more == SIZE_MAX || i + more >= s.size())
+                return false;
+            for (size_t k = 1; k <= more; ++k)
+                if ((static_cast<unsigned char>(s[i + k]) & 0xC0) != 0x80)
+                    return false;
+            if (b == 0xE0 && static_cast<unsigned char>(s[i + 1]) < 0xA0 || b == 0xED && static_cast<unsigned char>(s[i + 1]) > 0x9F ||
+                b == 0xF0 && static_cast<unsigned char>(s[i + 1]) < 0x90 || b == 0xF4 && static_cast<unsigned char>(s[i + 1]) > 0x8F)
+                return false;
+            i += more + 1;
+        }
+        return true;
     }
 
     // A lobby member's monster: "<monster>" or "<monster>:<skin id>" (a mod skin, mods/<mod>/skins/<id>/: a-z, 0-9 and _, up to 32,
