@@ -17,6 +17,8 @@ namespace wotm_net
     {
     public:
         static constexpr double kGraceSec = 10.0;
+        static constexpr double kLoadMaxSec = 60.0;    // a match that never moves (a page that never sends a real input) is judged anyway
+        static constexpr uint32_t kMaxPathFrames = 2;  // at most this much trail is put down to a longer path
         static constexpr double kAwaySec = 3.0;        // in the background for longer than this
         static constexpr double kSlowWindowSec = 15.0; // the pace measured over this long...
         static constexpr double kSlowShare = 0.8;      // ...under this share of the match's rate
@@ -37,10 +39,12 @@ namespace wotm_net
         };
 
         // The frames a member's inputs trail just from its longer path to the server (its round trip against the shortest one, one
-        // way): a healthy device on a far connection trails this much, so it isn't counted against it
+        // way): a healthy device on a far connection trails this much, so it isn't counted against it. Capped: a client could make
+        // its own round trip look longer
         static uint32_t latencyFrames(uint32_t rttMs, uint32_t minRttMs, double frameMs)
         {
-            return rttMs > minRttMs && frameMs > 0 ? static_cast<uint32_t>((rttMs - minRttMs) / 2.0 / frameMs) : 0u;
+            if (rttMs <= minRttMs || frameMs <= 0) return 0u;
+            return std::min(kMaxPathFrames, static_cast<uint32_t>((rttMs - minRttMs) / 2.0 / frameMs));
         }
 
         // t: seconds (any origin); frame: the match's frame (the first one some member's input is missing for); hz: the match's rate
@@ -49,10 +53,10 @@ namespace wotm_net
             // the match moves once every page has loaded the stage and sent a real input: until then a page still loading holds every
             // frame back without being slow, so the grace counts from the first frame the match plays
             if (!seen_)
-                seen_ = true, firstFrame_ = frame;
+                seen_ = true, firstFrame_ = frame, firstSeen_ = t;
             if (!started_)
             {
-                if (frame <= firstFrame_)
+                if (frame <= firstFrame_ && t - firstSeen_ < kLoadMaxSec)
                     return {};
                 started_ = true, start_ = t;
             }
@@ -123,6 +127,7 @@ namespace wotm_net
 
         bool seen_ = false, started_ = false;
         uint32_t firstFrame_ = 0;
+        double firstSeen_ = 0;
         double start_ = 0;
         std::deque<Sample> samples_;
         std::vector<double> awaySince_;
