@@ -38,7 +38,7 @@ function matchOfEnv(value) {
 
 // Fetches a lobby's match chunks once its choices have held still for `delayMs` (or the `waitMs` a call gives), `CONCURRENCY` chunks
 // at a time (the lobby's WebSocket is never starved); a new choice stops the fetch of the one it replaces (chunks already in stay
-// cached), stop() ends it all.
+// cached), cancel() drops the current one (a lobby left), stop() ends it all.
 // `prefetch(chunks, opts)` is disc_cache.js prefetch on game.iso; `table()` gives match_chunks.json (or throws: nothing is fetched)
 const CONCURRENCY = 4;
 function createMatchWarmer({ prefetch, table, delayMs = 1000, setTimer = setTimeout, clearTimer = clearTimeout }) {
@@ -52,9 +52,15 @@ function createMatchWarmer({ prefetch, table, delayMs = 1000, setTimer = setTime
       clearTimer(timer);
       timer = setTimer(async () => {
         let list;
-        try { list = matchChunkList(await table(), stage, members); } catch { return; }
+        try { list = matchChunkList(await table(), stage, members); } catch { if (mine === gen) key = ''; return; }   // asked again next time
         if (mine === gen && !stopped && list.length) prefetch(list, { maxRun: 1, concurrency: CONCURRENCY, stop: () => stopped || mine !== gen });
       }, waitMs);
+    },
+    // the lobby was left: its fetch stops, and the next lobby's choices warm again
+    cancel() {
+      ++gen;
+      key = '';
+      clearTimer(timer);
     },
     stop() {
       stopped = true;

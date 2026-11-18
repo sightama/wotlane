@@ -409,6 +409,8 @@ async function sendSettings() {
 function backToChoice(text) {
   lobby?.close();
   lobby = null;
+  members = { owner: '', members: [] };   // the next lobby's settings must not warm this one's monsters
+  window.wotmMatchPrefetch?.warmer.cancel();
   $('inLobby').hidden = true;
   $('inviteLink').hidden = true;
   $('choose').hidden = false;

@@ -102,3 +102,33 @@ test('nothing is prefetched where the chunks could not be kept: no Cache API, on
   assert.equal(await canKeepChunks({ caches, estimate: async () => ({ usage: 900 << 20, quota: 1 << 30 }) }, 40), false);
   assert.equal(await canKeepChunks({ caches, estimate: null }, 40), true);   // no estimate: the cache's own check decides
 });
+
+test('leaving the lobby cancels its fetch, and a later lobby still warms', async () => {
+  const { warmer, calls, fire } = harness();
+  warmer.want('1', []);
+  await fire();
+  warmer.cancel();
+  assert.equal(calls[0].opts.stop(), true);
+  warmer.want('1', []);   // the same choice in the next lobby starts again
+  await fire();
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].opts.stop(), false);
+});
+
+test('a choice whose table could not be read is asked again', async () => {
+  let fail = true;
+  const calls = [];
+  const timers = [];
+  const warmer = createMatchWarmer({
+    table: async () => { if (fail) throw new Error('offline'); return TABLE; },
+    prefetch: (chunks) => { calls.push(chunks); return new Promise(() => {}); },
+    setTimer: (fn) => { timers.push(fn); return timers.length; },
+    clearTimer: () => {},
+  });
+  warmer.want('1', []);
+  await timers.shift()();
+  fail = false;
+  warmer.want('1', [], 0);   // the boot asks for the same match
+  await timers.shift()();
+  assert.deepEqual(calls, [[10, 11]]);
+});
