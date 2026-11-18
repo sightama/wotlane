@@ -1679,7 +1679,7 @@ namespace
     TEST(lobby_owner_kicks_a_member_who_cannot_rejoin_for_a_while)
     {
         ServerConfig cfg = testConfig();
-        cfg.kickBanMs = 700;
+        cfg.kickBanMs = 1500;
         RunningServer rs(cfg);
         CHECK(rs.ok);
         LineSocket a, b, c;
@@ -1701,16 +1701,20 @@ namespace
         CHECK(readUntil(a, "ERROR") == "ERROR Zed is not in this lobby");
 
         a.sendLine("KICK Bia");
-        CHECK(readUntil(b, "KICKED") == "KICKED " + code + " 1");
+        CHECK(readUntil(b, "KICKED") == "KICKED " + code + " 2");
         CHECK(readUntil(a, "MEMBERS " + code + " Ana Ana:3,Cai:2") == "MEMBERS " + code + " Ana Ana:3,Cai:2");
         CHECK(readUntil(c, "MEMBERS " + code + " Ana Ana:3,Cai:2") == "MEMBERS " + code + " Ana Ana:3,Cai:2");
         // the kicked connection stays open and is out of the lobby: lobby commands are refused, and the lobby is closed to its name
         b.sendLine("CHAT hello");
         CHECK(readUntil(b, "ERROR") == "ERROR join a lobby first");
         b.sendLine("JOIN " + code + " Bia 1");
-        CHECK(readUntil(b, "ERROR") == "ERROR you were removed from this lobby; try again in 1 s");
+        CHECK(readUntil(b, "ERROR") == "ERROR you were removed from this lobby; try again in 2 s");
         // someone else is welcome meanwhile, and Bia can come back once the ban is over
-        std::this_thread::sleep_for(std::chrono::milliseconds(800));
+        LineSocket d;
+        CHECK(hello(d, cfg.port) == "WELCOME 1");
+        d.sendLine("JOIN " + code + " Dee 4");
+        CHECK(readUntil(d, "JOINED") == "JOINED " + code);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1700));
         b.sendLine("JOIN " + code + " Bia 1");
         CHECK(readUntil(b, "JOINED") == "JOINED " + code);
     }
@@ -1754,9 +1758,11 @@ namespace
         CHECK(readUntil(a, "HEALTH " + code + " ") == "HEALTH " + code + " Bia:28.5:13.2:60");
         a.sendLine("HEALTH 60 4.5 30");
         CHECK(readUntil(b, "HEALTH " + code + " Ana:60.0:4.5:30,Bia") == "HEALTH " + code + " Ana:60.0:4.5:30,Bia:28.5:13.2:60");
-        // the numbers leave with the member
+        // the numbers leave with the member: Bia back without sending any is not listed
         b.sendLine("LEAVE");
         CHECK(readUntil(b, "LEFT") == "LEFT " + code);
+        b.sendLine("JOIN " + code + " Bia 1");
+        CHECK(readUntil(b, "JOINED") == "JOINED " + code);
         std::string alone;
         for (int i = 0; i < 4 && alone != "HEALTH " + code + " Ana:60.0:4.5:30"; ++i)   // lines sent before the LEAVE may still arrive
             alone = readUntil(a, "HEALTH " + code + " ");

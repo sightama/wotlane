@@ -83,7 +83,7 @@ function showMembers(m) {
     if (s.wins !== undefined) $('wins').value = s.wins;
     for (const mod of MODIFIERS) $('mod_' + mod).checked = (s.mods || '').split(',').includes(mod);
     setOwner(true);
-    say('The owner left: you are the owner now. Start when everyone is in.');
+    say('You are the owner now. Start when everyone is in.');
   }
   members = m;
   showMemberList();
@@ -108,25 +108,30 @@ function sendChat() {
 }
 
 // A button that asks once more before it acts: the first click turns it into "Sure?" for a few seconds
-function confirmButton(label, act) {
+// (the member rows are rebuilt when the list changes, so the armed button is kept by `key`, not by the element)
+let armed = { key: '', timer: 0 };
+function confirmButton(key, label, act) {
   const button = document.createElement('button');
-  button.textContent = label;
-  let timer = 0;
+  const show = () => { button.textContent = armed.key === key ? 'Sure?' : label; };
+  show();
   button.addEventListener('click', () => {
-    if (timer) {
-      clearTimeout(timer);
+    clearTimeout(armed.timer);
+    if (armed.key === key) {
+      armed = { key: '', timer: 0 };
+      show();
       return act();
     }
-    button.textContent = 'Sure?';
-    timer = setTimeout(() => { timer = 0; button.textContent = label; }, 3000);
+    armed = { key, timer: setTimeout(() => { armed = { key: '', timer: 0 }; for (const b of document.querySelectorAll('#members button')) b.dispatchEvent(new Event('disarm')); }, 3000) };
+    show();
   });
+  button.addEventListener('disarm', show);
   return button;
 }
 
 // the owner's controls on another member's row: hand the lobby over, or remove them (they can't join it again for a minute)
 function ownerControls(name) {
-  const handOver = confirmButton('Make owner', () => lobby?.handOver(name).catch((e) => say(friendlyError(e.message))));
-  const remove = confirmButton('Remove', () => lobby?.kick(name).catch((e) => say(friendlyError(e.message))));
+  const handOver = confirmButton('owner ' + name, 'Make owner', () => lobby?.handOver(name).catch((e) => say(friendlyError(e.message))));
+  const remove = confirmButton('kick ' + name, 'Remove', () => lobby?.kick(name).catch((e) => say(friendlyError(e.message))));
   return [handOver, remove];
 }
 
@@ -245,7 +250,7 @@ async function connect(build) {
   client.onChat = showChat;
   client.onPings = (p) => { pings = p; showMemberStatus(); };
   client.onHealth = (h) => { healths = h; showMemberStatus(); };
-  client.onKicked = ({ seconds }) => backToChoice(`The owner removed you from the lobby. You can join it again in  seconds.`);
+  client.onKicked = ({ seconds }) => backToChoice(`The owner removed you from the lobby. You can join it again in ${seconds} seconds.`);
   client.onSettings = (s) => {
     // a saved map shows by its name when this browser has it (Your creations), else by its id
     const stage = [...$('lobbyStage').options].find((o) => o.value === s.stage);

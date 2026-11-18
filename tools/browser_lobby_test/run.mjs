@@ -99,7 +99,7 @@ async function run(browserName) {
     check(tag('Remove asks again before it acts'), (await buttons(ana, 'Bia')).includes('Sure?') && (await cai.locator('#members li').count()) === 3);
     await row(ana, 'Bia').getByRole('button', { name: 'Sure?' }).first().click();
     check(tag('the removed player is back on the Host/Join choice with the reason'),
-      await waitFor(bia, () => !document.getElementById('choose').hidden && document.getElementById('frontMsg').textContent.includes('removed you')));
+      await waitFor(bia, () => !document.getElementById('choose').hidden && /removed you from the lobby. You can join it again in \d+ seconds/.test(document.getElementById('frontMsg').textContent)));
     check(tag('the others see the member go'), (await Promise.all([ana, cai].map((p) => waitFor(p, () => document.querySelectorAll('#members li').length === 2)))).every(Boolean));
     check(tag('the warning about the removed player goes with them'), (await text(ana.locator('#lobbyWarnings'))) === '');
 

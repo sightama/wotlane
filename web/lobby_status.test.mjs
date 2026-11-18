@@ -54,3 +54,10 @@ test('lobbyWarnings names whoever would hurt the match: a ping from 150 ms, a de
   ]);
   assert.deepEqual(lobbyWarnings(['Ana'], { Ana: 12 }, {}), []);
 });
+
+test('a member named like an Object property has no ping and no health of their own', () => {
+  for (const name of ['constructor', 'toString', 'hasOwnProperty']) {
+    assert.equal(memberStatus(name, {}, {}).device.level, 'none');
+    assert.deepEqual(lobbyWarnings([name], {}, {}), []);
+  }
+});
