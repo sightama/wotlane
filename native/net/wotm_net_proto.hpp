@@ -405,6 +405,12 @@ namespace wotm_net::proto
     // device that falls short of the rate slows the game itself for everyone; at 30 Hz it does half the frames for the same time
     inline int matchStep(int players, bool halfRateMember) { return players >= 3 || halfRateMember ? 2 : 1; }
     inline double frameMs(int step) { return step * 1000.0 / 60.0; }
+    // The address of a lobby client for the owner's removals: the TCP peer's, except behind the proxy on this machine (a loopback peer),
+    // where it is what the proxy says in its headers (may be empty). Kept in memory only, and "" means unknown: the ban falls back to the name.
+    inline std::string clientAddress(const std::string &peerIp, const std::string &forwarded)
+    {
+        return peerIp == "127.0.0.1" ? forwarded : peerIp;
+    }
     // a phone's or tablet's browser, from its lobby WebSocket's User-Agent: the server's own check, so a phone plays at 30 Hz even
     // when its page did not say hz=30 (an old page in the browser's memory, a pad as its input)
     inline bool halfRateUserAgent(std::string_view ua)

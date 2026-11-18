@@ -1469,6 +1469,29 @@ namespace
         CHECK(lower && lower->userAgent.empty());
     }
 
+    // the client's address behind the proxy: Cloudflare's CF-Connecting-IP, else the first X-Forwarded-For hop (what Caddy sets for a
+    // client that reaches it directly); text that is not an address is ignored
+    TEST(handshake_reads_the_clients_address_from_the_proxy_headers)
+    {
+        const auto addr = [](const std::string &headers) {
+            const auto h = wotm_net::ws::parseHandshake("GET /lobby HTTP/1.1\r\nUpgrade: websocket\r\nSec-WebSocket-Key: k\r\n" + headers + "\r\n");
+            return h ? h->clientAddress : std::string("<refused>");
+        };
+        CHECK(addr("") == "");
+        CHECK(addr("CF-Connecting-IP: 198.51.100.7\r\n") == "198.51.100.7");
+        CHECK(addr("cf-connecting-ip: 2001:db8::1\r\n") == "2001:db8::1");
+        CHECK(addr("X-Forwarded-For: 203.0.113.9\r\n") == "203.0.113.9");
+        CHECK(addr("X-Forwarded-For: 203.0.113.9, 10.0.0.2\r\n") == "203.0.113.9");
+        CHECK(addr("X-Forwarded-For: 203.0.113.9\r\nCF-Connecting-IP: 198.51.100.7\r\n") == "198.51.100.7");
+        CHECK(addr("CF-Connecting-IP: <script>\r\n") == "");
+        CHECK(addr("CF-Connecting-IP: " + std::string(60, '1') + "\r\n") == "");
+        // the proxy's own address is the TCP peer: only then is the header believed
+        CHECK(p::clientAddress("127.0.0.1", "198.51.100.7") == "198.51.100.7");
+        CHECK(p::clientAddress("127.0.0.1", "") == "");
+        CHECK(p::clientAddress("203.0.113.5", "198.51.100.7") == "203.0.113.5");
+        CHECK(p::clientAddress("203.0.113.5", "") == "203.0.113.5");
+    }
+
     // a phone or tablet's browser (its lobby WebSocket's User-Agent) plays online at 30 Hz, whatever its page says
     TEST(half_rate_user_agents_are_phones_and_tablets)
     {
@@ -1601,6 +1624,36 @@ namespace
         a.sendLine("START");
         const auto mb = p::keyValues(p::words(readUntil(b, "MATCH")));
         CHECK(mb.count("you") && mb.at("you") == "1");
+    }
+
+    // a removed member can't come back from the same address under another name, though a different address (a proxy's header) can join;
+    // the server believes the header only from a loopback peer
+    TEST(ws_lobby_ban_follows_the_clients_address_behind_the_proxy)
+    {
+        ServerConfig cfg = wsTestConfig();
+        RunningServer rs(cfg);
+        CHECK(rs.ok);
+        LineSocket a;
+        CHECK(hello(a, cfg.port) == "WELCOME 0");
+        const std::string code = createLobby(a, "Lobby", "Ana", 3);
+        const auto viaProxy = [&](wotm_net::WsLink &l, const std::string &address) {
+            std::string err;
+            CHECK(l.connect(wsUrl(cfg, "/lobby"), 2000, err, "CF-Connecting-IP: " + address + "\r\n"));
+            l.sendLine("HELLO " + std::to_string(p::kProtocol) + " b1");
+            CHECK(readUntil(l, "WELCOME").rfind("WELCOME", 0) == 0);
+        };
+        wotm_net::WsLink bia, bia2, dee;
+        viaProxy(bia, "198.51.100.7");
+        bia.sendLine("JOIN " + code + " Bia 1");
+        CHECK(readUntil(bia, "JOINED") == "JOINED " + code);
+        a.sendLine("KICK Bia");
+        CHECK(readUntil(bia, "KICKED").rfind("KICKED " + code, 0) == 0);
+        viaProxy(bia2, "198.51.100.7");
+        bia2.sendLine("JOIN " + code + " Bia2 1");
+        CHECK(readUntil(bia2, "ERROR").rfind("ERROR you were removed from this lobby", 0) == 0);
+        viaProxy(dee, "198.51.100.8");
+        dee.sendLine("JOIN " + code + " Dee 1");
+        CHECK(readUntil(dee, "JOINED") == "JOINED " + code);
     }
 
     // a waiting lobby tells its members each one's round trip: measured for a browser (WebSocket pings), "-" for a TCP member
