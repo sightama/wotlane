@@ -5,7 +5,7 @@ import { initCreations, addLobbyChoices } from './creations_ui.js';
 import { initSettings } from './settings_ui.js';
 import { lightMatchDrawing, readSettings, settingsSaved } from './settings.js';
 import { playStartupMovies } from './movies.js';
-import { DiagReporter, FrameWatch, LongTaskWatch, TaskLagWatch, deviceFields, diagLine, flushSocket, installAudioWatch, joinFields, latencySource, readGame, reportFields } from './diag.js';
+import { DiagReporter, DiscWatch, FrameWatch, LongTaskWatch, TaskLagWatch, deviceFields, diagLine, flushSocket, installAudioWatch, joinFields, latencySource, readGame, reportFields } from './diag.js';
 import { deliverReport, initReport } from './report_ui.js';
 import { RateMemory, healthLine, rememberedHealth } from './rate.js';
 import { lobbyWarnings, memberStatus } from './lobby_status.js';
@@ -91,6 +91,13 @@ function showMembers(m) {
   members = m;
   braves = new Set([...braves].filter((name) => m.members.some((p) => p.name === name)));   // a member who left is not Brave under a name someone else takes
   showMemberList();
+  warmLobbyMatch(lobby?.settings?.stage);
+}
+
+// the disc chunks of the match this lobby would start (web/match_prefetch.js) come down while everyone waits, so no player's fight
+// load waits on the network at the start
+function warmLobbyMatch(stage) {
+  if (stage !== undefined) window.wotmMatchPrefetch?.warmer.want(stage, members.members);
 }
 
 // the lobby's chat: the last CHAT_LINES lines, the newest in view
@@ -210,6 +217,7 @@ function startDiag(client, socket, match, build) {
     hasFocus: () => document.hasFocus(),
     lag: new TaskLagWatch({ now: () => performance.now(), post: postTask }),
     latency: latencySource(window),
+    disc: new DiscWatch(typeof BroadcastChannel === 'function' ? new BroadcastChannel('wotlane-disc') : null),
   });
   diagReporter.begin();
   // the last report goes out as the match ends: boot.js calls this before it reloads the page (the game quit, or Leave the match)
@@ -265,6 +273,7 @@ async function connect(build) {
     const stage = [...$('lobbyStage').options].find((o) => o.value === s.stage);
     $('guestSettings').textContent = `Stage: ${stage ? stage.text : s.stage}, wins: ${s.wins === '0' ? 'endless' : s.wins}` +
       (s.mods ? `, modifiers: ${s.mods}` : '');
+    warmLobbyMatch(s.stage);
   };
   client.onError = (text) => say(friendlyError(text));
   client.onClose = () => { if (!front.hidden) say('Lost the connection to the game server. Reload the page to try again.'); };

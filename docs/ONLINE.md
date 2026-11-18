@@ -224,6 +224,9 @@ cause can be read afterwards without asking anyone to copy logs.
   the total or `lat_in_ms`). A present is timed at the animation frame after the draw, so it is a multiple of the display's refresh;
   the compositor and the display add their own time after it, which a page can't see. Measured on this computer by
   `node tools/browser_mp_test/latency.mjs` (tabs behind `tools/net_lagproxy.py --tcp` links with a round trip, jitter and spikes).
+  `disc_net_mb` and `disc_hit_mb`: the disc megabytes the game and the page's prefetch got in the window over the network and from the
+  browser's disc cache (`web/diag.js` DiscWatch; Firefox's synchronous reads through the helper worker are not counted). A match
+  start whose first frames came late with a large `disc_net_mb` waited on its download.
 - **What the server adds.** Every 5 s of a started match, one line per player: `transport` (ws or enet), `hz`, `delay`, `rtt_ms`,
   `rtt_high_ms`, `rtt_level_ms` (the round trip the delay covers: what the ping stays at or under 4/5 of the last 8 s), `in_pkts`
   (input packets since the last line), `in_gap_avg_ms` and `in_gap_max_ms` (how far apart the player's input packets arrived),

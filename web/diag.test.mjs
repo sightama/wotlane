@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   SCHEMA, diagValue, diagLine, browserName, deviceFields, FrameWatch, LongTaskWatch, installAudioWatch, readGame, latencySource, windowFields, gpuName,
-  TaskLagWatch,
+  TaskLagWatch, DiscWatch,
   DiagReporter, joinFields, reportFields,
 } from './diag.js';
 
@@ -353,4 +353,29 @@ test('a window carries the median frame interval, the share of samples with the 
   assert.equal(f.focus_pct, '50');
   assert.equal(f.lag_ms, '3.3');
   assert.equal(f.lag_max_ms, '12');
+});
+
+// the disc chunks the game read in the window: from the network (a number on the 'wotlane-disc' channel) or from the browser's disc
+// cache ({hit}); a match whose load came over the network shows why its first frames were late
+test('disc: the bytes the game read from the network and from the disc cache, per window', () => {
+  const channel = { onmessage: null };
+  const disc = new DiscWatch(channel);
+  channel.onmessage({ data: 3 << 20 });
+  channel.onmessage({ data: { hit: 1 << 20 } });
+  channel.onmessage({ data: 'junk' });
+  assert.deepEqual(disc.take(), { net: 3 << 20, hit: 1 << 20 });
+  assert.deepEqual(disc.take(), { net: 0, hit: 0 });
+  const f = Object.fromEntries(windowFields({ t: 0 }, { t: 5000, disc: { net: 5 << 19, hit: 0 } }));
+  assert.equal(f.disc_net_mb, '2.5');
+  assert.equal(f.disc_hit_mb, undefined);   // nothing read: no field
+  assert.equal(new DiscWatch(null).take(), null);   // no BroadcastChannel: no source
+});
+
+test('a periodic report carries the disc bytes of its window', () => {
+  const r = reporterFor({ extra: { disc: { take: () => ({ net: 1 << 20, hit: 2 << 20 }) } } });
+  r.reporter.begin();
+  for (let i = 0; i < 10; ++i) { r.advance(500); r.t.tick(); }
+  const f = fieldsOf(r.sent[0]);
+  assert.equal(f.disc_net_mb, '1.0');
+  assert.equal(f.disc_hit_mb, '2.0');
 });
