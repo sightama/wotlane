@@ -126,6 +126,8 @@ async function run(browserName) {
     check(tag('the old owner loses the controls and the buttons'), await waitFor(ana, () => document.getElementById('ownerOnly').hidden &&
       document.querySelectorAll('#members button').length === 0));
     check(tag('the new owner has the buttons, with Ana now removable'), await waitFor(cai, () => document.querySelectorAll('#members li[data-name="Ana"] button').length === 2));
+    check(tag('after the handoff the new owner sees Ana\'s row without a Brave chip and the old owner no chip at all'),
+      (await text(chip(cai, 'Ana', 'browser'))) === '' && (await text(chip(ana, 'Cai', 'browser'))) === '');
     check(tag('the old owner is told'), (await text(ana.locator('#frontMsg'))).includes('Cai is the owner now'));
   } finally {
     await browser.close();
