@@ -151,7 +151,7 @@ namespace
     TEST(holdback_latency_frames_are_the_extra_one_way_time)
     {
         CHECK(wotm_net::Holdback::latencyFrames(100, 20, 1000.0 / 30) == 1u);   // 40 ms more one way at 33 ms frames
-        CHECK(wotm_net::Holdback::latencyFrames(160, 20, 1000.0 / 60) == 4u);   // 70 ms at 16.7 ms
+        CHECK(wotm_net::Holdback::latencyFrames(160, 20, 1000.0 / 60) == 2u);   // 70 ms at 16.7 ms is 4, capped at 2 (a round trip is the client's to inflate)
         CHECK(wotm_net::Holdback::latencyFrames(20, 20, 1000.0 / 60) == 0u);
         CHECK(wotm_net::Holdback::latencyFrames(10, 20, 1000.0 / 60) == 0u);
     }
@@ -172,6 +172,16 @@ namespace
         for (double u = 0; u < 40 && d.slot < 0; u += 0.1)
             d = g.update(u, f2 += 1, 60, {{0, false, true}, {0, false, true}, {0, false, true}, {5, true, false}});
         CHECK(d.slot < 0);
+    }
+
+    // a page that never sends a real input can't keep the match from being judged: past kLoadMaxSec the grace starts anyway
+    TEST(holdback_judges_a_match_that_never_moves_after_a_minute)
+    {
+        wotm_net::Holdback h;
+        double t = 0;
+        uint32_t frame = 3;
+        const auto d = runHoldback(h, t, frame, 120, 0, {0, 0, 3}, {false, false, false});
+        CHECK(d.slot == 2 && t > wotm_net::Holdback::kLoadMaxSec);
     }
 
     // a slow pace with no member clearly behind the others (the network, or everyone a bit slow), or a pace at 80% and over: nobody
