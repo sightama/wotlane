@@ -179,6 +179,12 @@ inline bool project(const M4 &C, const Focus &f, const float w[3], float &x, flo
     y = -f.fv * q[2] / q[1];
     return true;
 }
+// Whether the present blends the last two game frames (wotm_live.inc): the INTERPOLATE FRAMES option on, the present above 60 Hz (or
+// up to 60 with the game at 30: slowGame), not suspended (too slow to blend) and not collecting itself (replay). Never in a network
+// match: the blend shows the newest frame one game frame late, which there is input latency (17 ms at 60 Hz, 33 ms at 30 Hz)
+inline bool wanted(bool option, int presentHz, bool slowGame, bool suspended, bool localCollect, bool network) {
+    return option && (presentHz > 60 || (presentHz > 0 && slowGame)) && !suspended && !localCollect && !network;
+}
 // The browser's guard on blending (wotm_live.inc): there the drawing's real cost is in the browser's GPU process, which runs the
 // WebGL calls later, out of sight of this thread's timers; when it falls behind, animation frames come late. So blending is judged by
 // the present interval reached while it is on (a moving average, each sample capped at 4 periods so one long gap, such as a hidden

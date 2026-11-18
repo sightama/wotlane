@@ -82,7 +82,9 @@ For online play start `wotm_server --ws-port <port>`; a page opened from `localh
   (`interp::PaceGuard`, `wotm_interp.hpp`): a moving average over 1.4 periods suspends it (the scene goes back to one redraw per game
   frame, presented at the display rate), and it is tried again after 10 s, twice as long after each failed try (up to 160 s), with an
   `[interp]` line in the log each time. The Settings page's Frame rate (`WOTM_HZ`: Display rate or 60) caps the rate the drawing assumes (an unmeasured display counts as 60), so 60 turns
-  interpolation off; Vsync has no effect in the browser. Online matches stay in step because nothing the drawing does reaches the game.
+  interpolation off; Vsync has no effect in the browser. Online matches stay in step because nothing the drawing does reaches the game,
+  and they never blend (`interp::wanted`): the newest game frame goes to the screen as soon as it is captured, since showing it a frame late
+  is input lag.
   The rate is measured once: a window moved to a screen with another rate keeps the first one until the next Play. Measuring the rate
   from frame times follows nfsu2-web (`web/src/app/display.ts`, https://github.com/th0mk/nfsu2-web, MIT License, Copyright (c) th0mk).
 - **Graphics:** the native layer's GL calls go to WebGL2 (`native/wotm_glad_web.cpp`); its GLSL 330 shaders become GLSL ES 3.00
