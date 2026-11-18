@@ -29,10 +29,10 @@ void wotmWebNetStall(double ms, const char *text);
 // the online match's counters, for the page's diagnostics report (web/diag.js reads them through wotm_web_net_stat; read only, they
 // never reach the game): the game frame, how many times the game waited for the other players and the ms it waited in all, the input
 // delay in frames, the ping in ms, the ms the game thread has spent idle (waiting for a vblank or an event), its frames by length (4
-// counts: up to 1.25, 1.75, 2.25 and over that many frame periods, without the network waits) and the network thread's waits that
-// ran out with the ms they overran by in all; any thread
+// counts: up to 1.25, 1.75, 2.25 and over that many frame periods, without the network waits) and the vblank clock's wakes (ms
+// late in all, how many, how many over half a vblank late); any thread
 void wotmWebNetStats(uint32_t frame, uint32_t waits, double waitMs, uint32_t delay, uint32_t pingMs, double idleMs, const uint32_t periods[4],
-                     double timerOverrunMs, double timerWaits);
+                     double vblankLateMs, double vblankWakes, double vblankSlowWakes);
 
 // the earliest key or button the page saw go down since the last call (ms, emscripten_get_now's clock; 0: none), and forgets it: the
 // input latency probe takes it at every sample (wotm_latency.hpp; boot.js and touch.js report through wotm_web_input_at); any thread

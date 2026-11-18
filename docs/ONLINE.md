@@ -190,10 +190,11 @@ cause can be read afterwards without asking anyone to copy logs.
   (`why=periodic`) and once when the match ends (`why=end`, with the device again). A periodic report holds, for the last 5 s: `fps`
   (frames presented) and `gfps` (game frames computed per second; `hz` is what it should be, 60 or 30), `work_ms` (the game loop's time
   per presented frame), `ee_busy_ms` and `ee_idle_ms` (the game thread's own time per game frame: busy, and idle waiting for a vblank
-  or an event; the window less those idle waits and the waits for the network, so a device whose game thread can't keep up shows a busy
-  time near the frame's 16.7 or 33.3 ms), `fr_len` (the game frames by length, without their network waits: how many took up to 1.25,
-  1.75, 2.25 and more frame periods; frames that round up to a whole extra vsync land in the third), `tm_late_ms` (how far past 1 ms
-  the match's network thread wakes from a wait that runs out: about 0.1 on a fine timer, near 15 on a 15.6 ms system timer), `waits`
+  or an event; wall time: the window less those idle waits and the waits for the network, so a device whose game thread can't keep up
+  shows a busy time near the frame's 16.7 or 33.3 ms), `fr_len` (the game frames by length, without their network waits: how many took
+  up to 1.25, 1.75, 2.25 and more frame periods; frames that round up to a whole extra vsync land in the third, pauses and hidden tabs
+  in the last), `vbl_late_ms` and `vbl_slow` (how late, on average, the game's vblank clock woke past its target, and how many of its
+  wakes were over half a vblank late: under a ms on a fine timer, several ms on a coarse system timer), `waits`
   and `wait_ms` (how often and for how long the game was blocked waiting for the other players' input; `waits_tot` and `wait_tot_ms`
   since the start), `delay` (input delay, frames), `ping_ms`, `ping_max_ms` and `jitter_ms` (the round trip the server measures and
   sends each player every 500 ms: a browser can't time its WebSocket pings itself), `late` (animation frames that took over 25 ms),

@@ -235,9 +235,9 @@ export function installAudioWatch(win) {
 // The game's counters since it started: frames presented and the time its loop worked (wotm_webfs.cpp wotmFrames), and from the wasm
 // module (wotm_web_net_stat, native/wotm_webfs.cpp): the game frame, the waits for the other players and their total ms, the input
 // delay in frames, the ping, the ms the game thread spent idle (waiting for a vblank or an event), its frames by length in frame periods
-// (up to 1.25, 1.75, 2.25, longer: `periods`) and the 1 ms waits of the match's network thread that ran out (`timerWaits`) with the ms
-// they overran by in all (`timerLateMs`: how coarse this browser's timers are). Only reads.
-export const NET_STAT = { frame: 0, waits: 1, waitMs: 2, delay: 3, pingMs: 4, idleMs: 5, periods: 6, timerLateMs: 10, timerWaits: 11 };
+// (up to 1.25, 1.75, 2.25, longer: `periods`) and the vblank clock's wakes (`vblankWakes`), the ms they woke late in all (`vblankLateMs`) and
+// how many were over half a vblank late (`vblankSlow`): how coarse this browser's timers are. Only reads.
+export const NET_STAT = { frame: 0, waits: 1, waitMs: 2, delay: 3, pingMs: 4, idleMs: 5, periods: 6, vblankLateMs: 10, vblankWakes: 11, vblankSlow: 12 };
 export function readGame(win) {
   const m = win.Module;
   const f = win.wotmFrames;
@@ -247,7 +247,7 @@ export function readGame(win) {
     frame: stat(NET_STAT.frame), waits: stat(NET_STAT.waits), waitMs: stat(NET_STAT.waitMs), delay: stat(NET_STAT.delay), pingMs: stat(NET_STAT.pingMs),
     idleMs: stat(NET_STAT.idleMs),
     periods: typeof m?._wotm_web_net_stat === 'function' ? [0, 1, 2, 3].map((k) => stat(NET_STAT.periods + k)) : undefined,
-    timerLateMs: stat(NET_STAT.timerLateMs), timerWaits: stat(NET_STAT.timerWaits),
+    vblankLateMs: stat(NET_STAT.vblankLateMs), vblankWakes: stat(NET_STAT.vblankWakes), vblankSlow: stat(NET_STAT.vblankSlow),
   };
 }
 
@@ -286,16 +286,20 @@ export function windowFields(prev, cur) {
   const pings = (cur.pings ?? []).filter(Number.isFinite);
   const { raf, lt, audio } = cur;
   const lat = cur.lat?.n > 0 ? cur.lat : undefined;
+  // the game thread's busy time: the window less its idle waits and its waits for the network (a wait that began in the last window and
+  // is counted in this one can leave less than nothing: no figure then)
+  const busyMs = frames > 0 && Number.isFinite(cur.idleMs) ? cur.t - prev.t - since('idleMs') - (since('waitMs') ?? 0) : -1;
   const timed = lat && lat.unknown < lat.n ? lat : undefined;   // the total and the sample stage need presses with a page time
   return present([
     ['up_s', whole(cur.t / 1000)],
     ['fps', fix(perSecond(presented))],
     ['gfps', fix(perSecond(frames))],
     ['work_ms', presented > 0 && Number.isFinite(cur.workMs) ? fix((cur.workMs - (prev.workMs ?? 0)) / presented) : undefined],
-    ['ee_busy_ms', frames > 0 && Number.isFinite(cur.idleMs) ? fix((cur.t - prev.t - since('idleMs') - (since('waitMs') ?? 0)) / frames) : undefined],
+    ['ee_busy_ms', busyMs >= 0 ? fix(busyMs / frames) : undefined],
     ['ee_idle_ms', frames > 0 && Number.isFinite(cur.idleMs) ? fix(since('idleMs') / frames) : undefined],
     ['fr_len', Array.isArray(cur.periods) ? cur.periods.map((n, k) => n - (prev.periods?.[k] ?? 0)).join(',') : undefined],
-    ['tm_late_ms', since('timerWaits') > 0 ? (since('timerLateMs') / since('timerWaits')).toFixed(2) : undefined],
+    ['vbl_late_ms', since('vblankWakes') > 0 ? (since('vblankLateMs') / since('vblankWakes')).toFixed(2) : undefined],
+    ['vbl_slow', since('vblankWakes') > 0 ? since('vblankSlow') : undefined],
     ['frame', cur.frame],
     ['delay', cur.delay],
     ['ping_ms', cur.pingMs],

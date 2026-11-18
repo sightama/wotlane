@@ -43,8 +43,7 @@
 #ifdef __EMSCRIPTEN__
 #include "wotm_web.h"                 // browser: the tab is hidden (Away), a long network wait for the page to offer leaving (wotm_sync.inc)
 #endif
-// the EE scheduler's idle time (EeSchedulerGame.cpp wotmIdleWait), for the page's diagnostics report (wotm_sync.inc netPace)
-extern std::atomic<unsigned long long> g_wotmIdleUs;
+
 #ifdef _WIN32
 extern "C" __declspec(dllimport) unsigned long __stdcall GetModuleFileNameA(void *module, char *path, unsigned long size);
 #else
@@ -58,6 +57,9 @@ namespace ps2_stubs   // Kernel/Stubs/Pad.cpp: pad state that scePadRead returns
 }
 
 extern std::atomic<unsigned long long> g_wotmIdleUs;
+// the vblank clock's wakes: how many, how far past their target in all (µs), and how many over half a vblank late
+// (EeSchedulerGame.cpp, the timer thread), for the page's diagnostics report (wotm_sync.inc netPace)
+extern std::atomic<unsigned long long> g_wotmVblankWakes, g_wotmVblankLateUs, g_wotmVblankSlowWakes;
 void wotmHostProfWatchThisThread();                            // ps2_hostprof.cpp (PS2X_HOSTPROF)
 void wotmHostProfDump(long long t0, long long t1, const char *tag);
 double wotmThreadCpuMs();

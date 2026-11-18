@@ -617,6 +617,11 @@ namespace wotm_sync
             std::fprintf(stderr, "[net] frame %u: %u waits for the network, %.0f ms in total\n", frame, g_netStalls, g_netStallMs);
     }
 
+    // the game frames by length since the match started (netPace, for the page): without their network waits, in frame periods, up to
+    // 1.25, 1.75, 2.25 and longer; a frame that rounds up to a whole extra vsync lands in the third. Pauses and hidden tabs land in
+    // the last. Reset at the match start (levelLoad)
+    uint32_t g_framePeriods[4] = {};
+    double g_framePeriodAt = 0.0, g_framePeriodStallMs = 0.0;
     // Every frame: notes a change of this player's input delay (the server's Pace advice). Every 600 frames: the delay, ping and the
     // stalls of the window, the numbers the felt lag comes from (tools/net_check.py sums them up per player)
     constexpr uint32_t kPaceFrames = 600u;
@@ -624,25 +629,21 @@ namespace wotm_sync
     void netPace(uint32_t frame)
     {
 #ifdef __EMSCRIPTEN__
-        // For the page's diagnostics report. The game thread's idle time is the EE scheduler's (EeSchedulerGame.cpp wotmIdleWait). The
-        // game frames by length, without their waits for the network, in frame periods (vsyncsPerFrame vsyncs): up to 1.25, 1.75, 2.25,
-        // longer; a device whose frames round up to a whole extra vsync shows in the third. The network thread's timed-out waits show
-        // how coarse this browser's timers are (wotm_net::webWaitOverrun)
-        static double lastAt = 0.0, lastStallMs = 0.0;
-        static uint32_t periods[4] = {};
+        // For the page's diagnostics report: the game thread's idle time (the EE scheduler's, EeSchedulerGame.cpp wotmIdleWait), its
+        // frames by length (g_framePeriods) and the vblank clock's wakes (how late a timer wakes on this browser and system)
         const double now = wotm::latency::nowMs();
         const double period = 1000.0 / 60.0 * wotm::modifiers::vsyncsPerFrame(g_fixedStep, g_mods);
-        if (lastAt > 0.0)
+        if (g_framePeriodAt > 0.0)
         {
-            const double r = (now - lastAt - (g_netStallMs - lastStallMs)) / period;
-            ++periods[r <= 1.25 ? 0 : r <= 1.75 ? 1 : r <= 2.25 ? 2 : 3];
+            const double r = (now - g_framePeriodAt - (g_netStallMs - g_framePeriodStallMs)) / period;
+            ++g_framePeriods[r <= 1.25 ? 0 : r <= 1.75 ? 1 : r <= 2.25 ? 2 : 3];
         }
-        lastAt = now;
-        lastStallMs = g_netStallMs;
-        double overrunMs = 0, timedOut = 0;
-        wotm_net::webWaitOverrun(overrunMs, timedOut);
+        g_framePeriodAt = now;
+        g_framePeriodStallMs = g_netStallMs;
         wotmWebNetStats(frame, g_netStalls, g_netStallMs, g_net->delay(), g_net->rttMs(), ::g_wotmIdleUs.load(std::memory_order_relaxed) / 1000.0,
-                        periods, overrunMs, timedOut);
+                        g_framePeriods, ::g_wotmVblankLateUs.load(std::memory_order_relaxed) / 1000.0,
+                        static_cast<double>(::g_wotmVblankWakes.load(std::memory_order_relaxed)),
+                        static_cast<double>(::g_wotmVblankSlowWakes.load(std::memory_order_relaxed)));
 #endif
         if (const uint32_t d = g_net->delay(); d != wotm_netstatus::g_delay.load())
         {
@@ -857,6 +858,8 @@ namespace wotm_sync
         {
             netStart();
             latencyReset();
+            std::fill(std::begin(g_framePeriods), std::end(g_framePeriods), 0u);
+            g_framePeriodAt = 0.0;
         }
         g_inputs = wotm_net::InputTimeline(kControllers, g_inputDelay);
         for (const InputRecord &r : g_inputPlay)
