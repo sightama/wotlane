@@ -89,6 +89,7 @@ function showMembers(m) {
     say('You are the owner now. Start when everyone is in.');
   }
   members = m;
+  braves = new Set([...braves].filter((name) => m.members.some((p) => p.name === name)));   // a member who left is not Brave under a name someone else takes
   showMemberList();
 }
 
@@ -161,7 +162,7 @@ function showMemberStatus() {
     const status = memberStatus(li.dataset.name, pings, healths, braves);
     for (const kind of ['ping', 'device', 'browser']) {
       const chip = li.querySelector('.' + kind);
-      const shown = kind !== 'browser' || owner;   // the Brave hint is for the owner
+      const shown = kind !== 'browser' || (owner && li.dataset.name !== myName);   // the Brave hint is for the owner, about the others
       chip.textContent = shown ? status[kind].text : '';
       chip.title = shown ? (status[kind].title ?? '') : '';
       chip.className = `chip ${kind} ${shown ? status[kind].level : 'none'}`;
@@ -369,7 +370,7 @@ async function hostOrJoin(join) {
     lobby = await connect(build);
     showLobby(join ? await lobby.join(code, name, monster) : await lobby.create(name, monster), !join);
     const health = rememberedHealth(localStorage);
-    if (onBrave) lobby.brave();   // the owner sees which member's browser is Brave
+    if (onBrave && lobby.code) lobby.brave();   // the owner sees which member's browser is Brave
     if (health) lobby.health(healthLine(health));   // what the last match showed of this device, for the other members
     lobby.diag(diagLine(joinFields([['build', build], ['lobby', lobby.code], ['name', name]], deviceFields(window))));
     if (!join) await sendSettings();
@@ -472,7 +473,7 @@ function init() {
     onBrave = brave;
     $('braveNote').hidden = !brave;
     $('braveNote').textContent = brave ? BRAVE_NOTICE : '';
-    if (brave && lobby) lobby.brave();   // the lobby was joined before the answer came
+    if (brave && lobby?.code) lobby.brave();   // the lobby was joined before the answer came
   });
   const invited = window.inviteCode(new URLSearchParams(location.search));
   if (invited) {   // a reload doesn't join again; the address keeps its other parts
