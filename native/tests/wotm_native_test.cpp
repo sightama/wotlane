@@ -295,8 +295,6 @@ namespace
         }
     }
 
-    // The browser's blending guard (PaceGuard): judged by the present interval actually reached, since the drawing's cost is in
-    // the browser's GPU process, out of sight of this thread
     // Blending is wanted with the option on and the present above 60 Hz (or up to 60 with the game at 30), unless the present is
     // suspended or collects itself (replay); never in a network match, where the game frame it shows late is input latency
     TEST(interp_wanted_only_offline)
@@ -310,6 +308,9 @@ namespace
         CHECK(!ip::wanted(true, 144, false, false, false, true));   // network match
         CHECK(!ip::wanted(true, 60, true, false, false, true));
     }
+
+    // The browser's blending guard (PaceGuard): judged by the present interval actually reached, since the drawing's cost is in
+    // the browser's GPU process, out of sight of this thread
     TEST(pace_guard_keeps_blending_while_frames_keep_the_period)
     {
         ip::PaceGuard g;

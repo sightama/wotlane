@@ -72,21 +72,21 @@ For online play start `wotm_server --ws-port <port>`; a page opened from `localh
   mods digest equals a native install's.
 - **Frames:** each presented frame awaits one `requestAnimationFrame` through JSPI. The game itself runs on its own thread and does not
   wait for presentation, so it keeps its 60 frames per second in a hidden tab.
-- **High frame rate:** the game logic always runs at 60, online and offline; only the drawing follows the display. Before the game
-  starts the page measures the display's refresh rate from 60 animation frames (`web/display.js` `measureRefresh`: the median of
-  4-frame spans, snapped to a common rate within 4%; a hidden tab gives up after 2 s and the game assumes 60) and passes it as
-  `WOTM_DISPLAY_HZ`, which stands for the monitor rate natively (`initPresentRate`, `wotm_live.inc`). Above 60 Hz every animation frame
-  draws the blend of the game's last two frames (frame interpolation, `docs/passos/NATIVO.md`, "Presentation rate"), one game frame
-  behind; at 60 the scene is redrawn once per game frame. The redraw's real cost is in the browser's GPU process, which runs the WebGL
-  calls after this thread has moved on, so the native guard (the redraw time against the period) misses it; in the browser blending is
-  judged by the frame interval it reaches (`interp::PaceGuard`, `wotm_interp.hpp`): a moving average over 1.4 periods suspends it (the
-  scene goes back to one redraw per game frame, presented at the display rate), and it is tried again after 10 s, twice as long after
-  each failed try (up to 160 s), with an `[interp]` line in the log each time. The Settings page's Frame rate (`WOTM_HZ`: Display rate
-  or 60) caps the rate the drawing assumes (an unmeasured display counts as 60), so 60 turns interpolation off; Vsync has no effect in
-  the browser. Online matches stay in step because nothing the drawing does reaches the game, and they never blend: the newest game
-  frame goes to the screen as soon as it is captured (`interp::wanted`), since showing it a frame late would be input lag. The rate is
-  measured once: a window moved to a screen with another rate keeps the first one until the next Play. Measuring the rate from frame
-  times follows nfsu2-web (`web/src/app/display.ts`, https://github.com/th0mk/nfsu2-web, MIT License, Copyright (c) th0mk).
+- **High frame rate:** the game logic always runs at 60, online and offline; only the drawing follows the display. Before the game starts
+  the page measures the display's refresh rate from 60 animation frames (`web/display.js` `measureRefresh`: the median of 4-frame spans,
+  snapped to a common rate within 4%; a hidden tab gives up after 2 s and the game assumes 60) and passes it as `WOTM_DISPLAY_HZ`, which
+  stands for the monitor rate natively (`initPresentRate`, `wotm_live.inc`). Above 60 Hz every animation frame draws the blend of the game's
+  last two frames (frame interpolation, `docs/passos/NATIVO.md`, "Presentation rate"), one game frame behind; at 60 the scene is redrawn
+  once per game frame. The redraw's real cost is in the browser's GPU process, which runs the WebGL calls after this thread has moved on, so the native
+  guard (the redraw time against the period) misses it; in the browser blending is judged by the frame interval it reaches
+  (`interp::PaceGuard`, `wotm_interp.hpp`): a moving average over 1.4 periods suspends it (the scene goes back to one redraw per game
+  frame, presented at the display rate), and it is tried again after 10 s, twice as long after each failed try (up to 160 s), with an
+  `[interp]` line in the log each time. The Settings page's Frame rate (`WOTM_HZ`: Display rate or 60) caps the rate the drawing assumes (an unmeasured display counts as 60), so 60 turns
+  interpolation off; Vsync has no effect in the browser. Online matches stay in step because nothing the drawing does reaches the game,
+  and they never blend (`interp::wanted`): the newest game frame goes to the screen as soon as it is captured, since showing it a frame late
+  is input lag.
+  The rate is measured once: a window moved to a screen with another rate keeps the first one until the next Play. Measuring the rate
+  from frame times follows nfsu2-web (`web/src/app/display.ts`, https://github.com/th0mk/nfsu2-web, MIT License, Copyright (c) th0mk).
 - **Graphics:** the native layer's GL calls go to WebGL2 (`native/wotm_glad_web.cpp`); its GLSL 330 shaders become GLSL ES 3.00
   (`native/wotm_glsl.hpp`). Lens flares are off (`WOTM_NOFLARE`: WebGL2 can't read the depth buffer back). The canvas fills the page in
   device pixels (CSS size times `devicePixelRatio`, `fitCanvas` in `wotm_live.inc`: raylib sizes it in CSS pixels at start and on each page
