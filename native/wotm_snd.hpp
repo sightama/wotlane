@@ -26,7 +26,10 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 #include <vector>
+
+#include "wotm_rollback.hpp"
 
 namespace wotm::snd {
 
@@ -382,6 +385,7 @@ public:
         for (auto s = sounds_.begin(); s != sounds_.end();)
             s = s->second->bank() == it->second.get() ? sounds_.erase(s) : std::next(s);
         banks_.erase(it);
+        ++bankGen_;
     }
     const Bank *bank(u32 h) const { auto it = banks_.find(h); return it == banks_.end() ? nullptr : it->second.get(); }
 
@@ -458,11 +462,13 @@ public:
     }
     void setFrameLocked(bool on) { frameLocked_ = on; }
     // One game frame with `fields` fields: mixes 800 frames per field (48000 / 60) on the game thread and queues them for the audio thread
-    // (at most ~0.25 s queued: if the device stops, the oldest is dropped)
-    void advanceFrame(unsigned fields) {
+    // (at most ~0.25 s queued: if the device stops, the oldest is dropped). `queue` false: the state advances, nothing is heard (a frame
+    // run again by a rollback was heard the first time)
+    void advanceFrame(unsigned fields, bool queue = true) {
         if (!frameLocked_) return;
         std::vector<s16> buf(size_t(2) * 800u * fields);
         render(buf.data(), 800u * fields);
+        if (!queue) return;
         std::lock_guard<std::mutex> g(ringM_);
         for (size_t i = 0; i < buf.size(); i += 2) ring_.push_back({buf[i], buf[i + 1]});
         while (ring_.size() > size_t(kRate / 4)) ring_.pop_front();
@@ -485,6 +491,16 @@ private:
 
 public:
     bool startOutput();   // raylib AudioStream (needs InitAudioDevice first)
+
+    // Rollback (wotm_rollback.hpp): in a deterministic match the engine is game state (the game polls playing() and the tick count,
+    // and both follow from the sounds, voices and random draws). The piece saves all of it, including the state RAND_PLAY and
+    // PLAY_CYCLE keep in their grains; streams' samples are shared, not copied. The banks are not in it: a snapshot only restores
+    // into the same banks, so a bank loaded or unloaded since (bankGeneration) is a barrier.
+    rollback::Piece rollbackPiece() {
+        return {"sound engine", [this](rollback::Writer &w) { std::lock_guard<std::mutex> g(m_); saveState(w); },
+                [this](rollback::Reader &r) { std::lock_guard<std::mutex> g(m_); loadState(r); }};
+    }
+    u32 bankGeneration() const { return bankGen_; }
 
     // --- used by the sounds
     VolPair makeVolume(int vol1, int pan1, int vol2, int pan2, int vol3, int pan3) const {
@@ -530,8 +546,13 @@ private:
         log("[snd] bank %s loaded (LSN %u): %zu sounds, %zu bytes of samples -> %#x\n", b->id.c_str(), lsn, b->sounds.size(),
             b->samples.size(), h);
         banks_[h] = std::move(b);
+        ++bankGen_;
         return h;
     }
+    void saveState(rollback::Writer &w) const;
+    void saveBlock(rollback::Writer &w, const BlockSound &b, const std::unordered_map<const Voice *, u32> &index) const;
+    void loadState(rollback::Reader &r);
+    std::unique_ptr<BlockSound> loadBlock(rollback::Reader &r, const std::vector<std::shared_ptr<Voice>> &voices);
     void tickAll() {
         ++tick_;
         for (auto it = sounds_.begin(); it != sounds_.end();) it = it->second->tick() ? sounds_.erase(it) : std::next(it);
@@ -546,6 +567,7 @@ private:
     std::array<std::atomic<int>, 2> player_{{100, 100}};   // setPlayerVolume: this PC's effects and music percent
     bool mono_ = false;
     u32 nextHandle_ = 0, nextBank_ = 1, tick_ = 0, rng_ = 0x989u;
+    u32 bankGen_ = 0;   // banks loaded and unloaded so far (bankGeneration)
     int tickPhase_ = 0;
     std::atomic<bool> frameLocked_{false};
     std::mutex ringM_;
@@ -853,7 +875,7 @@ inline void BlockSound::tickLfo(Lfo &l) {
 struct Stream : Sound {
     Engine &eng;
     std::vector<u8> file;
-    struct Ch { std::shared_ptr<Voice> v; s32 vol = 127, pan = 0; std::vector<u8> data; };
+    struct Ch { std::shared_ptr<Voice> v; s32 vol = 127, pan = 0; rollback::Blob data; };   // data: never changes once opened
     std::vector<Ch> ch;
     s32 vol = 0x400, pan = 0;
 
@@ -902,16 +924,18 @@ struct Stream : Sound {
         for (u32 c = 0; c < nch; ++c) {
             Ch &k = ch[c];
             if (nch == 2) { k.vol = std::min<s32>(rd16(&file[0x18 + 4 * c]), 127); k.pan = rd16(&file[0x1a + 4 * c]); }
+            std::vector<u8> data;
             for (u32 o = 0; o < perCh; o += inter) {
                 const size_t at = size_t(start) + (size_t(o / inter) * nch + c) * inter;
                 if (at >= file.size()) break;
                 const size_t n = std::min<size_t>({inter, perCh - o, file.size() - at});
-                k.data.insert(k.data.end(), file.begin() + ptrdiff_t(at), file.begin() + ptrdiff_t(at + n));
+                data.insert(data.end(), file.begin() + ptrdiff_t(at), file.begin() + ptrdiff_t(at + n));
             }
+            k.data = std::make_shared<const std::vector<u8>>(std::move(data));
             k.v = std::make_shared<Voice>();
             k.v->envelope = false;
-            k.v->src.data = k.data.data();
-            k.v->src.size = k.data.size();
+            k.v->src.data = k.data->data();
+            k.v->src.size = k.data->size();
             k.v->src.honorFlags = false;
             k.v->pitch = u16(std::min<u32>(rate * 4096u / kRate, 0x3fff));
         }
@@ -968,6 +992,190 @@ inline u32 Engine::playStream(u32 lsn, s32 vol, s32 pan, int group) {
     s->handle = h;
     sounds_[h] = std::move(s);
     return h;
+}
+
+// ---------------------------------------------------------------- Engine: rollback state (rollbackPiece)
+
+// A voice's samples: kind 1 = a bank's (its handle), kind 2 = a stream channel's blob, 0 = none. A bank voice's data is the bank's
+// sample block and a stream voice's its channel's blob (the read position is src.pos); a dead voice never plays again, so it is saved
+// with none (its stream, and the data it pointed at, may be gone already)
+inline void Engine::saveState(rollback::Writer &w) const {
+    w.pod(bankGen_);
+    w.pod(master_);
+    w.pod(nextHandle_);
+    w.pod(nextBank_);
+    w.pod(tick_);
+    w.pod(rng_);
+    w.pod(tickPhase_);
+    w.pod(blockReg);
+    for (const auto &[h, b] : banks_)   // the grains' own state (RAND_PLAY, PLAY_CYCLE: the last choice)
+        for (const Sfx &s : b->sounds)
+            for (const Grain &g : s.grains)
+                if (g.type == G_RAND_PLAY || g.type == G_PLAY_CYCLE) w.pod(g.param(2));
+    std::unordered_map<const u8 *, rollback::Blob> streamData;
+    for (const auto &[h, s] : sounds_)
+        if (const auto *st = dynamic_cast<const Stream *>(s.get()))
+            for (const auto &c : st->ch) streamData[c.data->data()] = c.data;
+    std::unordered_map<const Voice *, u32> index;
+    w.pod(u32(voices_.size()));
+    for (size_t i = 0; i < voices_.size(); ++i) {
+        const Voice &v = *voices_[i];
+        index.emplace(&v, u32(i));
+        u8 kind = 0;
+        u32 bankHandle = 0;
+        rollback::Blob blob;
+        if (!v.dead && v.src.data) {
+            for (const auto &[h, b] : banks_)
+                if (v.src.data == b->samples.data()) {
+                    kind = 1, bankHandle = h;
+                    break;
+                }
+            if (const auto st = streamData.find(v.src.data); !kind && st != streamData.end()) kind = 2, blob = st->second;
+        }
+        w.pod(kind);
+        if (kind == 1) w.pod(bankHandle);
+        if (kind == 2) w.blob(blob);
+        const AdpcmReader &a = v.src;
+        w.pod(a.size), w.pod(a.pos), w.pod(a.loop), w.pod(a.h1), w.pod(a.h2), w.pod(a.ended), w.pod(a.honorFlags);
+        w.pod(v.adsr);
+        w.pod(v.fifo);
+        w.pod(v.head), w.pod(v.count), w.pod(v.counter), w.pod(v.pitch), w.pod(v.volL), w.pod(v.volR);
+        w.pod(v.paused), w.pod(v.envelope), w.pod(v.dead);
+    }
+    w.pod(u32(sounds_.size()));
+    for (const auto &[h, s] : sounds_) {
+        w.pod(h);
+        if (const auto *b = dynamic_cast<const BlockSound *>(s.get())) {
+            w.pod(u8(1));
+            saveBlock(w, *b, index);
+        } else {
+            const auto &st = static_cast<const Stream &>(*s);
+            w.pod(u8(2));
+            w.pod(st.group), w.pod(st.paused), w.pod(st.vol), w.pod(st.pan);
+            w.pod(u32(st.ch.size()));
+            for (const auto &c : st.ch) {
+                w.pod(index.at(c.v.get())), w.pod(c.vol), w.pod(c.pan);
+                w.blob(c.data);
+            }
+        }
+    }
+}
+
+inline void Engine::saveBlock(rollback::Writer &w, const BlockSound &b, const std::unordered_map<const Voice *, u32> &index) const {
+    u32 bankHandle = 0;
+    for (const auto &[h, bk] : banks_)
+        if (bk.get() == &b.bk) bankHandle = h;
+    w.pod(bankHandle);
+    w.pod(u32(b.sfx - b.bk.sounds.data()));
+    w.pod(b.handle), w.pod(b.group), w.pod(b.paused);
+    w.pod(b.origVol), w.pod(b.origPan), w.pod(b.curVol), w.pod(b.curPan), w.pod(b.curPb), w.pod(b.curPm);
+    w.pod(b.appVol), w.pod(b.appPan), w.pod(b.appPb), w.pod(b.appPm);
+    w.pod(b.lfoVol), w.pod(b.lfoPan), w.pod(b.lfoPm), w.pod(b.lfoPb);
+    w.pod(b.note), w.pod(b.fine), w.pod(b.regs), w.pod(b.lfo);
+    w.pod(b.nextGrain), w.pod(b.countdown), w.pod(b.done), w.pod(b.skipGrains), w.pod(b.grainsToPlay), w.pod(b.grainsToSkip);
+    w.pod(u32(b.voices.size()));
+    for (const auto &v : b.voices) w.pod(index.at(v.v.get())), w.pod(v.tone), w.pod(v.gVol), w.pod(v.gPan), w.pod(v.base);
+    w.pod(u32(b.children.size()));
+    for (const auto &c : b.children) saveBlock(w, *c, index);
+}
+
+inline void Engine::loadState(rollback::Reader &r) {
+    // everything is read into new objects first and applied only once the whole piece has read well: a snapshot that doesn't fit
+    // (other banks, cut short) leaves the engine as it was
+    if (r.pod<u32>() != bankGen_) {   // other banks than the ones the snapshot refers to
+        r.ok = false;
+        return;
+    }
+    const auto master = r.pod<std::array<s32, 32>>();
+    const u32 nextHandle = r.pod<u32>(), nextBank = r.pod<u32>(), tick = r.pod<u32>(), rng = r.pod<u32>();
+    const int tickPhase = r.pod<int>();
+    const auto regs = r.pod<std::array<s8, 32>>();
+    std::vector<s16> grainState;
+    for (const auto &[h, b] : banks_)
+        for (const Sfx &s : b->sounds)
+            for (const Grain &g : s.grains)
+                if (g.type == G_RAND_PLAY || g.type == G_PLAY_CYCLE) grainState.push_back(r.pod<s16>());
+    std::vector<std::shared_ptr<Voice>> voices(r.count(sizeof(u8) + sizeof(Voice::fifo)));
+    std::vector<rollback::Blob> held;   // the streams' data stays alive until the streams below hold it again
+    for (auto &v : voices) {
+        v = std::make_shared<Voice>();
+        const u8 kind = r.pod<u8>();
+        if (kind == 1) {
+            const auto b = banks_.find(r.pod<u32>());
+            if (b == banks_.end()) { r.ok = false; return; }
+            v->src.data = b->second->samples.data();
+        } else if (kind == 2) {
+            held.push_back(r.blob());
+            if (!held.back()) return;
+            v->src.data = held.back()->data();
+        }
+        AdpcmReader &a = v->src;
+        r.pod(a.size), r.pod(a.pos), r.pod(a.loop), r.pod(a.h1), r.pod(a.h2), r.pod(a.ended), r.pod(a.honorFlags);
+        if (!a.data) a.size = 0;   // no samples (a dead voice): nothing to read
+        r.pod(v->adsr);
+        r.pod(v->fifo);
+        r.pod(v->head), r.pod(v->count), r.pod(v->counter), r.pod(v->pitch), r.pod(v->volL), r.pod(v->volR);
+        r.pod(v->paused), r.pod(v->envelope), r.pod(v->dead);
+    }
+    std::map<u32, std::unique_ptr<Sound>> sounds;
+    for (u32 n = r.count(sizeof(u32) + sizeof(u8)); n > 0 && r.ok; --n) {
+        const u32 h = r.pod<u32>();
+        if (r.pod<u8>() == 1) {
+            auto b = loadBlock(r, voices);
+            if (!b) return;
+            sounds[h] = std::move(b);
+            continue;
+        }
+        auto st = std::make_unique<Stream>(*this);
+        st->handle = h;
+        r.pod(st->group), r.pod(st->paused), r.pod(st->vol), r.pod(st->pan);
+        st->ch.resize(r.count(3 * sizeof(u32)));
+        for (auto &c : st->ch) {
+            const u32 vi = r.pod<u32>();
+            if (vi >= voices.size()) { r.ok = false; return; }
+            c.v = voices[vi];
+            r.pod(c.vol), r.pod(c.pan);
+            if (!(c.data = r.blob())) return;
+        }
+        sounds[h] = std::move(st);
+    }
+    if (!r.ok) return;
+    master_ = master;
+    nextHandle_ = nextHandle, nextBank_ = nextBank, tick_ = tick, rng_ = rng;
+    tickPhase_ = tickPhase;
+    blockReg = regs;
+    size_t at = 0;
+    for (auto &[h, b] : banks_)
+        for (Sfx &s : b->sounds)
+            for (Grain &g : s.grains)
+                if (g.type == G_RAND_PLAY || g.type == G_PLAY_CYCLE) g.setParam(2, grainState[at++]);
+    // the sounds being replaced mark their voices dead when destroyed: those are the old voices, dropped here too
+    sounds_ = std::move(sounds);
+    voices_ = std::move(voices);
+}
+
+inline std::unique_ptr<BlockSound> Engine::loadBlock(rollback::Reader &r, const std::vector<std::shared_ptr<Voice>> &voices) {
+    const auto bank = banks_.find(r.pod<u32>());
+    const u32 sfx = r.pod<u32>();
+    if (!r.ok || bank == banks_.end() || sfx >= bank->second->sounds.size()) { r.ok = false; return nullptr; }
+    auto b = std::make_unique<BlockSound>(*this, *bank->second, bank->second->sounds[sfx]);
+    r.pod(b->handle), r.pod(b->group), r.pod(b->paused);
+    r.pod(b->origVol), r.pod(b->origPan), r.pod(b->curVol), r.pod(b->curPan), r.pod(b->curPb), r.pod(b->curPm);
+    r.pod(b->appVol), r.pod(b->appPan), r.pod(b->appPb), r.pod(b->appPm);
+    r.pod(b->lfoVol), r.pod(b->lfoPan), r.pod(b->lfoPm), r.pod(b->lfoPb);
+    r.pod(b->note), r.pod(b->fine), r.pod(b->regs), r.pod(b->lfo);
+    r.pod(b->nextGrain), r.pod(b->countdown), r.pod(b->done), r.pod(b->skipGrains), r.pod(b->grainsToPlay), r.pod(b->grainsToSkip);
+    b->voices.resize(r.count(sizeof(u32) + sizeof(Tone)));
+    for (auto &v : b->voices) {
+        const u32 vi = r.pod<u32>();
+        if (vi >= voices.size()) { r.ok = false; return nullptr; }
+        v.v = voices[vi];
+        r.pod(v.tone), r.pod(v.gVol), r.pod(v.gPan), r.pod(v.base);
+    }
+    for (u32 n = r.count(2 * sizeof(u32)); n > 0 && r.ok; --n)
+        if (auto c = loadBlock(r, voices)) b->children.push_back(std::move(c));
+    if (!r.ok) return nullptr;
+    return b;
 }
 
 }  // namespace wotm::snd
