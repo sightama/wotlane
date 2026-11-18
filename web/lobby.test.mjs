@@ -2,7 +2,7 @@
 // ABOUTME: tools/net_lobby.py's match_env) and the lobby client's requests and replies over a fake WebSocket. Run: node --test web/
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { PROTOCOL, parseLine, parseMembers, matchEnv, lobbySocketUrl, lastLobbyNotice, inviteLink, lobbyRow, parsePings, parseHealth, parseChat, LobbyClient, halfRateDevice, phoneDevice } from './lobby.js';
+import { PROTOCOL, parseLine, parseMembers, matchEnv, lobbySocketUrl, lastLobbyNotice, inviteLink, lobbyRow, parsePings, parseHealth, parseBrave, parseChat, LobbyClient, halfRateDevice, phoneDevice } from './lobby.js';
 
 const MATCH_LINE = 'MATCH lobby=QZXW players=2 stage=9 wins=2 mods=jump,turbo monsters=5,1 names=Ana,Bia ' +
   'seed=12345 step=1 you=1 token=00aa11bb22cc33dd port=7777';
@@ -393,4 +393,32 @@ test('LobbyClient hands KICKED to onKicked with the ban in seconds, and forgets 
   ws.reply('KICKED QZXW 60');
   assert.deepEqual(seen, [{ code: 'QZXW', seconds: 60 }]);
   assert.equal(client.code, '');
+});
+
+test('parseBrave reads the names of the members on Brave', () => {
+  assert.deepEqual(parseBrave(parseLine('BRAVE QZXW Ana,Bia')), ['Ana', 'Bia']);
+  assert.deepEqual(parseBrave(parseLine('BRAVE QZXW')), []);
+});
+
+test('LobbyClient hands BRAVE lines to onBrave and says brave() without waiting for a reply', async () => {
+  const { ws, client } = await connected();
+  const seen = [];
+  client.onBrave = (names) => seen.push(names);
+  client.brave();
+  assert.equal(ws.sent.at(-1), 'BRAVE');
+  assert.equal(client.waiting.length, 0);
+  ws.reply('BRAVE QZXW Bia');
+  assert.deepEqual(seen, [['Bia']]);
+});
+
+test('a server that does not know BRAVE answers ERROR: that refuses no request, and nothing more is sent to it', async () => {
+  const { ws, client } = await connected();
+  const pending = client.list();
+  client.brave();
+  ws.reply('ERROR unknown command: BRAVE');
+  ws.reply('END');
+  assert.deepEqual(await pending, []);
+  const sent = ws.sent.length;
+  client.brave();
+  assert.equal(ws.sent.length, sent);
 });

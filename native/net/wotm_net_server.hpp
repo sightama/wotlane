@@ -88,6 +88,7 @@ namespace wotm_net
             Clock::time_point diagWindow{};   // the same for DIAG reports
             int diagLines = 0;
             // what the page last said about how this device runs a match (HEALTH): its own frames a second, ms of work per frame, game Hz
+            bool brave = false;   // BRAVE: the page runs in the Brave browser (its Shields can slow the game a lot)
             bool hasHealth = false;
             double healthFps = 0, healthWorkMs = 0;
             int healthHz = 0;
@@ -182,6 +183,8 @@ namespace wotm_net
         // the lobby `c` owns and that has not started, or null after answering the ERROR
         Lobby *ownedWaitingLobby(int c, const char *notOwner);
         int memberNamed(const Lobby &l, const std::string &name) const;
+        // BRAVE: the page says it runs in the Brave browser; the lobby is told who does with the pings
+        void setBrave(int c);
         // HEALTH <own fps> <work ms> <hz>
         void setHealth(int c, const std::vector<std::string> &w);
         // joins lobby li (already validated): member, owner if first, JOINED, SETTINGS and MEMBERS

@@ -332,6 +332,8 @@ namespace wotm_net
             handOver(ci, w[1]);
         else if (cmd == "HEALTH")
             setHealth(ci, w);
+        else if (cmd == "BRAVE")
+            setBrave(ci);
         else if (cmd == "LEAVE")
         {
             const std::string code = c.lobby >= 0 ? lobbies_[static_cast<size_t>(c.lobby)].code : "";
@@ -585,6 +587,14 @@ namespace wotm_net
         sendMembers(c.lobby);
     }
 
+    void Server::setBrave(int ci)
+    {
+        Conn &c = *conns_[static_cast<size_t>(ci)];
+        if (c.lobby < 0)
+            return void(c.link->sendLine("ERROR join a lobby first"));
+        c.brave = true;
+    }
+
     void Server::setHealth(int ci, const std::vector<std::string> &w)
     {
         Conn &c = *conns_[static_cast<size_t>(ci)];
@@ -613,6 +623,7 @@ namespace wotm_net
         l.members.erase(std::remove(l.members.begin(), l.members.end(), ci), l.members.end());
         c.lobby = -1;
         c.hasHealth = false;
+        c.brave = false;
         if (l.host == ci)
             l.host = l.members.empty() ? -1 : l.members.front();
         log("lobby %s: %s left", l.code.c_str(), c.name.c_str());
@@ -677,6 +688,13 @@ namespace wotm_net
             if (!v.empty())
                 for (int m : l.members)
                     conns_[static_cast<size_t>(m)]->link->sendLine("HEALTH " + l.code + " " + join(v, ","));
+            v.clear();
+            for (int m : l.members)
+                if (conns_[static_cast<size_t>(m)]->brave)
+                    v.push_back(conns_[static_cast<size_t>(m)]->name);
+            if (!v.empty())
+                for (int m : l.members)
+                    conns_[static_cast<size_t>(m)]->link->sendLine("BRAVE " + l.code + " " + join(v, ","));
         }
     }
 
