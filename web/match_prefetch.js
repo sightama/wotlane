@@ -63,13 +63,31 @@ function createMatchWarmer({ prefetch, table, delayMs = 1000, setTimer = setTime
   };
 }
 
-if (typeof module !== 'undefined' && module.exports) module.exports = { costumesFor, matchChunkList, matchOfEnv, createMatchWarmer };
+// Whether `chunks` 1 MiB chunks fetched now would be kept: a Cache API that works (a private window's can throw) and room under 90% of
+// the storage quota (disc_cache.js stores nothing past it). Otherwise a prefetch would only download what the game then downloads again
+async function canKeepChunks({ caches, estimate }, chunks) {
+  try {
+    if (!caches) return false;
+    await caches.keys();
+    if (!estimate) return true;
+    const { usage = 0, quota = 0 } = await estimate();
+    return quota > 0 && usage + chunks * (1 << 20) <= quota * 0.9;
+  } catch {
+    return false;
+  }
+}
+
+if (typeof module !== 'undefined' && module.exports) module.exports = { costumesFor, matchChunkList, matchOfEnv, createMatchWarmer, canKeepChunks };
 if (typeof window !== 'undefined') {
   // the page's one warmer: the lobby (front.js) tells it each choice, the game's boot (boot.js wotmStart) the match it starts
   let table = null;
   const warmer = createMatchWarmer({
     table: () => (table ??= fetch('match_chunks.json').then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); }).catch((e) => { table = null; throw e; })),
-    prefetch: (chunks, opts) => window.wotmDiscCache?.prefetch(fetch, 'data/game.iso', chunks, opts),
+    prefetch: async (chunks, opts) => {
+      const storage = navigator.storage;
+      if (await canKeepChunks({ caches: window.caches, estimate: storage?.estimate ? () => storage.estimate() : null }, chunks.length))
+        await window.wotmDiscCache?.prefetch(fetch, 'data/game.iso', chunks, opts);
+    },
   });
   window.wotmMatchPrefetch = { warmer, matchOfEnv };
 }

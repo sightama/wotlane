@@ -167,7 +167,15 @@
     showLoading(matchEnv ? 57 << 20 : 27 << 20);   // a first visit's download to a fight, or to the title
     // a match's stage and monsters: what the lobby has not fetched yet comes down while the game boots (web/match_prefetch.js)
     const match = matchEnv && window.wotmMatchPrefetch?.matchOfEnv(matchEnv.WOTM_MATCH);
-    if (match) window.wotmMatchPrefetch.warmer.want(match.stage, match.members, 0);
+    if (match) {
+      window.wotmMatchPrefetch.warmer.want(match.stage, match.members, 0);
+      // once the fight runs it has read its load: nothing more is fetched next to the match
+      const loaded = setInterval(() => {
+        if (!(window.Module?._wotm_web_net_stat?.(0) > 0)) return;
+        window.wotmMatchPrefetch.warmer.stop();
+        clearInterval(loaded);
+      }, 500);
+    }
     document.addEventListener('visibilitychange', tellHidden);
     // a key going down is the input latency probe's press time (wotm_web_input_at, native/wotm_webfs.cpp; pads report theirs in
     // touch.js); a key held down repeats its keydown, which is no new press

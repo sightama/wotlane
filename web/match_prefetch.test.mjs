@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
-const { costumesFor, matchChunkList, matchOfEnv, createMatchWarmer } = createRequire(import.meta.url)('./match_prefetch.js');
+const { costumesFor, matchChunkList, matchOfEnv, createMatchWarmer, canKeepChunks } = createRequire(import.meta.url)('./match_prefetch.js');
 
 const TABLE = {
   stages: { 1: [10, 11], 4: [12, 13] },
@@ -57,7 +57,7 @@ test('the warmer waits for the choices to hold still, then fetches a few chunks 
   await fire();
   assert.equal(calls.length, 1);
   assert.deepEqual(calls[0].chunks, [12, 13, 20, 21]);
-  assert.ok(calls[0].opts.concurrency <= 6 && calls[0].opts.maxRun === 1);
+  assert.deepEqual([calls[0].opts.concurrency, calls[0].opts.maxRun], [4, 1]);
 });
 
 test('a new choice stops the fetch of the one it replaces, and stop() ends it all', async () => {
@@ -91,4 +91,14 @@ test('the same choice again does not start over', async () => {
   await fire();
   assert.equal(calls.length, 1);
   assert.equal(calls[0].opts.stop(), false);
+});
+
+test('nothing is prefetched where the chunks could not be kept: no Cache API, one that throws, or storage that would pass 90%', async () => {
+  const caches = { keys: async () => [] };
+  const roomy = async () => ({ usage: 0, quota: 1 << 30 });
+  assert.equal(await canKeepChunks({ caches, estimate: roomy }, 40), true);
+  assert.equal(await canKeepChunks({ caches: undefined, estimate: roomy }, 40), false);
+  assert.equal(await canKeepChunks({ caches: { keys: async () => { throw new Error('private window'); } }, estimate: roomy }, 40), false);
+  assert.equal(await canKeepChunks({ caches, estimate: async () => ({ usage: 900 << 20, quota: 1 << 30 }) }, 40), false);
+  assert.equal(await canKeepChunks({ caches, estimate: null }, 40), true);   // no estimate: the cache's own check decides
 });
