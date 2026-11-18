@@ -6,6 +6,7 @@ export const SAMPLE_EVERY_MS = 500;
 export const REPORT_EVERY_MS = 5000;
 const LATE_FRAME_MS = 25;   // a 60 Hz frame is 16.7 ms: past 25 ms one was missed
 const MAX_NOTE = 200;       // the server keeps this much of a note (native/net/wotm_net_diag.hpp kMaxNoteBytes)
+const MIB = 1 << 20;
 
 // a value as native/net/wotm_net_diag.hpp accepts it: A-Z a-z 0-9 . _ : , / + - and at most 48 characters
 export function diagValue(v) {
@@ -106,6 +107,29 @@ export class FrameWatch {
     if (!v.length) return null;
     return { n: v.length, med: v[v.length >> 1], p95: v[Math.min(v.length - 1, Math.floor(v.length * 0.95))], max: v[v.length - 1],
       late: v.filter((x) => x > LATE_FRAME_MS).length };
+  }
+}
+
+// The disc bytes the game and the page's prefetch got: each chunk that came over the network is a number on the 'wotlane-disc' channel
+// (data_retry.js, disc_chunks.js), each read the disc cache served is {hit: bytes} (disc_cache.js). `channel`: that BroadcastChannel, or
+// null (no source)
+export class DiscWatch {
+  constructor(channel) {
+    this.channel = channel;
+    this.net = 0;
+    this.hit = 0;
+    if (channel) channel.onmessage = (e) => {
+      if (typeof e.data === 'number') this.net += e.data;
+      else if (typeof e.data?.hit === 'number') this.hit += e.data.hit;
+    };
+  }
+
+  take() {
+    if (!this.channel) return null;
+    const out = { net: this.net, hit: this.hit };
+    this.net = 0;
+    this.hit = 0;
+    return out;
   }
 }
 
@@ -336,6 +360,8 @@ export function windowFields(prev, cur) {
     ['lat_pr_ms', fix(lat?.present)],
     ['lat_bl_ms', fix(lat?.blend)],
     ['lat_unk', lat?.unknown > 0 ? lat.unknown : undefined],
+    ['disc_net_mb', cur.disc?.net > 0 ? fix(cur.disc.net / MIB) : undefined],
+    ['disc_hit_mb', cur.disc?.hit > 0 ? fix(cur.disc.hit / MIB) : undefined],
   ]);
 }
 
@@ -363,8 +389,8 @@ export function reportFields({ saved, device, lobby, name, build }) {
 // `hasFocus()` and `lag` (TaskLagWatch) are read at every sample, `latency` (latencySource) once per report
 // after the page reloads. A source that throws is left out, never reported as a failure of the page.
 export class DiagReporter {
-  constructor({ send, base, now, setTimer, clearTimer, store, frames, longTasks, audio, game, device, isHidden, hasFocus, lag, latency }) {
-    Object.assign(this, { send, base, now, setTimer, clearTimer, store, frames, longTasks, audio, game, device, isHidden, hasFocus, lag, latency });
+  constructor({ send, base, now, setTimer, clearTimer, store, frames, longTasks, audio, game, device, isHidden, hasFocus, lag, latency, disc }) {
+    Object.assign(this, { send, base, now, setTimer, clearTimer, store, frames, longTasks, audio, game, device, isHidden, hasFocus, lag, latency, disc });
     this.seq = 0;
     this.started = false;
     this.pings = [];
@@ -405,7 +431,7 @@ export class DiagReporter {
   report(why, game) {
     const now = this.now();
     const cur = { t: now - this.start, ...game, pings: this.pings, raf: this.take(this.frames), lt: this.take(this.longTasks),
-      audio: this.take(this.audio), hiddenMs: this.hiddenMs, taskLag: this.take(this.lag), lat: this.take(this.latency),
+      audio: this.take(this.audio), hiddenMs: this.hiddenMs, taskLag: this.take(this.lag), lat: this.take(this.latency), disc: this.take(this.disc),
       focusPct: this.hasFocus && this.samples ? (100 * this.focused) / this.samples : undefined };
     const fields = [['v', SCHEMA], ['why', why], ['seq', ++this.seq], ...this.base, ...windowFields(this.prev, cur)];
     if (why === 'end') fields.push(...this.device());

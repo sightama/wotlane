@@ -36,7 +36,15 @@ For online play start `wotm_server --ws-port <port>`; a page opened from `localh
   before use; a chunk missing or failing the check comes from the network. Nothing is stored when the Cache API is missing, the HEAD
   gave no ETag or storage is 90% full. From the page's load, while the player is on the front panel, `web/boot.js` drops the caches
   of other versions and fetches in parallel the chunks every boot reads (`web/boot_chunks.json`, written by
-  `python3 tools/web_boot_chunks.py <boot log> <SCUS_971.97>` from a boot to the title); the game starts once they are in. In Firefox
+  `python3 tools/web_boot_chunks.py <boot log> <SCUS_971.97>` from a boot to the title); the game starts once they are in. For an online match
+  `web/match_prefetch.js` fetches the chunks of the lobby's stage and of each member's monster and costume (`web/match_chunks.json`)
+  once the lobby's choices have held still for 1 s, four at a time, a new choice stopping the fetch of the one it replaces; the
+  game's boot asks again at once for what is still missing. A fight's load reads the stage, its two music tracks whole and each
+  monster one file after another, so on a slow line a match waits at its first frames for the slowest player's download. `match_chunks.json` comes from fight logs: `node tools/web_match_logs.mjs` (one direct fight per monster with that monster
+  in both seats on stage 1, one per stage) then `python3 tools/web_match_chunks.py <data>/game.iso runtime/match_logs`: a file read in
+  every monster's fight is the stage's, the rest of a monster's fight is the monster's, and its costumes follow the disc's file names
+  (`MON/<NAME><costume>.*`, `RST/<NAME><costume>.AIC`). A map of the player's own (a map id as the stage) prefetches its monsters
+  only. In Firefox
   the game's own reads from worker threads are synchronous XHR (below), which the Cache API can't serve, so the page starts a helper
   worker (`disc_cache.js` itself, named `wotlane-disc-cache`) that owns the cache for them: a game worker (its `XMLHttpRequest` is wrapped
   by `data_retry.js`'s `importScripts` of `disc_cache.js`) asks it over a BroadcastChannel, blocks on a SharedArrayBuffer until it
@@ -289,7 +297,7 @@ OpenGraph and Twitter tags and JSON-LD (`web/index.html`, tested by `web/legal.t
 - `node --test web/` (the page scripts, with a fake WebSocket and an in-memory file system);
 - `sh tools/test_web.sh` (the native tests built with Emscripten and run under node, the browser-only sources with `-Werror`, then the
   page scripts);
-- `python3 tools/test_serve_web.py`, `python3 tools/test_web_mods.py`, `python3 tools/test_web_boot_chunks.py` and `python3 tools/test_web_movies.py`;
+- `python3 tools/test_serve_web.py`, `python3 tools/test_web_mods.py`, `python3 tools/test_web_boot_chunks.py`, `python3 tools/test_web_match_chunks.py` and `python3 tools/test_web_movies.py`;
 - the WebSocket listener and transport: `sh tools/test_net.sh` (`ws_*` tests).
 - online play in real browsers, 1 to 8 players against a local server or the live site: `node tools/browser_mp_test/run.mjs`
   (`tools/browser_mp_test/README.md`; its log readers: `node --test tools/browser_mp_test/test/`).
