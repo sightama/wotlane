@@ -1,5 +1,5 @@
 // ABOUTME: Decides when one member holds a running lockstep match back for everyone: away (game in the background) for over 3 s, or the
-// ABOUTME: one the others keep waiting on while the match's pace stays under 80% of its rate. No network or game code; used by the server.
+// ABOUTME: one the others keep waiting on while the match's pace stays under 75% of its rate. No network or game code; used by the server.
 #pragma once
 
 #include <algorithm>
@@ -21,7 +21,7 @@ namespace wotm_net
         static constexpr uint32_t kMaxPathFrames = 2;  // at most this much trail is put down to a longer path
         static constexpr double kAwaySec = 3.0;        // in the background for longer than this
         static constexpr double kSlowWindowSec = 15.0; // the pace measured over this long...
-        static constexpr double kSlowShare = 0.8;      // ...under this share of the match's rate
+        static constexpr double kSlowShare = 0.75;     // ...under this share of the match's rate
         static constexpr double kLastShare = 0.6;      // the bottleneck is alone at the back in at least this share of the samples
 
         enum class Reason { None, Away, Slow };

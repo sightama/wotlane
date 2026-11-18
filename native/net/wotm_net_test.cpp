@@ -184,6 +184,20 @@ namespace
         CHECK(d.slot == 2 && t > wotm_net::Holdback::kLoadMaxSec);
     }
 
+    // the drop is for the severe case: a match at 80% of its rate (68LN ran at ~82% and felt much better) keeps everyone; under 75%
+    // the one waited on goes
+    TEST(holdback_threshold_is_75_percent)
+    {
+        CHECK(wotm_net::Holdback::kSlowShare == 0.75);
+        wotm_net::Holdback a;
+        double t = 0;
+        uint32_t frame = 0;
+        CHECK(runHoldback(a, t, frame, 60, 24, {0, 0, 3}, {false, false, false}, 30).slot < 0);   // 24 of 30: 80%
+        wotm_net::Holdback b;
+        t = 0, frame = 0;
+        CHECK(runHoldback(b, t, frame, 60, 21, {0, 0, 3}, {false, false, false}, 30).slot == 2);  // 21 of 30: 70%
+    }
+
     // a slow pace with no member clearly behind the others (the network, or everyone a bit slow), or a pace at 80% and over: nobody
     TEST(holdback_drops_nobody_without_a_clear_bottleneck_or_a_slow_pace)
     {
