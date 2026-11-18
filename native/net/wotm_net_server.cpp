@@ -872,8 +872,8 @@ namespace wotm_net
                 continue;
             const uint32_t rtt = (s.peer.enet ? s.peer.enet->roundTripTime : s.peer.ws->link->rttMs()) + testRttMs_.load();
             char stats[200];
-            std::snprintf(stats, sizeof stats, " rtt_ms=%u rtt_high_ms=%u in_pkts=%u in_gap_avg_ms=%.0f in_gap_max_ms=%.0f behind_max=%u behind_avg=%.1f away=%d", rtt,
-                          rttHighOf(s.peer), w.packets, w.packets ? w.gapSumMs / w.packets : 0.0, w.gapMaxMs, w.behindMax,
+            std::snprintf(stats, sizeof stats, " rtt_ms=%u rtt_high_ms=%u rtt_level_ms=%u in_pkts=%u in_gap_avg_ms=%.0f in_gap_max_ms=%.0f behind_max=%u behind_avg=%.1f away=%d", rtt,
+                          rttHighOf(s.peer), s.rtt.level(), w.packets, w.packets ? w.gapSumMs / w.packets : 0.0, w.gapMaxMs, w.behindMax,
                           w.behindSamples ? w.behindSum / w.behindSamples : 0.0, s.away ? 1 : 0);
             diagEvent(l, "player=" + s.name + " slot=" + std::to_string(i) + " transport=" + (s.peer.ws ? "ws" : "enet") + " hz=" +
                              std::to_string(60 / m.step) + " delay=" + std::to_string(s.advised) + stats);
@@ -977,12 +977,12 @@ namespace wotm_net
         return (peer.enet ? peer.enet->roundTripTime : peer.ws->link->rttMs()) + testRttMs_.load();
     }
 
-    // each player's recent round trip at its high end (0 for a player who left: nobody waits for them)
-    std::vector<uint32_t> Server::rttHighs(Match &m)
+    // each player's round trip as the delay sees it (RttWindow::level; 0 for a player who left: nobody waits for them)
+    std::vector<uint32_t> Server::rttLevels(Match &m)
     {
         std::vector<uint32_t> out;
         for (Slot &s : m.slots)
-            out.push_back(s.peer && !s.gone ? s.rtt.high() : 0u);
+            out.push_back(s.peer && !s.gone ? s.rtt.level() : 0u);
         return out;
     }
 
@@ -1001,17 +1001,17 @@ namespace wotm_net
                 s.rtt.add(rttHighOf(s.peer));
                 send(s.peer, proto::kControl, proto::encode(proto::Rtt{rttOf(s.peer)}), true);
             }
-        const std::vector<uint32_t> highs = rttHighs(m);
+        const std::vector<uint32_t> levels = rttLevels(m);
         const double frame = proto::frameMs(m.step);
         for (size_t i = 0; i < m.slots.size(); ++i)
         {
             Slot &s = m.slots[i];
-            const uint32_t d = proto::adviseDelay(s.advised, highs, i, frame);
+            const uint32_t d = proto::adviseDelay(s.advised, levels, i, frame);
             if (!s.peer || s.gone || d == s.advised)
                 continue;
-            log("lobby %s: %s's delay %u -> %u frame(s) (ping ms, high end: %u)", l.code.c_str(), s.name.c_str(), s.advised, d, highs[i]);
+            log("lobby %s: %s's delay %u -> %u frame(s) (round trip the delay covers: %u ms)", l.code.c_str(), s.name.c_str(), s.advised, d, levels[i]);
             diagEvent(l, "event=delay player=" + s.name + " from=" + std::to_string(s.advised) + " to=" + std::to_string(d) +
-                             " rtt_high_ms=" + std::to_string(highs[i]));
+                             " rtt_level_ms=" + std::to_string(levels[i]));
             s.advised = d;
             send(s.peer, proto::kControl, proto::encode(proto::Pace{d}), true);
         }
@@ -1328,7 +1328,7 @@ namespace wotm_net
                             s.rtt.add(rttHighOf(s.peer));
                         st.names.push_back(s.name);
                     }
-                    const std::vector<uint32_t> rtt = rttHighs(*m);
+                    const std::vector<uint32_t> rtt = rttLevels(*m);
                     st.delay = cfg_.forcedDelay ? cfg_.forcedDelay : proto::startDelay(rtt, proto::frameMs(m->step));
                     for (Slot &s : m->slots)
                         s.advised = st.delay;
@@ -1343,7 +1343,7 @@ namespace wotm_net
                     for (uint32_t r : rtt)
                         pings += (pings.empty() ? "" : ",") + std::to_string(r);
                     log("lobby %s: start, delay %u frame(s) (ping ms: %s)", l.code.c_str(), st.delay, pings.c_str());
-                    diagEvent(l, "event=start delay=" + std::to_string(st.delay) + " rtt_high_ms=" + (pings.empty() ? "-" : pings));
+                    diagEvent(l, "event=start delay=" + std::to_string(st.delay) + " rtt_level_ms=" + (pings.empty() ? "-" : pings));
                     m->lastDiag = m->lastBehind = now;
                     for (Slot &s : m->slots)
                         if (s.peer && !s.gone)

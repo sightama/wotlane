@@ -613,17 +613,30 @@ namespace
         CHECK(p::adviseDelay(3, {40}, 0, f60) == 1u);       // nobody else to reach
     }
 
-    TEST(proto_rtt_window_keeps_the_highest_recent_round_trip)
+    // The delay covers the round trip a player has 4/5 of the time (the last 16 samples, 8 s at the server's 500 ms): a spike shorter
+    // than that costs a short wait instead of raising everyone's delay, a lasting rise counts within 2 s and goes again once it has left
+    // the window. The first samples count at their high end.
+    TEST(proto_rtt_window_covers_four_fifths_of_the_recent_round_trips)
     {
         p::RttWindow w;
-        CHECK(w.high() == 0u);
+        CHECK(w.level() == 0u);
         w.add(40);
         w.add(90);
         w.add(50);
-        CHECK(w.high() == 90u);
+        CHECK(w.level() == 90u);
         for (size_t i = 0; i < p::RttWindow::kSamples; ++i)
-            w.add(30);
-        CHECK(w.high() == 30u);   // the spike left the window
+            w.add(60);
+        CHECK(w.level() == 60u);
+        for (int i = 0; i < 3; ++i)
+            w.add(230);   // 68LN: one player's ping spikes to 130 to 230 ms every few seconds
+        CHECK(w.level() == 60u);   // three spikes in 8 s: ignored
+        w.add(230);
+        CHECK(w.level() == 230u);   // a fourth: 2 s of it in 8 s is the player's ping now
+        for (int i = 0; i < 12; ++i)
+            w.add(60);
+        CHECK(w.level() == 230u);
+        w.add(60);
+        CHECK(w.level() == 60u);   // back once at most three high samples are left
     }
 
     TEST(proto_pace_roundtrip)

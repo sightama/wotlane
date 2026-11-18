@@ -438,7 +438,7 @@ namespace wotm_net::proto
                ua.find("iPhone") != std::string_view::npos || ua.find("iPad") != std::string_view::npos;
     }
 
-    // Input delay (frames) of `player`, from each player's round trip to the server (ms, the high end of the recent ones: RttWindow):
+    // Input delay (frames) of `player`, from each player's round trip to the server (ms, the level of the recent ones: RttWindow):
     // the input goes to the server and from there to every other player, so its path is half its own round trip plus half the
     // slowest other player's, plus kDelayMarginMs for sending and handling. Clamped to 1..15.
     constexpr double kDelayMarginMs = 3.0;
@@ -479,24 +479,28 @@ namespace wotm_net::proto
         return d;
     }
 
-    // The highest of a player's last kSamples round trips: a jittery ping counts at its high end, and a spike only lowers the delay
-    // again once it has left the window
+    // A player's round trip as the delay sees it: the level their last kSamples round trips stay at or under 4/5 of the time (nearest
+    // rank, so with the server's 500 ms samples up to 3 high ones in 8 s are left out). A short spike then costs the others a short wait
+    // instead of a frame of delay for everyone while it is in the window; a lasting rise counts once it holds for 4 samples (2 s), and
+    // the delay goes back once at most 3 high samples are left
     class RttWindow
     {
     public:
-        static constexpr size_t kSamples = 8;
+        static constexpr size_t kSamples = 16;
         void add(uint32_t ms)
         {
             samples_[at_] = ms;
             at_ = (at_ + 1) % kSamples;
             n_ = std::min(n_ + 1, kSamples);
         }
-        uint32_t high() const
+        uint32_t level() const
         {
-            uint32_t h = 0;
-            for (size_t i = 0; i < n_; ++i)
-                h = std::max(h, samples_[i]);
-            return h;
+            if (n_ == 0)
+                return 0;
+            uint32_t sorted[kSamples];
+            std::copy(samples_, samples_ + n_, sorted);
+            std::sort(sorted, sorted + n_);
+            return sorted[(n_ * 80 + 99) / 100 - 1];
         }
 
     private:

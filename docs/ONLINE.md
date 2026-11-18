@@ -145,7 +145,8 @@ to the console) and starts once that many players are in; `--code <code> --name 
 - Debug keys that change the game or pause it are off: F1 (cheats), F5 (free camera), F6/F7/F8 (pause, step, photo).
 - Input delay: 1 frame on a LAN, about 3 to 8 over the internet (each frame is 16.7 ms; 33 ms with 3 or more players, where the game
   runs its own 30 Hz mode, as it does when a phone or tablet is in the match). Each player has their own: the time their input takes to reach the slowest other player (half their ping
-  plus half that player's, at the high end of the last few seconds). The server re-measures every half second and the game moves the
+  plus half that player's, at the level their ping stays at or under 4/5 of the last 8 s: a spike shorter than that costs a short wait
+  instead of a frame of delay for everyone). The server re-measures every half second and the game moves the
   delay one frame at a time, on a frame where your buttons did not change, so a press is not lost or doubled (a delay that must
   grow while the buttons keep changing for 30 frames goes ahead anyway).
 - **30 Hz with a phone or a slow computer:** every game frame of an online match is exactly 1/60 s of game time (fixed step, so every
@@ -216,10 +217,11 @@ cause can be read afterwards without asking anyone to copy logs.
   the compositor and the display add their own time after it, which a page can't see. Measured on this computer by
   `node tools/browser_mp_test/latency.mjs` (tabs behind `tools/net_lagproxy.py --tcp` links with a round trip, jitter and spikes).
 - **What the server adds.** Every 5 s of a started match, one line per player: `transport` (ws or enet), `hz`, `delay`, `rtt_ms`,
-  `rtt_high_ms`, `in_pkts` (input packets since the last line), `in_gap_avg_ms` and `in_gap_max_ms` (how far apart the player's input
-  packets arrived), `behind_max` and `behind_avg` (frames the player's inputs trailed the player furthest ahead, sampled every 100 ms;
-  in lockstep this is who the others wait for) and `away`. Events: `join` (with `half_rate`), `match_start`, `start`, `delay` (each
-  delay change), `away`, `left`, `desync`, `match_over`.
+  `rtt_high_ms`, `rtt_level_ms` (the round trip the delay covers: what the ping stays at or under 4/5 of the last 8 s), `in_pkts`
+  (input packets since the last line), `in_gap_avg_ms` and `in_gap_max_ms` (how far apart the player's input packets arrived),
+  `behind_max` and `behind_avg` (frames the player's inputs trailed the player furthest ahead, sampled every 100 ms; in lockstep this
+  is who the others wait for) and `away`. Events: `join` (with `half_rate`), `match_start`, `start`, `delay` (each
+  delay change, with the `rtt_level_ms` it covers), `away`, `left`, `desync`, `match_over`.
 - **Where it goes.** Every line is journaled (`journalctl -u wotlane-server`, lines starting `[diag]`). With `--diag-dir <folder>`
   (the live server uses `/var/log/wotlane`) each line is also appended, with a UTC time, to that lobby's file: `<UTC time>-<code>-lobby.log`
   until the match starts, then `<UTC time>-<code>-match.log`. Files older than `--diag-days` (default 7) are deleted, and the oldest go
