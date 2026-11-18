@@ -527,16 +527,16 @@ namespace wotm_net::proto
     //         SET [stage=<stage>] [wins=<wins>] [mods=<list>] | MONSTER <monster> (any member, while the lobby waits) | START | LEAVE |
     //         CHAT <text> (printable text up to kMaxChatBytes, kChatBurst lines per kChatWindowMs, only while the lobby waits) |
     //         KICK <name> | OWNER <name> (owner only, while the lobby waits: remove a member, who can't join this lobby again for a while;
-    //         hand the lobby to a member) | HEALTH <own fps> <work ms> <hz> (how this device ran its last match, shown to the lobby) |
-    //         BRAVE (the page runs in the Brave browser, whose Shields can slow the game a lot: shown to the owner) |
+    //         hand the lobby to a member) | HEALTH <own fps> <work ms> <hz> [sw] | HEALTH sw (how this device ran its last match, and
+    //         "sw" when its browser draws WebGL in software, shown to the lobby; an older server refuses the "sw" forms with an ERROR) |
     //         DIAG <key=value>... (a page's diagnostics report, at any time after HELLO: never answered, never relayed; see wotm_net_diag.hpp;
     //         an older server answers "ERROR unknown command: DIAG", which a client that sends it ignores)
     // server: WELCOME <open lobbies> | LOBBY <code> <waiting|playing> <n>/<max> <open|locked> <lobby> <owner> <names,...|-> |
     //         END | CREATED <code> | JOINED <code> | LEFT <code> | SETTINGS <code> stage=<stage> wins=<wins> mods=<list> | CHAT <code> <name> <text> |
     //         MEMBERS <code> <owner> <name:monster,...> |
     //         KICKED <code> <seconds> (this member was removed; the seconds are the ban) |
-    //         BRAVE <code> <names,...> (every second with PINGS, for the members that said BRAVE) |
-    //         HEALTH <code> <name:fps:work_ms:hz,...> (every second with PINGS, for the members that sent one) |
+    //         HEALTH <code> <name:fps:work_ms:hz[:sw],...> (every second with PINGS, for the members that sent one; "-" for numbers not
+    //         measured yet) |
     //         PINGS <code> <name:ms|name:->,... (every second while the lobby waits; - for a member the server can't measure, a TCP one) | MATCH <key=value>... | ERROR <text>
     // <monster> is "<number>" or "<number>:<skin id>" (Pick); <stage> is a stage number or a saved map's id (validStage)
     constexpr int kMaxWins = 99;

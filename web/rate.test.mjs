@@ -87,6 +87,9 @@ test('rememberedHealth: nothing stored, junk or storage that throws gives null',
 
 test('healthLine is the HEALTH command for a lobby', () => {
   assert.equal(healthLine({ fps: 27.4, workMs: 13.24, hz: 60 }), 'HEALTH 27.4 13.2 60');
+  assert.equal(healthLine({ fps: 5.3, workMs: 40, hz: 60 }, true), 'HEALTH 5.3 40.0 60 sw');
+  assert.equal(healthLine(null, true), 'HEALTH sw');   // drawing in software before any match
+  assert.equal(healthLine(null, false), null);         // nothing to say
 });
 
 test('rememberedHealth refuses numbers the server would refuse', () => {

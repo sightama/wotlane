@@ -332,8 +332,6 @@ namespace wotm_net
             handOver(ci, w[1]);
         else if (cmd == "HEALTH")
             setHealth(ci, w);
-        else if (cmd == "BRAVE")
-            setBrave(ci);
         else if (cmd == "LEAVE")
         {
             const std::string code = c.lobby >= 0 ? lobbies_[static_cast<size_t>(c.lobby)].code : "";
@@ -587,14 +585,6 @@ namespace wotm_net
         sendMembers(c.lobby);
     }
 
-    void Server::setBrave(int ci)
-    {
-        Conn &c = *conns_[static_cast<size_t>(ci)];
-        if (c.lobby < 0)
-            return void(c.link->sendLine("ERROR join a lobby first"));
-        c.brave = true;
-    }
-
     void Server::setHealth(int ci, const std::vector<std::string> &w)
     {
         Conn &c = *conns_[static_cast<size_t>(ci)];
@@ -607,10 +597,15 @@ namespace wotm_net
             out = std::strtod(w[i].c_str(), &end);
             return *end == 0 && std::isfinite(out) && out >= 0 && out <= max;
         };
+        // "HEALTH sw" alone: drawing in software, not measured yet; else the numbers and an optional "sw"
+        if (w.size() == 2 && w[1] == "sw")
+            return void(c.softwareGl = true);
         double fps = 0, workMs = 0, hz = 0;
-        if (w.size() != 4 || !number(1, 1000, fps) || !number(2, 1000, workMs) || !number(3, 240, hz) || hz < 1 || hz != std::floor(hz))
+        const bool sw = w.size() == 5 && w[4] == "sw";
+        if ((w.size() != 4 && !sw) || !number(1, 1000, fps) || !number(2, 1000, workMs) || !number(3, 240, hz) || hz < 1 || hz != std::floor(hz))
             return void(c.link->sendLine("ERROR HEALTH <own fps> <work ms> <hz>: numbers in range"));
         c.hasHealth = true, c.healthFps = fps, c.healthWorkMs = workMs, c.healthHz = static_cast<int>(hz);
+        c.softwareGl = sw;
     }
 
     void Server::leaveLobby(int ci)
@@ -623,7 +618,7 @@ namespace wotm_net
         l.members.erase(std::remove(l.members.begin(), l.members.end(), ci), l.members.end());
         c.lobby = -1;
         c.hasHealth = false;
-        c.brave = false;
+        c.softwareGl = false;
         if (l.host == ci)
             l.host = l.members.empty() ? -1 : l.members.front();
         log("lobby %s: %s left", l.code.c_str(), c.name.c_str());
@@ -680,21 +675,15 @@ namespace wotm_net
             for (int m : l.members)
             {
                 const Conn &c = *conns_[static_cast<size_t>(m)];
-                char buf[64];
-                std::snprintf(buf, sizeof buf, ":%.1f:%.1f:%d", c.healthFps, c.healthWorkMs, c.healthHz);
+                char buf[64] = ":-:-:-";
                 if (c.hasHealth)
-                    v.push_back(c.name + buf);
+                    std::snprintf(buf, sizeof buf, ":%.1f:%.1f:%d", c.healthFps, c.healthWorkMs, c.healthHz);
+                if (c.hasHealth || c.softwareGl)
+                    v.push_back(c.name + buf + (c.softwareGl ? ":sw" : ""));
             }
             if (!v.empty())
                 for (int m : l.members)
                     conns_[static_cast<size_t>(m)]->link->sendLine("HEALTH " + l.code + " " + join(v, ","));
-            v.clear();
-            for (int m : l.members)
-                if (conns_[static_cast<size_t>(m)]->brave)
-                    v.push_back(conns_[static_cast<size_t>(m)]->name);
-            if (!v.empty())
-                for (int m : l.members)
-                    conns_[static_cast<size_t>(m)]->link->sendLine("BRAVE " + l.code + " " + join(v, ","));
         }
     }
 

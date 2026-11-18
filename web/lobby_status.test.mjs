@@ -15,7 +15,7 @@ test('pingLevel: green under 80 ms, yellow under 150, red from 150, none without
   assert.equal(pingLevel(undefined), 'none');
 });
 
-test('deviceLevel: a device that holds its match rate is green, one at 60% of it red (the 21-32 fps Brave browser)', () => {
+test('deviceLevel: a device that holds its match rate is green, one at 60% of it red (a browser drawing in software)', () => {
   assert.equal(deviceLevel({ fps: 60, workMs: 6, hz: 60 }), 'good');
   assert.equal(deviceLevel({ fps: 52, workMs: 8, hz: 60 }), 'warn');
   assert.equal(deviceLevel({ fps: 27, workMs: 13, hz: 60 }), 'bad');
@@ -37,12 +37,10 @@ test('memberStatus words the ping and the device for one member', () => {
   assert.deepEqual(memberStatus('Bia', { Bia: 42 }, health), {
     ping: { level: 'good', text: '42 ms' },
     device: { level: 'bad', text: 'device too slow: 27 fps of 60' },
-    browser: { level: 'none', text: '', title: '' },
   });
   assert.deepEqual(memberStatus('Ana', { Ana: null }, health), {
     ping: { level: 'none', text: '' },
     device: { level: 'none', text: 'device not measured yet' },
-    browser: { level: 'none', text: '', title: '' },
   });
   assert.equal(memberStatus('Cy', { Cy: 100 }, { Cy: { fps: 53, workMs: 9, hz: 60 } }).device.text, 'device borderline: 53 fps of 60');
   assert.equal(memberStatus('Cy', {}, { Cy: { fps: 60, workMs: 5, hz: 60 } }).device.text, 'device ok');
@@ -64,8 +62,12 @@ test('a member named like an Object property has no ping and no health of their 
   }
 });
 
-test('memberStatus marks a member who runs Brave with a browser hint', () => {
-  assert.deepEqual(memberStatus('Bia', {}, {}, new Set(['Bia'])).browser, { level: 'warn', text: 'Brave', title: "Brave's Shields can slow the game a lot" });
-  assert.equal(memberStatus('Ana', {}, {}, new Set(['Bia'])).browser.text, '');
-  assert.equal(memberStatus('Ana', {}, {}).browser.text, '');   // no list of Brave members yet
+test('a member drawing in software is red with the reason, measured or not, and named in the warnings', () => {
+  const health = { Bia: { softwareGl: true }, Cy: { fps: 60, workMs: 5, hz: 60, softwareGl: true } };
+  assert.equal(deviceLevel(health.Bia), 'bad');
+  assert.deepEqual(memberStatus('Bia', {}, health).device, { level: 'bad', text: 'software graphics (hardware acceleration off)' });
+  assert.deepEqual(memberStatus('Cy', {}, health).device, { level: 'bad', text: 'software graphics (hardware acceleration off)' });
+  assert.deepEqual(lobbyWarnings(['Bia'], {}, health), [
+    'Bia: this browser draws without the graphics card (hardware acceleration off) and would slow the match for everyone.',
+  ]);
 });

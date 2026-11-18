@@ -9,7 +9,6 @@ import { DiagReporter, DiscWatch, FrameWatch, LongTaskWatch, TaskLagWatch, devic
 import { deliverReport, initReport } from './report_ui.js';
 import { RateMemory, healthLine, rememberedHealth } from './rate.js';
 import { lobbyWarnings, memberStatus } from './lobby_status.js';
-import { detectBrave } from './brave.js';
 import { frontNotice } from './device_notice.js';
 
 const MONSTERS = [[1, 'Congar'], [2, 'Robo-47'], [3, 'Togera'], [4, 'Ultra V'], [5, 'Preytor'], [7, 'Kineticlops'], [8, 'Magmo'],
@@ -56,8 +55,6 @@ let myName = '';
 let members = { owner: '', members: [] };
 let pings = {};
 let healths = {};   // each member's device health (HEALTH), by name
-let braves = new Set();   // the members on Brave (BRAVE)
-let onBrave = false;   // this page's browser is Brave
 let myMonster = 0;   // the monster the server last accepted
 
 // the owner picks the stage, wins and modifiers and starts; a guest sees them. The server hands the lobby on when the owner leaves
@@ -90,7 +87,6 @@ function showMembers(m) {
     say('You are the owner now. Start when everyone is in.');
   }
   members = m;
-  braves = new Set([...braves].filter((name) => m.members.some((p) => p.name === name)));   // a member who left is not Brave under a name someone else takes
   showMemberList();
   warmLobbyMatch(lobby?.settings?.stage);
 }
@@ -157,7 +153,7 @@ function showMemberList() {
     const skin = p.skin ? `, skin ${p.skin}` : '';
     const who = Object.assign(document.createElement('span'), { className: 'who' });
     who.textContent = `${p.name} (${monster ? monster[1] : 'monster ' + p.monster}${skin})${p.name === members.owner ? ', owner' : ''}`;
-    const chips = ['ping', 'device', 'browser'].map((kind) => Object.assign(document.createElement('span'), { className: `chip ${kind}` }));
+    const chips = ['ping', 'device'].map((kind) => Object.assign(document.createElement('span'), { className: `chip ${kind}` }));
     li.append(who, ...chips, ...(owner && p.name !== myName ? ownerControls(p.name) : []));
     return li;
   }));
@@ -167,13 +163,11 @@ function showMemberList() {
 function showMemberStatus() {
   const names = members.members.map((p) => p.name);
   for (const li of $('members').children) {
-    const status = memberStatus(li.dataset.name, pings, healths, braves);
-    for (const kind of ['ping', 'device', 'browser']) {
+    const status = memberStatus(li.dataset.name, pings, healths);
+    for (const kind of ['ping', 'device']) {
       const chip = li.querySelector('.' + kind);
-      const shown = kind !== 'browser' || (owner && li.dataset.name !== myName);   // the Brave hint is for the owner, about the others
-      chip.textContent = shown ? status[kind].text : '';
-      chip.title = shown ? (status[kind].title ?? '') : '';
-      chip.className = `chip ${kind} ${shown ? status[kind].level : 'none'}`;
+      chip.textContent = status[kind].text;
+      chip.className = `chip ${kind} ${status[kind].level}`;
     }
   }
   $('lobbyWarnings').replaceChildren(...lobbyWarnings(names, pings, healths).map((text) => Object.assign(document.createElement('li'), { textContent: text })));
@@ -267,7 +261,6 @@ async function connect(build) {
   client.onChat = showChat;
   client.onPings = (p) => { pings = p; showMemberStatus(); };
   client.onHealth = (h) => { healths = h; showMemberStatus(); };
-  client.onBrave = (names) => { braves = new Set(names); showMemberStatus(); };
   client.onKicked = ({ seconds }) => backToChoice(`The owner removed you from the lobby. You can join it again in ${seconds} seconds.`);
   client.onSettings = (s) => {
     // a saved map shows by its name when this browser has it (Your creations), else by its id
@@ -370,7 +363,6 @@ async function hostOrJoin(join) {
   if (join && !/^[A-Z2-9]{4}$/.test(code)) return say('The code has 4 characters (letters and digits).');
   pings = {};
   healths = {};
-  braves = new Set();
   $('chatLog').replaceChildren();
   say(join ? 'Joining' : 'Creating a lobby');
   stopWatchingLobbies();
@@ -380,9 +372,9 @@ async function hostOrJoin(join) {
     const build = await buildId();
     lobby = await connect(build);
     showLobby(join ? await lobby.join(code, name, monster) : await lobby.create(name, monster), !join);
-    const health = rememberedHealth(localStorage);
-    if (onBrave && lobby.code) lobby.brave();   // the owner sees which member's browser is Brave
-    if (health) lobby.health(healthLine(health));   // what the last match showed of this device, for the other members
+    // what the last match showed of this device, and whether it draws in software, for the other members
+    const health = healthLine(rememberedHealth(localStorage), readSoftwareGl(window) === 1);
+    if (health) lobby.health(health);
     lobby.diag(diagLine(joinFields([['build', build], ['lobby', lobby.code], ['name', name]], deviceFields(window))));
     if (!join) await sendSettings();
   } catch (e) {
@@ -482,13 +474,9 @@ function init() {
     return;
   }
   $('name').value = recall('name', '');
-  detectBrave(navigator).then((brave) => {   // this player's own screen: the front panel carries the notice until they leave it
-    onBrave = brave;
-    const note = frontNotice({ brave, softwareGl: readSoftwareGl(window) });
-    $('deviceNote').hidden = !note;
-    $('deviceNote').textContent = note;
-    if (brave && lobby?.code) lobby.brave();   // the lobby was joined before the answer came
-  });
+  const note = frontNotice({ softwareGl: readSoftwareGl(window) });   // this player's own screen: the front panel carries it until they leave it
+  $('deviceNote').hidden = !note;
+  $('deviceNote').textContent = note;
   const invited = window.inviteCode(new URLSearchParams(location.search));
   if (invited) {   // a reload doesn't join again; the address keeps its other parts
     const rest = new URLSearchParams(location.search);

@@ -1,5 +1,5 @@
 // ABOUTME: Whether this browser can run the game, as a plain message for the front panel (or null when it can), and whether it reads
-// ABOUTME: the disc and saves on the main thread. Chromium-based browsers (Chrome, Edge) and Firefox (with JSPI) can run it, on a computer or an Android phone; Safari and iPhones can't.
+// ABOUTME: the disc and saves on the main thread. Chromium-based browsers (Chrome, Edge, Brave) and Firefox (with JSPI) can run it, on a computer or an Android phone; Safari and iPhones can't.
 'use strict';
 
 // what the page can see: chromium (Chrome, Edge, Opera...), firefox, jspi (WebAssembly.Suspending), isolated (crossOriginIsolated),
