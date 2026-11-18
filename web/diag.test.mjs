@@ -3,7 +3,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  SCHEMA, diagValue, diagLine, browserName, deviceFields, FrameWatch, LongTaskWatch, installAudioWatch, readGame, windowFields,
+  SCHEMA, diagValue, diagLine, browserName, deviceFields, FrameWatch, LongTaskWatch, installAudioWatch, readGame, windowFields, gpuName,
+  TaskLagWatch,
   DiagReporter, joinFields, reportFields,
 } from './diag.js';
 
@@ -245,4 +246,52 @@ test('a report from the front page: the last report of the match, this device, t
   assert.equal(line, 'DIAG v=1 why=report build=wl-abc123 lobby=QZXW name=Ana fps=41.0 wait_ms=900 ua=Chrome-131 touch=1 note=laggy');
   const none = diagLine(reportFields({ saved: null, device: [['ua', 'Chrome-131']], lobby: '', name: 'Ana', build: 'wl-abc123' }), 'x');
   assert.equal(none, 'DIAG v=1 why=report build=wl-abc123 name=Ana ua=Chrome-131 note=x');
+});
+
+test('frames: the median interval tells the display rate the page really gets (a 30 fps power-saving cap shows as ~33 ms)', () => {
+  const callbacks = [];
+  const watch = new FrameWatch({ raf: (cb) => callbacks.push(cb) });
+  watch.start();
+  let t = 0;
+  for (let i = 0; i < 31; ++i) { t += 33.3; callbacks.shift()(t); }
+  assert.ok(Math.abs(watch.take().med - 33.3) < 0.01);
+});
+
+test('gpuName: the GPU from the WebGL renderer string, without the ANGLE wrapper; a software renderer reads as software', () => {
+  const nvidia = 'ANGLE (NVIDIA, NVIDIA GeForce RTX 3080 (0x00002206) Direct3D11 vs_5_0 ps_5_0, D3D11)';
+  assert.equal(gpuName(nvidia), 'NVIDIA GeForce RTX 3080 (0x00002206) Direct3D11 vs_5_0 ps_5_0');
+  assert.ok(gpuName('ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)').startsWith('software'));
+  assert.ok(gpuName('ANGLE (Microsoft, Microsoft Basic Render Driver Direct3D11 vs_5_0 ps_5_0, D3D11)').startsWith('software'));
+  assert.equal(gpuName('Apple M2'), 'Apple M2');
+  assert.equal(gpuName(undefined), undefined);
+});
+
+test('the device description carries the GPU when the page can read it', () => {
+  const f = Object.fromEntries(deviceFields({ navigator: {}, matchMedia: () => ({ matches: false }), wotmGpu: 'software SwiftShader' }));
+  assert.equal(f.gpu, 'software SwiftShader');
+});
+
+test('task lag: how late a task posted to the page runs (the WebSocket hops of a match wait in the same queue)', () => {
+  let now = 0;
+  const posted = [];
+  const lag = new TaskLagWatch({ now: () => now, post: (fn) => posted.push(fn) });
+  lag.probe(); now += 4; posted.shift()();
+  lag.probe(); now += 30; posted.shift()();
+  assert.deepEqual(lag.take(), { n: 2, avg: 17, max: 30 });
+  assert.equal(lag.take(), null);
+});
+
+test('a window carries the median frame interval, the share of samples with the page focused and the task lag', () => {
+  const r = reporterFor({ extra: {
+    frames: { start() {}, stop() {}, take: () => ({ n: 150, p95: 17, max: 30, late: 1, med: 16.7 }) },
+    hasFocus: (() => { let i = 0; return () => (i++ % 2 === 0); })(),
+    lag: { probe() {}, take: () => ({ n: 10, avg: 3.25, max: 12 }) },
+  } });
+  r.reporter.begin();
+  for (let i = 0; i < 10; ++i) { r.advance(500); r.t.tick(); }
+  const f = fieldsOf(r.sent[0]);
+  assert.equal(f.raf_med_ms, '16.7');
+  assert.equal(f.focus_pct, '50');
+  assert.equal(f.lag_ms, '3.3');
+  assert.equal(f.lag_max_ms, '12');
 });

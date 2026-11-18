@@ -148,9 +148,12 @@ to the console) and starts once that many players are in; `--code <code> --name 
   plus half that player's, at the high end of the last few seconds). The server re-measures every half second and the game moves the
   delay one frame at a time, on a frame where your buttons did not change, so a press is not lost or doubled (a delay that must
   grow while the buttons keep changing for 30 frames goes ahead anyway).
-- **30 Hz with a phone:** every game frame of an online match is exactly 1/60 s of game time (fixed step, so every PC computes the
-  same thing), so a device that computes fewer than 60 game frames a second would slow the whole match down, sound included. A
-  phone or tablet (touch is the primary pointer, `web/lobby.js` `halfRateDevice`) says `hz=30` in its lobby `HELLO`, and a match
+- **30 Hz with a phone or a slow computer:** every game frame of an online match is exactly 1/60 s of game time (fixed step, so every
+  PC computes the same thing), so a device that computes fewer than 60 game frames a second would slow the whole match down, sound included. A
+  phone or tablet (`web/lobby.js` `phoneDevice`: the browser's mobile flag, an Android or mobile User-Agent, or touch as the primary
+  pointer; the server also checks the lobby WebSocket's User-Agent) says `hz=30` in its lobby `HELLO`, and so does a computer that
+  this browser measured unable to hold 60 in its last 60 Hz match (`web/rate.js`: its own game frames per second, not counting the
+  time it waited for the network, median of 5 s windows after the first 20 s, under 55; its first slow match still runs at 60). A match
   with such a member runs in the game's 30 Hz mode (`proto::matchStep`): half the frames for the same game time. Offline the game
   measures real time and lowers its own update rate, so a phone keeps normal speed there either way.
 - **5 to 8 players:** the game itself only has 4 player slots and 4 cameras. Players 5 to 8 drive monsters in the computer-player slots
@@ -176,11 +179,15 @@ cause can be read afterwards without asking anyone to copy logs.
   (frames presented) and `gfps` (game frames computed per second; `hz` is what it should be, 60 or 30), `work_ms` (the game loop's
   time per presented frame), `waits` and `wait_ms` (how often and for how long the game was blocked waiting for the other players'
   input; `waits_tot` and `wait_tot_ms` since the start), `delay` (input delay, frames), `ping_ms`, `ping_max_ms` and `jitter_ms`, `late`
-  (animation frames that took over 25 ms), `raf_p95_ms` and `raf_max_ms`, `lt_n`, `lt_ms` and `lt_max_ms` (main-thread tasks over
+  (animation frames that took over 25 ms), `raf_med_ms` (the median interval: the rate the page really gets, about 33 under a 30 fps
+  power-saving cap), `raf_p95_ms` and `raf_max_ms`, `lt_n`, `lt_ms` and `lt_max_ms` (main-thread tasks over
   50 ms, Chrome and Edge only), `au_cb`, `au_gaps` and `au_max_ms` (audio callbacks, and the ones later than 1.5 buffers, which are
-  dropped buffers), `hid_s` (seconds the tab was hidden), plus `up_s`, `frame`, `build`, `players`. The device is the class of device:
+  dropped buffers), `hid_s` (seconds the tab was hidden), `focus_pct` (share of samples with the page focused), `lag_ms` and
+  `lag_max_ms` (how late a task posted to the page ran: the match WebSocket waits in that queue), plus `up_s`, `frame`, `build`,
+  `players`. The device is the class of device:
   `touch`, `mobile`, `os`, `ua` (browser name and major version, for example `Chrome-131`; never the user agent string), `cores`,
-  `mem_gb`, `dpr`, `scr` (window size), `net`, `dl_mbps` and `est_rtt_ms` (the browser's own connection estimate). A field the browser
+  `mem_gb`, `dpr`, `scr` (window size), `net`, `dl_mbps` and `est_rtt_ms` (the browser's own connection estimate), `gpu` (the GPU model
+  from WebGL, `software ...` when the browser draws without one: hardware acceleration off or the GPU blocked). A field the browser
   can't give is left out.
 - **What the server adds.** Every 5 s of a started match, one line per player: `transport` (ws or enet), `hz`, `delay`, `rtt_ms`,
   `rtt_high_ms`, `in_pkts` (input packets since the last line), `in_gap_avg_ms` and `in_gap_max_ms` (how far apart the player's input
