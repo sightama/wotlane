@@ -198,7 +198,8 @@ cause can be read afterwards without asking anyone to copy logs.
   shows a busy time near the frame's 16.7 or 33.3 ms), `fr_len` (the game frames by length, without their network waits: how many took
   up to 1.25, 1.75, 2.25 and more frame periods; frames that round up to a whole extra vsync land in the third, pauses and hidden tabs
   in the last), `vbl_late_ms` and `vbl_slow` (how late, on average, the game's vblank clock woke past its target, and how many of its
-  wakes were over half a vblank late: under a ms on a fine timer, several ms on a coarse system timer), `waits`
+  wakes were over half a vblank late: under a ms normally, since the clock spins the last stretch before each vblank even on a coarse
+  system timer; several ms means its thread was starved of CPU), `waits`
   and `wait_ms` (how often and for how long the game was blocked waiting for the other players' input; `waits_tot` and `wait_tot_ms`
   since the start), `delay` (input delay, frames), `ping_ms`, `ping_max_ms` and `jitter_ms` (the round trip the server measures and
   sends each player every 500 ms: a browser can't time its WebSocket pings itself), `late` (animation frames that took over 25 ms),
