@@ -36,6 +36,15 @@ test('installGameInput stops the browser moving focus on Tab, only while the gam
   assert.equal(tab(), true);
 });
 
+test('installGameInput leaves Tab to the page\'s own overlay (the stall prompt\'s buttons) while the game runs', () => {
+  const win = fakeWindow();
+  installGameInput({ win, canvas: fakeCanvas(), running: () => true, idleCursor: false });
+  const press = (target) => { const e = { key: 'Tab', target, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } }; win.fire('keydown', e); return e.defaultPrevented; };
+  assert.equal(press({ closest: (sel) => (sel === '#stall' ? {} : null) }), false);   // a button inside #stall
+  assert.equal(press({ closest: () => null }), true);                                  // the canvas
+  assert.equal(press(undefined), true);
+});
+
 function fakeCanvas() {
   const listeners = {};
   return {

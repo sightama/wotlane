@@ -37,7 +37,7 @@ class IdleCursor {
 // `idleCursor`: false leaves the cursor alone (tests); it is also left alone on a touch screen
 function installGameInput({ win, canvas, running, idleCursor = true }) {
   win.addEventListener('keydown', (e) => {
-    if (running() && isGameTab(e)) e.preventDefault();
+    if (running() && isGameTab(e) && !e.target?.closest?.('#stall')) e.preventDefault();   // the stall prompt's buttons need Tab
   }, true);
   if (idleCursor && !win.matchMedia?.('(pointer: coarse)').matches)
     new IdleCursor({ canvas, setTimer: (fn, ms) => win.setTimeout(fn, ms), clearTimer: (id) => win.clearTimeout(id) }).start();

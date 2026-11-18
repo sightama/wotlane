@@ -47,7 +47,7 @@ async function run(name) {
       const canvas = document.getElementById('canvas');
       window.tabEvents = [];
       window.addEventListener('keydown', (e) => { if (e.key === 'Tab') window.tabEvents.push(e.defaultPrevented); });   // after gameinput's capture listener
-      wotmInstallGameInput({ win: window, canvas, running: () => true });
+      window.wotmStart(null, 'test');   // the page's own start (boot.js); the game's files are not there, which does not matter here
       canvas.tabIndex = 0;
       canvas.focus();
     });
