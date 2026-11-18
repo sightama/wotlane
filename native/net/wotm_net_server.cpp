@@ -798,6 +798,50 @@ namespace wotm_net
         }
     }
 
+    // Every 100 ms of a started match: the match frame, how far each member's inputs trail and who is away go to the Holdback; a member
+    // it names hears why (Reject: the page stops with the reason) and is dropped like one who left, so the others play on
+    void Server::holdbackTick(Match &m, const Lobby &l)
+    {
+        const Clock::time_point now = Clock::now();
+        if (now - m.lastHoldback < std::chrono::milliseconds(100))
+            return;
+        m.lastHoldback = now;
+        uint32_t lead = 0, frame = 0xFFFFFFFFu;
+        for (size_t i = 0; i < m.slots.size(); ++i)
+            if (!m.slots[i].gone)
+            {
+                lead = std::max(lead, m.inputs.nextMissing(static_cast<int>(i)));
+                frame = std::min(frame, m.inputs.nextMissing(static_cast<int>(i)));
+            }
+        std::vector<Holdback::Member> members;
+        for (size_t i = 0; i < m.slots.size(); ++i)
+        {
+            const Slot &s = m.slots[i];
+            const bool active = !s.gone && s.peer;
+            members.push_back({active ? lead - m.inputs.nextMissing(static_cast<int>(i)) : 0u, s.away, active});
+        }
+        const double t = std::chrono::duration<double>(now.time_since_epoch()).count();
+        const int hz = 60 / std::max(1, m.step);
+        const Holdback::Decision d = m.holdback.update(t, frame == 0xFFFFFFFFu ? 0u : frame, hz, members);
+        if (d.slot < 0)
+            return;
+        Slot &s = m.slots[static_cast<size_t>(d.slot)];
+        char why[200];
+        if (d.reason == Holdback::Reason::Away)
+            std::snprintf(why, sizeof why, "you were taken out of the match: your game was in the background for over %.0f s, which stops "
+                          "everyone (the others play on)", Holdback::kAwaySec);
+        else
+            std::snprintf(why, sizeof why, "you were taken out of the match: your device or connection could not keep up (the match ran at "
+                          "%.0f of %d frames a second; the others play on)", d.pace, hz);
+        send(s.peer, proto::kControl, proto::encode(proto::Reject{why}), true);
+        const char *reason = d.reason == Holdback::Reason::Away ? "away" : "slow";
+        log("lobby %s: %s held the match back (%s, pace %.1f of %d frames/s): taken out", l.code.c_str(), s.name.c_str(), reason, d.pace, hz);
+        char ev[160];
+        std::snprintf(ev, sizeof ev, " reason=%s pace=%.1f hz=%d", reason, d.pace, hz);
+        diagEvent(l, "event=dropped player=" + s.name + ev);
+        dropSlot(m, d.slot);
+    }
+
     void Server::diagTick(Match &m, const Lobby &l)
     {
         if (cfg_.diagEveryMs <= 0)
@@ -1294,6 +1338,7 @@ namespace wotm_net
             {
                 pace(*m, l);
                 diagTick(*m, l);
+                holdbackTick(*m, l);
                 for (size_t i = 0; i < m->slots.size(); ++i)
                 {
                     Slot &s = m->slots[i];
