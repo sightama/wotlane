@@ -1178,10 +1178,10 @@ index f247ff9..5568b05 100644
      EeKernelSnapshot m_snapshot;
 diff --git a/ps2xRuntime/include/runtime/ee_vblank_clock.h b/ps2xRuntime/include/runtime/ee_vblank_clock.h
 new file mode 100644
-index 0000000..0115619
+index 0000000..3cac13a
 --- /dev/null
 +++ b/ps2xRuntime/include/runtime/ee_vblank_clock.h
-@@ -0,0 +1,52 @@
+@@ -0,0 +1,76 @@
 +#pragma once
 +// WoTM: the vblank clock of the game executable's scheduler (EeSchedulerGame.cpp): a fixed 16.667 ms grid on the host, kept by a
 +// host thread that counts the vblanks that fell due for the EE to apply. Header-only so ps2xTest can test it without the game
@@ -1197,9 +1197,15 @@ index 0000000..0115619
 +    // The timer thread sleeps at most this long at a time: browsers oversleep a timed Atomics.wait in proportion to its length
 +    // (Chrome and Firefox on a Mac: 2.5 to 4.5 ms late on a whole period, under 0.6 ms in 2 ms slices)
 +    static constexpr std::chrono::microseconds kWaitSlice{2000};
++    // The timer thread stops sleeping this long before the vblank, on top of the worst oversleep seen lately, and spins the rest. A
++    // coarse system timer (Windows: up to 15.6 ms) makes that most of the period; the cap keeps one sleep a period, which keeps
++    // measuring the oversleep
++    static constexpr std::chrono::microseconds kSpinMargin{250};
++    static constexpr std::chrono::microseconds kMaxSpinLead = kPeriod - std::chrono::microseconds(1000);
 +
-+    Clock::time_point next{};   // when the next vblank falls due
-+    uint32_t due = 0;           // vblanks that fell due and the EE has not applied yet
++    Clock::time_point next{};               // when the next vblank falls due
++    uint32_t due = 0;                       // vblanks that fell due and the EE has not applied yet
++    std::chrono::microseconds oversleep{};  // the worst oversleep seen lately (a peak that decays by 1/256 a sleep)
 +
 +    void start(Clock::time_point now)
 +    {
@@ -1207,10 +1213,28 @@ index 0000000..0115619
 +        next = now + kPeriod;
 +    }
 +
-+    // Timer thread: when to wake from its next sleep (the next vblank, or one slice from now if that comes first)
++    // How long before the vblank the timer thread spins instead of sleeping
++    std::chrono::microseconds spinLead() const
++    {
++        const auto lead = oversleep + kSpinMargin;
++        return lead < kMaxSpinLead ? lead : kMaxSpinLead;
++    }
++
++    // Timer thread: when to wake from its next sleep (the spin lead before the next vblank, or one slice from now if that comes
++    // first). At or before `now`: don't sleep, spin to `next`
 +    Clock::time_point wakeAt(Clock::time_point now) const
 +    {
-+        return now + kWaitSlice < next ? now + kWaitSlice : next;
++        const Clock::time_point spinFrom = next - spinLead();
++        return now + kWaitSlice < spinFrom ? now + kWaitSlice : spinFrom;
++    }
++
++    // Timer thread, after a sleep it asked to end at `asked`: records how late it woke (early, from a notify, counts as on time)
++    void slept(Clock::time_point asked, Clock::time_point woke)
++    {
++        const auto late = woke > asked ? std::chrono::duration_cast<std::chrono::microseconds>(woke - asked) : std::chrono::microseconds{};
++        oversleep -= oversleep / 256;
++        if (late > oversleep)
++            oversleep = late;
 +    }
 +
 +    // Timer thread, woken at or after `next`: counts one vblank and moves the grid on. After a stall of more than 4 vblanks the grid
@@ -1856,10 +1880,10 @@ index c5e31c4..1d61f43 100644
  bool EeScheduler::hasReadyAtOrAbovePriority(int priority) const
 diff --git a/ps2xRuntime/src/lib/Kernel/EeSchedulerGame.cpp b/ps2xRuntime/src/lib/Kernel/EeSchedulerGame.cpp
 new file mode 100644
-index 0000000..d5e6d0d
+index 0000000..e1b3ae3
 --- /dev/null
 +++ b/ps2xRuntime/src/lib/Kernel/EeSchedulerGame.cpp
-@@ -0,0 +1,1342 @@
+@@ -0,0 +1,1355 @@
 +// WoTM (step 10 of docs/passos/FRONTEIRA.md in the WoTM repo): EeScheduler for the game executable (wotm), replacing EeScheduler.cpp.
 +// Measured in step 8: WotM uses a single thread (the main one), no INTC handler, one DMAC handler (hierSetDmaIntHandler,
 +// channel 1) and the vblank (sceGsSyncV); no semaphore, event flag, sleep or alarm in use. So there is no ready queue, time
@@ -2098,7 +2122,20 @@ index 0000000..d5e6d0d
 +        while (!m_stopRequested.load(std::memory_order_acquire))
 +        {
 +            const Clock::time_point target = G.vblank.next;
-+            G.timerCv.wait_until(lock, G.vblank.wakeAt(Clock::now()), [this]() { return m_stopRequested.load(std::memory_order_acquire); });
++            const Clock::time_point wake = G.vblank.wakeAt(Clock::now());
++            if (wake > Clock::now())
++            {
++                G.timerCv.wait_until(lock, wake, [this]() { return m_stopRequested.load(std::memory_order_acquire); });
++                G.vblank.slept(wake, Clock::now());
++            }
++            else
++            {
++                // within the spin lead: spin to the vblank without the lock, so the EE can take it meanwhile
++                lock.unlock();
++                while (Clock::now() < target && !m_stopRequested.load(std::memory_order_acquire))
++                    std::this_thread::yield();
++                lock.lock();
++            }
 +            if (m_stopRequested.load(std::memory_order_acquire))
 +                break;
 +            const Clock::time_point now = Clock::now();
@@ -6544,7 +6581,7 @@ index 4f979be..03042b7 100644
 +    });
  }
 diff --git a/ps2xTest/src/ps2_runtime_kernel_tests.cpp b/ps2xTest/src/ps2_runtime_kernel_tests.cpp
-index 63b12d9..cb03eee 100644
+index 63b12d9..cf192b1 100644
 --- a/ps2xTest/src/ps2_runtime_kernel_tests.cpp
 +++ b/ps2xTest/src/ps2_runtime_kernel_tests.cpp
 @@ -4,6 +4,7 @@
@@ -6555,7 +6592,7 @@ index 63b12d9..cb03eee 100644
  
  #include <array>
  #include <atomic>
-@@ -1564,4 +1565,48 @@ void register_ps2_runtime_kernel_tests()
+@@ -1564,4 +1565,74 @@ void register_ps2_runtime_kernel_tests()
                       "GetEntryAddress should read and return the handler address from the table");
          });
      });
@@ -6600,7 +6637,33 @@ index 63b12d9..cb03eee 100644
 +            vb.start(t0);
 +            t.IsTrue(vb.wakeAt(t0) == t0 + C::kWaitSlice, "far from the vblank: one slice");
 +            const auto close = vb.next - C::kWaitSlice / 2;
-+            t.IsTrue(vb.wakeAt(close) == vb.next, "within a slice of the vblank: wake at the vblank");
++            t.IsTrue(vb.wakeAt(close) == vb.next - vb.spinLead(), "within a slice of the vblank: wake the spin lead before it");
++            const auto inLead = vb.next - vb.spinLead() / 2;
++            t.IsTrue(vb.wakeAt(inLead) <= inLead, "within the spin lead: no sleep (spin to the vblank)");
++        });
++
++        tc.Run("the spin lead follows the worst oversleep seen lately", [&](TestCase &t)
++        {
++            C vb;
++            vb.start(t0);
++            t.IsTrue(vb.spinLead() == C::kSpinMargin, "no oversleep seen: just the margin");
++            vb.slept(t0, t0 + std::chrono::milliseconds(3));
++            t.IsTrue(vb.spinLead() == std::chrono::milliseconds(3) + C::kSpinMargin, "a 3 ms oversleep: spin the last 3 ms and the margin");
++            vb.slept(t0 + std::chrono::milliseconds(5), t0 + std::chrono::milliseconds(4));
++            t.IsTrue(vb.spinLead() >= std::chrono::milliseconds(2), "woken early (a notify) is no oversleep and keeps the peak");
++            for (int i = 0; i < 2000; ++i)
++                vb.slept(t0, t0 + std::chrono::microseconds(200));
++            t.IsTrue(vb.spinLead() < std::chrono::milliseconds(1), "the peak decays back to what the timer does now");
++        });
++
++        tc.Run("a coarse timer spins most of the period but still sleeps once a period", [&](TestCase &t)
++        {
++            C vb;
++            vb.start(t0);
++            vb.slept(t0, t0 + std::chrono::microseconds(15600));   // Windows' default 15.6 ms timer
++            t.IsTrue(vb.spinLead() == C::kMaxSpinLead, "the lead is capped below the period");
++            const auto justFired = vb.next - C::kPeriod;
++            t.IsTrue(vb.wakeAt(justFired) > justFired, "right after a vblank it sleeps, so the oversleep keeps being measured");
 +        });
 +    });
  }
