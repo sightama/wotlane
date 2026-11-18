@@ -242,6 +242,7 @@ namespace
         bool resimulating();   // a frame run again by a rollback: no drawing capture, pacing wait, sound output or input sampling
         void boundary(uint8_t *rdram, R5900Context *ctx);   // rtMain's frame boundary, right before wotm_sync::frame
         void barrier(const char *why);   // a point the state can't be rolled back across
+        bool dialogBoundary(uint8_t *rdram, R5900Context *ctx);   // a dialog loop's frame boundary: true when it restored a fight frame
         void init(PS2Runtime &runtime);
         double g_paceWaitMs = 0.0;   // the pacing wait in this boundary (waitMinRateByVblanks): not the game's time
     }
@@ -907,14 +908,15 @@ namespace
                 }
                 ++g_syncVCalls;
             }
-            if (ra == kDialogLoopSyncVRa && GPR_U32(ctx, 17) == 0u)
+            if (ra == kDialogLoopSyncVRa && GPR_U32(ctx, 17) == 0u && !wotm_rollback::resimulating())
                 wotmCaptureFrame(rdram);
             // each pass of the dialog loop is one fixed-step frame: it reads the pad (inputUpdate) and waits for vsync without going through
             // timerWaitForMinUpdateRate. Without this the frame index stopped and, over the network, every PC read forever the input of the
             // frame where the dialog opened (the menu didn't move). Here the index advances, local input is exchanged and the state goes into the hash
             if (ra == kDialogLoopSyncVRa && wotm_sync::g_fixedStep)
             {
-                wotm_rollback::barrier("dialog loop");
+                if (wotm_rollback::dialogBoundary(rdram, ctx))
+                    return;   // a fight frame was restored: the callers unwind and the EE resumes at its pc (wotm_rollback.inc)
                 wotm_sync::frame(rdram, kFieldCounter, kFieldCounterAtStart, kFieldsForAverage);
             }
             else if (ra == kFadeStepSyncVRa[0] || ra == kFadeStepSyncVRa[1])

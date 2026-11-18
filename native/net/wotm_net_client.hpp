@@ -24,6 +24,9 @@ namespace wotm_net
         uint16_t port = proto::kDefaultPort;
         std::string token, buildId, configHash, name;
         int dropInputPercent = 0;   // test: discards this percentage of the input packets sent
+        // rollback (WOTM_ROLLBACK): this PC's input gets the server's delay less this many frames, never under the floor
+        // (wotm_prediction.hpp rollbackDelay); 0 = the lockstep delay as the server advises it
+        uint32_t rollbackWindow = 0, rollbackFloor = 0;
     };
 
     class MatchClient
@@ -67,6 +70,10 @@ namespace wotm_net
         // waits up to `ms` for everyone's inputs for the frame; false if some are missing, or if the match stopped
         bool waitFrame(uint32_t frame, int ms);
         PadState input(int player, uint32_t frame) const;
+        // rollback: true with the player's input for the frame when it has arrived; what to predict for a frame that hasn't (the last
+        // input that arrived from that player)
+        bool arrived(int player, uint32_t frame, PadState &s) const;
+        PadState prediction(int player) const;
         // players with no input for the frame (for the "Waiting for ..." message)
         std::vector<int> missing(uint32_t frame) const;
         // state hash of the frame, with the 256 block hashes it came from (optional: the server then names the differing blocks)

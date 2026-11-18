@@ -3,6 +3,7 @@
 #include "wotm_confighash.hpp"
 #include "wotm_lockstep.hpp"
 #include "wotm_net_holdback.hpp"
+#include "wotm_prediction.hpp"
 #include "wotm_monsters.hpp"
 #include "wotm_lobby_client.hpp"
 #include "wotm_net_client.hpp"
@@ -512,6 +513,115 @@ namespace
             contiguous = contiguous && next == i + 1u + s.delay();
         }
         CHECK(contiguous);
+    }
+
+    // ---- rollback: predictions ----
+    using wotm_net::PredictedInputs;
+
+    // the inputs that have arrived, for PredictedInputs::firstWrong
+    struct Arrived
+    {
+        std::map<std::pair<int, uint32_t>, PadState> in;
+        bool operator()(int player, uint32_t frame, PadState &s) const
+        {
+            const auto it = in.find({player, frame});
+            if (it == in.end())
+                return false;
+            s = it->second;
+            return true;
+        }
+    };
+
+    // frames that ran on confirmed inputs only are final at once; nothing to roll back
+    TEST(predictions_confirmed_frames_are_final)
+    {
+        PredictedInputs p(2);
+        CHECK(p.finalThrough() == PredictedInputs::kNone);
+        for (uint32_t f = 0; f < 3; ++f)
+            for (int q = 0; q < 2; ++q)
+                p.ran(f, q, pressed(1), false);
+        CHECK(p.firstWrong(Arrived{}) == PredictedInputs::kNone);
+        CHECK(p.finalThrough() == 2u);
+    }
+
+    // a prediction that turns out right is confirmed; the frames are final once every prediction in them is
+    TEST(predictions_right_ones_become_final)
+    {
+        PredictedInputs p(2);
+        Arrived a;
+        for (uint32_t f = 0; f < 4; ++f)
+        {
+            p.ran(f, 0, pressed(1), false);
+            p.ran(f, 1, pressed(2), f >= 1);   // player 2's input from frame 1 on was predicted
+        }
+        CHECK(p.finalThrough() == 0u);
+        a.in[{1, 1}] = pressed(2);
+        a.in[{1, 2}] = pressed(2);
+        CHECK(p.firstWrong(a) == PredictedInputs::kNone);
+        CHECK(p.finalThrough() == 2u);
+        a.in[{1, 3}] = pressed(2);
+        CHECK(p.firstWrong(a) == PredictedInputs::kNone);
+        CHECK(p.finalThrough() == 3u);
+    }
+
+    // the first wrong prediction is where the rollback starts, whichever player it was; the predictions before it are confirmed
+    TEST(predictions_first_wrong_one_names_the_frame)
+    {
+        PredictedInputs p(3);
+        Arrived a;
+        for (uint32_t f = 10; f < 15; ++f)
+            for (int q = 0; q < 3; ++q)
+                p.ran(f, q, pressed(4), q != 0 && f >= 11);
+        a.in[{1, 11}] = pressed(4);   // right
+        a.in[{2, 11}] = pressed(4);   // right
+        a.in[{2, 12}] = pressed(4);   // right
+        a.in[{1, 12}] = pressed(5);   // wrong: frame 12
+        a.in[{2, 13}] = pressed(6);   // wrong too, later
+        CHECK(p.firstWrong(a) == 12u);
+        CHECK(p.finalThrough() == 11u);
+    }
+
+    // the frames that run again after a rollback are recorded anew; the corrected run is then checked like any other
+    TEST(predictions_are_forgotten_from_a_rollback_on)
+    {
+        PredictedInputs p(2);
+        Arrived a;
+        for (uint32_t f = 0; f < 4; ++f)
+        {
+            p.ran(f, 0, pressed(1), false);
+            p.ran(f, 1, pressed(1), f >= 2);
+        }
+        a.in[{1, 2}] = pressed(3);
+        CHECK(p.firstWrong(a) == 2u);
+        p.forget(2);
+        for (uint32_t f = 2; f < 4; ++f)
+        {
+            p.ran(f, 0, pressed(1), false);
+            p.ran(f, 1, f == 2 ? pressed(3) : pressed(3), f == 3);   // frame 2 now ran on the real input, frame 3 predicts it repeats
+        }
+        CHECK(p.firstWrong(a) == PredictedInputs::kNone);
+        CHECK(p.finalThrough() == 2u);
+    }
+
+    // each frame is recorded once per player: the game reads the pad twice per frame, and the second read must not change anything
+    TEST(predictions_keep_the_first_record_of_a_frame)
+    {
+        PredictedInputs p(1);
+        Arrived a;
+        p.ran(5, 0, pressed(1), true);
+        p.ran(5, 0, pressed(1), true);
+        a.in[{0, 5}] = pressed(1);
+        CHECK(p.firstWrong(a) == PredictedInputs::kNone && p.finalThrough() == 5u);
+    }
+
+    // the delay a player's input gets with a rollback window: the server's advice less the window, never under the floor
+    TEST(predictions_delay_is_the_advice_less_the_window_above_the_floor)
+    {
+        CHECK(wotm_net::rollbackDelay(6, 2, 2) == 4u);
+        CHECK(wotm_net::rollbackDelay(3, 2, 2) == 2u);
+        CHECK(wotm_net::rollbackDelay(1, 2, 2) == 2u);
+        CHECK(wotm_net::rollbackDelay(5, 0, 2) == 5u);   // no window: the advice as it is
+        CHECK(wotm_net::rollbackDelay(1, 0, 2) == 1u);
     }
 
     // ---- protocol ----
@@ -1444,6 +1554,38 @@ namespace
                 for (auto &c : cs)
                     same = same && c->input(p, f) == pressed(static_cast<uint16_t>((p << 8) | (f - d)));
         CHECK(same);
+    }
+
+    // With a rollback window the client gives its own input the server's delay less the window (never under the floor), and it can tell
+    // which inputs of the others have arrived and what to predict for the rest: the last input that arrived
+    TEST(match_rollback_window_shortens_the_delay_and_predicts)
+    {
+        ServerConfig cfg = testConfig();
+        RunningServer rs(cfg);
+        auto ms = formMatch(cfg.port, {"Ana", "Bia"}, {3, 1});
+        MatchClient a, b;
+        std::string err;
+        wotm_net::ClientConfig ca = clientFor(cfg.port, *ms[0]);
+        ca.rollbackWindow = 2;
+        ca.rollbackFloor = 1;
+        CHECK(a.start(ca, err) && b.start(clientFor(cfg.port, *ms[1]), err));
+        CHECK(a.waitStarted(5000) && b.waitStarted(5000));
+        const uint32_t d = b.delay();   // the server's advice (the same for both on one machine)
+        CHECK(a.delay() == wotm_net::rollbackDelay(d, 2, 1));
+        PadState s;
+        CHECK(a.arrived(1, d - 1u, s) && s == PadState{});   // the first frames are neutral for everyone
+        CHECK(!a.arrived(1, d, s));
+        CHECK(a.prediction(1) == PadState{});
+        b.pushLocal(d, pressed(0x0040));
+        bool came = false;
+        for (int i = 0; i < 200 && !came; ++i)
+        {
+            came = a.arrived(1, d, s);
+            if (!came)
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        CHECK(came && s == pressed(0x0040));
+        CHECK(a.prediction(1) == pressed(0x0040));
     }
 
     // The server re-picks each player's delay from the round trips while the match runs and the clients follow it one frame at a time;

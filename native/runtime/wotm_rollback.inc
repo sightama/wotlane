@@ -338,15 +338,13 @@ namespace wotm_rollback
         g_presentValid = false;
     }
 
-    // rtMain's frame boundary (waitMinRateByVblanks, right before wotm_sync::frame), in a fight
-    void boundary(uint8_t *rdram, R5900Context *ctx)
+    // the kind of the previous boundary: a dialog frame's snapshot is only ever compared, never restored, so the first fight frame
+    // after a dialog starts the history over
+    bool g_lastWasDialog = false;
+
+    // A frame boundary of either kind (below): save, and maybe restore n frames back. Returns true when it restored a snapshot.
+    bool step(uint8_t *rdram, R5900Context *ctx)
     {
-        if (!g_test || !wotm_sync::g_levelLoaded)
-            return;
-        // timerWaitForMinUpdateRate is also called by the menus (uiMain) and the shell's loop: only rtMain's call is a fight frame, and a
-        // snapshot restored from another caller would resume on another host call chain
-        if (GPR_U32(ctx, 31) - kFightLoop >= kFightLoopSize)
-            return barrier("frame outside the fight loop");
         if (g_state.size() == 0)
         {
             g_ctx = ctx;
@@ -357,7 +355,7 @@ namespace wotm_rollback
             std::fprintf(stderr, "[synctest] the boundary runs on another guest thread's context: barrier\n");
             g_ctx = ctx;
             barrier("thread change");
-            return;
+            return false;
         }
         if (const uint32_t banks = wotmSoundBankGeneration(); banks != g_soundBanks)
         {
@@ -369,7 +367,7 @@ namespace wotm_rollback
         switch (g_test->boundary(frame))
         {
         case rb::SyncTest::Step::Resimulated:
-            return;
+            return false;
         case rb::SyncTest::Step::Overshot:
             ++g_mismatches, ++g_mismatchesTotal;
             std::fprintf(stderr, "[synctest] MISMATCH: the redo reached frame %u without passing frame %u, where it started\n", frame,
@@ -394,7 +392,7 @@ namespace wotm_rollback
             report(frame);
             g_presentStart = t1;
             g_presentValid = true;
-            return;
+            return false;
         }
         case rb::SyncTest::Step::Save:
         case rb::SyncTest::Step::SaveAndBack:
@@ -413,7 +411,7 @@ namespace wotm_rollback
         {
             g_presentStart = t1;
             g_presentValid = true;
-            return;
+            return false;
         }
         if (!g_state.load(g_slots[g_test->slot(g_test->back())]))
         {
@@ -421,10 +419,54 @@ namespace wotm_rollback
             std::fprintf(stderr, "[synctest] MISMATCH: the snapshot of frame %u can't be restored: the game stops\n", g_test->back());
             g_runtime->requestStop();
             g_test.reset();
-            return;
+            return false;
         }
         g_restoreEnd = clk::now();
         g_restore.add(ms(t1, g_restoreEnd));
         g_presentValid = false;
+        return true;
+    }
+
+    // rtMain's frame boundary (waitMinRateByVblanks, right before wotm_sync::frame), in a fight. A restore here resumes at this same
+    // boundary of an earlier frame, so the caller carries on with the original function.
+    void boundary(uint8_t *rdram, R5900Context *ctx)
+    {
+        if (!g_test || !wotm_sync::g_levelLoaded)
+            return;
+        // timerWaitForMinUpdateRate is also called by the menus (uiMain) and the shell's loop: only rtMain's call is a fight frame, and a
+        // snapshot restored from another caller would resume on another host call chain
+        if (GPR_U32(ctx, 31) - kFightLoop >= kFightLoopSize)
+            return barrier("frame outside the fight loop");
+        if (g_lastWasDialog && !g_test->resimulating())
+            barrier("first fight frame after a dialog");
+        g_lastWasDialog = false;
+        step(rdram, ctx);
+    }
+
+    // A dialog loop's frame boundary (wotm_overrides.cpp syncVTapped: its sceGsSyncV, right before wotm_sync::frame). The first one
+    // after fight frames goes back like a fight frame: it restores rtMain's boundary of an earlier frame, which is not where this call
+    // came from, so it returns true and the caller returns at once without calling the original: the recompiled callers see a pc they
+    // didn't call and unwind, and the EE resumes at the restored pc (as after a scheduler checkpoint). The redo must reach this same
+    // dialog frame with the same state. The dialog's later frames are barriers.
+    bool dialogBoundary(uint8_t *rdram, R5900Context *ctx)
+    {
+        if (!g_test || !wotm_sync::g_levelLoaded)
+            return false;
+        const bool first = !g_lastWasDialog;
+        g_lastWasDialog = true;
+        if (!first && !g_test->resimulating())
+        {
+            barrier("dialog loop");
+            return false;
+        }
+        const bool redoing = g_test->resimulating();
+        const uint32_t mismatches = g_mismatchesTotal, frame = wotm_sync::g_index;
+        const bool restored = step(rdram, ctx);
+        if (restored)
+            std::fprintf(stderr, "[synctest] dialog frame %u: back to fight frame %u through the unwind\n", frame, g_test->back());
+        else if (redoing && !g_test->resimulating())
+            std::fprintf(stderr, "[synctest] dialog frame %u reached again by the redo: %s\n", frame,
+                         g_mismatchesTotal == mismatches ? "same state" : "MISMATCH (above)");
+        return restored;
     }
 }

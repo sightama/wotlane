@@ -1,6 +1,7 @@
 // ABOUTME: Network match client implementation: a thread that joins with the token over the match transport (ENet or WebSocket),
 // ABOUTME: relays inputs with acks and redundancy, applies drops and stops on desync. The game only calls pushSample/waitFrame/input.
 #include "wotm_net_client.hpp"
+#include "wotm_prediction.hpp"
 
 #include <algorithm>
 
@@ -121,7 +122,7 @@ namespace wotm_net
             proto::Start s;
             if (proto::decode(data, s) && local_ >= 0)
             {
-                schedule_ = LocalSchedule(s.delay);
+                schedule_ = LocalSchedule(rollbackDelay(s.delay, cfg_.rollbackWindow, cfg_.rollbackFloor));
                 names_ = s.names;
                 inputs_ = InputTimeline(players_, s.delay);
                 for (const auto &d : drops_)
@@ -182,7 +183,7 @@ namespace wotm_net
         {
             proto::Pace p;
             if (proto::decode(data, p) && status_ == Status::Running)
-                schedule_.setTarget(p.delay);
+                schedule_.setTarget(rollbackDelay(p.delay, cfg_.rollbackWindow, cfg_.rollbackFloor));
             break;
         }
         case proto::Type::Rtt:
@@ -330,6 +331,22 @@ namespace wotm_net
     {
         std::lock_guard<std::mutex> lk(mu_);
         return inputs_.get(player, frame);
+    }
+
+    bool MatchClient::arrived(int player, uint32_t frame, PadState &s) const
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        if (!inputs_.has(player, frame))
+            return false;
+        s = inputs_.get(player, frame);
+        return true;
+    }
+
+    PadState MatchClient::prediction(int player) const
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        const uint32_t next = inputs_.nextMissing(player);
+        return next == 0u ? PadState{} : inputs_.get(player, next - 1u);
     }
 
     std::vector<int> MatchClient::missing(uint32_t frame) const
