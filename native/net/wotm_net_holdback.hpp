@@ -60,9 +60,23 @@ namespace wotm_net
                     return {};
                 started_ = true, start_ = t;
             }
+            // while a member is away: how long, and in how many samples it was the one alone at the back (holding everyone)
             awaySince_.resize(members.size(), -1.0);
+            awaySamples_.resize(members.size(), 0);
+            awayBack_.resize(members.size(), 0);
+            const int back = aloneAtBack(members, members);
             for (size_t i = 0; i < members.size(); ++i)
-                awaySince_[i] = members[i].active && members[i].away ? (awaySince_[i] < 0 ? t : awaySince_[i]) : -1.0;
+            {
+                if (!members[i].active || !members[i].away)
+                {
+                    awaySince_[i] = -1.0, awaySamples_[i] = awayBack_[i] = 0;
+                    continue;
+                }
+                if (awaySince_[i] < 0)
+                    awaySince_[i] = t;
+                ++awaySamples_[i];
+                awayBack_[i] += back == static_cast<int>(i);
+            }
             samples_.push_back({t, frame, members});
             // the window starts at the newest sample that is at least kSlowWindowSec old (samples come every 100 ms or a little more)
             while (samples_.size() > 1 && samples_[1].t <= t - kSlowWindowSec + 1e-6)
@@ -75,7 +89,7 @@ namespace wotm_net
             if (active <= 2)
                 return {};
             for (size_t i = 0; i < members.size(); ++i)
-                if (awaySince_[i] >= 0 && t - awaySince_[i] > kAwaySec)
+                if (awaySince_[i] >= 0 && t - awaySince_[i] > kAwaySec && awayBack_[i] >= kLastShare * awaySamples_[i])
                     return named(static_cast<int>(i), Reason::Away, 0);
             const Sample &first = samples_.front();
             const double span = t - first.t;
@@ -88,22 +102,8 @@ namespace wotm_net
             // trails is capped by the input delay, so on a short delay it is about one frame: the count is what tells it apart
             std::vector<int> last(members.size(), 0);
             for (const Sample &s : samples_)
-            {
-                int at = -1;
-                uint32_t most = 0;
-                bool alone = false;
-                for (size_t i = 0; i < s.members.size() && i < members.size(); ++i)
-                {
-                    if (!members[i].active)
-                        continue;
-                    if (s.members[i].behind > most)
-                        most = s.members[i].behind, at = static_cast<int>(i), alone = true;
-                    else if (s.members[i].behind == most)
-                        alone = false;
-                }
-                if (at >= 0 && alone)
+                if (const int at = aloneAtBack(s.members, members); at >= 0)
                     ++last[static_cast<size_t>(at)];
-            }
             const auto worst = std::max_element(last.begin(), last.end());
             if (*worst < kLastShare * static_cast<double>(samples_.size()))
                 return {};
@@ -111,6 +111,24 @@ namespace wotm_net
         }
 
     private:
+        // the member alone at the back of a sample (the only one with the largest trail, above 0) among those active now; -1: none
+        static int aloneAtBack(const std::vector<Member> &sample, const std::vector<Member> &now)
+        {
+            int at = -1;
+            uint32_t most = 0;
+            bool alone = false;
+            for (size_t i = 0; i < sample.size() && i < now.size(); ++i)
+            {
+                if (!now[i].active)
+                    continue;
+                if (sample[i].behind > most)
+                    most = sample[i].behind, at = static_cast<int>(i), alone = true;
+                else if (sample[i].behind == most)
+                    alone = false;
+            }
+            return alone ? at : -1;
+        }
+
         struct Sample
         {
             double t;
@@ -122,6 +140,8 @@ namespace wotm_net
         {
             samples_.clear();
             awaySince_.assign(awaySince_.size(), -1.0);
+            awaySamples_.assign(awaySamples_.size(), 0);
+            awayBack_.assign(awayBack_.size(), 0);
             return {slot, reason, pace};
         }
 
@@ -131,5 +151,6 @@ namespace wotm_net
         double start_ = 0;
         std::deque<Sample> samples_;
         std::vector<double> awaySince_;
+        std::vector<int> awaySamples_, awayBack_;
     };
 }
