@@ -119,14 +119,15 @@ export function setOption(text, key, value) {
   return setIni(text, key, value);
 }
 
-// A phone's drawing in an online match: the main thread that draws shares the phone's few fast cores with the game, which must keep
-// up with the match, so a phone draws at 60 (no in-between frames) and at 75% scale there. A player who set either option keeps
+// The drawing of a phone, or of a device measured too slow for its matches (web/rate.js), in an online match: the main thread that
+// draws shares the device's cores with the game, which must keep up with the match, so such a device draws at 60 (no in-between
+// frames) and at 75% scale there. A player who set either option keeps
 // theirs; a line with the default value counts as unset (the game writes every key back). `text`: settings.ini. Returns env values
-const PHONE_MATCH_DRAWING = { WOTM_HZ: '60', WOTM_RENDERSCALE: '75' };
-export function phoneMatchDrawing(text) {
+const LIGHT_MATCH_DRAWING = { WOTM_HZ: '60', WOTM_RENDERSCALE: '75' };
+export function lightMatchDrawing(text) {
   const file = parseIni(text);
   const out = {};
-  for (const [key, value] of Object.entries(PHONE_MATCH_DRAWING)) {
+  for (const [key, value] of Object.entries(LIGHT_MATCH_DRAWING)) {
     const def = OPTIONS.find((o) => o.key === key).def;
     if ((file.get(key) ?? def) === def) out[key] = value;
   }

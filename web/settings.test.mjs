@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs';
 import { Dir } from './fakefs.mjs';
 import { MOVIE_MODES, DEFAULT_MODE } from './movies.js';
 import {
-  OPTIONS, TABS, parseIni, setIni, setOption, choiceFor, readSettings, updateSetting, settingsSaved, optionsOf, phoneMatchDrawing,
+  OPTIONS, TABS, parseIni, setIni, setOption, choiceFor, readSettings, updateSetting, settingsSaved, optionsOf, lightMatchDrawing,
 } from './settings.js';
 
 const hpp = readFileSync(new URL('../native/wotm_settings.hpp', import.meta.url), 'utf8');
@@ -171,13 +171,13 @@ test('the display tab offers the wide HUD and a 60 Hz cap on the display rate', 
   assert.deepEqual(display('WOTM_HZ').choices.map(([v]) => v), ['0', '60']);
 });
 
-test('phoneMatchDrawing: a phone in an online match draws at 60 and at 75% scale, unless its player chose those settings', () => {
-  assert.deepEqual(phoneMatchDrawing(''), { WOTM_HZ: '60', WOTM_RENDERSCALE: '75' });
+test('lightMatchDrawing: a phone in an online match draws at 60 and at 75% scale, unless its player chose those settings', () => {
+  assert.deepEqual(lightMatchDrawing(''), { WOTM_HZ: '60', WOTM_RENDERSCALE: '75' });
   // a line with the default value is the game writing every key back, not the player's choice
-  assert.deepEqual(phoneMatchDrawing('WOTM_HZ=0\nWOTM_RENDERSCALE=100\n'), { WOTM_HZ: '60', WOTM_RENDERSCALE: '75' });
-  assert.deepEqual(phoneMatchDrawing('WOTM_RENDERSCALE=125\n'), { WOTM_HZ: '60' });
-  assert.deepEqual(phoneMatchDrawing('WOTM_HZ=60\nWOTM_RENDERSCALE=50\n'), {});
+  assert.deepEqual(lightMatchDrawing('WOTM_HZ=0\nWOTM_RENDERSCALE=100\n'), { WOTM_HZ: '60', WOTM_RENDERSCALE: '75' });
+  assert.deepEqual(lightMatchDrawing('WOTM_RENDERSCALE=125\n'), { WOTM_HZ: '60' });
+  assert.deepEqual(lightMatchDrawing('WOTM_HZ=60\nWOTM_RENDERSCALE=50\n'), {});
   // every value offered is one the Settings page has
-  for (const [key, value] of Object.entries(phoneMatchDrawing('')))
+  for (const [key, value] of Object.entries(lightMatchDrawing('')))
     assert.ok(OPTIONS.find((o) => o.key === key).choices.some(([v]) => v === value), key);
 });
