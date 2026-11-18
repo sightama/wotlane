@@ -1,7 +1,7 @@
 # The browser version
 
 The whole port (the recompiled game, the PS2Recomp runtime and `native/`) built with Emscripten into one WebAssembly module, plus a
-page in `web/`. It runs in Chrome, Edge and Firefox on a computer and in Chrome on an Android phone. The disc is never part of the build or the repo: the page reads it from a `data/`
+page in `web/`. It runs in Chrome, Edge, Brave and Firefox on a computer and in Chrome on an Android phone. The disc is never part of the build or the repo: the page reads it from a `data/`
 folder its server provides.
 
 **Direction: browser first.** The browser version is the product. Mac-native features, Mac friends zips and browser-versus-Mac cross-play

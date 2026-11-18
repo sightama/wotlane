@@ -47,10 +47,11 @@ const chip = (page, name, kind) => row(page, name).locator('.' + kind);
 const text = (locator) => locator.textContent({ timeout: 8000 });
 const waitFor = async (page, fn, arg, ms = 10000) => { try { await page.waitForFunction(fn, arg, { timeout: ms }); return true; } catch { return false; } };
 
-// `softwareGl`: the page reads its WebGL as drawn in software (diag.js readSoftwareGl keeps its answer in window.wotmSoftwareGl)
+// `softwareGl`: the page reads its WebGL as drawn in software, or not, whatever this host's browser draws with (diag.js readSoftwareGl
+// keeps its answer in window.wotmSoftwareGl)
 async function player(browser, name, health, softwareGl = false) {
   const context = await browser.newContext();
-  if (softwareGl) await context.addInitScript(() => { window.wotmSoftwareGl = 1; });
+  await context.addInitScript((sw) => { window.wotmSoftwareGl = sw; }, softwareGl ? 1 : 0);
   if (health) await context.addInitScript((h) => { try { localStorage.setItem('wotlane.deviceHealth', JSON.stringify(h)); } catch { /* none */ } }, health);
   const page = await context.newPage();
   await page.goto(`http://127.0.0.1:${sitePort}/?server=ws://127.0.0.1:${ports.ws}`);
