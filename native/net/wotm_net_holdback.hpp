@@ -24,6 +24,7 @@ namespace wotm_net
         static constexpr double kSlowShare = 0.75;     // ...under this share of the match's rate
         static constexpr double kLastShare = 0.6;      // the bottleneck is alone at the back in at least this share of the samples
         static constexpr double kFreezeSec = 1.0;      // the window's longest freeze, from this long to half the window, is one outage
+        static constexpr double kOutageEverySec = 60.0; // ...excused at most once this often (a freeze that keeps coming is judged)
 
         enum class Reason { None, Away, Slow };
         struct Member
@@ -97,9 +98,17 @@ namespace wotm_net
             if (first.t - start_ < kGraceSec - 1e-6 || span < kSlowWindowSec - 1e-6)
                 return {};
             // one outage is not a slow device: the window's longest freeze, from kFreezeSec to half the window, is left out of the pace and
-            // of who was at the back (a longer one is judged: a page that never moves, a connection that is gone)
+            // of who was at the back, once every kOutageEverySec (a longer one is judged: a page that never moves, a connection that is gone;
+            // and so is a freeze that keeps coming)
             const Freeze freeze = longestFreeze();
-            const bool outage = freeze.seconds >= kFreezeSec && freeze.seconds < kSlowWindowSec / 2;
+            bool outage = freeze.seconds >= kFreezeSec && freeze.seconds < kSlowWindowSec / 2;
+            if (outage && !(excused_ && samples_[freeze.first].frame == excusedFrame_))   // a freeze not excused yet: one a minute
+            {
+                if (excused_ && t - excusedAt_ < kOutageEverySec)
+                    outage = false;
+                else
+                    excused_ = true, excusedFrame_ = samples_[freeze.first].frame, excusedAt_ = t;
+            }
             const double moving = span - (outage ? freeze.seconds : 0.0);
             const double pace = (frame - first.frame) / moving;
             if (pace >= kSlowShare * hz)
@@ -147,7 +156,8 @@ namespace wotm_net
             uint32_t frame;
             std::vector<Member> members;
         };
-        // the longest run of samples on one frame in the window: from samples_[first] to samples_[last], `seconds` long
+        // the longest run of samples on one frame in the window: from samples_[first] to samples_[last], `seconds` long (until the sample
+        // that moved on, or the newest one while it lasts)
         struct Freeze
         {
             size_t first = 0, last = 0;
@@ -161,8 +171,9 @@ namespace wotm_net
                 size_t j = i;
                 while (j + 1 < samples_.size() && samples_[j + 1].frame == samples_[i].frame)
                     ++j;
-                if (samples_[j].t - samples_[i].t > best.seconds)
-                    best = {i, j, samples_[j].t - samples_[i].t};
+                const double end = j + 1 < samples_.size() ? samples_[j + 1].t : samples_[j].t;
+                if (end - samples_[i].t > best.seconds)
+                    best = {i, j, end - samples_[i].t};
                 i = j + 1;
             }
             return best;
@@ -184,5 +195,8 @@ namespace wotm_net
         std::deque<Sample> samples_;
         std::vector<double> awaySince_;
         std::vector<int> awaySamples_, awayBack_;
+        bool excused_ = false;          // an outage was excused (kOutageEverySec), the freeze on excusedFrame_ at excusedAt_
+        uint32_t excusedFrame_ = 0;
+        double excusedAt_ = 0;
     };
 }
