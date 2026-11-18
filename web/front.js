@@ -7,7 +7,8 @@ import { lightMatchDrawing, readSettings, settingsSaved } from './settings.js';
 import { playStartupMovies } from './movies.js';
 import { DiagReporter, FrameWatch, LongTaskWatch, TaskLagWatch, deviceFields, diagLine, flushSocket, installAudioWatch, joinFields, readGame, reportFields } from './diag.js';
 import { deliverReport, initReport } from './report_ui.js';
-import { RateMemory } from './rate.js';
+import { RateMemory, healthLine, rememberedHealth } from './rate.js';
+import { lobbyWarnings, memberStatus } from './lobby_status.js';
 
 const MONSTERS = [[1, 'Congar'], [2, 'Robo-47'], [3, 'Togera'], [4, 'Ultra V'], [5, 'Preytor'], [7, 'Kineticlops'], [8, 'Magmo'],
   [9, 'Raptros'], [10, 'Agamo'], [11, 'Zorgulon']];
@@ -52,6 +53,7 @@ let owner = false;
 let myName = '';
 let members = { owner: '', members: [] };
 let pings = {};
+let healths = {};   // each member's device health (HEALTH), by name
 let myMonster = 0;   // the monster the server last accepted
 
 // the owner picks the stage, wins and modifiers and starts; a guest sees them. The server hands the lobby on when the owner leaves
@@ -59,6 +61,7 @@ function setOwner(isOwner) {
   owner = isOwner;
   $('ownerOnly').hidden = !isOwner;
   $('guestSettings').hidden = isOwner;
+  showMemberList();   // the owner's buttons come and go with the role
 }
 
 function showLobby(code, isOwner) {
@@ -70,6 +73,10 @@ function showLobby(code, isOwner) {
 }
 
 function showMembers(m) {
+  if (lobby && !$('inLobby').hidden && m.owner !== myName && owner) {
+    setOwner(false);
+    say(`${m.owner} is the owner now.`);
+  }
   if (lobby && !$('inLobby').hidden && m.owner === myName && !owner) {
     const s = lobby.settings;   // the controls start from what the lobby has
     if (s.stage !== undefined) $('lobbyStage').value = s.stage;
@@ -100,16 +107,57 @@ function sendChat() {
   $('chatText').value = '';
 }
 
-// each member's round trip to the server arrives (PINGS) every second while the lobby waits; a member without a measurement shows none
+// A button that asks once more before it acts: the first click turns it into "Sure?" for a few seconds
+function confirmButton(label, act) {
+  const button = document.createElement('button');
+  button.textContent = label;
+  let timer = 0;
+  button.addEventListener('click', () => {
+    if (timer) {
+      clearTimeout(timer);
+      return act();
+    }
+    button.textContent = 'Sure?';
+    timer = setTimeout(() => { timer = 0; button.textContent = label; }, 3000);
+  });
+  return button;
+}
+
+// the owner's controls on another member's row: hand the lobby over, or remove them (they can't join it again for a minute)
+function ownerControls(name) {
+  const handOver = confirmButton('Make owner', () => lobby?.handOver(name).catch((e) => say(friendlyError(e.message))));
+  const remove = confirmButton('Remove', () => lobby?.kick(name).catch((e) => say(friendlyError(e.message))));
+  return [handOver, remove];
+}
+
+// The member rows are built when the members change; each member's ping (PINGS, every second while the lobby waits) and device health
+// (HEALTH) then change the chips in place, so a button is never replaced under a click
 function showMemberList() {
   $('members').replaceChildren(...members.members.map((p) => {
     const li = document.createElement('li');
+    li.dataset.name = p.name;
     const monster = MONSTERS.find(([id]) => id === p.monster);
     const skin = p.skin ? `, skin ${p.skin}` : '';
-    const ping = typeof pings[p.name] === 'number' ? `, ${pings[p.name]} ms` : '';
-    li.textContent = `${p.name} (${monster ? monster[1] : 'monster ' + p.monster}${skin})${ping}${p.name === members.owner ? ', owner' : ''}`;
+    const who = Object.assign(document.createElement('span'), { className: 'who' });
+    who.textContent = `${p.name} (${monster ? monster[1] : 'monster ' + p.monster}${skin})${p.name === members.owner ? ', owner' : ''}`;
+    const chips = ['ping', 'device'].map((kind) => Object.assign(document.createElement('span'), { className: `chip ${kind}` }));
+    li.append(who, ...chips, ...(owner && p.name !== myName ? ownerControls(p.name) : []));
     return li;
   }));
+  showMemberStatus();
+}
+
+function showMemberStatus() {
+  const names = members.members.map((p) => p.name);
+  for (const li of $('members').children) {
+    const status = memberStatus(li.dataset.name, pings, healths);
+    for (const kind of ['ping', 'device']) {
+      const chip = li.querySelector('.' + kind);
+      chip.textContent = status[kind].text;
+      chip.className = `chip ${kind} ${status[kind].level}`;
+    }
+  }
+  $('lobbyWarnings').replaceChildren(...lobbyWarnings(names, pings, healths).map((text) => Object.assign(document.createElement('li'), { textContent: text })));
 }
 
 // Diagnostics: while a match runs, the lobby connection (which stays open) carries a DIAG report every 5 s and a last one when the match
@@ -196,7 +244,9 @@ async function connect(build) {
   const client = new LobbyClient(ws, build, { halfRate: halfRateDevice(window) });
   client.onMembers = showMembers;
   client.onChat = showChat;
-  client.onPings = (p) => { pings = p; showMemberList(); };
+  client.onPings = (p) => { pings = p; showMemberStatus(); };
+  client.onHealth = (h) => { healths = h; showMemberStatus(); };
+  client.onKicked = ({ seconds }) => backToChoice(`The owner removed you from the lobby. You can join it again in  seconds.`);
   client.onSettings = (s) => {
     // a saved map shows by its name when this browser has it (Your creations), else by its id
     const stage = [...$('lobbyStage').options].find((o) => o.value === s.stage);
@@ -296,6 +346,7 @@ async function hostOrJoin(join) {
   const code = $('joinCode').value.trim().toUpperCase();
   if (join && !/^[A-Z2-9]{4}$/.test(code)) return say('The code has 4 characters (letters and digits).');
   pings = {};
+  healths = {};
   $('chatLog').replaceChildren();
   say(join ? 'Joining' : 'Creating a lobby');
   stopWatchingLobbies();
@@ -305,6 +356,8 @@ async function hostOrJoin(join) {
     const build = await buildId();
     lobby = await connect(build);
     showLobby(join ? await lobby.join(code, name, monster) : await lobby.create(name, monster), !join);
+    const health = rememberedHealth(localStorage);
+    if (health) lobby.health(healthLine(health));   // what the last match showed of this device, for the other members
     lobby.diag(diagLine(joinFields([['build', build], ['lobby', lobby.code], ['name', name]], deviceFields(window))));
     if (!join) await sendSettings();
   } catch (e) {
@@ -325,6 +378,19 @@ async function sendSettings() {
   } catch (e) {
     say(friendlyError(e.message));
   }
+}
+
+// the Host/Join choice again, with `text` on the panel: after Leave, or when the owner removed this player (the server has taken them
+// out of the lobby already)
+function backToChoice(text) {
+  lobby?.close();
+  lobby = null;
+  $('inLobby').hidden = true;
+  $('inviteLink').hidden = true;
+  $('choose').hidden = false;
+  for (const id of ['single', 'host', 'join']) $(id).disabled = false;
+  say(text);
+  startWatchingLobbies();
 }
 
 // back from a match (Leave the match reloads the page): the code is offered again only while the server still holds that lobby
@@ -439,12 +505,7 @@ function init() {
     // LEFT only comes when the server still has the player in a lobby: a second of waiting is enough
     try { await Promise.race([leaving?.leave(), new Promise((r) => setTimeout(r, 1000))]); } catch { /* the connection is closed next either way */ }
     leaving?.close();
-    $('inLobby').hidden = true;
-    $('inviteLink').hidden = true;
-    $('choose').hidden = false;
-    for (const id of ['single', 'host', 'join']) $(id).disabled = false;
-    say('');
-    startWatchingLobbies();
+    backToChoice('');
   });
 }
 
