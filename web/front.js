@@ -5,11 +5,12 @@ import { initCreations, addLobbyChoices } from './creations_ui.js';
 import { initSettings } from './settings_ui.js';
 import { lightMatchDrawing, readSettings, settingsSaved } from './settings.js';
 import { playStartupMovies } from './movies.js';
-import { DiagReporter, FrameWatch, LongTaskWatch, TaskLagWatch, deviceFields, diagLine, flushSocket, installAudioWatch, joinFields, latencySource, readGame, reportFields } from './diag.js';
+import { DiagReporter, DiscWatch, FrameWatch, LongTaskWatch, TaskLagWatch, deviceFields, diagLine, flushSocket, installAudioWatch, joinFields, latencySource, readGame, readSoftwareGl, reportFields } from './diag.js';
 import { deliverReport, initReport } from './report_ui.js';
 import { RateMemory, healthLine, rememberedHealth } from './rate.js';
 import { lobbyWarnings, memberStatus } from './lobby_status.js';
-import { BRAVE_NOTICE, detectBrave } from './brave.js';
+import { detectBrave } from './brave.js';
+import { frontNotice } from './device_notice.js';
 
 const MONSTERS = [[1, 'Congar'], [2, 'Robo-47'], [3, 'Togera'], [4, 'Ultra V'], [5, 'Preytor'], [7, 'Kineticlops'], [8, 'Magmo'],
   [9, 'Raptros'], [10, 'Agamo'], [11, 'Zorgulon']];
@@ -91,6 +92,13 @@ function showMembers(m) {
   members = m;
   braves = new Set([...braves].filter((name) => m.members.some((p) => p.name === name)));   // a member who left is not Brave under a name someone else takes
   showMemberList();
+  warmLobbyMatch(lobby?.settings?.stage);
+}
+
+// the disc chunks of the match this lobby would start (web/match_prefetch.js) come down while everyone waits, so no player's fight
+// load waits on the network at the start
+function warmLobbyMatch(stage) {
+  if (stage !== undefined) window.wotmMatchPrefetch?.warmer.want(stage, members.members);
 }
 
 // the lobby's chat: the last CHAT_LINES lines, the newest in view
@@ -210,6 +218,7 @@ function startDiag(client, socket, match, build) {
     hasFocus: () => document.hasFocus(),
     lag: new TaskLagWatch({ now: () => performance.now(), post: postTask }),
     latency: latencySource(window),
+    disc: new DiscWatch(typeof BroadcastChannel === 'function' ? new BroadcastChannel('wotlane-disc') : null),
   });
   diagReporter.begin();
   // the last report goes out as the match ends: boot.js calls this before it reloads the page (the game quit, or Leave the match)
@@ -265,6 +274,7 @@ async function connect(build) {
     const stage = [...$('lobbyStage').options].find((o) => o.value === s.stage);
     $('guestSettings').textContent = `Stage: ${stage ? stage.text : s.stage}, wins: ${s.wins === '0' ? 'endless' : s.wins}` +
       (s.mods ? `, modifiers: ${s.mods}` : '');
+    warmLobbyMatch(s.stage);
   };
   client.onError = (text) => say(friendlyError(text));
   client.onClose = () => { if (!front.hidden) say('Lost the connection to the game server. Reload the page to try again.'); };
@@ -400,6 +410,8 @@ async function sendSettings() {
 function backToChoice(text) {
   lobby?.close();
   lobby = null;
+  members = { owner: '', members: [] };   // the next lobby's settings must not warm this one's monsters
+  window.wotmMatchPrefetch?.warmer.cancel();
   $('inLobby').hidden = true;
   $('inviteLink').hidden = true;
   $('choose').hidden = false;
@@ -472,8 +484,9 @@ function init() {
   $('name').value = recall('name', '');
   detectBrave(navigator).then((brave) => {   // this player's own screen: the front panel carries the notice until they leave it
     onBrave = brave;
-    $('braveNote').hidden = !brave;
-    $('braveNote').textContent = brave ? BRAVE_NOTICE : '';
+    const note = frontNotice({ brave, softwareGl: readSoftwareGl(window) });
+    $('deviceNote').hidden = !note;
+    $('deviceNote').textContent = note;
     if (brave && lobby?.code) lobby.brave();   // the lobby was joined before the answer came
   });
   const invited = window.inviteCode(new URLSearchParams(location.search));

@@ -160,6 +160,15 @@ test('prefetch asks for the listed chunks in runs of neighbours, a few requests 
   assert.deepEqual(net.gets().map((c) => c.range).sort(), ['bytes=0-15', 'bytes=32-47', 'bytes=48-55', 'bytes=72-79'].sort());
 });
 
+test('prefetch asks for nothing more once stop() says so', async () => {
+  const net = fakeNetwork();
+  let stopped = false;
+  const counting = async (url, init) => { const r = await net(url, init); stopped = true; return r; };
+  const runs = await prefetch(counting, 'data/game.iso', [0, 2, 4, 6], { chunkBytes: CHUNK, maxRun: 1, concurrency: 1, stop: () => stopped });
+  assert.deepEqual(net.gets().map((c) => c.range), ['bytes=0-7']);
+  assert.equal(runs, 1);   // the runs asked for
+});
+
 test('the fetch backend\'s double slash (data//game.iso) names the same file and cache', async () => {
   const net = fakeNetwork();
   const caches = fakeCaches();

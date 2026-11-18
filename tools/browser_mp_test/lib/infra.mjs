@@ -105,12 +105,15 @@ export async function launchBrowsers(pw, { n, browser = 'chromium', headed = fal
   if (browser === 'chrome') {
     opts.channel = 'chrome';
     opts.args = ['--autoplay-policy=no-user-gesture-required'];   // the real GPU
+  } else if (browser === 'brave') {   // Brave (WOTM_BRAVE: its binary), a new profile: Shields at their defaults
+    opts.executablePath = process.env.WOTM_BRAVE || '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser';
+    opts.args = ['--autoplay-policy=no-user-gesture-required'];
   }
   // animation frames at full rate in every window, covered or not (a covered window otherwise gets 30 a second), and in headless
   // Chromium as fast as it can draw: the page reads a display above 60 Hz and the game draws interpolated frames
   if (unlockFrames) {
     opts.args.push('--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding', '--disable-background-timer-throttling');
-    if (browser !== 'chrome') opts.args.push('--disable-frame-rate-limit', '--disable-gpu-vsync');
+    if (browser === 'chromium') opts.args.push('--disable-frame-rate-limit', '--disable-gpu-vsync');
   }
   const count = isolation === 'browser' ? n : 1;
   const list = [];

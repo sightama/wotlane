@@ -210,7 +210,10 @@ cause can be read afterwards without asking anyone to copy logs.
   `build`, `players`. The device is the class of device: `touch`, `mobile`, `os`, `ua` (browser name and major version, for example
   `Chrome-131`; never the user agent string), `cores`, `mem_gb`, `dpr`, `scr` (window size), `net`, `dl_mbps` and `est_rtt_ms` (the
   browser's own connection estimate), `gpu` (the GPU model from WebGL, `software ...` when the browser draws without one: hardware
-  acceleration off or the GPU blocked). A field the browser can't give is left out.
+  acceleration off or the GPU blocked), `gl_sw` (1 when WebGL2 refuses a context that asks to fail on a major performance caveat but gives a plain
+  one: drawing in software, which a browser that masks the renderer string, as Brave does with `gpu=Brave`, still shows; 0 means none
+  detected, since a browser may not flag every software renderer: one forced by a command-line flag shows only in `gpu`). A field the browser can't give
+  is left out.
 - **Input latency.** The `lat_` fields follow each button or key that went down in the window, from the moment the page saw it to the
   first present that draws the game frame applying it (`native/wotm_latency.hpp`; the page gives the time of each keydown and of each pad
   button it sees go down, `wotm_web_input_at`, and the game takes the earliest one since its previous sample; a pad counts from its own
@@ -224,6 +227,9 @@ cause can be read afterwards without asking anyone to copy logs.
   the total or `lat_in_ms`). A present is timed at the animation frame after the draw, so it is a multiple of the display's refresh;
   the compositor and the display add their own time after it, which a page can't see. Measured on this computer by
   `node tools/browser_mp_test/latency.mjs` (tabs behind `tools/net_lagproxy.py --tcp` links with a round trip, jitter and spikes).
+  `disc_net_mb` and `disc_hit_mb`: the disc megabytes the game and the page's prefetch got in the window over the network and from the
+  browser's disc cache (`web/diag.js` DiscWatch; Firefox's synchronous reads through the helper worker are not counted). A match
+  start whose first frames came late with a large `disc_net_mb` waited on its download.
 - **What the server adds.** Every 5 s of a started match, one line per player: `transport` (ws or enet), `hz`, `delay`, `rtt_ms`,
   `rtt_high_ms`, `rtt_level_ms` (the round trip the delay covers: what the ping stays at or under 4/5 of the last 8 s), `in_pkts`
   (input packets since the last line), `in_gap_avg_ms` and `in_gap_max_ms` (how far apart the player's input packets arrived),

@@ -97,8 +97,8 @@ async function run(browserName) {
     check(tag('a guest has no owner buttons'), (await buttons(bia, 'Cai')).length === 0 && (await buttons(cai, 'Ana')).length === 0);
 
     // Brave: Cai's own screen carries the notice, nobody else's does, and the owner (only) sees Cai's browser marked
-    const notice = (p) => p.locator('#braveNote');
-    check(tag('a Brave player\'s own screen shows the Shields notice'), await waitFor(cai, () => !document.getElementById('braveNote').hidden) &&
+    const notice = (p) => p.locator('#deviceNote');
+    check(tag('a Brave player\'s own screen shows the Shields notice'), await waitFor(cai, () => !document.getElementById('deviceNote').hidden) &&
       (await text(notice(cai))) === "Brave's Shields can slow this game a lot. For the best experience use Chrome, Edge or Firefox, or turn Shields off for playwotm.com and enable graphics acceleration.");
     check(tag('another browser shows no notice'), (await notice(ana).isHidden()) && (await notice(bia).isHidden()));
     check(tag('the owner sees Cai\'s Brave hint'), await waitFor(ana, () => document.querySelector('#members li[data-name="Cai"] .browser')?.textContent === 'Brave', null, 10000));

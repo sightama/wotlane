@@ -103,8 +103,9 @@ async function evictOld(caches, current) {
 }
 
 // Fetches the listed chunks of `url` (runs of neighbours as one range, at most `maxRun` chunks each, `concurrency` at a time) and
-// reads them to the end, so that a caching fetch stores them; a failure just leaves that run to the game's own reads
-async function prefetch(fetchFn, url, chunks, { chunkBytes = 1 << 20, maxRun = 8, concurrency = 4 } = {}) {
+// reads them to the end, so that a caching fetch stores them; a failure just leaves that run to the game's own reads. `stop()` true: no
+// further run is asked for (the runs in flight finish). Returns how many runs were asked for
+async function prefetch(fetchFn, url, chunks, { chunkBytes = 1 << 20, maxRun = 8, concurrency = 4, stop = () => false } = {}) {
   const sorted = [...new Set(chunks)].sort((a, b) => a - b);
   const runs = [];
   for (const i of sorted) {
@@ -114,7 +115,7 @@ async function prefetch(fetchFn, url, chunks, { chunkBytes = 1 << 20, maxRun = 8
   }
   let next = 0;
   async function worker() {
-    while (next < runs.length) {
+    while (next < runs.length && !stop()) {
       const [a, b] = runs[next++];
       try {
         const r = await fetchFn(url, { headers: { Range: `bytes=${a * chunkBytes}-${(b + 1) * chunkBytes - 1}` } });
@@ -125,7 +126,7 @@ async function prefetch(fetchFn, url, chunks, { chunkBytes = 1 << 20, maxRun = 8
     }
   }
   await Promise.all(Array.from({ length: Math.min(concurrency, runs.length) }, worker));
-  return runs.length;
+  return next;
 }
 
 // Firefox reads the disc from the game's worker threads with synchronous XHR (native/wotm_webdisc.cpp), which the Cache API can't serve.
@@ -289,11 +290,12 @@ else if (typeof document === 'undefined' && globalThis.name === HELPER_NAME) {
   const storage = globalThis.navigator?.storage;
   // the cache sits over the chunk files: what it lacks is read from data/<digest>/<n>.bin when the server has them (disc_chunks.js)
   const onBytes = (n) => progress?.postMessage(n);
+  const onHit = (n) => progress?.postMessage({ hit: n });   // a read the cache served: the loading counter and the diag (web/diag.js DiscWatch)
   globalThis.fetch = cachingFetch(discChunks.chunkedFetch(globalThis.fetch, { subtle: globalThis.crypto?.subtle, onBytes }), {
     caches: globalThis.caches,
     subtle: globalThis.crypto?.subtle,
     estimate: storage?.estimate ? () => storage.estimate() : null,
-    onBytes,
+    onBytes: onHit,
   });
   globalThis.wotmDiscCache = { evictOld, prefetch };
   const canBlock = typeof SharedArrayBuffer === 'function' && typeof BroadcastChannel === 'function';

@@ -15,10 +15,12 @@ const USAGE = `Usage: node tools/browser_mp_test/latency.mjs [options]
   --spike 4:6:160:400      player 4 (1-based) gets +160 ms for 400 ms every 6 s (repeatable)
   --secs 90                seconds of play once every tab has started
   --press-ms 700           mean time between one tab's presses (each a 120 ms tap of Space, the cross button)
-  --browser chromium|chrome  --firefox K (the last K tabs use Playwright's Firefox)  --headed  --unlock-frames
+  --browser chromium|chrome|brave  --firefox K (the last K tabs use Playwright's Firefox)  --headed  --unlock-frames
   --site <dir>  --data <dir>  --server <file>   as in run.mjs (defaults: <repo>/runtime/web_dist, <repo>/runtime/web_data,
                                                 native/net/build/wotm_server)
   --env NAME=VALUE         a game environment variable for every tab (repeatable; test only, as run.mjs adds WOTM_PADLOG)
+  --http-mbps M            limit each Chromium tab's downloads to M megabits/s once its page has loaded (the disc as a slow line gets it)
+  --lobby-secs S           wait S seconds in the formed lobby before the start (players idle there while the others join)
   --out <dir>              results (default <repo>/runtime/latency/<time>): summary.json, the diag files, each tab's log (P1.log...),
                            server.log, proxy.log
 The game's AI plays every seat (WOTM_AIVSAI=1), so the match runs on its own; the presses only feed the latency probe (they reach
@@ -26,7 +28,7 @@ the game like any press). Run under caffeinate -dis on a Mac (display sleep free
 
 function parseArgs(argv) {
   const o = { players: 4, rtt: [60], jitter: 15, spikes: [], secs: 90, pressMs: 700, browser: 'chromium', firefox: 0, headed: false,
-    unlockFrames: false, env: {}, site: join(REPO, 'runtime/web_dist'), data: join(REPO, 'runtime/web_data'), server: join(REPO, 'native/net/build/wotm_server'),
+    unlockFrames: false, env: {}, httpMbps: 0, lobbySecs: 0, site: join(REPO, 'runtime/web_dist'), data: join(REPO, 'runtime/web_data'), server: join(REPO, 'native/net/build/wotm_server'),
     out: join(REPO, 'runtime/latency', new Date().toISOString().replace(/[:.]/g, '-')) };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i], v = () => argv[++i];
@@ -45,6 +47,8 @@ function parseArgs(argv) {
     else if (a === '--data') o.data = v();
     else if (a === '--server') o.server = v();
     else if (a === '--out') o.out = v();
+    else if (a === '--http-mbps') o.httpMbps = Number(v());
+    else if (a === '--lobby-secs') o.lobbySecs = Number(v());
     else if (a === '--env') { const [k, ...rest] = v().split('='); o.env[k] = rest.join('='); }
     else { console.error(`unknown option ${a}\n${USAGE}`); process.exit(2); }
   }
@@ -72,6 +76,13 @@ async function startProxy(o, wsPort, logPath) {
     await sleep(100);
   }
   return { ports, stop: () => { writeFileSync(logPath, log); proc.kill('SIGTERM'); } };
+}
+
+// limits a Chromium page's downloads to `mbps` (DevTools network emulation; no added latency: the proxy links model the round trip)
+async function throttle(page, mbps) {
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Network.enable');
+  await cdp.send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: (mbps * 1e6) / 8, uploadThroughput: -1 });
 }
 
 // taps Space at random intervals around `meanMs` until `until`
@@ -103,8 +114,10 @@ async function main() {
       players.push(await Player.open(i >= o.players - o.firefox ? firefox : chromium,
         { name: `P${i + 1}`, index: i, monster: MONSTER_IDS[i], url, env: o.env, viewport: { width: 640, height: 900 }, gameViewport: { width: 640, height: 400 } }));
     }
+    if (o.httpMbps > 0) await Promise.all(players.filter((p, i) => i < o.players - o.firefox).map((p) => throttle(p.page, o.httpMbps)));
     const lobby = await formLobby(players);
     if (!lobby.ok) throw new Error(`lobby: ${lobby.detail}`);
+    if (o.lobbySecs > 0) await sleep(o.lobbySecs * 1000);
     const started = await startMatch(players);
     if (!started.ok) throw new Error(`match did not start on ${started.missing.join(', ')}`);
     console.log(`match ${lobby.code} started; ${o.secs} s of presses`);
