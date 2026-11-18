@@ -3,6 +3,7 @@
 #include "wotm_interp.hpp"
 #include "wotm_settings.hpp"
 #include "wotm_snd.hpp"
+#include "wotm_rollback.hpp"
 #include "wotm_windowfit.hpp"
 #include "wotm_discchunks.hpp"
 #include "wotm_savemirror.hpp"
@@ -574,6 +575,272 @@ namespace
         for (size_t i = 0; i < sizeof groups / sizeof groups[0]; ++i)
             CHECK(e.adjustToGroup(0x4000, groups[i]) < full[i] && e.adjustToGroup(0x4000, groups[i]) > 0);
         e.setPlayerVolume(0, 100);
+    }
+
+    namespace rb = wotm::rollback;
+
+    // A snapshot brings every piece back to what it held when it was saved
+    TEST(rollback_snapshot_restores_every_piece)
+    {
+        uint8_t ram[64];
+        uint32_t seed = 7;
+        for (int i = 0; i < 64; ++i)
+            ram[i] = uint8_t(i);
+        rb::State st;
+        st.add(rb::memoryPiece("ram", ram, sizeof ram, 0x100000u));
+        st.add(rb::memoryPiece("seed", &seed, sizeof seed));
+        rb::Snapshot s;
+        st.save(s, 12);
+        CHECK(s.frame == 12 && s.ends.size() == 2 && s.bytes.size() == 68);
+        ram[5] = 99;
+        seed = 1234;
+        CHECK(st.load(s));
+        CHECK(ram[5] == 5 && seed == 7);
+    }
+
+    // A comparison names the first piece that differs, its first differing byte and how many differ
+    TEST(rollback_compare_names_the_first_difference)
+    {
+        uint8_t ram[16] = {}, ctx[8] = {};
+        rb::State st;
+        st.add(rb::memoryPiece("ram", ram, sizeof ram, 0x2000u));
+        st.add(rb::memoryPiece("context", ctx, sizeof ctx));
+        rb::Snapshot a, b;
+        st.save(a, 1);
+        st.save(b, 1);
+        CHECK(st.compare(a, b).equal);
+        ctx[3] = 1;
+        ctx[6] = 1;
+        st.save(b, 1);
+        const rb::State::Diff d = st.compare(a, b);
+        CHECK(!d.equal && d.piece == 1 && d.offset == 3 && d.bytes == 2);
+        CHECK(st.piece(d.piece).name == "context" && st.piece(0).address == 0x2000u);
+        ram[15] = 1;
+        st.save(b, 1);
+        const rb::State::Diff r = st.compare(a, b);
+        CHECK(!r.equal && r.piece == 0 && r.offset == 15 && r.bytes == 1);
+    }
+
+    // A piece that saves a different amount of data (a sound playing in one and not in the other) differs in size
+    TEST(rollback_compare_sees_a_piece_of_another_size)
+    {
+        std::vector<uint8_t> items = {1, 2};
+        rb::State st;
+        st.add({"items", [&](rb::Writer &w) { w.pod(uint32_t(items.size())); w.bytes(items.data(), items.size()); },
+                [&](rb::Reader &r) { items.resize(r.pod<uint32_t>()); r.bytes(items.data(), items.size()); }});
+        rb::Snapshot a, b;
+        st.save(a, 0);
+        items.push_back(3);
+        st.save(b, 0);
+        const rb::State::Diff d = st.compare(a, b);
+        CHECK(!d.equal && d.piece == 0);
+        CHECK(st.load(a) && items.size() == 2);
+    }
+
+    // Data that never changes once made (a stream's samples) is shared by the snapshots, not copied
+    TEST(rollback_blobs_are_shared_not_copied)
+    {
+        auto data = std::make_shared<const std::vector<uint8_t>>(std::vector<uint8_t>(1000, 9));
+        rb::Blob held = data;
+        rb::State st;
+        st.add({"stream", [&](rb::Writer &w) { w.blob(held); }, [&](rb::Reader &r) { held = r.blob(); }});
+        rb::Snapshot s;
+        st.save(s, 0);
+        CHECK(s.bytes.size() == 4 && s.blobs.size() == 1 && s.blobs[0] == data);
+        held.reset();
+        CHECK(st.load(s) && held == data);
+    }
+
+    // A snapshot from code that saved more or less than it loads is refused
+    TEST(rollback_load_refuses_a_snapshot_of_another_shape)
+    {
+        uint32_t a = 1, b = 2;
+        rb::State one, two;
+        one.add(rb::memoryPiece("a", &a, sizeof a));
+        two.add(rb::memoryPiece("a", &a, sizeof a));
+        two.add(rb::memoryPiece("b", &b, sizeof b));
+        rb::Snapshot s;
+        one.save(s, 0);
+        CHECK(!two.load(s));
+        uint64_t wide = 0;
+        rb::State three;
+        three.add(rb::memoryPiece("wide", &wide, sizeof wide));
+        CHECK(!three.load(s));
+    }
+
+    // The synctest schedule with n = 2: two frames of history, then every frame saves, goes 2 frames back, runs them again and
+    // compares at the frame where it started
+    TEST(rollback_synctest_goes_back_n_frames_every_frame)
+    {
+        using S = rb::SyncTest::Step;
+        rb::SyncTest t(2);
+        CHECK(t.slots() == 3);
+        CHECK(t.boundary(10) == S::Save);
+        CHECK(t.boundary(11) == S::Save);
+        CHECK(t.boundary(12) == S::SaveAndBack && t.back() == 10 && t.target() == 12 && t.resimulating());
+        CHECK(t.boundary(11) == S::Resimulated);
+        CHECK(t.boundary(12) == S::Compare && !t.resimulating());
+        CHECK(t.boundary(13) == S::SaveAndBack && t.back() == 11);
+        CHECK(t.slot(13) != t.slot(11));   // the frame being restored and the one just saved use different slots
+        CHECK(t.boundary(12) == S::Resimulated);
+        CHECK(t.boundary(13) == S::Compare);
+    }
+
+    // A barrier (stage load, dialog loop) starts the history over; one in the middle of a resimulation means the run diverged
+    TEST(rollback_synctest_barrier_restarts_the_history)
+    {
+        using S = rb::SyncTest::Step;
+        rb::SyncTest t(1);
+        CHECK(t.boundary(0) == S::Save);
+        CHECK(t.boundary(1) == S::SaveAndBack);
+        CHECK(t.barrier());   // resimulating: diverged
+        CHECK(t.boundary(5) == S::Save);
+        CHECK(!t.barrier());
+        CHECK(t.boundary(6) == S::Save);
+        CHECK(t.boundary(7) == S::SaveAndBack && t.back() == 6);
+    }
+
+    // A bank of the game's format (Bank::parse): sound 0 is a tone, a RAND_PLAY between two tones (state kept in the grain) and an
+    // LFO on the pitch; sound 1 a tone whose sample loops; sound 2 starts sound 1 as a child, then branches to sound 0. Sample 0
+    // (offset 0) loops, sample 1 (offset 64) ends after 2 blocks.
+    std::vector<uint8_t> testSoundBank()
+    {
+        struct G { uint32_t type; int32_t delay; uint8_t raw[0x20]; };
+        auto tone = [](int32_t delay, uint32_t sample) {
+            G g{wotm::snd::G_TONE, delay, {}};
+            g.raw[1] = 100;   // vol
+            g.raw[2] = 60;    // centerNote
+            g.raw[6] = 0;
+            g.raw[7] = 127;
+            g.raw[10] = 0x0F;  // adsr1: fast attack
+            g.raw[12] = 0xC0;  // adsr2
+            std::memcpy(g.raw + 16, &sample, 4);
+            return g;
+        };
+        auto param = [](G g, int i, int16_t v) { std::memcpy(g.raw + 2 * i, &v, 2); return g; };
+        auto i32 = [](G g, int o, int32_t v) { std::memcpy(g.raw + o, &v, 4); return g; };
+        G lfo{wotm::snd::G_LFO, 0, {}};
+        lfo.raw[1] = wotm::snd::Lfo::PMod;
+        lfo.raw[3] = wotm::snd::Lfo::Sine;
+        lfo.raw[6] = 0x40;   // depth
+        lfo.raw[12] = 0x10;  // step size
+        const std::vector<std::vector<G>> sounds = {
+            {lfo, tone(0, 64), param(param(G{wotm::snd::G_RAND_PLAY, 20, {}}, 0, 2), 1, 1), tone(0, 0), tone(0, 64), tone(30, 64)},
+            {tone(0, 0)},
+            {i32(G{wotm::snd::G_STARTCHILD, 0, {}}, 12, 1), i32(G{wotm::snd::G_BRANCH, 40, {}}, 12, 0)},
+        };
+        std::vector<uint8_t> blk(0x40, 0);
+        std::memcpy(blk.data(), "SBlk", 4);
+        blk[4] = 1;
+        std::memcpy(blk.data() + 12, "TSET", 4);
+        const int16_t n = int16_t(sounds.size());
+        std::memcpy(blk.data() + 0x16, &n, 2);
+        const uint32_t firstSound = 0x40, firstGrain = firstSound + 12u * uint32_t(sounds.size());
+        std::memcpy(blk.data() + 0x1c, &firstSound, 4);
+        std::memcpy(blk.data() + 0x20, &firstGrain, 4);
+        uint32_t grainAt = 0;
+        std::vector<uint8_t> grains;
+        for (const auto &s : sounds)
+        {
+            uint8_t rec[12] = {100, 0, 0, 0, uint8_t(s.size()), 0, 0, 0};
+            std::memcpy(rec + 8, &grainAt, 4);
+            blk.insert(blk.end(), rec, rec + 12);
+            for (const G &g : s)
+            {
+                const auto *b = reinterpret_cast<const uint8_t *>(&g);
+                grains.insert(grains.end(), b, b + 0x28);
+                grainAt += 0x28;
+            }
+        }
+        blk.insert(blk.end(), grains.begin(), grains.end());
+        std::vector<uint8_t> samples(96, 0);
+        for (size_t b = 0; b < samples.size(); b += 16)
+        {
+            samples[b] = 0x12;   // shift 2, filter 1
+            for (size_t i = 2; i < 16; ++i)
+                samples[b + i] = uint8_t(0x35 + 7 * (b + i));
+        }
+        samples[1] = 4;        // sample 0: loop start
+        samples[48 + 1] = 3;   // its 4th block: end, loop
+        samples[80 + 1] = 1;   // sample 1 (offset 64): end
+        std::vector<uint8_t> file(0x18, 0);
+        const uint32_t hdr[6] = {0, 2, 0x18, uint32_t(blk.size()), uint32_t(0x18 + blk.size()), uint32_t(samples.size())};
+        std::memcpy(file.data(), hdr, sizeof hdr);
+        file.insert(file.end(), blk.begin(), blk.end());
+        file.insert(file.end(), samples.begin(), samples.end());
+        return file;
+    }
+
+    // The sound engine is game state in a deterministic match (the game polls it: playing, tick count). A snapshot restored brings back
+    // every sound, voice, handle, grain state and random draw: the same calls afterwards give the same handles, ticks and samples, and
+    // a sound started after the snapshot is gone
+    TEST(sound_engine_snapshot_replays_the_same_frames)
+    {
+        auto &e = wotm::snd::Engine::get();
+        e.setFrameLocked(true);
+        const uint32_t bank = e.loadBankData(testSoundBank());
+        CHECK(bank != 0);
+        std::vector<int16_t> drain(2 * 800 * 4);
+        auto frame = [&](std::vector<int16_t> &out) {
+            e.advanceFrame(1);
+            std::vector<int16_t> buf(2 * 800);
+            e.mix(buf.data(), 800);
+            out.insert(out.end(), buf.begin(), buf.end());
+        };
+        const uint32_t first = e.play(bank, 0, 0x400, 0, 0, 0), looping = e.play(bank, 1, 0x400, 30, 0, 0);
+        std::vector<int16_t> warm;
+        for (int f = 0; f < 3; ++f)
+            frame(warm);
+        rb::State st;
+        st.add(e.rollbackPiece());
+        rb::Snapshot before, after, again;
+        st.save(before, 0);
+        auto run = [&](std::vector<uint32_t> &events, std::vector<int16_t> &samples) {
+            for (int f = 0; f < 24; ++f)
+            {
+                if (f == 2)
+                    events.push_back(e.play(bank, 1, 0x300, -1, 0, 0));
+                if (f == 3)
+                    events.push_back(e.play(bank, 2, 0x300, -1, 0, 0));
+                if (f == 5)
+                    events.push_back(e.play(bank, 0, 0x400, 90, 0, 100));
+                if (f == 9)
+                    e.setVolPan(looping, 0x200, 45);
+                frame(samples);
+                events.push_back(e.tickCount());
+                events.push_back(e.playing(first) ? 1u : 0u);
+                events.push_back(e.playing(looping) ? 1u : 0u);
+            }
+        };
+        std::vector<uint32_t> ev1, ev2;
+        std::vector<int16_t> out1, out2;
+        run(ev1, out1);
+        st.save(after, 24);
+        const uint32_t late = ev1[6];   // the looping sound played at f == 2 (after the snapshot; frames 0 and 1 pushed 3 each)
+        CHECK(e.playing(late));
+        CHECK(st.load(before));
+        CHECK(!e.playing(late) && e.playing(looping));
+        run(ev2, out2);
+        st.save(again, 24);
+        CHECK(ev1 == ev2);
+        CHECK(out1 == out2);
+        CHECK(st.compare(after, again).equal);
+        CHECK(std::any_of(out1.begin(), out1.end(), [](int16_t s) { return s != 0; }));
+        e.stopAll();
+        e.unloadBank(bank);
+        e.setFrameLocked(false);
+    }
+
+    // A bank loaded or unloaded since the snapshot is a barrier: the engine says so, and restoring would refer to banks that changed
+    TEST(sound_engine_bank_changes_are_counted)
+    {
+        auto &e = wotm::snd::Engine::get();
+        const uint32_t g0 = e.bankGeneration();
+        const uint32_t bank = e.loadBankData(testSoundBank());
+        CHECK(e.bankGeneration() != g0);
+        const uint32_t g1 = e.bankGeneration();
+        e.unloadBank(bank);
+        CHECK(e.bankGeneration() != g1);
     }
 
     // The window at start (#6): the largest size of the frame's aspect that fits in 90% of the monitor, whatever the render resolution
