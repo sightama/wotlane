@@ -1999,6 +1999,36 @@ namespace
         CHECK(readUntil(ms[0]->socket, "ERROR") == "ERROR the match has started");
     }
 
+    // BRAVE: a page that runs in the Brave browser says so (its Shields can slow the game a lot); the lobby relays the names each second
+    // with the pings (BRAVE <code> <names>), and the flag leaves with the member
+    TEST(lobby_members_see_who_runs_brave)
+    {
+        ServerConfig cfg = testConfig();
+        RunningServer rs(cfg);
+        CHECK(rs.ok);
+        LineSocket a, b, c;
+        CHECK(hello(c, cfg.port) == "WELCOME 0");
+        c.sendLine("BRAVE");
+        CHECK(readUntil(c, "ERROR") == "ERROR join a lobby first");
+        CHECK(hello(a, cfg.port) == "WELCOME 0");
+        const std::string code = createLobby(a, "Lobby", "Ana", 3);
+        CHECK(hello(b, cfg.port) == "WELCOME 1");
+        b.sendLine("JOIN " + code + " Bia 1");
+        CHECK(readUntil(b, "JOINED") == "JOINED " + code);
+        b.sendLine("BRAVE");
+        CHECK(readUntil(a, "BRAVE " + code + " ") == "BRAVE " + code + " Bia");
+        a.sendLine("BRAVE");
+        CHECK(readUntil(b, "BRAVE " + code + " Ana,Bia") == "BRAVE " + code + " Ana,Bia");
+        b.sendLine("LEAVE");
+        CHECK(readUntil(b, "LEFT") == "LEFT " + code);
+        b.sendLine("JOIN " + code + " Bia 1");   // back without saying it again: not listed
+        CHECK(readUntil(b, "JOINED") == "JOINED " + code);
+        std::string line;
+        for (int i = 0; i < 6 && line != "BRAVE " + code + " Ana"; ++i)   // lines sent before the LEAVE may still arrive
+            line = readUntil(a, "BRAVE " + code + " ");
+        CHECK(line == "BRAVE " + code + " Ana");
+    }
+
     // HEALTH <own fps> <work ms> <hz>: a page tells the lobby how its device ran its last match; the lobby relays every member's
     // numbers each second with the pings (HEALTH <code> <name:fps:work_ms:hz,...>); a member that sent none is left out; bad numbers
     // are refused

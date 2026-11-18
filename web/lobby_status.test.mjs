@@ -37,10 +37,12 @@ test('memberStatus words the ping and the device for one member', () => {
   assert.deepEqual(memberStatus('Bia', { Bia: 42 }, health), {
     ping: { level: 'good', text: '42 ms' },
     device: { level: 'bad', text: 'device too slow: 27 fps of 60' },
+    browser: { level: 'none', text: '', title: '' },
   });
   assert.deepEqual(memberStatus('Ana', { Ana: null }, health), {
     ping: { level: 'none', text: '' },
     device: { level: 'none', text: 'device not measured yet' },
+    browser: { level: 'none', text: '', title: '' },
   });
   assert.equal(memberStatus('Cy', { Cy: 100 }, { Cy: { fps: 53, workMs: 9, hz: 60 } }).device.text, 'device borderline: 53 fps of 60');
   assert.equal(memberStatus('Cy', {}, { Cy: { fps: 60, workMs: 5, hz: 60 } }).device.text, 'device ok');
@@ -60,4 +62,10 @@ test('a member named like an Object property has no ping and no health of their 
     assert.equal(memberStatus(name, {}, {}).device.level, 'none');
     assert.deepEqual(lobbyWarnings([name], {}, {}), []);
   }
+});
+
+test('memberStatus marks a member who runs Brave with a browser hint', () => {
+  assert.deepEqual(memberStatus('Bia', {}, {}, new Set(['Bia'])).browser, { level: 'warn', text: 'Brave', title: "Brave's Shields can slow the game a lot" });
+  assert.equal(memberStatus('Ana', {}, {}, new Set(['Bia'])).browser.text, '');
+  assert.equal(memberStatus('Ana', {}, {}).browser.text, '');   // no list of Brave members yet
 });
