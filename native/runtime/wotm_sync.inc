@@ -280,10 +280,24 @@ namespace wotm_sync
     PS2Runtime::RecompiledFunction g_origSyncV = nullptr;
     uint32_t g_syncCalls = 0;
 
+    // timer1Handler, at the end of every rtMain frame, waits here for the next vsync, after the frame is complete and before
+    // timerWaitForMinUpdateRate captures it for drawing. In fixed step the frame is paced at its boundary instead, after the capture
+    // (wotm_overrides.cpp waitMinRateByVblanks), so this call only counts the parity: the finished frame reaches the screen without
+    // waiting for a vsync, and a frame that runs past its budget doesn't wait for one more. Only rtMain's call: the dialog and menu loops
+    // (ShellRtLoop, uiMain) keep their own wait
+    constexpr uint32_t kTimer1HandlerSize = 0xC0u;   // kTimer1Handler: wotm_overrides.cpp
+    bool g_timer1InFight = false;   // the running timer1Handler was called by rtMain (wotm_overrides.cpp timer1HandlerNative)
+
     void syncVParity(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         const bool entry = ctx->pc == kSyncV;
         const uint32_t ra = GPR_U32(ctx, 31);
+        if (entry && g_timer1InFight && ra - kTimer1Handler < kTimer1HandlerSize)
+        {
+            SET_GPR_U32(ctx, 2, g_syncCalls++ & 1u);
+            ctx->pc = ra;
+            return;
+        }
         g_origSyncV(rdram, ctx, runtime);
         if (entry && ctx->pc == ra)
             SET_GPR_U32(ctx, 2, g_syncCalls++ & 1u);
