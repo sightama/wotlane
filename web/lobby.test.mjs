@@ -2,7 +2,7 @@
 // ABOUTME: tools/net_lobby.py's match_env) and the lobby client's requests and replies over a fake WebSocket. Run: node --test web/
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { PROTOCOL, parseLine, parseMembers, matchEnv, lobbySocketUrl, lastLobbyNotice, inviteLink, lobbyRow, parsePings, parseChat, LobbyClient, halfRateDevice, phoneDevice } from './lobby.js';
+import { PROTOCOL, parseLine, parseMembers, matchEnv, lobbySocketUrl, lastLobbyNotice, inviteLink, lobbyRow, parsePings, parseHealth, parseChat, LobbyClient, halfRateDevice, phoneDevice } from './lobby.js';
 
 const MATCH_LINE = 'MATCH lobby=QZXW players=2 stage=9 wins=2 mods=jump,turbo monsters=5,1 names=Ana,Bia ' +
   'seed=12345 step=1 you=1 token=00aa11bb22cc33dd port=7777';
@@ -335,4 +335,62 @@ test('a diagnostics line is delivered once the server has answered a LIST sent a
   const old = await connected();
   old.client.diagUnsupported = true;
   assert.equal(await old.client.sendDiag('DIAG v=1'), false);   // nothing sent, nothing to wait for
+});
+
+test('parseHealth reads each member\'s own frames a second, work per frame and game Hz', () => {
+  assert.deepEqual(parseHealth(parseLine('HEALTH QZXW Ana:60.0:4.5:30,Bia:28.5:13.2:60')),
+    { Ana: { fps: 60, workMs: 4.5, hz: 30 }, Bia: { fps: 28.5, workMs: 13.2, hz: 60 } });
+  assert.deepEqual(parseHealth(parseLine('HEALTH QZXW')), {});
+});
+
+test('LobbyClient hands HEALTH lines to onHealth and sends its own without waiting for a reply', async () => {
+  const { ws, client } = await connected();
+  const seen = [];
+  client.onHealth = (h) => seen.push(h);
+  client.health('HEALTH 27.4 13.2 60');
+  assert.equal(ws.sent.at(-1), 'HEALTH 27.4 13.2 60');
+  assert.equal(client.waiting.length, 0);
+  ws.reply('HEALTH QZXW Bia:27.4:13.2:60');
+  assert.deepEqual(seen, [{ Bia: { fps: 27.4, workMs: 13.2, hz: 60 } }]);
+});
+
+test('a server that does not know HEALTH answers ERROR: that refuses no request, and nothing more is sent to it', async () => {
+  const { ws, client } = await connected();
+  const pending = client.list();
+  client.health('HEALTH 27.4 13.2 60');
+  ws.reply('ERROR unknown command: HEALTH');
+  ws.reply('END');
+  assert.deepEqual(await pending, []);
+  const sent = ws.sent.length;
+  client.health('HEALTH 27.4 13.2 60');
+  assert.equal(ws.sent.length, sent);
+});
+
+test('LobbyClient kick and handOver send the owner commands and wait for the new member list', async () => {
+  const { ws, client } = await connected();
+  const kicked = client.kick('Bia');
+  assert.equal(ws.sent.at(-1), 'KICK Bia');
+  ws.reply('MEMBERS QZXW Ana Ana:5');
+  await kicked;
+  const handed = client.handOver('Cy');
+  assert.equal(ws.sent.at(-1), 'OWNER Cy');
+  ws.reply('MEMBERS QZXW Cy Ana:5,Cy:1');
+  await handed;
+});
+
+test('LobbyClient: a refused KICK is rejected with the server reason', async () => {
+  const { ws, client } = await connected();
+  const kicked = client.kick('Zed');
+  ws.reply('ERROR Zed is not in this lobby');
+  await assert.rejects(kicked, /Zed is not in this lobby/);
+});
+
+test('LobbyClient hands KICKED to onKicked with the ban in seconds, and forgets the lobby', async () => {
+  const { ws, client } = await connected();
+  const seen = [];
+  client.onKicked = (k) => seen.push(k);
+  client.code = 'QZXW';
+  ws.reply('KICKED QZXW 60');
+  assert.deepEqual(seen, [{ code: 'QZXW', seconds: 60 }]);
+  assert.equal(client.code, '');
 });

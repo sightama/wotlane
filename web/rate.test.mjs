@@ -2,7 +2,7 @@
 // ABOUTME: verdict that it can't hold 60 (its next matches ask for 30 Hz).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ownRate, RateMemory, SLOW_KEY, rememberedSlow } from './rate.js';
+import { ownRate, RateMemory, SLOW_KEY, rememberedSlow, HEALTH_KEY, rememberedHealth, healthLine } from './rate.js';
 
 // a diag window as windowFields writes it, as [key, value] pairs
 const win = (fields) => Object.entries(fields);
@@ -57,4 +57,39 @@ test('RateMemory: a device that can not even hold 30 in a 30 Hz match (5QMC: ~24
   const m2 = new RateMemory({ get: (k) => held.get(k) ?? null, set: (k, v) => held.set(k, v) });
   feed(m2, { hz: 30, gfps: 18, waitMs: 2000, windows: 8 });     // 18 / 0.6 = 30: kept up at 30 Hz
   assert.equal(held.get(SLOW_KEY), '1');
+});
+
+test('RateMemory keeps the device health of a match (own frames a second, ms of work per frame, game Hz), at 30 Hz too', () => {
+  for (const hz of [60, 30]) {
+    const store = new Map();
+    const m = new RateMemory({ get: (k) => store.get(k) ?? null, set: (k, v) => store.set(k, v) });
+    for (let i = 0; i < 6; ++i) m.add(win({ hz, up_s: 25 + 5 * i, gfps: 27, wait_ms: 0, work_ms: 13.2 }));
+    assert.deepEqual(rememberedHealth({ getItem: (k) => store.get(k) ?? null }), { fps: 27, workMs: 13.2, hz });
+  }
+});
+
+test('RateMemory keeps no health from a hidden tab, the loading seconds or a match too short to say', () => {
+  for (const opts of [{ hidden: true, windows: 8 }, { from: -40, windows: 8 }, { windows: 3 }]) {
+    const store = new Map();
+    const m = new RateMemory({ get: (k) => store.get(k) ?? null, set: (k, v) => store.set(k, v) });
+    feed(m, { gfps: 30, waitMs: 0, ...opts });
+    assert.equal(store.has(HEALTH_KEY), false, JSON.stringify(opts));
+  }
+});
+
+test('rememberedHealth: nothing stored, junk or storage that throws gives null', () => {
+  assert.equal(rememberedHealth({ getItem: () => null }), null);
+  assert.equal(rememberedHealth({ getItem: () => 'not json' }), null);
+  assert.equal(rememberedHealth({ getItem: () => '{"fps":"x","workMs":1,"hz":60}' }), null);
+  assert.equal(rememberedHealth({ getItem: () => { throw new Error('denied'); } }), null);
+  assert.equal(rememberedHealth(undefined), null);
+});
+
+test('healthLine is the HEALTH command for a lobby', () => {
+  assert.equal(healthLine({ fps: 27.4, workMs: 13.24, hz: 60 }), 'HEALTH 27.4 13.2 60');
+});
+
+test('rememberedHealth refuses numbers the server would refuse', () => {
+  for (const h of [{ fps: 1001, workMs: 1, hz: 60 }, { fps: -1, workMs: 1, hz: 60 }, { fps: 30, workMs: 1, hz: 0 }, { fps: 30, workMs: 1, hz: 30.5 }, { fps: 30, workMs: 1, hz: 300 }])
+    assert.equal(rememberedHealth({ getItem: () => JSON.stringify(h) }), null, JSON.stringify(h));
 });
