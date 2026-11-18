@@ -495,7 +495,7 @@ namespace
 
     // The engine applies this PC's volume on top of the game's group volume: the game still reads back its own value
     // (snd_GetMasterVolume), effects and music are separate, 0 is silence
-    TEST(sound_player_volume_scales_one_group_only)
+    TEST(sound_player_volume_keeps_effects_and_music_apart)
     {
         auto &e = wotm::snd::Engine::get();
         e.setMasterVolume(0, 0x400);
@@ -510,6 +510,29 @@ namespace
         e.setPlayerVolume(0, 100);
         e.setPlayerVolume(1, 100);
         CHECK(e.adjustToGroup(0x4000, 0) == full && e.adjustToGroup(0x4000, 1) == full);
+    }
+
+    // The game spreads its effects over several groups (voices 3, ambient 4 and 5, the pause menu's 2, announcer 6, fades 8): this PC's
+    // effects volume reaches every one of them, and only group 1 is music
+    TEST(sound_player_effects_volume_reaches_every_effects_group)
+    {
+        auto &e = wotm::snd::Engine::get();
+        for (int g = 0; g < 32; ++g)
+            e.setMasterVolume(g, 0x400);
+        e.setPlayerVolume(0, 0);
+        e.setPlayerVolume(1, 100);
+        const int groups[] = {0, 2, 3, 4, 5, 6, 8, 14, 15, 31};
+        for (const int g : groups)
+            CHECK(e.adjustToGroup(0x4000, g) == 0);
+        CHECK(e.adjustToGroup(0x4000, 1) > 0);   // music keeps playing
+        e.setPlayerVolume(0, 100);
+        int full[sizeof groups / sizeof groups[0]];
+        for (size_t i = 0; i < sizeof groups / sizeof groups[0]; ++i)
+            full[i] = e.adjustToGroup(0x4000, groups[i]);
+        e.setPlayerVolume(0, 50);
+        for (size_t i = 0; i < sizeof groups / sizeof groups[0]; ++i)
+            CHECK(e.adjustToGroup(0x4000, groups[i]) < full[i] && e.adjustToGroup(0x4000, groups[i]) > 0);
+        e.setPlayerVolume(0, 100);
     }
 
     // The window at start (#6): the largest size of the frame's aspect that fits in 90% of the monitor, whatever the render resolution
