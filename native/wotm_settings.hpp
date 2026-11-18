@@ -311,22 +311,22 @@ inline constexpr const char *kPadButtonNames[18] = {"",        "DPAD_UP", "DPAD_
                                                     "R2",      "BACK",    "GUIDE",      "START",     "L3",        "R3"};
 inline constexpr int kPadButtons = 18;
 
-// Default keyboard (layout 3): WASD moves (left stick), the mouse turns the camera, left button light attack (square), right button
-// heavy (triangle), Space jumps (X), E or F grabs (circle), Shift blocks, Q or the middle button locks on, Tab/R or the wheel switch
-// targets, Z/C strafe, 1 and 2 the specials (triangle+circle, X+square), Alt walks slowly, Enter or Esc pause (Esc and Backspace go
-// back in the menus, wotm_pad.inc), G or Ctrl taunts (Select), arrows on the D-pad. L1, R1, L2, R2 and L1+R1 have no key: the actions
+// Default keyboard (layout 4): WASD moves (left stick), the mouse turns the camera, left button light attack (square), right button
+// heavy (triangle), Space jumps (X), E or F grabs (circle), Shift blocks, Q or the middle button locks on, T/R or the wheel switch
+// targets, Z/C strafe, 1 and 2 the specials (triangle+circle, X+square), Alt walks slowly, Tab or Enter pause (Esc leaves the browser's fullscreen, so it is
+// no default key: it and Backspace go back in the menus, and Esc closes the pause, wotm_pad.inc), G or Ctrl taunts (Select), arrows on the D-pad. L1, R1, L2, R2 and L1+R1 have no key: the actions
 // above drive them.
 inline constexpr uint32_t kbPair(int a, int b = 0) { return uint32_t(a) | (uint32_t(b) << 16); }
 inline constexpr uint32_t kDefaultKb[kBinds] = {kbPair(265), kbPair(264), kbPair(263), kbPair(262),           // D-pad: arrows
                                                 kbPair(32), kbPair(69, 70), kbPair(1000), kbPair(1001),      // X, circle, square, triangle
                                                 0, 0, 0, 0, 0,                                               // L1, R1, L2, R2, L1+R1
-                                                kbPair(257, 256), kbPair(71, 341), 0, 0,                     // Start, Select, L3, R3
+                                                kbPair(257, 258), kbPair(71, 341), 0, 0,                     // Start, Select, L3, R3
                                                 kbPair(87), kbPair(83), kbPair(65), kbPair(68),              // left stick: WASD
                                                 kbPair(81, 1002), kbPair(340), kbPair(90), kbPair(67),       // lock-on, block, strafe
-                                                kbPair(258, 1011), kbPair(82, 1010),                         // next, previous target
+                                                kbPair(84, 1011), kbPair(82, 1010),                         // next, previous target
                                                 kbPair(49), kbPair(50), kbPair(342)};                        // specials, walk
 // KB_LAYOUT in settings.ini: the KB_ lines of a file from an older layout are ignored (the player gets the new defaults)
-inline constexpr int kKbLayout = 3;
+inline constexpr int kKbLayout = 4;
 inline constexpr int kDefaultPad[kBinds] = {1, 3, 4, 2, 7, 6, 8, 5, 9, 11, 10, 12, 0, 15, 13, 16, 17, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
 inline std::atomic<uint32_t> g_kb[kBinds];
