@@ -1128,6 +1128,36 @@ index 0f19c9f..02bbec7 100644
  {
      if (reg != 0)
      {
+diff --git a/ps2xRuntime/include/ps2_stubs.h b/ps2xRuntime/include/ps2_stubs.h
+index 4492ce1..14eef04 100644
+--- a/ps2xRuntime/include/ps2_stubs.h
++++ b/ps2xRuntime/include/ps2_stubs.h
+@@ -3,7 +3,9 @@
+ struct R5900Context;
+ class  PS2Runtime;
+ 
++#include <cstddef>
+ #include <cstdint>
++#include <vector>
+ #include "ps2_call_list.h"
+ #include "runtime/ps2_memory.h"
+ #include "Stubs/Unimplemented.h"
+@@ -15,4 +17,15 @@ namespace ps2_stubs
+ #undef PS2_DECLARE_STUB
+ 
+     void resetSifState();
++
++    // Host state the game reads back (newlib's rand seed, the pads' port state and frame counter): rollback snapshots save and
++    // restore these blocks as they are (WotM: native/runtime/wotm_rollback.inc)
++    struct HostStateBlock
++    {
++        const char *name;
++        void *data;
++        size_t size;
++    };
++    std::vector<HostStateBlock> hostStateBlocks();
++    void appendPadHostState(std::vector<HostStateBlock> &out);   // Pad.cpp
+ }
 diff --git a/ps2xRuntime/include/runtime/ee_scheduler.h b/ps2xRuntime/include/runtime/ee_scheduler.h
 index f247ff9..5568b05 100644
 --- a/ps2xRuntime/include/runtime/ee_scheduler.h
@@ -1847,10 +1877,10 @@ index c5e31c4..1d61f43 100644
  bool EeScheduler::hasReadyAtOrAbovePriority(int priority) const
 diff --git a/ps2xRuntime/src/lib/Kernel/EeSchedulerGame.cpp b/ps2xRuntime/src/lib/Kernel/EeSchedulerGame.cpp
 new file mode 100644
-index 0000000..6e2a4e8
+index 0000000..1ebff65
 --- /dev/null
 +++ b/ps2xRuntime/src/lib/Kernel/EeSchedulerGame.cpp
-@@ -0,0 +1,1342 @@
+@@ -0,0 +1,1349 @@
 +// WoTM (step 10 of docs/passos/FRONTEIRA.md in the WoTM repo): EeScheduler for the game executable (wotm), replacing EeScheduler.cpp.
 +// Measured in step 8: WotM uses a single thread (the main one), no INTC handler, one DMAC handler (hierSetDmaIntHandler,
 +// channel 1) and the vblank (sceGsSyncV); no semaphore, event flag, sleep or alarm in use. So there is no ready queue, time
@@ -2852,9 +2882,16 @@ index 0000000..6e2a4e8
 +
 +// ---- invocations (interrupts, callbacks) ----
 +
++// guest calls queued by kind (GuestInvocationKind) and the last one's pc: rollback's synctest reports them (native/runtime/wotm_rollback.inc)
++std::atomic<uint32_t> g_wotmInvocations[8];
++std::atomic<uint32_t> g_wotmLastInvocationPc{0};
++
 +void EeScheduler::queueInvocation(GuestInvocation invocation)
 +{
 +    invocation.sequence = ++m_invocationSequence;
++    if (static_cast<size_t>(invocation.kind) < 8u)
++        g_wotmInvocations[static_cast<size_t>(invocation.kind)].fetch_add(1u, std::memory_order_relaxed);
++    g_wotmLastInvocationPc.store(invocation.context.pc, std::memory_order_relaxed);
 +    m_pendingInvocations.push_back(std::move(invocation));
 +    m_checkpointPending.store(true, std::memory_order_release);
 +}
@@ -3484,7 +3521,7 @@ index b1bb6d8..837a5e2 100644
  
      static void seedGsDrawEnv1(GsDrawEnv1Mem &env,
 diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/LibC.cpp b/ps2xRuntime/src/lib/Kernel/Stubs/LibC.cpp
-index d467c4b..3eb746f 100644
+index d467c4b..60d93c8 100644
 --- a/ps2xRuntime/src/lib/Kernel/Stubs/LibC.cpp
 +++ b/ps2xRuntime/src/lib/Kernel/Stubs/LibC.cpp
 @@ -2,6 +2,8 @@
@@ -3534,7 +3571,7 @@ index d467c4b..3eb746f 100644
          }
          else
          {
-@@ -1080,14 +1095,20 @@ namespace ps2_stubs
+@@ -1080,17 +1095,30 @@ namespace ps2_stubs
          setReturnU32(ctx, 0u);
      }
  
@@ -3557,8 +3594,18 @@ index d467c4b..3eb746f 100644
          setReturnS32(ctx, 0);
      }
  
++    std::vector<HostStateBlock> hostStateBlocks()
++    {
++        std::vector<HostStateBlock> out{{"newlib rand seed", &s_newlibRandNext, sizeof s_newlibRandNext}};
++        appendPadHostState(out);
++        return out;
++    }
++
+     void strcasecmp(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+     {
+         const uint32_t lhsAddr = getRegU32(ctx, 4);
 diff --git a/ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp b/ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp
-index b50a4cf..3f1d65a 100644
+index b50a4cf..6751c8e 100644
 --- a/ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp
 +++ b/ps2xRuntime/src/lib/Kernel/Stubs/Pad.cpp
 @@ -14,7 +14,7 @@ namespace ps2_stubs
@@ -3570,16 +3617,18 @@ index b50a4cf..3f1d65a 100644
  
          constexpr uint16_t kPadBtnSelect = 1u << 0;
          constexpr uint16_t kPadBtnL3 = 1u << 1;
-@@ -64,7 +64,7 @@ namespace ps2_stubs
+@@ -64,8 +64,9 @@ namespace ps2_stubs
          std::mutex g_padStateMutex;
          bool g_padOverrideEnabled = false;
          PadInputState g_padOverrideState{};
 -        PadPortState g_padPorts[kPadPortCount]{};
 +        PadPortState g_padPorts[kPadPortCount * kPadSlotCount]{};
          int g_padReadLogCount = 0;
++        uint32_t g_padFrameCount = 0;   // scePadGetFrameCount (only the game thread calls it)
  
          uint8_t axisToByte(float axis)
-@@ -210,7 +210,7 @@ namespace ps2_stubs
+         {
+@@ -210,7 +211,7 @@ namespace ps2_stubs
              {
                  return nullptr;
              }
@@ -3588,6 +3637,16 @@ index b50a4cf..3f1d65a 100644
          }
  
          void initializePadPortLocked(PadPortState &portState, uint32_t dmaAddr)
+@@ -413,8 +414,7 @@ namespace ps2_stubs
+     {
+         (void)rdram;
+         (void)runtime;
+-        static std::atomic<uint32_t> frameCount{0};
+-        setReturnU32(ctx, frameCount++);
++        setReturnU32(ctx, g_padFrameCount++);
+     }
+ 
+     void scePadGetModVersion(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 @@ -818,7 +818,7 @@ namespace ps2_stubs
              {
                  for (size_t slot = 0; slot < kPadDebugSlotCount; ++slot)
@@ -3597,6 +3656,17 @@ index b50a4cf..3f1d65a 100644
                      PadDebugPortSnapshot &dst = snapshot.ports[port][slot];
                      dst.open = src.open;
                      dst.analogMode = src.analogMode;
+@@ -860,4 +860,10 @@ namespace ps2_stubs
+         g_padOverrideEnabled = false;
+         g_padOverrideState = PadInputState{};
+     }
++
++    void appendPadHostState(std::vector<HostStateBlock> &out)
++    {
++        out.push_back({"pad ports", g_padPorts, sizeof g_padPorts});
++        out.push_back({"pad frame count", &g_padFrameCount, sizeof g_padFrameCount});
++    }
+ }
 diff --git a/ps2xRuntime/src/lib/Kernel/Syscalls/Interrupt.cpp b/ps2xRuntime/src/lib/Kernel/Syscalls/Interrupt.cpp
 index 2c98016..aac673d 100644
 --- a/ps2xRuntime/src/lib/Kernel/Syscalls/Interrupt.cpp

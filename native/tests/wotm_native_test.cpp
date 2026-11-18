@@ -651,6 +651,25 @@ namespace
         CHECK(st.load(s) && held == data);
     }
 
+    // A redone frame that starts a stream again reads it again: another blob with the same bytes is the same state; other bytes are not
+    TEST(rollback_blobs_compare_by_content)
+    {
+        rb::Blob held = std::make_shared<const std::vector<uint8_t>>(std::vector<uint8_t>(1000, 9));
+        rb::State st;
+        st.add({"stream", [&](rb::Writer &w) { w.blob(held); }, [&](rb::Reader &r) { held = r.blob(); }});
+        rb::Snapshot a, b, c;
+        st.save(a, 0);
+        held = std::make_shared<const std::vector<uint8_t>>(std::vector<uint8_t>(1000, 9));
+        st.save(b, 0);
+        CHECK(st.compare(a, b).equal);
+        std::vector<uint8_t> other(1000, 9);
+        other[500] = 1;
+        held = std::make_shared<const std::vector<uint8_t>>(other);
+        st.save(c, 0);
+        const rb::State::Diff d = st.compare(a, c);
+        CHECK(!d.equal && d.piece == st.size());   // past the pieces: the shared data
+    }
+
     // A snapshot from code that saved more or less than it loads is refused
     TEST(rollback_load_refuses_a_snapshot_of_another_shape)
     {

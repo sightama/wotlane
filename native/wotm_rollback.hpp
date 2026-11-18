@@ -127,7 +127,7 @@ public:
         size_t bytes = 0;    // how many of its bytes differ (its size when the sizes differ)
     };
 
-    // a and b were saved from this State; blobs compare by content identity (the same shared data)
+    // a and b were saved from this State; a difference past the last piece (piece == size()) is in the shared data
     Diff compare(const Snapshot &a, const Snapshot &b) const {
         Diff d;
         for (size_t i = 0; i < pieces_.size() && i < a.ends.size() && i < b.ends.size(); ++i) {
@@ -146,7 +146,9 @@ public:
                 return d;
             }
         }
-        if (a.blobs.size() != b.blobs.size() || !std::equal(a.blobs.begin(), a.blobs.end(), b.blobs.begin()))
+        // the same data read twice (a stream started again in a redone frame) is two blobs with the same bytes
+        const auto same = [](const Blob &x, const Blob &y) { return x == y || (x && y && *x == *y); };
+        if (a.blobs.size() != b.blobs.size() || !std::equal(a.blobs.begin(), a.blobs.end(), b.blobs.begin(), same))
             d = {false, pieces_.size(), 0, 0};
         return d;
     }

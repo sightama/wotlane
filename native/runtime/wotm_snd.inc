@@ -369,8 +369,9 @@ void wotmSndInstall(PS2Runtime &runtime)
         runtime.registerFunction(wotm::fn::sceSifLoadModule, hostLeaf<loadModule>);
     std::fprintf(stderr, "[snd] native sound: %zu 989snd functions replaced\n", sizeof hooks / sizeof hooks[0]);
 }
-// Game frame boundary in deterministic mode (wotm_sync.inc): the engine advances by `fields` fields
-void wotmSoundFrame(unsigned fields) { wotm::snd::Engine::get().advanceFrame(fields); }
+// Game frame boundary in deterministic mode (wotm_sync.inc): the engine advances by `fields` fields; a resimulated frame (rollback) is
+// mixed but not heard
+void wotmSoundFrame(unsigned fields, bool output) { wotm::snd::Engine::get().advanceFrame(fields, output); }
 // This PC's effects and music volume (AUDIO tab, WOTM_VOL_SFX / WOTM_VOL_MUSIC) into the engine; every presented frame (wotm_live.inc),
 // so a panel change is heard at once. The engine only refreshes the playing sounds when a value changes.
 void wotmApplyAudioSettings()
@@ -392,6 +393,6 @@ void wotmSndInstall(PS2Runtime &)
 {
     std::fprintf(stderr, "[snd] native sound off: native/wotm_snd.hpp is missing (WOTM_NATIVE_DIR)\n");
 }
-void wotmSoundFrame(unsigned) {}
+void wotmSoundFrame(unsigned, bool) {}
 void wotmApplyAudioSettings() {}
 #endif

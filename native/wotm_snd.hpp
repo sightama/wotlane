@@ -462,11 +462,13 @@ public:
     }
     void setFrameLocked(bool on) { frameLocked_ = on; }
     // One game frame with `fields` fields: mixes 800 frames per field (48000 / 60) on the game thread and queues them for the audio thread
-    // (at most ~0.25 s queued: if the device stops, the oldest is dropped)
-    void advanceFrame(unsigned fields) {
+    // (at most ~0.25 s queued: if the device stops, the oldest is dropped). `queue` false: the state advances, nothing is heard (a frame
+    // run again by a rollback was heard the first time)
+    void advanceFrame(unsigned fields, bool queue = true) {
         if (!frameLocked_) return;
         std::vector<s16> buf(size_t(2) * 800u * fields);
         render(buf.data(), 800u * fields);
+        if (!queue) return;
         std::lock_guard<std::mutex> g(ringM_);
         for (size_t i = 0; i < buf.size(); i += 2) ring_.push_back({buf[i], buf[i + 1]});
         while (ring_.size() > size_t(kRate / 4)) ring_.pop_front();

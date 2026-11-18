@@ -864,6 +864,7 @@ namespace wotm_sync
     {
         if (g_net && g_levelLoaded)
             std::fprintf(stderr, "[net] WARNING: second level load in the network match (the frame index restarts; it will desync)\n");
+        wotm_rollback::barrier("stage load");
         g_index = 0;
         g_levelLoaded = true;
         if (!g_fixedStep)
@@ -884,6 +885,7 @@ namespace wotm_sync
     // fieldCounterAtStart/fieldCounter: D_006F8DC0/D_006F8DBC; fieldsForAverage: D_006F8DE4 (fields since timerSetFrameStart)
     void frame(uint8_t *rdram, uint32_t fieldCounter, uint32_t fieldCounterAtStart, uint32_t fieldsForAverage)
     {
+        const bool redo = wotm_rollback::resimulating();   // a frame run again by a rollback: its output and input already happened
         if (g_fixedStep)
         {
             const uint32_t step = static_cast<uint32_t>(wotm::modifiers::fieldsPerFrame(g_fixedStep, g_mods));
@@ -893,8 +895,8 @@ namespace wotm_sync
             g_ticCalls = 0;
             // sound advances by the frame's real length, on the game thread (when each sound ends becomes a function of the frames);
             // in a turbo fight that is 1 vsync for 2 fields, so sound keeps its normal speed instead of overfilling the output
-            wotmSoundFrame(static_cast<unsigned>(wotm::modifiers::vsyncsPerFrame(g_fixedStep, g_mods)));
-            if (g_inputRec && g_levelLoaded)
+            wotmSoundFrame(static_cast<unsigned>(wotm::modifiers::vsyncsPerFrame(g_fixedStep, g_mods)), !redo);
+            if (g_inputRec && g_levelLoaded && !redo)
             {
                 if (!g_inputRecHeader)
                 {
@@ -910,9 +912,12 @@ namespace wotm_sync
                 if ((g_index & 63u) == 0u)
                     std::fflush(g_inputRec);
             }
-            sampleInputs(g_index + 1u);
+            if (!redo)
+                sampleInputs(g_index + 1u);
         }
         const uint32_t index = g_index++;
+        if (redo)
+            return;
         callTraceFrameDone(index);
         if (g_hashFile)
         {

@@ -57,6 +57,8 @@ namespace ps2_stubs   // Kernel/Stubs/Pad.cpp: pad state that scePadRead returns
 }
 
 extern std::atomic<unsigned long long> g_wotmIdleUs;
+extern std::atomic<uint32_t> g_wotmInvocations[8];   // EeSchedulerGame.cpp: guest calls queued by kind (interrupt, alarm, GS callback...)
+extern std::atomic<uint32_t> g_wotmLastInvocationPc;
 // the vblank clock's wakes: how many, how far past their target in all (µs), and how many over half a vblank late
 // (EeSchedulerGame.cpp, the timer thread), for the page's diagnostics report (wotm_sync.inc netPace)
 extern std::atomic<unsigned long long> g_wotmVblankWakes, g_wotmVblankLateUs, g_wotmVblankSlowWakes;
@@ -100,7 +102,7 @@ bool wotmScreenPolyBox(const uint8_t *rdram, int src, int x, int y, uint32_t pd,
 void wotmBarRect(float x0, float y0, float x1, float y1, uint8_t r, uint8_t g, uint8_t b, uint8_t a);   // wotm_live.inc: bar rectangle
 void wotmBarTex(float x0, float y0, float x1, float y1, uint64_t tex0, float u0, float v0, float u1, float v1);   // wotm_live.inc: portrait
 void wotmBarView(int view);   // wotm_live.inc: view of the bars that follow
-void wotmSoundFrame(unsigned fields);   // wotm_snd.inc: sound advances one game frame (deterministic mode)
+void wotmSoundFrame(unsigned fields, bool output);   // wotm_snd.inc: sound advances one game frame (deterministic mode)
 bool wotmPersonalPause(uint16_t buttons, bool &start);   // wotm_mainmenu.inc: network match, this player's own menu (personal pause)
 void wotmHudAnchor(const uint8_t *rdram, float cx, float cy, const float *world, bool bars);   // wotm_live.inc: health icon (photo mode)
 void wotmHudAnchorEnd();
@@ -125,6 +127,9 @@ std::atomic<bool> g_wotmCheatWin{false};
 #include "wotm_personalpause.hpp"   // network match: what this PC sends while its own menu is open (wotm_sync.inc)
 #include "wotm_detmath.hpp"   // trig with the same bits on every machine, for results that reach guest RAM (wotm_orbit.inc, lock-on)
 #include "wotm_zip.hpp"   // the stages' .TEX/.RTX unzip on the host (zipInflateCodesNative)
+#include "wotm_rollback.hpp"   // snapshots of the game state and the synctest schedule (wotm_rollback.inc)
+#include "wotm_snd.hpp"   // the sound engine is game state in a snapshot (wotm_rollback.inc)
+#include "ps2_stubs.h"   // the runtime's host state the game reads back (wotm_rollback.inc)
 std::atomic<bool> g_wotmFreeCam{false};
 std::atomic<bool> g_wotmFreeCamPad{false};
 std::mutex g_wotmFreeCamM;
@@ -231,6 +236,14 @@ namespace
         g_clockScale = scale;
     }
 
+    namespace wotm_rollback   // wotm_rollback.inc (after the state it saves)
+    {
+        bool resimulating();   // a frame run again by a rollback: no drawing capture, pacing wait, sound output or input sampling
+        void boundary(uint8_t *rdram, R5900Context *ctx);   // rtMain's frame boundary, right before wotm_sync::frame
+        void barrier(const char *why);   // a point the state can't be rolled back across
+        void init(PS2Runtime &runtime);
+        double g_paceWaitMs = 0.0;   // the pacing wait in this boundary (waitMinRateByVblanks): not the game's time
+    }
 #include "wotm_sync.inc"
     namespace wotm_modifiers   // wotm_modifiers.inc (below, after the RAM helpers it uses)
     {
@@ -899,7 +912,10 @@ namespace
             // timerWaitForMinUpdateRate. Without this the frame index stopped and, over the network, every PC read forever the input of the
             // frame where the dialog opened (the menu didn't move). Here the index advances, local input is exchanged and the state goes into the hash
             if (ra == kDialogLoopSyncVRa && wotm_sync::g_fixedStep)
+            {
+                wotm_rollback::barrier("dialog loop");
                 wotm_sync::frame(rdram, kFieldCounter, kFieldCounterAtStart, kFieldsForAverage);
+            }
             else if (ra == kFadeStepSyncVRa[0] || ra == kFadeStepSyncVRa[1])
             {
                 wotmCaptureFadeStep(rdram);
@@ -1039,13 +1055,19 @@ namespace
             // frame ready (update, hier, particleDraw) and the next one hasn't started: native drawing copies the scene here
             emitChaseHud(rdram);
             wotm_split4::trainingHudLate(rdram, ctx, runtime);   // training mode: the dummy's HUD if HUD 0's update was paused
-            wotmCaptureFrame(rdram);
+            // a frame run again by a rollback was drawn, paced and stopped on the first time: only its state is redone
+            const bool redo = wotm_rollback::resimulating();
+            if (!redo)
+                wotmCaptureFrame(rdram);
             // pause (F7/F6/F8, wotm_foto.inc): the finished frame stays on screen and the next one doesn't start. A frame with a stop counts as 1 field:
             // the stopped time doesn't become dt (without this updateRate dropped to the floor and the game took a 1/30 step on resume)
-            wotmPauseBlock(runtime);
+            if (!redo)
+                wotmPauseBlock(runtime);
             if (wotmPauseTookFrame())
                 WRITE32(kFieldCounter, READ32(kFieldCounterAtStart) + 1u);
-            else if ((g_nativeTimer || g_wotmFreeSpinPc != 0u) && g_frameStartValid)
+            // the fields the host measured; fixed step skips it (wotm_sync::frame writes the frame's exact length right after, and a value
+            // from the host's vblanks in the rollback snapshot would differ between a frame and its redo)
+            else if ((g_nativeTimer || g_wotmFreeSpinPc != 0u) && g_frameStartValid && !wotm_sync::g_fixedStep)
             {
                 const uint64_t vblanks = (runtime->eeScheduler().currentVSyncTick() - g_frameStartVsync) * g_clockScale;   // turbo: 2 fields per vsync
                 const int32_t start = static_cast<int32_t>(READ32(kFieldCounterAtStart));
@@ -1060,17 +1082,20 @@ namespace
             // next one still ends on the grid). frame() makes the frame exactly n fields long, which also satisfies the game's own wait
             // below. The wait is in place on the vblank clock, not through the game's sceGsSyncV, whose fixed-step parity counts calls
             // and must be the same on every PC. A turbo fight is 1 vsync per 2-field frame on purpose (wotm::modifiers::vsyncsPerFrame).
-            if (wotm_sync::g_timer1InFight)
+            if (wotm_sync::g_timer1InFight && !redo)
                 wotm_save::poll(rdram);   // what the sceGsSyncV that timer1Handler skipped would have polled (syncVTapped)
             const int frameVsyncs = wotm::modifiers::vsyncsPerFrame(wotm_sync::g_fixedStep, wotm_sync::g_mods);
-            if (wotm_sync::g_fixedStep && g_frameStartValid)
+            const auto paceFrom = std::chrono::steady_clock::now();
+            if (wotm_sync::g_fixedStep && g_frameStartValid && !redo)
             {
                 EeScheduler &ee = runtime->eeScheduler();
                 const uint64_t until = g_frameStartVsync + static_cast<uint64_t>(frameVsyncs);
                 while (ee.currentVSyncTick() < until && !runtime->isStopRequested())
                     ee.waitVSyncHere(ee.currentVSyncTick(), 0);
             }
+            wotm_rollback::g_paceWaitMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - paceFrom).count();
 #endif
+            wotm_rollback::boundary(rdram, ctx);   // snapshot, synctest (WOTM_SYNCTEST)
             wotm_sync::frame(rdram, kFieldCounter, kFieldCounterAtStart, kFieldsForAverage);   // fixed step and state hash (WOTM_FIXEDSTEP, WOTM_STATEHASH)
         }
         g_origWaitMinRate(rdram, ctx, runtime);
@@ -1353,6 +1378,8 @@ namespace
     void hierSceneExit(uint8_t *rdram)
     {
         g_hierSceneRa = 0;
+        if (wotm_rollback::resimulating())   // a frame run again by a rollback: drawn the first time
+            return;
         wotmCaptureScene(rdram, g_hierSceneView);
         if (g_hierSceneView == 0)
             wotmVu1SceneExit(rdram);
@@ -2040,6 +2067,7 @@ namespace
     }
 
 #include "wotm_modifiers.inc"   // gameplay modifiers: Super Jump, Fast Monsters, Turbo
+#include "wotm_rollback.inc"   // rollback snapshots and WOTM_SYNCTEST (after the state it saves)
 }
 
 namespace
@@ -2844,6 +2872,7 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
     }
     wotm_multi::install(runtime);   // after the LoadLevelFiles hook (stage load), which it wraps
     wotm_sync::init(runtime);
+    wotm_rollback::init(runtime);   // after wotm_sync (WOTM_SYNCTEST needs its fixed step)
     wotm_modifiers::install(runtime);   // after the direct match's userintMain, which it chains
     if ((g_origFfaOptions1P = runtime.lookupFunction(kFfaOptions1P)))
         runtime.registerFunction(kFfaOptions1P, &ffaOptions1PWithZero);
