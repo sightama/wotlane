@@ -88,8 +88,8 @@ frames and compares 40 MB), so 30 minutes of wall clock is fewer game minutes; t
 |---|---|---|---|---|
 | Chrome, 1 vs 1, 60 Hz | 2 | 30 min | 55 800 | 0 |
 | Firefox, 8 monsters, 30 Hz | 2 | 30 min | 18 300 | 0 |
-| Chrome, 8 monsters, 30 Hz | 2 | 30 min | (pending) | |
-| Firefox, 1 vs 1, 60 Hz | 2 | 30 min | (pending) | |
+| Chrome, 8 monsters, 30 Hz | 2 | 30 min | 24 900 | 0 |
+| Firefox, 1 vs 1, 60 Hz | 2 | 30 min | 20 400 | 0 |
 | native, 1 vs 1, 60 Hz | 3 | 60 min | (pending) | |
 | native, 1 vs 1, human pressing buttons and turning the camera (`--human`, `PS2X_PAD`, `WOTM_ORBITMOUSE`) | 3 | 3.3 min | 5 700 | 0 |
 | native, 1 vs 1 / 8 monsters, before the blob fix | 2 | 4 min each | 3 600 / 3 600 | 0 until a stream restarted in the window |
@@ -101,13 +101,16 @@ logic, no drawing capture); "played frame" is the frame's own work without the p
 
 | | save | restore | redone frame | played frame |
 |---|---|---|---|---|
-| Chrome, 1 vs 1, 60 Hz | 1.41 / 24 | 1.38 / 54 | 5.60 / 77 | 5.89 / 97 |
-| Firefox, 8 monsters, 30 Hz | 3.52 / 239 | 3.42 / 139 | 24.91 / 544 | 25.93 / 542 |
+| Chrome, 1 vs 1, 60 Hz | 1.39 / 24 | 1.36 / 54 | 5.51 / 77 | 5.77 / 97 |
+| Chrome, 8 monsters, 30 Hz | 2.06 / 36 | 2.00 / 25 | 14.75 / 215 | 15.16 / 114 |
+| Firefox, 1 vs 1, 60 Hz | 3.11 / 275 | 3.03 / 337 | 10.70 / 655 | 11.05 / 720 |
+| Firefox, 8 monsters, 30 Hz | 3.49 / 239 | 3.33 / 139 | 24.06 / 544 | 25.19 / 542 |
 | native, 1 vs 1, 60 Hz | 1.88 | 1.82 | 4.78 | 4.73 |
 | native, 8 monsters, 30 Hz | 2.85 | 2.20 | 9.70 | 10.59 |
 
-(Chrome 8 monsters and Firefox 1 vs 1: pending.) The worst windows are the moments the machine was shared; the medians are what a
-frame costs. A redone frame costs about as much as a played one: the drawing capture is cheap next to the game's own logic.
+These come from the long runs, with two browsers and a native game at a time on one machine, so they are high; "Cost, one run at a
+time" below has the same runs alone. In every case a redone frame costs about as much as a played one: the drawing capture is cheap
+next to the game's own logic.
 
 ## Expected latency (hybrid)
 
