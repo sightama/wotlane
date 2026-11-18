@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   SCHEMA, diagValue, diagLine, browserName, deviceFields, FrameWatch, LongTaskWatch, installAudioWatch, readGame, latencySource, windowFields, gpuName,
-  TaskLagWatch, DiscWatch,
+  TaskLagWatch, DiscWatch, readSoftwareGl,
   DiagReporter, joinFields, reportFields,
 } from './diag.js';
 
@@ -378,4 +378,15 @@ test('a periodic report carries the disc bytes of its window', () => {
   const f = fieldsOf(r.sent[0]);
   assert.equal(f.disc_net_mb, '1.0');
   assert.equal(f.disc_hit_mb, '2.0');
+});
+
+// a browser that masks the renderer string (Brave reports "Brave") still refuses a context that asks to fail on a major performance
+// caveat when it draws in software: gl_sw=1
+test('software drawing is read from a context that refuses a major performance caveat, not from the renderer string', () => {
+  const winWith = (refuses) => ({ document: { createElement: () => ({ getContext: (kind, opts) => (opts?.failIfMajorPerformanceCaveat && refuses ? null : { kind, getExtension: () => null }) }) } });
+  assert.equal(readSoftwareGl(winWith(true)), 1);
+  assert.equal(readSoftwareGl(winWith(false)), 0);
+  assert.equal(readSoftwareGl({ document: { createElement: () => ({ getContext: () => null }) } }), undefined);   // no WebGL at all
+  const f = Object.fromEntries(deviceFields({ navigator: {}, matchMedia: () => ({ matches: false }), wotmGpu: 'Brave', wotmSoftwareGl: 1 }));
+  assert.equal(f.gl_sw, 1);
 });

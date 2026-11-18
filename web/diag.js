@@ -74,6 +74,7 @@ export function deviceFields(win) {
     ['dl_mbps', conn.downlink],
     ['est_rtt_ms', conn.rtt],
     ['gpu', readGpu(win) ?? undefined],
+    ['gl_sw', readSoftwareGl(win)],
   ]);
 }
 
@@ -185,6 +186,22 @@ export function readGpu(win) {
   } catch { /* no WebGL here */ }
   win.wotmGpu = name ?? null;
   return win.wotmGpu;
+}
+
+// Whether WebGL draws in software, from a context asked to fail on a major performance caveat (refused on a software renderer): 1 or 0,
+// once per page; undefined without WebGL. Unlike the renderer string, a browser that masks it (Brave reports "Brave") still answers this
+export function readSoftwareGl(win) {
+  if (win.wotmSoftwareGl !== undefined) return win.wotmSoftwareGl ?? undefined;
+  let sw = null;
+  try {
+    const make = (opts) => win.document?.createElement('canvas').getContext('webgl', opts);
+    const plain = make({});
+    const fast = plain ? make({ failIfMajorPerformanceCaveat: true }) : null;
+    if (plain) sw = fast ? 0 : 1;
+    for (const gl of [plain, fast]) gl?.getExtension?.('WEBGL_lose_context')?.loseContext();
+  } catch { /* no WebGL here */ }
+  win.wotmSoftwareGl = sw;
+  return sw ?? undefined;
 }
 
 // main-thread tasks over 50 ms, where the browser reports them (Chrome and Edge; Firefox has no such entries: take() gives null)

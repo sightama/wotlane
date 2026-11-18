@@ -15,7 +15,7 @@ const USAGE = `Usage: node tools/browser_mp_test/desync.mjs [options]
   --scenarios a,b,...      ${Object.keys(SCRIPTS).join(', ')} (default baseline,pause)
   --reps K                 trials per case and scenario (default 1); the stage differs per rep
   --mods jump,fast,turbo   modifiers the owner turns on          --firefox K  the last K players of each lobby in Firefox
-  --target local|live  --url <url>  --password <pw>  --site <dir>  --data <dir>  --server <file>  --browser chromium|chrome  --headed
+  --target local|live  --url <url>  --password <pw>  --site <dir>  --data <dir>  --server <file>  --browser chromium|chrome|brave  --headed
   --win-secs 70 (game seconds to the vencer win)  --warmup-secs 15  --width 640  --height 400  --lobby-height 900  --out <dir>
 Exit code 0 when no trial failed.
 `;
