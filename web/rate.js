@@ -5,6 +5,7 @@
 // fewer than 60 frames a second slows the whole match. Its own rate is the frames it ran over the time it did not spend waiting for
 // the network: a slow device waits little and computes ~30; a fast one held back by it waits half the time and computes ~60.
 export const HOLD_FPS = 55;
+export const HOLD_SHARE = HOLD_FPS / 60;   // keeping up: at least this share of the match's rate
 export const SLOW_KEY = 'wotlane.slowDevice';   // '1': this device can't hold 60; '0': it held 60 in its last 60 Hz match
 export const HEALTH_KEY = 'wotlane.deviceHealth';   // JSON { fps, workMs, hz }: how this device ran its last match (shown to the lobby)
 const SKIP_SECONDS = 20;   // the match's first seconds (loading the stage, the intro) don't count
