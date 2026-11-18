@@ -22,7 +22,7 @@ export class Run {
 
   rel(path) { return relative(this.outDir, path); }
 
-  async openPlayer(n, index, { env = {}, name, monster, video, check, invite, remembered }) {
+  async openPlayer(n, index, { env = {}, name, monster, video, check, invite, remembered, initScripts }) {
     const firefox = this.firefox && index < n && index >= n - this.opts.firefoxCount;   // the last K players of a lobby (not the spare)
     const browser = firefox ? this.firefox : this.browsers[this.opts.isolation === 'browser' ? index % this.browsers.length : 0];
     return Player.open(browser, {
@@ -32,6 +32,7 @@ export class Run {
       url: invite ? `${this.target.pageUrl}${this.target.pageUrl.includes('?') ? '&' : '?'}join=${invite}` : this.target.pageUrl,
       invited: Boolean(invite),
       remembered,
+      initScripts,
       env,
       cookies: this.target.cookies,
       viewport: { width: this.opts.width, height: this.opts.lobbyHeight },

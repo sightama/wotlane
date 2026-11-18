@@ -45,11 +45,12 @@ export class Player {
   }
 
   // `target.url(path)` is the page address, `env` the test-only game environment, `video` a folder for a recording or undefined
-  static async open(browser, { name, index, monster, url, env = {}, viewport = { width: 640, height: 900 }, gameViewport = { width: 640, height: 400 }, videoDir, cookies, invited = false, remembered = false }) {
+  static async open(browser, { name, index, monster, url, env = {}, viewport = { width: 640, height: 900 }, gameViewport = { width: 640, height: 400 }, videoDir, cookies, invited = false, remembered = false, initScripts = [] }) {
     const context = await browser.newContext({ viewport, ...(videoDir ? { recordVideo: { dir: videoDir, size: viewport } } : {}) });
     if (remembered) await context.addInitScript((n) => { try { localStorage.setItem('wotlane.name', n); } catch { /* not kept */ } }, name);
     if (cookies) await context.addCookies(cookies);
     await context.addInitScript(frontMessageHistory);
+    for (const script of initScripts) await context.addInitScript(script);
     if (Object.keys(env).length) await context.addInitScript(envInit, env);
     const page = await context.newPage();
     const p = new Player({ name, index, context, page, monster });

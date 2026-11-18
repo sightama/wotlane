@@ -420,16 +420,19 @@ public:
         for (auto &[h, s] : sounds_) if (s->group == group) s->refreshVolume();
     }
     s32 masterVolume(int group) const { return group >= 0 && group < 32 ? master_[size_t(group)] : 0; }
-    // This PC's volume for group 0 (effects) or 1 (music), 0..100 %, on top of the game's master volume (AUDIO tab, WOTM_VOL_SFX /
-    // WOTM_VOL_MUSIC). The game never sees it (masterVolume stays the game's own), so it changes what you hear, not the game.
-    void setPlayerVolume(int group, int percent) {
-        if (group < 0 || group >= 2) return;
+    // This PC's volume, 0..100 %, on top of the game's master volume (AUDIO tab, WOTM_VOL_SFX / WOTM_VOL_MUSIC). The game never sees it
+    // (masterVolume stays the game's own), so it changes what you hear, not the game. `kind` 0 is the effects, 1 the music. The game
+    // plays its music in group 1 and spreads its effects over the others (voices, ambient, the pause menu, the announcer), so
+    // playerVolume(group) gives the music's percent for group 1 and the effects' for every other group.
+    static int volumeKind(int group) { return group == 1 ? 1 : 0; }
+    void setPlayerVolume(int kind, int percent) {
+        if (kind < 0 || kind >= 2) return;
         percent = std::clamp(percent, 0, 100);
-        if (player_[size_t(group)].exchange(percent) == percent) return;
+        if (player_[size_t(kind)].exchange(percent) == percent) return;
         std::lock_guard<std::mutex> g(m_);
-        for (auto &[h, s] : sounds_) if (s->group == group) s->refreshVolume();
+        for (auto &[h, s] : sounds_) if (volumeKind(s->group) == kind) s->refreshVolume();
     }
-    int playerVolume(int group) const { return group >= 0 && group < 2 ? player_[size_t(group)].load() : 100; }
+    int playerVolume(int group) const { return player_[size_t(volumeKind(group))].load(); }
     void setMono(bool m) { std::lock_guard<std::mutex> g(m_); mono_ = m; }
     s32 sramFree() const {   // the SPU2's 2 MB minus what's "loaded" (informational only; the game prints it)
         size_t used = 0;
@@ -498,10 +501,10 @@ public:
         return {s16(t[size_t(p - 180)].right * vol / 0x3fff), s16(t[size_t(p - 180)].left * vol / 0x3fff)};
     }
     s32 adjustToGroup(s32 v, int group) const {   // group master volume, with 989snd's quadratic curve
-        if (group >= 15) return v;
+        if (group >= 15) return v * playerVolume(group) / 100;
         v = std::min(v, 0x7ffe);
         v = v * master_[size_t(group)] / 0x400;
-        if (group < 2) v = v * playerVolume(group) / 100;
+        v = v * playerVolume(group) / 100;
         const int sign = v < 0 ? -1 : 1;
         return v * v / 0x7ffe * sign;
     }

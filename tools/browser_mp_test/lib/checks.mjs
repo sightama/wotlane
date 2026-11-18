@@ -5,6 +5,7 @@ import { Run, formLobby, startMatch, waitAll, hasStart, stopped, MONSTER_IDS } f
 import { CpuMeter } from './infra.mjs';
 import { hashes, compareHashes, gameFps, lastWaits, desyncs, padButtons, hasLine, roundsEnded, netStart } from './logs.mjs';
 import { makeCreations } from './creations.mjs';
+import { audioProbe, listen } from './audio.mjs';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { zip, unzip } from '../../../web/zip.js';
@@ -802,3 +803,43 @@ export async function moviesSession(run) {
 }
 
 export { Run, Player };
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+
+// Volumes set on the Settings page before a match: the last player turns effects and music off, the first leaves them at 100. Once the
+// fight runs, the first must be heard and the last must be silent (the output of the game's audio, lib/audio.mjs)
+export async function audioSession(run, n = 2) {
+  const R = run.report;
+  const check = 'audio';
+  const players = [];
+  let code = '';
+  try {
+    for (let i = 0; i < n; i++) players.push(await run.openPlayer(n, i, { env: { WOTM_AIVSAI: '1' }, check, initScripts: [audioProbe] }));
+    const quiet = players[n - 1];
+    await quiet.page.click('#openSettings');
+    await quiet.page.click('#tab-game');
+    await quiet.page.selectOption('#opt_WOTM_VOL_SFX', '0');
+    await quiet.page.selectOption('#opt_WOTM_VOL_MUSIC', '0');
+    await quiet.page.waitForFunction(() => /saved/i.test(document.getElementById('settingsMsg').textContent), null, { timeout: 5000 }).catch(() => {});
+    await quiet.page.click('#closeSettings');
+    const lobby = await formLobby(players);
+    code = lobby.code;
+    if (!lobby.ok) return R.add(n, 'audio_lobby', 'fail', lobby.detail);
+    const started = await startMatch(players);
+    if (!started.ok) return R.add(n, 'audio_start', 'fail', `no start on ${started.missing.join(',')}`);
+    await sleep(run.opts.warmupSecs * 1000);
+    const windows = [];
+    for (let w = 0; w < 6; w++) windows.push(await Promise.all([listen(players[0].page, 5000), listen(quiet.page, 5000)]));
+    const loud = windows.map(([a]) => a), muted = windows.map(([, b]) => b);
+    const fmt = (list) => list.map((m) => `${m.rms.toFixed(4)}/${m.peak.toFixed(3)}`).join(' ');
+    R.add(n, 'audio_loud_is_heard', Math.max(...loud.map((m) => m.rms)) > 0.02 ? 'pass' : 'fail', `${players[0].name} at 100%: rms/peak per 5 s ${fmt(loud)}`);
+    const heard = muted.filter((m) => m.rms > 0.001 || m.peak > 0.01).length;
+    R.add(n, 'audio_off_is_silent', muted.every((m) => m.buffers > 0) && !heard ? 'pass' : 'fail',
+      `${quiet.name} with effects and music at 0%: rms/peak per 5 s ${fmt(muted)}; ${heard} window(s) with sound`);
+  } catch (e) {
+    R.add(n, 'audio_error', 'fail', e.stack?.split('\n').slice(0, 2).join(' ') ?? String(e));
+  } finally {
+    await run.saveEvidence(n, check, players, code).catch(() => {});
+    await run.closeAll(players);
+  }
+}
