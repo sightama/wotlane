@@ -327,6 +327,14 @@ inline constexpr uint32_t kDefaultKb[kBinds] = {kbPair(265), kbPair(264), kbPair
                                                 kbPair(49), kbPair(50), kbPair(342)};                        // specials, walk
 // KB_LAYOUT in settings.ini: the KB_ lines of a file from an older layout are ignored (the player gets the new defaults)
 inline constexpr int kKbLayout = 4;
+// Keys read from a file of layout 3: the two binds still on that layout's defaults (Start Enter+Esc, next target Tab+wheel) move to the
+// current defaults; everything the player changed stays
+inline void migrateKb(int fromLayout, uint32_t (&kb)[kBinds])
+{
+    if (fromLayout != 3) return;
+    if (kb[BStart] == kbPair(257, 256)) kb[BStart] = kDefaultKb[BStart];
+    if (kb[BTargetNext] == kbPair(258, 1011)) kb[BTargetNext] = kDefaultKb[BTargetNext];
+}
 inline constexpr int kDefaultPad[kBinds] = {1, 3, 4, 2, 7, 6, 8, 5, 9, 11, 10, 12, 0, 15, 13, 16, 17, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
 inline std::atomic<uint32_t> g_kb[kBinds];
@@ -521,6 +529,14 @@ inline void load(const std::filesystem::path &dir)
             int kbFromFile = 0;
             for (int b = 0; b < kBinds; ++b)
                 kbFromFile += kbSeen[b];
+            if (kbLayout == 3 && kbFromFile)
+            {
+                for (int b = 0; b < kBinds; ++b)
+                    if (!kbSeen[b]) fileKb[b] = kDefaultKb[b];
+                migrateKb(kbLayout, fileKb);
+                kbLayout = kKbLayout;
+                g_pathPending = true;   // the file is rewritten as layout 4
+            }
             if (kbLayout == kKbLayout)
             {
                 for (int b = 0; b < kBinds; ++b)
