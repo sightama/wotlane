@@ -1,6 +1,8 @@
 // ABOUTME: The browser version's lobby client: wotm_server's lobby lines over a WebSocket (/lobby), and the game environment for a
 // ABOUTME: MATCH line (the same mapping as tools/net_lobby.py's match_env, with the match WebSocket as WOTM_NET).
 
+import { rememberedSlow } from './rate.js';
+
 export const PROTOCOL = 5;   // native/net/wotm_net_proto.hpp kProtocol (5: map ids as the stage, <monster>:<skin> members)
 
 // one lobby line: the command, its words, and its key=value words as fields (MATCH, SETTINGS); `rest` is everything after the command
@@ -90,8 +92,17 @@ export function inviteLink(location, code) {
 // A phone or tablet can't compute 60 game frames a second, and an online match counts every frame as 1/60 s of game time, so at 60 Hz
 // it would play everyone's match in slow motion: it asks for the game's 30 Hz mode (HELLO hz=30). The device decides, not what it
 // plays with (a pad on a phone is still a phone): the browser's own mobile flag, an Android or mobile User-Agent, or a touch screen
-// as the primary pointer. The server also checks the User-Agent itself. `win`: the page's window
+// as the primary pointer. The server also checks the User-Agent itself. A computer asks for it too once this browser measured it
+// unable to hold 60 in a 60 Hz match (web/rate.js). `win`: the page's window
 export function halfRateDevice(win) {
+  if (phoneDevice(win)) return true;
+  let storage;
+  try { storage = win.localStorage; } catch { /* storage may be off */ }
+  return rememberedSlow(storage);
+}
+
+// a phone or tablet: the browser's own mobile flag, an Android or mobile User-Agent, or a touch screen as the primary pointer
+export function phoneDevice(win) {
   const nav = win.navigator ?? {};
   if (nav.userAgentData?.mobile) return true;
   if (/Android|Mobi|iPhone|iPad/.test(nav.userAgent ?? '')) return true;

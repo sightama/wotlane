@@ -1,12 +1,13 @@
 // ABOUTME: The browser version's front panel: single player, or an online lobby on the game server (Host shows a 4-letter code,
 // ABOUTME: Join takes one). When the owner starts, every member's game loads with the match environment (boot.js wotmStart).
-import { LobbyClient, halfRateDevice, inviteLink, lastLobbyNotice, lobbyRow, lobbySocketUrl, matchEnv } from './lobby.js';
+import { LobbyClient, halfRateDevice, phoneDevice, inviteLink, lastLobbyNotice, lobbyRow, lobbySocketUrl, matchEnv } from './lobby.js';
 import { initCreations, addLobbyChoices } from './creations_ui.js';
 import { initSettings } from './settings_ui.js';
-import { settingsSaved } from './settings.js';
+import { phoneMatchDrawing, readSettings, settingsSaved } from './settings.js';
 import { playStartupMovies } from './movies.js';
-import { DiagReporter, FrameWatch, LongTaskWatch, deviceFields, diagLine, flushSocket, installAudioWatch, joinFields, readGame, reportFields } from './diag.js';
+import { DiagReporter, FrameWatch, LongTaskWatch, TaskLagWatch, deviceFields, diagLine, flushSocket, installAudioWatch, joinFields, readGame, reportFields } from './diag.js';
 import { deliverReport, initReport } from './report_ui.js';
+import { RateMemory } from './rate.js';
 
 const MONSTERS = [[1, 'Congar'], [2, 'Robo-47'], [3, 'Togera'], [4, 'Ultra V'], [5, 'Preytor'], [7, 'Kineticlops'], [8, 'Magmo'],
   [9, 'Raptros'], [10, 'Agamo'], [11, 'Zorgulon']];
@@ -118,20 +119,37 @@ const audioWatch = installAudioWatch(window);
 const LAST_DIAG = 'wotlane.lastdiag';
 let diagReporter = null;
 
+// runs fn as a new task on this thread (a MessageChannel message: no timer clamping), for the diag's task lag
+const taskChannel = new MessageChannel();
+const taskQueue = [];
+taskChannel.port1.onmessage = () => taskQueue.shift()?.();
+function postTask(fn) {
+  taskQueue.push(fn);
+  taskChannel.port2.postMessage(0);
+}
+
 function startDiag(client, socket, match, build) {
+  // each window also tells this browser whether its device holds 60 game frames a second (web/rate.js: if not, its next matches ask
+  // for 30 Hz)
+  const rate = new RateMemory({ get: (k) => localStorage.getItem(k), set: (k, v) => localStorage.setItem(k, v) });
   diagReporter = new DiagReporter({
     send: (line) => { try { client.diag(line); } catch { /* the connection is gone: the report is lost, the match goes on */ } },
     base: [['build', build], ['lobby', match.lobby], ['name', myName], ['hz', 60 / Number(match.step)], ['players', match.players]],
     now: () => performance.now(),
     setTimer: (fn, ms) => setInterval(fn, ms),
     clearTimer: (id) => clearInterval(id),
-    store: { set: (v) => { try { sessionStorage.setItem(LAST_DIAG, JSON.stringify(v)); } catch { /* private window: not kept */ } } },
+    store: { set: (v) => {
+      rate.add(v.fields);
+      try { sessionStorage.setItem(LAST_DIAG, JSON.stringify(v)); } catch { /* private window: not kept */ }
+    } },
     frames: new FrameWatch({ raf: (cb) => requestAnimationFrame(cb), doc: document }),
     longTasks: new LongTaskWatch(window.PerformanceObserver),
     audio: audioWatch,
     game: () => readGame(window),
     device: () => deviceFields(window),
     isHidden: () => document.hidden,
+    hasFocus: () => document.hasFocus(),
+    lag: new TaskLagWatch({ now: () => performance.now(), post: postTask }),
   });
   diagReporter.begin();
   // the last report goes out as the match ends: boot.js calls this before it reloads the page (the game quit, or Leave the match)
@@ -162,6 +180,16 @@ async function sendReport(note) {
   });
 }
 
+// a phone's drawing settings for an online match (settings.js phoneMatchDrawing); nothing on a computer, or when the file can't be read
+async function phoneDrawing() {
+  if (!phoneDevice(window)) return {};
+  try {
+    return phoneMatchDrawing(await readSettings(await navigator.storage.getDirectory()));
+  } catch {
+    return {};
+  }
+}
+
 async function connect(build) {
   const ws = new WebSocket(serverUrl('/lobby'));
   const client = new LobbyClient(ws, build, { halfRate: halfRateDevice(window) });
@@ -181,7 +209,7 @@ async function connect(build) {
     front.hidden = true;
     await settingsSaved();   // a change made a moment ago is in the file before the game reads it
     startDiag(client, ws, match, build);
-    window.wotmStart(matchEnv(match, serverUrl('/match')), build);
+    window.wotmStart({ ...matchEnv(match, serverUrl('/match')), ...(await phoneDrawing()) }, build);
   };
   await client.ready;
   return client;
