@@ -988,7 +988,7 @@ namespace wotm_net
 
     // During the match, every paceMs: samples each player's round trip, tells each player theirs (Rtt) and sends a player whose delay
     // should change its new one (Pace).
-    // The window makes a rise immediate and a fall wait until the high samples leave it
+    // The window (RttWindow::level) raises a player's level once 4 of its last 16 samples are high, and lowers it once at most 3 are left
     void Server::pace(Match &m, const Lobby &l)
     {
         const Clock::time_point now = Clock::now();
