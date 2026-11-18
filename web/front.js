@@ -5,7 +5,7 @@ import { initCreations, addLobbyChoices } from './creations_ui.js';
 import { initSettings } from './settings_ui.js';
 import { phoneMatchDrawing, readSettings, settingsSaved } from './settings.js';
 import { playStartupMovies } from './movies.js';
-import { DiagReporter, FrameWatch, LongTaskWatch, deviceFields, diagLine, flushSocket, installAudioWatch, joinFields, readGame, reportFields } from './diag.js';
+import { DiagReporter, FrameWatch, LongTaskWatch, TaskLagWatch, deviceFields, diagLine, flushSocket, installAudioWatch, joinFields, readGame, reportFields } from './diag.js';
 import { deliverReport, initReport } from './report_ui.js';
 import { RateMemory } from './rate.js';
 
@@ -119,6 +119,15 @@ const audioWatch = installAudioWatch(window);
 const LAST_DIAG = 'wotlane.lastdiag';
 let diagReporter = null;
 
+// runs fn as a new task on this thread (a MessageChannel message: no timer clamping), for the diag's task lag
+const taskChannel = new MessageChannel();
+const taskQueue = [];
+taskChannel.port1.onmessage = () => taskQueue.shift()?.();
+function postTask(fn) {
+  taskQueue.push(fn);
+  taskChannel.port2.postMessage(0);
+}
+
 function startDiag(client, socket, match, build) {
   // each window also tells this browser whether its device holds 60 game frames a second (web/rate.js: if not, its next matches ask
   // for 30 Hz)
@@ -139,6 +148,8 @@ function startDiag(client, socket, match, build) {
     game: () => readGame(window),
     device: () => deviceFields(window),
     isHidden: () => document.hidden,
+    hasFocus: () => document.hasFocus(),
+    lag: new TaskLagWatch({ now: () => performance.now(), post: postTask }),
   });
   diagReporter.begin();
   // the last report goes out as the match ends: boot.js calls this before it reloads the page (the game quit, or Leave the match)

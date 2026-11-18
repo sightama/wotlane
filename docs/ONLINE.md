@@ -179,11 +179,15 @@ cause can be read afterwards without asking anyone to copy logs.
   (frames presented) and `gfps` (game frames computed per second; `hz` is what it should be, 60 or 30), `work_ms` (the game loop's
   time per presented frame), `waits` and `wait_ms` (how often and for how long the game was blocked waiting for the other players'
   input; `waits_tot` and `wait_tot_ms` since the start), `delay` (input delay, frames), `ping_ms`, `ping_max_ms` and `jitter_ms`, `late`
-  (animation frames that took over 25 ms), `raf_p95_ms` and `raf_max_ms`, `lt_n`, `lt_ms` and `lt_max_ms` (main-thread tasks over
+  (animation frames that took over 25 ms), `raf_med_ms` (the median interval: the rate the page really gets, about 33 under a 30 fps
+  power-saving cap), `raf_p95_ms` and `raf_max_ms`, `lt_n`, `lt_ms` and `lt_max_ms` (main-thread tasks over
   50 ms, Chrome and Edge only), `au_cb`, `au_gaps` and `au_max_ms` (audio callbacks, and the ones later than 1.5 buffers, which are
-  dropped buffers), `hid_s` (seconds the tab was hidden), plus `up_s`, `frame`, `build`, `players`. The device is the class of device:
+  dropped buffers), `hid_s` (seconds the tab was hidden), `focus_pct` (share of samples with the page focused), `lag_ms` and
+  `lag_max_ms` (how late a task posted to the page ran: the match WebSocket waits in that queue), plus `up_s`, `frame`, `build`,
+  `players`. The device is the class of device:
   `touch`, `mobile`, `os`, `ua` (browser name and major version, for example `Chrome-131`; never the user agent string), `cores`,
-  `mem_gb`, `dpr`, `scr` (window size), `net`, `dl_mbps` and `est_rtt_ms` (the browser's own connection estimate). A field the browser
+  `mem_gb`, `dpr`, `scr` (window size), `net`, `dl_mbps` and `est_rtt_ms` (the browser's own connection estimate), `gpu` (the GPU model
+  from WebGL, `software ...` when the browser draws without one: hardware acceleration off or the GPU blocked). A field the browser
   can't give is left out.
 - **What the server adds.** Every 5 s of a started match, one line per player: `transport` (ws or enet), `hz`, `delay`, `rtt_ms`,
   `rtt_high_ms`, `in_pkts` (input packets since the last line), `in_gap_avg_ms` and `in_gap_max_ms` (how far apart the player's input
