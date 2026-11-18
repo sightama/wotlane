@@ -891,7 +891,7 @@ static void publishPause()
 }
 // pauseLevelOverlay's entry, every frame of displayDialog's loop (wotm_pausemenu.inc). With the panel open it runs here and the
 // original is skipped (true): the game neither reads the pad nor draws the pause list. Just after closing, the game's input stays
-// blocked (pauseBlocked) until whatever closed it is released: Esc and Enter are Start in the keyboard map, and X and triangle confirm in the pause.
+// blocked (pauseBlocked) until whatever closed it is released: Tab and Enter are Start in the keyboard map (and Esc closes the pause), and X and triangle confirm in the pause.
 static bool pauseFrame(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
 {
     if (g_pauseOpen)

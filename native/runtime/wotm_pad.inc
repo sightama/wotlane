@@ -163,7 +163,7 @@ inline bool inMenus() { return GetTime() - g_menuTime.load(std::memory_order_rel
 //   toggle lock-on on (WOTM_LOCKTOGGLE, the mod swaps the buttons; wotm_overrides.cpp): lock R1, block L1, strafe L2/R2;
 //   off (the game's own buttons): lock is L1+R1 held, block R2, strafe L1/R1.
 // Target switch: a direct request to the lock-on (wotm_mouse.hpp), on the key's edge; the d-pad isn't used (released, it would walk).
-// Esc on Start: in the menus it acts as triangle (back). Walk (Alt): the stick goes to ~40% of its travel.
+// Esc: in the menus it acts as triangle (back), and in the pause it is Start (closes it). Walk (Alt): the stick goes to ~40% of its travel.
 // In the menus the mouse bypasses the map (step 9): right goes back (triangle), wheel moves up and down (d-pad), left confirms (X),
 // except over a native menu that finds the item under the cursor (wotm_mainmenu.inc: the click belongs to it).
 static void keyboard(uint16_t &btns, uint8_t *data)
@@ -180,16 +180,13 @@ static void keyboard(uint16_t &btns, uint8_t *data)
     for (int b = 0; b < st::kBinds; ++b)
         if (st::kBindMask[b] && down(st::Bind(b)))
         {
-            uint16_t mask = st::kBindMask[b];
-            if (b == st::BStart && menus && IsKeyDown(KEY_ESCAPE))
-            {
-                const uint32_t v = st::kb(st::BStart);   // Esc on Start: only Esc pressed alone becomes back
-                const bool other = (int(v & 0xFFFF) != KEY_ESCAPE && inputDown(int(v & 0xFFFF))) ||
-                                   (int(v >> 16) != KEY_ESCAPE && inputDown(int(v >> 16)));
-                if (!other) mask = 0x1000;   // triangle
-            }
-            btns &= static_cast<uint16_t>(~mask);
+            btns &= static_cast<uint16_t>(~st::kBindMask[b]);
         }
+    if (IsKeyDown(KEY_ESCAPE))
+    {
+        if (menus) btns &= static_cast<uint16_t>(~0x1000u);   // triangle (back)
+        else if (wotm::mouse::inGameMenu()) btns &= static_cast<uint16_t>(~st::kBindMask[st::BStart]);   // closes the pause
+    }
     if (menus && IsKeyDown(KEY_BACKSPACE))
         btns &= static_cast<uint16_t>(~0x1000u);   // Backspace (the Mac "delete" key) goes back in the menus too, like Esc (triangle)
     if (mouseMenu && !wotm::mouse::g_captured.load(std::memory_order_relaxed))
