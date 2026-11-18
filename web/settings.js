@@ -119,6 +119,20 @@ export function setOption(text, key, value) {
   return setIni(text, key, value);
 }
 
+// A phone's drawing in an online match: the main thread that draws shares the phone's few fast cores with the game, which must keep
+// up with the match, so a phone draws at 60 (no in-between frames) and at 75% scale there. A player who set either option keeps
+// theirs; a line with the default value counts as unset (the game writes every key back). `text`: settings.ini. Returns env values
+const PHONE_MATCH_DRAWING = { WOTM_HZ: '60', WOTM_RENDERSCALE: '75' };
+export function phoneMatchDrawing(text) {
+  const file = parseIni(text);
+  const out = {};
+  for (const [key, value] of Object.entries(PHONE_MATCH_DRAWING)) {
+    const def = OPTIONS.find((o) => o.key === key).def;
+    if ((file.get(key) ?? def) === def) out[key] = value;
+  }
+  return out;
+}
+
 // What the page shows for an option: the file's value (the default without a line), and whether the page does not offer that value
 // (a file edited by hand, or written by an older game)
 export function choiceFor(option, text) {

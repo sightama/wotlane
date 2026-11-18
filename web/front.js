@@ -3,7 +3,7 @@
 import { LobbyClient, halfRateDevice, inviteLink, lastLobbyNotice, lobbyRow, lobbySocketUrl, matchEnv } from './lobby.js';
 import { initCreations, addLobbyChoices } from './creations_ui.js';
 import { initSettings } from './settings_ui.js';
-import { settingsSaved } from './settings.js';
+import { phoneMatchDrawing, readSettings, settingsSaved } from './settings.js';
 import { playStartupMovies } from './movies.js';
 import { DiagReporter, FrameWatch, LongTaskWatch, deviceFields, diagLine, flushSocket, installAudioWatch, joinFields, readGame, reportFields } from './diag.js';
 import { deliverReport, initReport } from './report_ui.js';
@@ -162,6 +162,16 @@ async function sendReport(note) {
   });
 }
 
+// a phone's drawing settings for an online match (settings.js phoneMatchDrawing); nothing on a computer, or when the file can't be read
+async function phoneDrawing() {
+  if (!halfRateDevice(window)) return {};
+  try {
+    return phoneMatchDrawing(await readSettings(await navigator.storage.getDirectory()));
+  } catch {
+    return {};
+  }
+}
+
 async function connect(build) {
   const ws = new WebSocket(serverUrl('/lobby'));
   const client = new LobbyClient(ws, build, { halfRate: halfRateDevice(window) });
@@ -181,7 +191,7 @@ async function connect(build) {
     front.hidden = true;
     await settingsSaved();   // a change made a moment ago is in the file before the game reads it
     startDiag(client, ws, match, build);
-    window.wotmStart(matchEnv(match, serverUrl('/match')), build);
+    window.wotmStart({ ...matchEnv(match, serverUrl('/match')), ...(await phoneDrawing()) }, build);
   };
   await client.ready;
   return client;
