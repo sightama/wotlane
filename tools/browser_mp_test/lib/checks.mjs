@@ -111,7 +111,7 @@ async function lobbyChat(run, n, players) {
 
 // every tab shows a round trip in ms next to every member while the lobby waits (the server measures each browser with WebSocket pings)
 async function lobbyPing(run, n, players) {
-  const shows = (p) => p.page.waitForFunction((k) => [...document.querySelectorAll('#members li')].filter((li) => /, \d+ ms(, owner)?$/.test(li.textContent)).length === k, n, { timeout: 15000 }).then(() => true, () => false);
+  const shows = (p) => p.page.waitForFunction((k) => [...document.querySelectorAll('#members .ping')].filter((c) => /^\d+ ms$/.test(c.textContent)).length === k, n, { timeout: 15000 }).then(() => true, () => false);
   const seen = await Promise.all(players.map(shows));
   const lines = await players[0].members();
   run.report.add(n, 'lobby_ping', seen.every(Boolean) ? 'pass' : 'fail', `every tab shows a ping for all ${n} members: ${seen.join(',')}; ${JSON.stringify(lines)}`);

@@ -53,6 +53,7 @@ namespace wotm_net
         uint64_t diagMaxTotalBytes = 64ull << 20;
         uint64_t diagMaxFileBytes = 2ull << 20;
         int diagEveryMs = 5000;                 // during a match, the server's view of each player is written this often (0: never)
+        int kickBanMs = 60000;                  // a member the owner removed can't join that lobby again for this long
     };
 
     class Server
@@ -85,6 +86,10 @@ namespace wotm_net
             int chatLines = 0;
             Clock::time_point diagWindow{};   // the same for DIAG reports
             int diagLines = 0;
+            // what the page last said about how this device runs a match (HEALTH): its own frames a second, ms of work per frame, game Hz
+            bool hasHealth = false;
+            double healthFps = 0, healthWorkMs = 0;
+            int healthHz = 0;
         };
 
         // a browser in a match (WebSocket /match)
@@ -158,6 +163,8 @@ namespace wotm_net
             std::unique_ptr<Match> match;
             Clock::time_point lastPings{};   // the last PINGS line sent to the members
             std::string diagFile;            // where this lobby's diagnostics go: its own file, then its match's
+            struct Ban { std::string name; Clock::time_point until; };
+            std::vector<Ban> bans;           // members the owner removed, by name, until the time given (the lobby's own: gone when it closes)
         };
 
         void log(const char *fmt, ...);
@@ -168,6 +175,14 @@ namespace wotm_net
         void joinLobby(int c, const std::vector<std::string> &w);
         void setLobby(int c, const std::vector<std::string> &w);
         void changeMonster(int c, const std::vector<std::string> &w);
+        // KICK <name> and OWNER <name>: owner only, while the lobby waits
+        void kickMember(int c, const std::string &name);
+        void handOver(int c, const std::string &name);
+        // the lobby `c` owns and that has not started, or null after answering the ERROR
+        Lobby *ownedWaitingLobby(int c, const char *notOwner);
+        int memberNamed(const Lobby &l, const std::string &name) const;
+        // HEALTH <own fps> <work ms> <hz>
+        void setHealth(int c, const std::vector<std::string> &w);
         // joins lobby li (already validated): member, owner if first, JOINED, SETTINGS and MEMBERS
         void addMember(int c, int li, const std::string &name, const proto::Pick &pick);
         // `except`: a member left out of the costume check (the one changing monster)

@@ -5,9 +5,13 @@
 // fewer than 60 frames a second slows the whole match. Its own rate is the frames it ran over the time it did not spend waiting for
 // the network: a slow device waits little and computes ~30; a fast one held back by it waits half the time and computes ~60.
 export const HOLD_FPS = 55;
+export const HOLD_SHARE = HOLD_FPS / 60;   // keeping up: at least this share of the match's rate
 export const SLOW_KEY = 'wotlane.slowDevice';   // '1': this device can't hold 60; '0': it held 60 in its last 60 Hz match
+export const HEALTH_KEY = 'wotlane.deviceHealth';   // JSON { fps, workMs, hz }: how this device ran its last match (shown to the lobby)
 const SKIP_SECONDS = 20;   // the match's first seconds (loading the stage, the intro) don't count
 const MIN_WINDOWS = 6;     // 30 s of play before a verdict
+const MIN_HEALTH_WINDOWS = 4;   // 20 s of play before the health
+const HEALTH_WINDOWS = 12;      // the health is the median of the last minute
 
 // frames per second of this device's own time; undefined with under a second of its own in the window
 export function ownRate({ frames, seconds, waitMs }) {
@@ -26,6 +30,7 @@ export class RateMemory {
   constructor(store) {
     this.store = store;
     this.rates = [];
+    this.works = [];   // ms of work per frame, one per rate
     this.prevUp = undefined;
   }
 
@@ -38,10 +43,32 @@ export class RateMemory {
     const rate = ownRate({ frames: Number(f.gfps) * dt, seconds: dt, waitMs: Number(f.wait_ms) || 0 });
     if (rate === undefined) return;
     this.rates.push(rate);
+    this.works.push(Number(f.work_ms));
+    this.rememberHealth(Number(f.hz));
     if (this.rates.length < MIN_WINDOWS) return;
     try { this.store.set(SLOW_KEY, median(this.rates) < HOLD_FPS ? '1' : '0'); } catch { /* storage may be off */ }
   }
+
+  // the median of the last minute's windows: how this device runs a match, for the lobby's member list
+  rememberHealth(hz) {
+    const rates = this.rates.slice(-HEALTH_WINDOWS);
+    const works = this.works.slice(-HEALTH_WINDOWS).filter(Number.isFinite);
+    if (rates.length < MIN_HEALTH_WINDOWS || !works.length) return;
+    try { this.store.set(HEALTH_KEY, JSON.stringify({ fps: median(rates), workMs: median(works), hz })); } catch { /* storage may be off */ }
+  }
 }
+
+// `storage`: localStorage (or undefined); how this device ran its last match, or null
+export function rememberedHealth(storage) {
+  try {
+    const h = JSON.parse(storage?.getItem(HEALTH_KEY));
+    const inRange = (n, max) => typeof n === 'number' && n >= 0 && n <= max;   // what the server's HEALTH accepts
+    return inRange(h?.fps, 1000) && inRange(h?.workMs, 1000) && Number.isInteger(h?.hz) && h.hz >= 1 && h.hz <= 240 ? { fps: h.fps, workMs: h.workMs, hz: h.hz } : null;
+  } catch { return null; }
+}
+
+// the HEALTH command that tells a lobby how this device runs a match
+export const healthLine = ({ fps, workMs, hz }) => `HEALTH ${fps.toFixed(1)} ${workMs.toFixed(1)} ${hz}`;
 
 // `storage`: localStorage (or undefined); true when this device was measured unable to hold 60
 export function rememberedSlow(storage) {

@@ -101,7 +101,7 @@ export class Player {
 
   // the "<name> (<Monster>[, skin x])[, owner]" lines of the member list
   async members() {
-    return this.page.$$eval('#members li', (items) => items.map((li) => li.textContent));
+    return this.page.$$eval('#members li', (items) => items.map((li) => li.querySelector('.who').textContent));
   }
 
   async waitMembers(count, timeout = 15000) {

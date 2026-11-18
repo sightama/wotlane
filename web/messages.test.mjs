@@ -19,7 +19,8 @@ test('every ERROR the server sends has a plain sentence', () => {
   // the reasons that follow a bare "ERROR " + err
   const reasons = ['invalid monster (no files on the disc)', 'that skin is already taken in the lobby (pick another skin or costume)',
     'monster has no free costume in the lobby (all its costumes are taken)'];
-  const whole = (s) => (s === 'the server already has ' ? `${s}4 lobbies open; join one of them` : s);   // the one text whose literal ends before its number
+  // the texts whose literal ends before their number
+  const whole = (s) => (s === 'the server already has ' ? `${s}4 lobbies open; join one of them` : s.endsWith('try again in ') ? `${s}42 s` : s);
   for (const text of [...sent.filter((s) => s.trim()).map(whole), ...reasons]) {
     const shown = friendlyError(text);
     assert.notEqual(shown, text, `no sentence for: ${text}`);
@@ -48,4 +49,13 @@ test('"lobby is in a match; change monster" and "wait for it to end" are told ap
 test('an unknown text passes through unchanged', () => {
   assert.equal(friendlyError('something new the server says'), 'something new the server says');
   assert.equal(friendlyError(''), '');
+});
+
+test('the owner controls read as plain sentences', () => {
+  assert.equal(friendlyError('only the lobby owner can remove a member'), 'Only the owner of the lobby can remove someone.');
+  assert.equal(friendlyError('only the lobby owner can hand the lobby to someone else'), 'Only the owner of the lobby can hand it to someone else.');
+  assert.equal(friendlyError('you can\'t remove yourself; leave instead'), 'To go, press Leave.');
+  assert.equal(friendlyError('you are the owner already'), 'You are the owner already.');
+  assert.equal(friendlyError('the match has started'), 'The match has started. That works again once it ends.');
+  assert.equal(friendlyError('you were removed from this lobby; try again in 42 s'), 'The owner removed you from that lobby. You can join it again in 42 seconds.');
 });

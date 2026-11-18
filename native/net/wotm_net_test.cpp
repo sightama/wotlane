@@ -1635,6 +1635,140 @@ namespace
         CHECK(pings.find_first_not_of("0123456789", pings.find("Bia:") + 4) == std::string::npos);
     }
 
+    // the owner hands the lobby to another member (OWNER <name>): MEMBERS names the new owner to everyone and only the new owner may
+    // change the settings and start; a guest, a stranger, oneself and a name that is not a member are refused
+    TEST(lobby_owner_hands_the_lobby_to_another_member)
+    {
+        ServerConfig cfg = testConfig();
+        RunningServer rs(cfg);
+        CHECK(rs.ok);
+        LineSocket a, b, c;
+        CHECK(hello(a, cfg.port) == "WELCOME 0");
+        const std::string code = createLobby(a, "Lobby", "Ana", 3);
+        CHECK(hello(b, cfg.port) == "WELCOME 1");
+        b.sendLine("JOIN " + code + " Bia 1");
+        CHECK(readUntil(b, "JOINED") == "JOINED " + code);
+        CHECK(readUntil(a, "MEMBERS " + code + " Ana Ana:3,") == "MEMBERS " + code + " Ana Ana:3,Bia:1");
+
+        b.sendLine("OWNER Bia");
+        CHECK(readUntil(b, "ERROR") == "ERROR only the lobby owner can hand the lobby to someone else");
+        a.sendLine("OWNER Ana");
+        CHECK(readUntil(a, "ERROR") == "ERROR you are the owner already");
+        a.sendLine("OWNER Zed");
+        CHECK(readUntil(a, "ERROR") == "ERROR Zed is not in this lobby");
+        CHECK(hello(c, cfg.port) == "WELCOME 1");
+        c.sendLine("OWNER Bia");
+        CHECK(readUntil(c, "ERROR") == "ERROR join a lobby first");
+
+        a.sendLine("OWNER Bia");
+        CHECK(readUntil(a, "MEMBERS " + code + " Bia ") == "MEMBERS " + code + " Bia Ana:3,Bia:1");
+        CHECK(readUntil(b, "MEMBERS " + code + " Bia ") == "MEMBERS " + code + " Bia Ana:3,Bia:1");
+        a.sendLine("SET wins=3");
+        CHECK(readUntil(a, "ERROR").find("owner") != std::string::npos);
+        a.sendLine("START");
+        CHECK(readUntil(a, "ERROR").find("owner") != std::string::npos);
+        b.sendLine("SET wins=3");
+        CHECK(readUntil(b, "SETTINGS") == "SETTINGS " + code + " stage=1 wins=3 mods=");
+        // the old owner leaving no longer moves the lobby: Bia keeps it
+        a.sendLine("LEAVE");
+        CHECK(readUntil(b, "MEMBERS " + code + " Bia ") == "MEMBERS " + code + " Bia Bia:1");
+    }
+
+    // the owner removes a member (KICK <name>): the member is told (KICKED <code> <seconds>), the others see the new list, and the
+    // member can't join that lobby again until the ban (cfg.kickBanMs) ends; only the owner may, and only before the match
+    TEST(lobby_owner_kicks_a_member_who_cannot_rejoin_for_a_while)
+    {
+        ServerConfig cfg = testConfig();
+        cfg.kickBanMs = 1500;
+        RunningServer rs(cfg);
+        CHECK(rs.ok);
+        LineSocket a, b, c;
+        CHECK(hello(a, cfg.port) == "WELCOME 0");
+        const std::string code = createLobby(a, "Lobby", "Ana", 3);
+        CHECK(hello(b, cfg.port) == "WELCOME 1");
+        b.sendLine("JOIN " + code + " Bia 1");
+        CHECK(readUntil(b, "JOINED") == "JOINED " + code);
+        CHECK(hello(c, cfg.port) == "WELCOME 1");
+        c.sendLine("JOIN " + code + " Cai 2");
+        CHECK(readUntil(c, "JOINED") == "JOINED " + code);
+        CHECK(readUntil(a, "MEMBERS " + code + " Ana Ana:3,Bia:1,Cai:2") == "MEMBERS " + code + " Ana Ana:3,Bia:1,Cai:2");
+
+        b.sendLine("KICK Cai");
+        CHECK(readUntil(b, "ERROR") == "ERROR only the lobby owner can remove a member");
+        a.sendLine("KICK Ana");
+        CHECK(readUntil(a, "ERROR") == "ERROR you can't remove yourself; leave instead");
+        a.sendLine("KICK Zed");
+        CHECK(readUntil(a, "ERROR") == "ERROR Zed is not in this lobby");
+
+        a.sendLine("KICK Bia");
+        CHECK(readUntil(b, "KICKED") == "KICKED " + code + " 2");
+        CHECK(readUntil(a, "MEMBERS " + code + " Ana Ana:3,Cai:2") == "MEMBERS " + code + " Ana Ana:3,Cai:2");
+        CHECK(readUntil(c, "MEMBERS " + code + " Ana Ana:3,Cai:2") == "MEMBERS " + code + " Ana Ana:3,Cai:2");
+        // the kicked connection stays open and is out of the lobby: lobby commands are refused, and the lobby is closed to its name
+        b.sendLine("CHAT hello");
+        CHECK(readUntil(b, "ERROR") == "ERROR join a lobby first");
+        b.sendLine("JOIN " + code + " Bia 1");
+        CHECK(readUntil(b, "ERROR") == "ERROR you were removed from this lobby; try again in 2 s");
+        // someone else is welcome meanwhile, and Bia can come back once the ban is over
+        LineSocket d;
+        CHECK(hello(d, cfg.port) == "WELCOME 1");
+        d.sendLine("JOIN " + code + " Dee 4");
+        CHECK(readUntil(d, "JOINED") == "JOINED " + code);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1700));
+        b.sendLine("JOIN " + code + " Bia 1");
+        CHECK(readUntil(b, "JOINED") == "JOINED " + code);
+    }
+
+    // once the match has started the lobby is closed to KICK and OWNER (the match owns its members)
+    TEST(lobby_kick_is_refused_once_the_match_started)
+    {
+        ServerConfig cfg = testConfig();
+        RunningServer rs(cfg);
+        CHECK(rs.ok);
+        auto ms = formMatch(cfg.port, {"Ana", "Bia"}, {3, 1});
+        CHECK(ms.size() == 2u);
+        if (ms.size() < 2)
+            return;
+        ms[0]->socket.sendLine("KICK Bia");
+        CHECK(readUntil(ms[0]->socket, "ERROR") == "ERROR the match has started");
+        ms[0]->socket.sendLine("OWNER Bia");
+        CHECK(readUntil(ms[0]->socket, "ERROR") == "ERROR the match has started");
+    }
+
+    // HEALTH <own fps> <work ms> <hz>: a page tells the lobby how its device ran its last match; the lobby relays every member's
+    // numbers each second with the pings (HEALTH <code> <name:fps:work_ms:hz,...>); a member that sent none is left out; bad numbers
+    // are refused
+    TEST(lobby_members_see_each_others_device_health)
+    {
+        ServerConfig cfg = testConfig();
+        RunningServer rs(cfg);
+        CHECK(rs.ok);
+        LineSocket a, b;
+        CHECK(hello(a, cfg.port) == "WELCOME 0");
+        const std::string code = createLobby(a, "Lobby", "Ana", 3);
+        CHECK(hello(b, cfg.port) == "WELCOME 1");
+        b.sendLine("JOIN " + code + " Bia 1");
+        CHECK(readUntil(b, "JOINED") == "JOINED " + code);
+        for (const char *bad : {"HEALTH", "HEALTH 28 13", "HEALTH x 13 60", "HEALTH 28 -1 60", "HEALTH 28 13 0", "HEALTH 99999 13 60", "HEALTH nan 13 60"})
+        {
+            b.sendLine(bad);
+            CHECK(readUntil(b, "ERROR") == "ERROR HEALTH <own fps> <work ms> <hz>: numbers in range");
+        }
+        b.sendLine("HEALTH 28.46 13.2 60");
+        CHECK(readUntil(a, "HEALTH " + code + " ") == "HEALTH " + code + " Bia:28.5:13.2:60");
+        a.sendLine("HEALTH 60 4.5 30");
+        CHECK(readUntil(b, "HEALTH " + code + " Ana:60.0:4.5:30,Bia") == "HEALTH " + code + " Ana:60.0:4.5:30,Bia:28.5:13.2:60");
+        // the numbers leave with the member: Bia back without sending any is not listed
+        b.sendLine("LEAVE");
+        CHECK(readUntil(b, "LEFT") == "LEFT " + code);
+        b.sendLine("JOIN " + code + " Bia 1");
+        CHECK(readUntil(b, "JOINED") == "JOINED " + code);
+        std::string alone;
+        for (int i = 0; i < 4 && alone != "HEALTH " + code + " Ana:60.0:4.5:30"; ++i)   // lines sent before the LEAVE may still arrive
+            alone = readUntil(a, "HEALTH " + code + " ");
+        CHECK(alone == "HEALTH " + code + " Ana:60.0:4.5:30");
+    }
+
     // plain chat in a waiting lobby: everyone in it (the sender too) gets "CHAT <code> <name> <text>"; control characters are dropped,
     // the text is cut at proto::kMaxChatBytes, and a member can send only proto::kChatBurst lines per proto::kChatWindowMs
     TEST(lobby_chat_reaches_the_lobby_is_cleaned_and_rate_limited)
