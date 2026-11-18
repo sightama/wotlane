@@ -199,16 +199,21 @@ namespace
         CHECK(runHoldback(c, t, frame, 40, 20, {0, 0, 3}, {false, false, false}, 30).slot == 2);   // a 30 Hz match: 20 of 30 is slow
     }
 
-    // a member whose game is in the background for over 3 s is named at once (one hidden tab froze a 4-player match for 9 s)
+    // a member whose game is in the background for over 3 s while it holds everyone back (alone at the back) is named at once (one
+    // hidden tab froze a 4-player match for 9 s); one whose game keeps up in the background is left alone
     TEST(holdback_names_a_member_away_for_over_3_s)
     {
         wotm_net::Holdback h;
         double t = 0;
         uint32_t frame = 0;
         CHECK(runHoldback(h, t, frame, 12, 60, {0, 0, 0}, {false, false, false}).slot < 0);
-        CHECK(runHoldback(h, t, frame, 2.9, 0, {0, 0, 0}, {false, true, false}).slot < 0);
-        const auto d = runHoldback(h, t, frame, 0.3, 0, {0, 0, 0}, {false, true, false});
+        CHECK(runHoldback(h, t, frame, 2.9, 0, {0, 2, 0}, {false, true, false}).slot < 0);
+        const auto d = runHoldback(h, t, frame, 0.3, 0, {0, 2, 0}, {false, true, false});
         CHECK(d.slot == 1 && d.reason == wotm_net::Holdback::Reason::Away);
+        wotm_net::Holdback g;
+        t = 0, frame = 0;
+        CHECK(runHoldback(g, t, frame, 12, 60, {0, 0, 0}, {false, false, false}).slot < 0);
+        CHECK(runHoldback(g, t, frame, 10, 60, {0, 0, 0}, {false, true, false}).slot < 0);   // in the background, keeping up
     }
 
     // never down to one player: in a 2-player match nobody is named, whatever happens
@@ -1410,7 +1415,8 @@ namespace
         rs.server.setTestRtt(0);
     }
 
-    // a member whose game stays in the background is taken out (Holdback): its page hears why, and the other two play on (about 14 s)
+    // a member whose game freezes in the background holds everyone back and is taken out (Holdback): its page hears why, and the other
+    // two play on (about 15 s)
     TEST(match_drops_a_member_away_too_long_and_the_others_play_on)
     {
         ServerConfig cfg = testConfig();
@@ -1428,7 +1434,8 @@ namespace
         while (c.status() == Status::Running && std::chrono::steady_clock::now() < until)
         {
             for (MatchClient *x : {&a, &b, &c})
-                x->pushLocal(f + d, pressed(static_cast<uint16_t>(f)));
+                if (x != &c || f < 120)   // after about 2 s Caio's game freezes in the background: no more input from it
+                    x->pushLocal(f + d, pressed(static_cast<uint16_t>(f)));
             a.waitFrame(f, 50), b.waitFrame(f, 50);
             ++f;
             std::this_thread::sleep_for(std::chrono::milliseconds(16));

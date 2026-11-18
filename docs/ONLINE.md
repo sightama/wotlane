@@ -158,7 +158,8 @@ to the console) and starts once that many players are in; `--code <code> --name 
   with such a member runs in the game's 30 Hz mode (`proto::matchStep`): half the frames for the same game time. Offline the game
   measures real time and lowers its own update rate, so a phone keeps normal speed there either way.
 - **A player who holds the match back is taken out:** in lockstep everyone runs at the slowest member's pace, so the server
-  (`native/net/wotm_net_holdback.hpp`, sampled every 100 ms) drops a member whose game is in the background for over 3 s, or the one
+  (`native/net/wotm_net_holdback.hpp`, sampled every 100 ms) drops a member whose game is in the background for over 3 s while it holds
+  everyone back (alone at the back in at least 60% of those samples; a game that keeps up in the background is left alone), or the one
   the others keep waiting on (alone at the back in at least 60% of the samples) while the match's pace stays under 80% of its rate for
   15 s. It is the same path as leaving: that monster is neutral from the first frame the server lacks, on every page, and the others
   play on. The dropped page stops with the reason ("your device or connection could not keep up", or "your game was in the
