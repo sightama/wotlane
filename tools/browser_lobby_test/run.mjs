@@ -46,8 +46,10 @@ const chip = (page, name, kind) => row(page, name).locator('.' + kind);
 const text = (locator) => locator.textContent({ timeout: 8000 });
 const waitFor = async (page, fn, arg, ms = 10000) => { try { await page.waitForFunction(fn, arg, { timeout: ms }); return true; } catch { return false; } };
 
-async function player(browser, name, health) {
+// `brave`: the page answers navigator.brave.isBrave() with true, as Brave does
+async function player(browser, name, health, brave = false) {
   const context = await browser.newContext();
+  if (brave) await context.addInitScript(() => Object.defineProperty(navigator, 'brave', { value: { isBrave: async () => true } }));
   if (health) await context.addInitScript((h) => { try { localStorage.setItem('wotlane.deviceHealth', JSON.stringify(h)); } catch { /* none */ } }, health);
   const page = await context.newPage();
   await page.goto(`http://127.0.0.1:${sitePort}/?server=ws://127.0.0.1:${ports.ws}`);
@@ -61,7 +63,7 @@ async function run(browserName) {
   try {
     const ana = await player(browser, 'Ana');
     const bia = await player(browser, 'Bia', { fps: 27, workMs: 13.2, hz: 60 });
-    const cai = await player(browser, 'Cai', { fps: 60, workMs: 5, hz: 60 });
+    const cai = await player(browser, 'Cai', { fps: 60, workMs: 5, hz: 60 }, true);
     await ana.click('#host');
     await ana.waitForSelector('#inLobby:not([hidden])');
     const code = (await text(ana.locator('#code'))).trim();
@@ -94,6 +96,15 @@ async function run(browserName) {
       JSON.stringify(await buttons(ana, 'Bia')) === '["Make owner","Remove"]' && (await buttons(ana, 'Ana')).length === 0);
     check(tag('a guest has no owner buttons'), (await buttons(bia, 'Cai')).length === 0 && (await buttons(cai, 'Ana')).length === 0);
 
+    // Brave: Cai's own screen carries the notice, nobody else's does, and the owner (only) sees Cai's browser marked
+    const notice = (p) => p.locator('#braveNote');
+    check(tag('a Brave player\'s own screen shows the Shields notice'), await waitFor(cai, () => !document.getElementById('braveNote').hidden) &&
+      (await text(notice(cai))) === "Brave's Shields can slow this game a lot. For the best experience use Chrome, Edge or Firefox, or turn Shields off for playwotm.com and enable graphics acceleration.");
+    check(tag('another browser shows no notice'), (await notice(ana).isHidden()) && (await notice(bia).isHidden()));
+    check(tag('the owner sees Cai\'s Brave hint'), await waitFor(ana, () => document.querySelector('#members li[data-name="Cai"] .browser')?.textContent === 'Brave', null, 10000));
+    check(tag('and no hint on a browser that is not Brave'), (await text(chip(ana, 'Bia', 'browser'))) === '');
+    check(tag('a guest sees no Brave hint'), (await text(chip(bia, 'Cai', 'browser'))) === '');
+
     // Remove asks twice; one click only arms it
     await row(ana, 'Bia').getByRole('button', { name: 'Remove' }).click();
     check(tag('Remove asks again before it acts'), (await buttons(ana, 'Bia')).includes('Sure?') && (await cai.locator('#members li').count()) === 3);
@@ -106,7 +117,7 @@ async function run(browserName) {
     await bia.fill('#joinCode', code);
     await bia.click('#join');
     check(tag('the removed player can\'t rejoin at once'),
-      await waitFor(bia, () => document.getElementById('frontMsg').textContent.includes('removed you from that lobby')) && (await ana.locator('#members li').count()) === 2);
+      await waitFor(bia, () => document.getElementById('frontMsg').textContent.includes('from that lobby. You can join it again')) && (await ana.locator('#members li').count()) === 2);
 
     // Make owner
     await row(ana, 'Cai').getByRole('button', { name: 'Make owner' }).click();
