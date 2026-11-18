@@ -412,7 +412,9 @@ function start() {
   let storage = null;
   try { storage = window.localStorage; } catch { /* blocked */ }
   const overlay = new TouchOverlay({ document, window, navigator, stage, virtual, storage });
-  const pads = Pads.installPads({ window, navigator, virtual, virtualWanted: () => overlay.wanted, toast: (t) => overlay.toast(t) });
+  // a button going down on any pad (the touch pad too) is the input latency probe's press time (wotm_web_input_at, wotm_webfs.cpp)
+  const onPress = (t) => window.Module?._wotm_web_input_at?.(performance.timeOrigin + t);
+  const pads = Pads.installPads({ window, navigator, virtual, virtualWanted: () => overlay.wanted, toast: (t) => overlay.toast(t), onPress });
   overlay.hub = pads.hub;
   // the game's mouse camera asks for the pointer on a screen the player is touching; there is no mouse to turn the camera with
   const canvas = document.getElementById('canvas');

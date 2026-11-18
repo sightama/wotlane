@@ -245,6 +245,21 @@ export function readGame(win) {
   };
 }
 
+// The input latency of the presses since the last take (native/wotm_latency.hpp; wotm_web_latency_take and wotm_web_latency in
+// native/wotm_webfs.cpp), ms: total (press to the first present that draws it: median, p95, max) and the stages' medians. Taking
+// starts a new window, so the reporter takes it once per report. Only reads the game's state.
+export const LATENCY = { n: 0, total: 1, p95: 2, max: 3, sample: 4, delay: 5, stall: 6, sim: 7, present: 8, unknown: 9, blend: 10 };
+export function latencySource(win) {
+  return {
+    take() {
+      const m = win.Module;
+      if (typeof m?._wotm_web_latency_take !== 'function') return null;
+      m._wotm_web_latency_take();
+      return Object.fromEntries(Object.entries(LATENCY).map(([key, i]) => [key, m._wotm_web_latency(i)]));
+    },
+  };
+}
+
 // the mean difference between consecutive samples (the way RFC 3550 reads jitter)
 function jitter(values) {
   if (values.length < 2) return undefined;
@@ -254,7 +269,7 @@ function jitter(values) {
 }
 
 // The report's numbers for the time between two samples. `prev` and `cur` hold the cumulative counters (readGame) and `t`, ms since the
-// match began; `cur` also holds what was gathered over the window: `pings`, `raf`, `lt`, `audio`, `hiddenMs`. Counters start at 0 when the
+// match began; `cur` also holds what was gathered over the window: `pings`, `raf`, `lt`, `audio`, `hiddenMs`, `lat`. Counters start at 0 when the
 // game starts, so a missing earlier value reads as 0. A source that has nothing leaves its fields out.
 export function windowFields(prev, cur) {
   const dt = (cur.t - prev.t) / 1000;
@@ -264,6 +279,7 @@ export function windowFields(prev, cur) {
   const frames = since('frame');
   const pings = (cur.pings ?? []).filter(Number.isFinite);
   const { raf, lt, audio } = cur;
+  const lat = cur.lat?.n > 0 ? cur.lat : undefined;
   return present([
     ['up_s', whole(cur.t / 1000)],
     ['fps', fix(perSecond(presented))],
@@ -293,6 +309,17 @@ export function windowFields(prev, cur) {
     ['focus_pct', whole(cur.focusPct)],
     ['lag_ms', fix(cur.taskLag?.avg)],
     ['lag_max_ms', whole(cur.taskLag?.max)],
+    ['lat_n', lat?.n],
+    ['lat_ms', fix(lat?.total)],
+    ['lat_p95_ms', fix(lat?.p95)],
+    ['lat_max_ms', fix(lat?.max)],
+    ['lat_in_ms', fix(lat?.sample)],
+    ['lat_dl_ms', fix(lat?.delay)],
+    ['lat_st_ms', fix(lat?.stall)],
+    ['lat_sim_ms', fix(lat?.sim)],
+    ['lat_pr_ms', fix(lat?.present)],
+    ['lat_bl_ms', fix(lat?.blend)],
+    ['lat_unk', lat?.unknown > 0 ? lat.unknown : undefined],
   ]);
 }
 
@@ -317,11 +344,11 @@ export function reportFields({ saved, device, lobby, name, build }) {
 // Every SAMPLE_EVERY_MS reads the game's counters (the ping is sampled this often, for its jitter) and every REPORT_EVERY_MS sends the
 // window as a periodic report; finish() sends the last one (why=end) with the device. `base`: [key, value] pairs on every report (build,
 // lobby, name, hz, players). `send(line)` puts a line on the lobby socket; `store.set` keeps the latest report for a hand-sent one;
-// `hasFocus()` and `lag` (TaskLagWatch) are read at every sample
+// `hasFocus()` and `lag` (TaskLagWatch) are read at every sample, `latency` (latencySource) once per report
 // after the page reloads. A source that throws is left out, never reported as a failure of the page.
 export class DiagReporter {
-  constructor({ send, base, now, setTimer, clearTimer, store, frames, longTasks, audio, game, device, isHidden, hasFocus, lag }) {
-    Object.assign(this, { send, base, now, setTimer, clearTimer, store, frames, longTasks, audio, game, device, isHidden, hasFocus, lag });
+  constructor({ send, base, now, setTimer, clearTimer, store, frames, longTasks, audio, game, device, isHidden, hasFocus, lag, latency }) {
+    Object.assign(this, { send, base, now, setTimer, clearTimer, store, frames, longTasks, audio, game, device, isHidden, hasFocus, lag, latency });
     this.seq = 0;
     this.started = false;
     this.pings = [];
@@ -362,7 +389,7 @@ export class DiagReporter {
   report(why, game) {
     const now = this.now();
     const cur = { t: now - this.start, ...game, pings: this.pings, raf: this.take(this.frames), lt: this.take(this.longTasks),
-      audio: this.take(this.audio), hiddenMs: this.hiddenMs, taskLag: this.take(this.lag),
+      audio: this.take(this.audio), hiddenMs: this.hiddenMs, taskLag: this.take(this.lag), lat: this.take(this.latency),
       focusPct: this.hasFocus && this.samples ? (100 * this.focused) / this.samples : undefined };
     const fields = [['v', SCHEMA], ['why', why], ['seq', ++this.seq], ...this.base, ...windowFields(this.prev, cur)];
     if (why === 'end') fields.push(...this.device());

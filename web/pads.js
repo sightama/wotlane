@@ -211,8 +211,10 @@ class PadHub {
 }
 
 // Puts the hub between the page and the game: navigator.getGamepads answers from the hub, and the browser's own connect and
-// disconnect events (whose indexes are not the hub's slots) are replaced by the hub's. `toast(text)` shows a message.
-function installPads({ window, navigator, virtual, virtualWanted, toast = () => {}, now = () => performance.now() }) {
+// disconnect events (whose indexes are not the hub's slots) are replaced by the hub's. `toast(text)` shows a message. `onPress(t)` hears
+// when a button went down on any pad (the input latency probe, native/wotm_latency.hpp): the pad's own timestamp when it is plausible
+// (up to now and newer than the last look), else the time of this look; a held button or a release says nothing.
+function installPads({ window, navigator, virtual, virtualWanted, toast = () => {}, now = () => performance.now(), onPress = () => {} }) {
   const nativeGetGamepads = navigator.getGamepads ? navigator.getGamepads.bind(navigator) : () => [];
   const emitToWindow = (type, pad) => {
     const event = new window.Event(type);
@@ -238,11 +240,28 @@ function installPads({ window, navigator, virtual, virtualWanted, toast = () => 
       hub.snapshot(now());   // the real event is a reason to look at the list now
     }, true);
   let last = [null, null, null, null];
+  let held = new Set(), lookedAt = -Infinity;   // `slot:button` pressed at the last look, and when that was
+  const notePresses = (t) => {
+    const now = new Set();
+    let newest = null;
+    last.forEach((pad, slot) => pad?.buttons?.forEach((b, i) => {
+      if (!b?.pressed) return;
+      now.add(`${slot}:${i}`);
+      if (held.has(`${slot}:${i}`)) return;
+      const ts = pad.timestamp > lookedAt && pad.timestamp <= t ? pad.timestamp : t;
+      newest = Math.max(newest ?? ts, ts);
+    }));
+    held = now;
+    lookedAt = t;
+    if (newest !== null) onPress(newest);
+  };
   // the last good answer stands when the browser's call fails, and while the tab is hidden (some browsers answer null for every pad then,
   // which would read as every pad unplugged)
   const answer = () => {
     if (window.document?.hidden) return last;
-    try { last = hub.snapshot(now()); } catch { /* the previous answer stands */ }
+    const t = now();
+    try { last = hub.snapshot(t); } catch { /* the previous answer stands */ }
+    try { notePresses(t); } catch { /* only the latency probe misses this one */ }
     return last;
   };
   navigator.getGamepads = answer;

@@ -467,6 +467,14 @@ namespace
         CHECK(p::typeOf(p::encode(a)) == p::Type::Pace);
     }
 
+    TEST(proto_rtt_roundtrip)
+    {
+        p::Rtt a{187};
+        p::Rtt b;
+        CHECK(p::decode(p::encode(a), b) && b.ms == 187u);
+        CHECK(p::typeOf(p::encode(a)) == p::Type::Rtt);
+    }
+
     TEST(lobby_lines_split_words_and_key_values)
     {
         const std::vector<std::string> w = p::words("JOIN 1 Lane 3");
@@ -1190,6 +1198,23 @@ namespace
 
     // The server re-picks each player's delay from the round trips while the match runs and the clients follow it one frame at a time;
     // every frame still has exactly one input per player, the same on both PCs
+    // pushSample says which frame the sample fills (the input latency probe starts from it, wotm_latency.hpp)
+    TEST(match_sample_names_the_frame_it_fills)
+    {
+        ServerConfig cfg = testConfig();
+        RunningServer rs(cfg);
+        auto ms = formMatch(cfg.port, {"Ana", "Bia"}, {3, 1});
+        MatchClient a, b;
+        std::string err;
+        CHECK(a.start(clientFor(cfg.port, *ms[0]), err) && b.start(clientFor(cfg.port, *ms[1]), err));
+        CHECK(a.waitStarted(5000) && b.waitStarted(5000));
+        const uint32_t d = a.delay();
+        CHECK(a.pushSample(pressed(0x4000)) == d);
+        CHECK(a.pushSample(pressed(0x4000)) == d + 1u);
+        MatchClient idle;
+        CHECK(idle.pushSample(pressed(0x4000)) == MatchClient::kNoFrame);   // not in a match
+    }
+
     TEST(match_delay_follows_the_ping_without_losing_a_frame)
     {
         ServerConfig cfg = testConfig();
@@ -1889,6 +1914,26 @@ namespace
         CHECK(a.status() == Status::Running && b.status() == Status::Running);
     }
 
+    // a browser can't time the server's WebSocket pings itself: the server tells every player the round trip it measures (Rtt), which is
+    // what the client reports from then on (the page's ping and the in-game ping)
+    TEST(ws_match_client_learns_its_round_trip_from_the_server)
+    {
+        ServerConfig cfg = wsTestConfig();
+        cfg.paceMs = 20;
+        RunningServer rs(cfg);
+        auto ms = formMatch(cfg.port, {"Ana", "Bia"}, {3, 1});
+        ClientConfig ca = clientFor(cfg.port, *ms[0]), cb = clientFor(cfg.port, *ms[1]);
+        ca.host = cb.host = wsUrl(cfg, "/match");
+        MatchClient a, b;
+        std::string err;
+        CHECK(a.start(ca, err) && b.start(cb, err));
+        CHECK(a.waitStarted(5000) && b.waitStarted(5000));
+        rs.server.setTestRtt(150);
+        for (int i = 0; i < 200 && (a.rttMs() < 150u || b.rttMs() < 150u); ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        CHECK(a.rttMs() >= 150u && b.rttMs() >= 150u);
+    }
+
     // a browser and a native client in the same match: the server relays between ENet and WebSocket
     TEST(ws_match_mixes_enet_and_websocket_clients)
     {
@@ -2282,6 +2327,9 @@ namespace
         for (size_t i = 0; i < diag::kMaxFields + 10; ++i)
             line += " k" + std::to_string(i) + "=1";
         CHECK(diag::parse(p::words(line), many) && many.fields.size() == diag::kMaxFields);
+        // a page's last report holds the window (web/diag.js windowFields, up to 39 with the input latency), the base (v, why, seq,
+        // build, lobby, name, hz, players) and the device (deviceFields, up to 12): all of it has to fit
+        CHECK(diag::kMaxFields >= 39u + 8u + 12u);
         diag::Report none;
         CHECK(!diag::parse(p::words("DIAG"), none));
         CHECK(!diag::parse(p::words("DIAG Bad-Key=1"), none));

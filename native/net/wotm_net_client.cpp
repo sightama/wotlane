@@ -87,7 +87,7 @@ namespace wotm_net
             }
             if (connected_)
             {
-                rtt_ = net_->rttMs();
+                rtt_ = haveServerRtt_ ? serverRtt_.load() : net_->rttMs();
                 sendInput(Clock::now());
             }
         }
@@ -182,6 +182,13 @@ namespace wotm_net
             proto::Pace p;
             if (proto::decode(data, p) && status_ == Status::Running)
                 schedule_.setTarget(p.delay);
+            break;
+        }
+        case proto::Type::Rtt:
+        {
+            proto::Rtt r;
+            if (proto::decode(data, r))
+                serverRtt_ = r.ms, haveServerRtt_ = true;
             break;
         }
         case proto::Type::Desync:
@@ -296,14 +303,16 @@ namespace wotm_net
         dirty_ = true;
     }
 
-    void MatchClient::pushSample(const PadState &s)
+    uint32_t MatchClient::pushSample(const PadState &s)
     {
         std::lock_guard<std::mutex> lk(mu_);
         if (status_ != Status::Running || local_ < 0)
-            return;
-        for (const auto &f : schedule_.push(s))
+            return kNoFrame;
+        const auto fills = schedule_.push(s);
+        for (const auto &f : fills)
             inputs_.set(local_, f.first, f.second);
         dirty_ = true;
+        return fills.empty() ? kNoFrame : fills.back().first;   // a grow step puts a repeat first, then this sample
     }
 
     bool MatchClient::waitFrame(uint32_t frame, int ms)

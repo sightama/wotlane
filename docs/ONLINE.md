@@ -179,17 +179,28 @@ cause can be read afterwards without asking anyone to copy logs.
   (`why=periodic`) and once when the match ends (`why=end`, with the device again). A periodic report holds, for the last 5 s: `fps`
   (frames presented) and `gfps` (game frames computed per second; `hz` is what it should be, 60 or 30), `work_ms` (the game loop's
   time per presented frame), `waits` and `wait_ms` (how often and for how long the game was blocked waiting for the other players'
-  input; `waits_tot` and `wait_tot_ms` since the start), `delay` (input delay, frames), `ping_ms`, `ping_max_ms` and `jitter_ms`, `late`
+  input; `waits_tot` and `wait_tot_ms` since the start), `delay` (input delay, frames), `ping_ms`, `ping_max_ms` and `jitter_ms` (the round
+  trip the server measures and sends each player every 500 ms: a browser can't time its WebSocket pings itself), `late`
   (animation frames that took over 25 ms), `raf_med_ms` (the median interval: the rate the page really gets, about 33 under a 30 fps
   power-saving cap), `raf_p95_ms` and `raf_max_ms`, `lt_n`, `lt_ms` and `lt_max_ms` (main-thread tasks over
   50 ms, Chrome and Edge only), `au_cb`, `au_gaps` and `au_max_ms` (audio callbacks, and the ones later than 1.5 buffers, which are
   dropped buffers), `hid_s` (seconds the tab was hidden), `focus_pct` (share of samples with the page focused), `lag_ms` and
-  `lag_max_ms` (how late a task posted to the page ran: the match WebSocket waits in that queue), plus `up_s`, `frame`, `build`,
-  `players`. The device is the class of device:
+  `lag_max_ms` (how late a task posted to the page ran: the match WebSocket waits in that queue), the input latency (below), plus
+  `up_s`, `frame`, `build`, `players`. The device is the class of device:
   `touch`, `mobile`, `os`, `ua` (browser name and major version, for example `Chrome-131`; never the user agent string), `cores`,
   `mem_gb`, `dpr`, `scr` (window size), `net`, `dl_mbps` and `est_rtt_ms` (the browser's own connection estimate), `gpu` (the GPU model
   from WebGL, `software ...` when the browser draws without one: hardware acceleration off or the GPU blocked). A field the browser
   can't give is left out.
+- **Input latency.** The `lat_` fields follow each button or key that went down in the window, from the moment the page saw it to the
+  first present that draws the game frame applying it (`native/wotm_latency.hpp`; the page gives the time of each keydown and of each pad
+  button it sees go down, `wotm_web_input_at`): `lat_n` presses, `lat_ms` (median), `lat_p95_ms` and `lat_max_ms` of that total, and the
+  medians of its stages: `lat_in_ms` (the page saw it until the game sampled it), `lat_dl_ms` (the sample until the game frame that
+  applies it starts, without waits: the input delay), `lat_st_ms` (waits for the other players' input in between), `lat_sim_ms` (that
+  frame's start to its capture for drawing), `lat_pr_ms` (the capture to the animation frame after the draw that first includes it).
+  `lat_bl_ms` is apart: with frame interpolation on, the time from that present to the first one that shows the frame whole (the blend
+  of the last two frames gives the newest a growing weight). `lat_unk` counts presses the page gave no time for (counted from the
+  sample). The compositor and the display add their own time after the present, which a page can't see. Measured on this computer by
+  `node tools/browser_mp_test/latency.mjs` (tabs behind `tools/net_lagproxy.py --tcp` links with a round trip, jitter and spikes).
 - **What the server adds.** Every 5 s of a started match, one line per player: `transport` (ws or enet), `hz`, `delay`, `rtt_ms`,
   `rtt_high_ms`, `in_pkts` (input packets since the last line), `in_gap_avg_ms` and `in_gap_max_ms` (how far apart the player's input
   packets arrived), `behind_max` and `behind_avg` (frames the player's inputs trailed the player furthest ahead, sampled every 100 ms;
@@ -204,7 +215,7 @@ cause can be read afterwards without asking anyone to copy logs.
 - **Privacy.** The lines hold the player's chosen name, the browser and device class above, and timings; no address, no user agent
   string, no language, and never chat text (the server's chat code is the only place that reads it, and it writes nothing). A DIAG line
   is checked by `native/net/wotm_net_diag.hpp`: keys are lower-case words, values are short tokens of letters, digits and `. _ : , / + -`,
-  at most 48 fields; anything else is dropped. The keys the server's own lines use (`src`, `lobby`, `player`, `event`, `slot`,
+  at most 64 fields; anything else is dropped. The keys the server's own lines use (`src`, `lobby`, `player`, `event`, `slot`,
   `transport`) can't be repeated by a report. A connection may send 10 DIAG lines per 10 s.
 - **Who the line is about.** From a connection in a lobby the server writes `src=client lobby=<code> player=<name>` itself. A report
   from a connection in no lobby (a page back on its front panel after a match) says which lobby and player it was, and nothing proves
@@ -236,4 +247,6 @@ cause can be read afterwards without asking anyone to copy logs.
   <name>]`, with `tools/live_check.py` and `tools/determinism_check.py` for the single-game ones; their shared part is
   `tools/gamecheck.py` (tested by `tools/test_gamecheck.py`). `net_check.py --rtt 20,60 --jitter 10` puts `tools/net_lagproxy.py` between
   the games and the server (a round trip per player, the last value covering the rest), so the server's ping sees it; every 600 frames
-  each game logs `[net] pace:` (its delay, ping and stalls) and the check prints each player's average delay and stalls.
+  each game logs `[net] pace:` (its delay, ping and stalls) and the check prints each player's average delay and stalls. The browsers'
+  WebSocket goes through `net_lagproxy.py --tcp` (`--spike <port>:<every s>:<extra ms>:<length ms>` adds a periodic jump in one link's
+  round trip), which `tools/browser_mp_test/latency.mjs` uses.

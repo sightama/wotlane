@@ -51,6 +51,8 @@ namespace wotm_net::proto
         Pace,         // server -> client: the input delay this player should move to (re-picked from the round trips during the
                       // match; the client steps toward it, wotm_lockstep.hpp LocalSchedule). Older peers ignore it and keep the
                       // Start delay, which stays in sync either way
+        Rtt,          // server -> client: this player's round trip as the server measures it (a browser can't time the WebSocket
+                      // pings itself), sent with every pace check. Older peers ignore it
     };
 
     struct Join
@@ -112,6 +114,10 @@ namespace wotm_net::proto
     struct Pace
     {
         uint32_t delay = 0;
+    };
+    struct Rtt
+    {
+        uint32_t ms = 0;
     };
 
     class Writer
@@ -397,6 +403,19 @@ namespace wotm_net::proto
     {
         Reader r(b, Type::Pace);
         m.delay = r.u32();
+        return r.done();
+    }
+
+    inline std::vector<uint8_t> encode(const Rtt &m)
+    {
+        Writer w(Type::Rtt);
+        w.u32(m.ms);
+        return w.take();
+    }
+    inline bool decode(const std::vector<uint8_t> &b, Rtt &m)
+    {
+        Reader r(b, Type::Rtt);
+        m.ms = r.u32();
         return r.done();
     }
 

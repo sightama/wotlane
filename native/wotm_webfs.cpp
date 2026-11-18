@@ -3,6 +3,7 @@
 #ifdef __EMSCRIPTEN__
 #include "wotm_web.h"
 #include "wotm_discchunks.hpp"
+#include "wotm_latency.hpp"
 
 #include <emscripten.h>
 #include <emscripten/wasmfs.h>
@@ -22,6 +23,8 @@ namespace
     std::atomic<double> g_stallMs{0};
     // the match's counters for the page's diagnostics (wotmWebNetStats): index = web/diag.js NET_STAT
     std::atomic<double> g_netStats[5];
+    std::atomic<double> g_inputAt{0};   // the page's last button or key down (wotm_web_input_at)
+    wotm::latency::Window g_latency;    // the window the page took last (wotm_web_latency_take); main thread only
     std::mutex g_stallMu;
     std::string g_stallText;
 }
@@ -43,7 +46,10 @@ void wotmWebPresent()
     if (++frames % 60 == 0)
         wotmWebSaveSync();   // every 60 frames, what the game saved goes to the browser's storage (WOTM_SAVE_MEMORY)
     wotm_web_wait_frame();
+    wotm::latency::tracker().presented(wotm::latency::nowMs());   // the frame drawn before this animation frame is on its way out
 }
+
+double wotmWebInputAt() { return g_inputAt.load(); }
 
 bool wotmWebHidden() { return g_hidden.load(); }
 
@@ -84,6 +90,18 @@ extern "C"
 {
     // the match's counters, as wotmWebNetStats set them: 0 frame, 1 waits, 2 wait ms, 3 delay, 4 ping (anything else: 0)
     EMSCRIPTEN_KEEPALIVE double wotm_web_net_stat(int which) { return which >= 0 && which < 5 ? g_netStats[which].load() : 0; }
+    // a button or key went down at `ms` (performance.timeOrigin + the event's time, the clock of emscripten_get_now)
+    EMSCRIPTEN_KEEPALIVE void wotm_web_input_at(double ms) { g_inputAt = ms; }
+    // the input latency since the last take (wotm_latency.hpp), read with wotm_web_latency: 0 presses, 1 total median, 2 total p95,
+    // 3 total max, 4 sample, 5 delay, 6 stall, 7 sim, 8 present (medians, ms), 9 presses with no page time, 10 blend (median, ms; web/diag.js
+    // LATENCY; anything else: 0)
+    EMSCRIPTEN_KEEPALIVE void wotm_web_latency_take() { g_latency = wotm::latency::tracker().take(); }
+    EMSCRIPTEN_KEEPALIVE double wotm_web_latency(int which)
+    {
+        const wotm::latency::Window &w = g_latency;
+        const double v[] = {double(w.n), w.total, w.p95, w.max, w.sample, w.delay, w.stall, w.sim, w.present, double(w.unknownPress), w.blend};
+        return which >= 0 && which < 11 ? v[which] : 0;
+    }
     EMSCRIPTEN_KEEPALIVE void wotm_web_set_hidden(int hidden) { g_hidden = hidden != 0; }
     EMSCRIPTEN_KEEPALIVE double wotm_web_net_stall_ms() { return g_stallMs.load(); }
     // the text stays valid until the next call (the page reads it right away)

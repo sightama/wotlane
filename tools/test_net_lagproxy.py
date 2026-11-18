@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# ABOUTME: Tests for the UDP latency proxy (tools/net_lagproxy.py): round trip near the asked one, jitter within its spread, order kept.
+# ABOUTME: Tests for the latency proxy (tools/net_lagproxy.py): round trip near the asked one, jitter within its spread, order kept, UDP and TCP, spikes.
 # ABOUTME: Run: python tools/test_net_lagproxy.py
 import socket
 import subprocess
@@ -98,6 +98,80 @@ class ProxyTest(unittest.TestCase):
             time.sleep(0.002)
         got = [int(c.recvfrom(2048)[0]) for _ in range(60)]
         self.assertEqual(got, list(range(60)))
+
+
+
+class SpikeSpecTest(unittest.TestCase):
+    def test_port_period_extra_and_length(self):
+        self.assertEqual(net_lagproxy.parse_spike('9001:5:150:400'), (9001, 5.0, 150.0, 400.0))
+
+    def test_extra_round_trip_only_inside_each_spike(self):
+        spike = (5.0, 150.0, 400.0)   # every 5 s, 400 ms at +150 ms
+        self.assertEqual(net_lagproxy.spike_extra_ms(spike, 4.9), 0.0)
+        self.assertEqual(net_lagproxy.spike_extra_ms(spike, 5.1), 150.0)
+        self.assertEqual(net_lagproxy.spike_extra_ms(spike, 5.5), 0.0)
+        self.assertEqual(net_lagproxy.spike_extra_ms(None, 5.1), 0.0)
+
+
+class TcpProxyTest(unittest.TestCase):
+    """A TCP echo server behind the proxy (--tcp, the browsers' WebSocket path): bytes come back after the round trip, in order."""
+
+    def setUp(self):
+        self.echo = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.echo.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.echo.bind(('127.0.0.1', 0))
+        self.echo.listen()
+        self.echo.settimeout(0.2)
+        self.running = True
+        self.thread = threading.Thread(target=self.serve, daemon=True)
+        self.thread.start()
+        free = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        free.bind(('127.0.0.1', 0))
+        self.listen = free.getsockname()[1]
+        free.close()
+        self.proxies = []
+
+    def tearDown(self):
+        self.running = False
+        for p in self.proxies:
+            p.terminate()
+            p.wait()
+        self.thread.join()
+        self.echo.close()
+
+    def serve(self):
+        while self.running:
+            try:
+                conn, _ = self.echo.accept()
+            except socket.timeout:
+                continue
+            threading.Thread(target=self.pump, args=(conn,), daemon=True).start()
+
+    def pump(self, conn):
+        with conn:
+            while True:
+                data = conn.recv(4096)
+                if not data:
+                    return
+                conn.sendall(data)
+
+    def test_round_trip_and_order(self):
+        p = subprocess.Popen([sys.executable, str(PROXY), '--tcp', '--to', f'127.0.0.1:{self.echo.getsockname()[1]}',
+                              '--link', f'{self.listen}:80:20'], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        self.proxies.append(p)
+        self.assertIn('listening', p.stdout.readline())
+        c = socket.create_connection(('127.0.0.1', self.listen), timeout=3)
+        self.addCleanup(c.close)
+        t0 = time.monotonic()
+        c.sendall(b'a')
+        self.assertEqual(c.recv(16), b'a')
+        self.assertGreaterEqual((time.monotonic() - t0) * 1000, 68)   # 80 less the jitter's half on each way, at the least
+        for i in range(50):
+            c.sendall(b'%03d' % i)
+        got = b''
+        while len(got) < 150:
+            got += c.recv(4096)
+        self.assertEqual(got, b''.join(b'%03d' % i for i in range(50)))
 
 
 if __name__ == '__main__':

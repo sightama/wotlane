@@ -31,6 +31,10 @@ void wotmWebNetStall(double ms, const char *text);
 // delay in frames and the ping in ms; any thread
 void wotmWebNetStats(uint32_t frame, uint32_t waits, double waitMs, uint32_t delay, uint32_t pingMs);
 
+// when the page last saw a button or key go down (ms, emscripten_get_now's clock; 0 before the first), for the input latency probe
+// (wotm_latency.hpp; boot.js and pads.js report it through wotm_web_input_at); any thread
+double wotmWebInputAt();
+
 // the game quit (its menu's quit game): the page goes back to its front panel (boot.js wotmQuit); any thread
 void wotmWebQuit();
 
