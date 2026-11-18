@@ -2,6 +2,7 @@
 // ABOUTME: on localhost. Exits with 0 if everything passes; each failure prints the file, line and expression.
 #include "wotm_confighash.hpp"
 #include "wotm_lockstep.hpp"
+#include "wotm_net_holdback.hpp"
 #include "wotm_monsters.hpp"
 #include "wotm_lobby_client.hpp"
 #include "wotm_net_client.hpp"
@@ -70,6 +71,172 @@ namespace
         PadState s;
         s.buttons = static_cast<uint16_t>(0xFFFFu & ~mask);
         return s;
+    }
+
+    // ---- holding the match back (wotm_net_holdback.hpp) ----
+
+    // feeds `secs` of 100 ms samples: the match frame advances `fps` a second; `behind[i]` frames behind for each player; returns the first
+    // drop decided (or a decision with slot -1)
+    wotm_net::Holdback::Decision runHoldback(wotm_net::Holdback &h, double &t, uint32_t &frame, double secs, double fps,
+                                             const std::vector<uint32_t> &behind, const std::vector<bool> &away, int hz = 60)
+    {
+        double carry = 0;
+        for (double end = t + secs; t < end - 1e-9; t += 0.1)
+        {
+            carry += fps * 0.1;
+            frame += static_cast<uint32_t>(carry);
+            carry -= static_cast<uint32_t>(carry);
+            std::vector<wotm_net::Holdback::Member> ms;
+            for (size_t i = 0; i < behind.size(); ++i)
+                ms.push_back({behind[i], away[i]});
+            const auto d = h.update(t, frame, hz, ms);
+            if (d.slot >= 0)
+                return d;
+        }
+        return {};
+    }
+
+    // the one everyone waits on, with the match's pace under 80% of its rate for 15 s after the first 10 s, is named
+    TEST(holdback_names_the_member_everyone_waits_on)
+    {
+        wotm_net::Holdback h;
+        double t = 0;
+        uint32_t frame = 0;
+        CHECK(runHoldback(h, t, frame, 10, 30, {0, 0, 3}, {false, false, false}).slot < 0);   // the first 10 s don't count
+        CHECK(runHoldback(h, t, frame, 14, 30, {0, 0, 3}, {false, false, false}).slot < 0);   // 14 s of slow pace: not yet
+        const auto d = runHoldback(h, t, frame, 2, 30, {0, 0, 3}, {false, false, false});
+        CHECK(d.slot == 2 && d.reason == wotm_net::Holdback::Reason::Slow);
+    }
+
+    // on a short input delay the one waited on trails by about one frame, and only some of the time: it is still named when it is
+    // the one alone at the back in most samples
+    TEST(holdback_names_the_bottleneck_on_a_one_frame_delay)
+    {
+        wotm_net::Holdback h;
+        double t = 0;
+        uint32_t frame = 0;
+        wotm_net::Holdback::Decision d;
+        for (int i = 0; i < 400 && d.slot < 0; ++i)   // 40 s: behind 1 in 7 samples of 10, level in the rest
+            d = runHoldback(h, t, frame, 0.1, 10, {0, 0, i % 10 < 7 ? 1u : 0u}, {false, false, false});
+        CHECK(d.slot == 2 && d.reason == wotm_net::Holdback::Reason::Slow);
+    }
+
+    // the server samples every 100 ms or a little more: the window still fills
+    TEST(holdback_window_fills_with_uneven_sampling)
+    {
+        wotm_net::Holdback h;
+        uint32_t frame = 0;
+        wotm_net::Holdback::Decision d;
+        for (double t = 0; t < 40 && d.slot < 0; t += 0.107)
+        {
+            frame += 1;
+            d = h.update(t, frame, 60, {{0, false, true}, {0, false, true}, {2, false, true}});
+        }
+        CHECK(d.slot == 2);
+    }
+
+    // a page still loading the stage after the start holds every frame back, but it isn't slow: the grace counts from the first frame
+    // the match plays
+    TEST(holdback_waits_for_the_match_to_move_before_judging)
+    {
+        wotm_net::Holdback h;
+        double t = 0;
+        uint32_t frame = 3;   // the start delay's neutral frames, then nothing until the last page has loaded
+        CHECK(runHoldback(h, t, frame, 40, 0, {0, 0, 3}, {false, false, false}).slot < 0);
+        CHECK(runHoldback(h, t, frame, 20, 60, {0, 0, 0}, {false, false, false}).slot < 0);
+    }
+
+    // a member on a longer path to the server trails by its extra one-way time in frames even on a healthy device: that much is not
+    // counted against it (so a whole match slowed by something else doesn't name the highest ping)
+    TEST(holdback_latency_frames_are_the_extra_one_way_time)
+    {
+        CHECK(wotm_net::Holdback::latencyFrames(100, 20, 1000.0 / 30) == 1u);   // 40 ms more one way at 33 ms frames
+        CHECK(wotm_net::Holdback::latencyFrames(160, 20, 1000.0 / 60) == 2u);   // 70 ms at 16.7 ms is 4, capped at 2 (a round trip is the client's to inflate)
+        CHECK(wotm_net::Holdback::latencyFrames(20, 20, 1000.0 / 60) == 0u);
+        CHECK(wotm_net::Holdback::latencyFrames(10, 20, 1000.0 / 60) == 0u);
+    }
+
+    // away for 2 s, back, away for 2 s again: never over 3 s in one go, so nobody; and a member that left is never named
+    TEST(holdback_counts_away_in_one_go_and_skips_members_who_left)
+    {
+        wotm_net::Holdback h;
+        double t = 0;
+        uint32_t frame = 0;
+        CHECK(runHoldback(h, t, frame, 12, 60, {0, 0, 0}, {false, false, false}).slot < 0);
+        CHECK(runHoldback(h, t, frame, 2, 60, {0, 0, 0}, {false, true, false}).slot < 0);
+        CHECK(runHoldback(h, t, frame, 0.5, 60, {0, 0, 0}, {false, false, false}).slot < 0);
+        CHECK(runHoldback(h, t, frame, 2, 60, {0, 0, 0}, {false, true, false}).slot < 0);
+        wotm_net::Holdback g;
+        uint32_t f2 = 0;
+        wotm_net::Holdback::Decision d;
+        for (double u = 0; u < 40 && d.slot < 0; u += 0.1)
+            d = g.update(u, f2 += 1, 60, {{0, false, true}, {0, false, true}, {0, false, true}, {5, true, false}});
+        CHECK(d.slot < 0);
+    }
+
+    // a page that never sends a real input can't keep the match from being judged: past kLoadMaxSec the grace starts anyway
+    TEST(holdback_judges_a_match_that_never_moves_after_a_minute)
+    {
+        wotm_net::Holdback h;
+        double t = 0;
+        uint32_t frame = 3;
+        const auto d = runHoldback(h, t, frame, 120, 0, {0, 0, 3}, {false, false, false});
+        CHECK(d.slot == 2 && t > wotm_net::Holdback::kLoadMaxSec);
+    }
+
+    // the drop is for the severe case: a match at 80% of its rate (68LN ran at ~82% and felt much better) keeps everyone; under 75%
+    // the one waited on goes
+    TEST(holdback_threshold_is_75_percent)
+    {
+        CHECK(wotm_net::Holdback::kSlowShare == 0.75);
+        wotm_net::Holdback a;
+        double t = 0;
+        uint32_t frame = 0;
+        CHECK(runHoldback(a, t, frame, 60, 24, {0, 0, 3}, {false, false, false}, 30).slot < 0);   // 24 of 30: 80%
+        wotm_net::Holdback b;
+        t = 0, frame = 0;
+        CHECK(runHoldback(b, t, frame, 60, 21, {0, 0, 3}, {false, false, false}, 30).slot == 2);  // 21 of 30: 70%
+    }
+
+    // a slow pace with no member clearly behind the others (the network, or everyone a bit slow), or a pace at 80% and over: nobody
+    TEST(holdback_drops_nobody_without_a_clear_bottleneck_or_a_slow_pace)
+    {
+        wotm_net::Holdback a;
+        double t = 0;
+        uint32_t frame = 0;
+        CHECK(runHoldback(a, t, frame, 40, 30, {1, 1, 1}, {false, false, false}).slot < 0);
+        wotm_net::Holdback b;
+        t = 0, frame = 0;
+        CHECK(runHoldback(b, t, frame, 40, 50, {0, 0, 3}, {false, false, false}).slot < 0);   // 50 of 60 is over 80%
+        wotm_net::Holdback c;
+        t = 0, frame = 0;
+        CHECK(runHoldback(c, t, frame, 40, 20, {0, 0, 3}, {false, false, false}, 30).slot == 2);   // a 30 Hz match: 20 of 30 is slow
+    }
+
+    // a member whose game is in the background for over 3 s while it holds everyone back (alone at the back) is named at once (one
+    // hidden tab froze a 4-player match for 9 s); one whose game keeps up in the background is left alone
+    TEST(holdback_names_a_member_away_for_over_3_s)
+    {
+        wotm_net::Holdback h;
+        double t = 0;
+        uint32_t frame = 0;
+        CHECK(runHoldback(h, t, frame, 12, 60, {0, 0, 0}, {false, false, false}).slot < 0);
+        CHECK(runHoldback(h, t, frame, 2.9, 0, {0, 2, 0}, {false, true, false}).slot < 0);
+        const auto d = runHoldback(h, t, frame, 0.3, 0, {0, 2, 0}, {false, true, false});
+        CHECK(d.slot == 1 && d.reason == wotm_net::Holdback::Reason::Away);
+        wotm_net::Holdback g;
+        t = 0, frame = 0;
+        CHECK(runHoldback(g, t, frame, 12, 60, {0, 0, 0}, {false, false, false}).slot < 0);
+        CHECK(runHoldback(g, t, frame, 10, 60, {0, 0, 0}, {false, true, false}).slot < 0);   // in the background, keeping up
+    }
+
+    // never down to one player: in a 2-player match nobody is named, whatever happens
+    TEST(holdback_never_leaves_a_match_with_one_player)
+    {
+        wotm_net::Holdback h;
+        double t = 0;
+        uint32_t frame = 0;
+        CHECK(runHoldback(h, t, frame, 60, 20, {0, 4}, {false, true}).slot < 0);
     }
 
     // A config hash is "<settings hash>:<mods digest>": a refusal says which part differs, so a player knows whether to import the
@@ -1260,6 +1427,45 @@ namespace
         exchange(a, b, 100);
         CHECK(a.delay() >= 5u && a.delay() <= 7u && b.delay() >= 5u && b.delay() <= 7u);
         rs.server.setTestRtt(0);
+    }
+
+    // a member whose game freezes in the background holds everyone back and is taken out (Holdback): its page hears why, and the other
+    // two play on (about 15 s)
+    TEST(match_drops_a_member_away_too_long_and_the_others_play_on)
+    {
+        ServerConfig cfg = testConfig();
+        cfg.forcedDelay = 2;
+        RunningServer rs(cfg);
+        auto ms = formMatch(cfg.port, {"Ana", "Bia", "Caio"}, {3, 1, 2});
+        MatchClient a, b, c;
+        std::string err;
+        CHECK(a.start(clientFor(cfg.port, *ms[0]), err) && b.start(clientFor(cfg.port, *ms[1]), err) && c.start(clientFor(cfg.port, *ms[2]), err));
+        CHECK(a.waitStarted(5000) && b.waitStarted(5000) && c.waitStarted(5000));
+        c.setAway(true);
+        const uint32_t d = a.delay();
+        uint32_t f = 0;
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(25);
+        while (c.status() == Status::Running && std::chrono::steady_clock::now() < until)
+        {
+            for (MatchClient *x : {&a, &b, &c})
+                if (x != &c || f < 120)   // after about 2 s Caio's game freezes in the background: no more input from it
+                    x->pushLocal(f + d, pressed(static_cast<uint16_t>(f)));
+            a.waitFrame(f, 50), b.waitFrame(f, 50);
+            ++f;
+            std::this_thread::sleep_for(std::chrono::milliseconds(16));
+        }
+        CHECK(c.status() == Status::Rejected);
+        CHECK(c.message().find("background") != std::string::npos);
+        // the two left keep going: Caio is neutral from the frame he was dropped at
+        bool going = true;
+        for (const uint32_t end = f + 60; f < end && going; ++f)
+        {
+            a.pushLocal(f + d, pressed(static_cast<uint16_t>(f)));
+            b.pushLocal(f + d, pressed(static_cast<uint16_t>(f)));
+            going = a.waitFrame(f, 3000) && b.waitFrame(f, 3000);
+        }
+        CHECK(going);
+        CHECK(a.status() == Status::Running && b.status() == Status::Running);
     }
 
     TEST(match_survives_lost_input_packets)
