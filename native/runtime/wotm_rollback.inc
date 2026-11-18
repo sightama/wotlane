@@ -97,6 +97,14 @@ namespace wotm_rollback
         }
     }
 
+    void logSizes(const rb::Snapshot &s)
+    {
+        std::fprintf(stderr, "[synctest] frame %u, snapshot %zu bytes:", s.frame, s.bytes.size());
+        for (size_t i = 0; i < g_state.size(); ++i)
+            std::fprintf(stderr, "%s %s %zu", i ? "," : "", g_state.piece(i).name.c_str(), s.ends[i] - (i ? s.ends[i - 1] : 0));
+        std::fprintf(stderr, "; %zu stream blob(s)\n", s.blobs.size());
+    }
+
     void logMismatch(const rb::State::Diff &d, const rb::Snapshot &original, const rb::Snapshot &redone)
     {
         ++g_mismatches;
@@ -387,6 +395,8 @@ namespace wotm_rollback
         if (frame == g_traceFrame)
             g_traceDone[0] = true;
         g_state.save(g_slots[g_test->slot(frame)], frame);
+        if (frame % 3000u == 0u)   // the pieces' sizes now and then (the sound engine's and the upper RAM's vary)
+            logSizes(g_slots[g_test->slot(frame)]);
         const auto t1 = clk::now();
         g_save.add(ms(t0, t1));
         if (!g_test->resimulating())

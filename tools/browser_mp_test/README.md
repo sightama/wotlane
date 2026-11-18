@@ -74,3 +74,12 @@ stages, the delays and pings seen. `--browser chrome` uses the GPU; the default 
 second on a busy machine, which the present stage then shows. Results: `summary.json`, the diag files, `server.log` and `proxy.log` in
 `--out`. The summary reader is `lib/latency.mjs` (tested in `test/latency.test.mjs`). The keys are Playwright's, sent straight to the page:
 the time the system and the browser take to deliver a real key is not in the numbers.
+
+## Rollback synctest
+
+`node tools/browser_mp_test/synctest.mjs --browser chrome|firefox --back 2 [--step 2 --match 3,1,2,4,5,7,8,9,1] --minutes 30` serves a
+built `web_dist` and runs one AI vs AI direct fight with `WOTM_SYNCTEST` (`docs/passos/NATIVO.md`): every fight frame goes n frames back
+and is redone, and the whole state is compared with the first run. It prints the game's `[synctest]` lines (cost every 300 frames,
+mismatches) and exits 1 on a mismatch; the game's log goes to `runtime/browser_synctest/`, and `python3 tools/synctest_cost.py <logs>`
+turns the cost lines into a table. `--env K=V` adds game variables (`WOTM_SYNCTEST_SKIP=sound`, `WOTM_FRAMESPIN=8`). See
+`docs/investigacoes/2026-11-18/rollback-synctest/`.
