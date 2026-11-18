@@ -613,30 +613,41 @@ namespace
         CHECK(p::adviseDelay(3, {40}, 0, f60) == 1u);       // nobody else to reach
     }
 
-    // The delay covers the round trip a player has 4/5 of the time (the last 16 samples, 8 s at the server's 500 ms): a spike shorter
-    // than that costs a short wait instead of raising everyone's delay, a lasting rise counts within 2 s and goes again once it has left
-    // the window. The first samples count at their high end.
-    TEST(proto_rtt_window_covers_four_fifths_of_the_recent_round_trips)
+    // The delay rises for the round trip a player has 4/5 of the time (the last 16 samples, 8 s at the server's 500 ms): a spike shorter
+    // than that costs a short wait instead of raising everyone's delay, and a lasting rise counts within 2 s. It falls only once at
+    // most one high sample is left, so spikes that keep coming hold it up instead of moving it up and down. The first samples count at
+    // their high end.
+    TEST(proto_rtt_window_rises_for_four_fifths_and_falls_for_all_but_one)
     {
         p::RttWindow w;
-        CHECK(w.level() == 0u);
+        CHECK(w.riseLevel() == 0u && w.fallLevel() == 0u);
         w.add(40);
         w.add(90);
         w.add(50);
-        CHECK(w.level() == 90u);
+        CHECK(w.riseLevel() == 90u && w.fallLevel() == 90u);
         for (size_t i = 0; i < p::RttWindow::kSamples; ++i)
             w.add(60);
-        CHECK(w.level() == 60u);
+        CHECK(w.riseLevel() == 60u);
         for (int i = 0; i < 3; ++i)
             w.add(230);   // 68LN: one player's ping spikes to 130 to 230 ms every few seconds
-        CHECK(w.level() == 60u);   // three spikes in 8 s: ignored
+        CHECK(w.riseLevel() == 60u);   // three spikes in 8 s: no rise
         w.add(230);
-        CHECK(w.level() == 230u);   // a fourth: 2 s of it in 8 s is the player's ping now
-        for (int i = 0; i < 12; ++i)
+        CHECK(w.riseLevel() == 230u && w.fallLevel() == 230u);   // a fourth: 2 s of it in 8 s is the player's ping now
+        for (int i = 0; i < 13; ++i)
             w.add(60);
-        CHECK(w.level() == 230u);
-        w.add(60);
-        CHECK(w.level() == 60u);   // back once at most three high samples are left
+        CHECK(w.riseLevel() == 60u && w.fallLevel() == 230u);   // three left: no new rise, but no fall yet
+        for (int i = 0; i < 2; ++i)
+            w.add(60);
+        CHECK(w.fallLevel() == 60u);   // one left: the delay may fall
+    }
+
+    // the advice rises for the rise levels and falls only as far as the fall levels allow
+    TEST(proto_advice_rises_for_the_rise_level_and_falls_for_the_fall_level)
+    {
+        const double f30 = 1000.0 / 30.0;
+        CHECK(p::adviseDelay(2, {230, 60}, {230, 60}, 1, f30) == 5u);   // (60 + 230) / 2 + 3 = 148 ms
+        CHECK(p::adviseDelay(5, {60, 60}, {230, 60}, 1, f30) == 5u);    // the spikes keep coming: it stays
+        CHECK(p::adviseDelay(5, {60, 60}, {60, 60}, 1, f30) == 3u);     // they stopped: 63 ms is 1.9 frames, 3 with half a frame spare
     }
 
     TEST(proto_pace_roundtrip)

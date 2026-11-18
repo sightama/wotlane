@@ -873,7 +873,7 @@ namespace wotm_net
             const uint32_t rtt = (s.peer.enet ? s.peer.enet->roundTripTime : s.peer.ws->link->rttMs()) + testRttMs_.load();
             char stats[200];
             std::snprintf(stats, sizeof stats, " rtt_ms=%u rtt_high_ms=%u rtt_level_ms=%u in_pkts=%u in_gap_avg_ms=%.0f in_gap_max_ms=%.0f behind_max=%u behind_avg=%.1f away=%d", rtt,
-                          rttHighOf(s.peer), s.rtt.level(), w.packets, w.packets ? w.gapSumMs / w.packets : 0.0, w.gapMaxMs, w.behindMax,
+                          rttHighOf(s.peer), s.rtt.riseLevel(), w.packets, w.packets ? w.gapSumMs / w.packets : 0.0, w.gapMaxMs, w.behindMax,
                           w.behindSamples ? w.behindSum / w.behindSamples : 0.0, s.away ? 1 : 0);
             diagEvent(l, "player=" + s.name + " slot=" + std::to_string(i) + " transport=" + (s.peer.ws ? "ws" : "enet") + " hz=" +
                              std::to_string(60 / m.step) + " delay=" + std::to_string(s.advised) + stats);
@@ -977,18 +977,19 @@ namespace wotm_net
         return (peer.enet ? peer.enet->roundTripTime : peer.ws->link->rttMs()) + testRttMs_.load();
     }
 
-    // each player's round trip as the delay sees it (RttWindow::level; 0 for a player who left: nobody waits for them)
-    std::vector<uint32_t> Server::rttLevels(Match &m)
+    // each player's round trip as the delay sees it for a rise, or with `fall` for a fall (RttWindow; 0 for a player who left: nobody
+    // waits for them)
+    std::vector<uint32_t> Server::rttLevels(Match &m, bool fall)
     {
         std::vector<uint32_t> out;
         for (Slot &s : m.slots)
-            out.push_back(s.peer && !s.gone ? s.rtt.level() : 0u);
+            out.push_back(s.peer && !s.gone ? (fall ? s.rtt.fallLevel() : s.rtt.riseLevel()) : 0u);
         return out;
     }
 
     // During the match, every paceMs: samples each player's round trip, tells each player theirs (Rtt) and sends a player whose delay
     // should change its new one (Pace).
-    // The window (RttWindow::level) raises a player's level once 4 of its last 16 samples are high, and lowers it once at most 3 are left
+    // The window (RttWindow) raises a player's delay once 4 of its last 16 samples are high, and lowers it once at most 1 is left
     void Server::pace(Match &m, const Lobby &l)
     {
         const Clock::time_point now = Clock::now();
@@ -1001,12 +1002,12 @@ namespace wotm_net
                 s.rtt.add(rttHighOf(s.peer));
                 send(s.peer, proto::kControl, proto::encode(proto::Rtt{rttOf(s.peer)}), true);
             }
-        const std::vector<uint32_t> levels = rttLevels(m);
+        const std::vector<uint32_t> levels = rttLevels(m), fallLevels = rttLevels(m, true);
         const double frame = proto::frameMs(m.step);
         for (size_t i = 0; i < m.slots.size(); ++i)
         {
             Slot &s = m.slots[i];
-            const uint32_t d = proto::adviseDelay(s.advised, levels, i, frame);
+            const uint32_t d = proto::adviseDelay(s.advised, levels, fallLevels, i, frame);
             if (!s.peer || s.gone || d == s.advised)
                 continue;
             log("lobby %s: %s's delay %u -> %u frame(s) (round trip the delay covers: %u ms)", l.code.c_str(), s.name.c_str(), s.advised, d, levels[i]);

@@ -460,13 +460,18 @@ namespace wotm_net::proto
         return framesFor(pathFrames(rttMs, player, frameMs));
     }
 
-    // The delay to advise a player whose delay is `current` during the match: it rises as soon as the path needs another frame, but
-    // only falls when the lower delay leaves half a frame to spare, so a ping sitting on a frame boundary does not flap
+    // The delay to advise a player whose delay is `current` during the match: it rises as soon as the path for the rise levels needs
+    // another frame, and falls only when the path for the fall levels (RttWindow) leaves half a frame to spare at the lower delay, so
+    // neither a ping sitting on a frame boundary nor spikes that keep coming move it back and forth
+    inline uint32_t adviseDelay(uint32_t current, const std::vector<uint32_t> &riseMs, const std::vector<uint32_t> &fallMs, size_t player,
+                                double frameMs)
+    {
+        const uint32_t up = framesFor(pathFrames(riseMs, player, frameMs)), down = framesFor(pathFrames(fallMs, player, frameMs) + 0.5);
+        return up >= current ? up : std::min(current, down);
+    }
     inline uint32_t adviseDelay(uint32_t current, const std::vector<uint32_t> &rttMs, size_t player, double frameMs)
     {
-        const double frames = pathFrames(rttMs, player, frameMs);
-        const uint32_t up = framesFor(frames), down = framesFor(frames + 0.5);
-        return up >= current ? up : std::min(current, down);
+        return adviseDelay(current, rttMs, rttMs, player, frameMs);
     }
 
     // the delay everyone starts with (the frames before it are neutral for every player): the largest player's, and at least 2,
@@ -479,10 +484,11 @@ namespace wotm_net::proto
         return d;
     }
 
-    // A player's round trip as the delay sees it: the level their last kSamples round trips stay at or under 4/5 of the time (nearest
-    // rank, so with the server's 500 ms samples up to 3 high ones in 8 s are left out). A short spike then costs the others a short wait
-    // instead of a frame of delay for everyone while it is in the window; a lasting rise counts once it holds for 4 samples (2 s), and
-    // the delay goes back once at most 3 high samples are left
+    // A player's round trip as the delay sees it, from their last kSamples round trips (8 s at the server's 500 ms). The delay rises
+    // for the level they stay at or under 4/5 of the time (riseLevel: 3 high samples of 16 are left out, so a short spike costs the
+    // others a short wait instead of a frame of delay for everyone, and a lasting rise counts once it holds for 4 samples, 2 s), and
+    // falls only for the level all but one stay at or under (fallLevel), so spikes that keep coming hold the delay up instead of
+    // moving it up and down. While the window fills, fewer samples are left out (the first ones count at their high end)
     class RttWindow
     {
     public:
@@ -493,17 +499,21 @@ namespace wotm_net::proto
             at_ = (at_ + 1) % kSamples;
             n_ = std::min(n_ + 1, kSamples);
         }
-        uint32_t level() const
+        uint32_t riseLevel() const { return highestBut(n_ * 3 / kSamples); }
+        uint32_t fallLevel() const { return highestBut(n_ / kSamples); }
+
+    private:
+        // the highest sample once the `skip` highest are left out
+        uint32_t highestBut(size_t skip) const
         {
             if (n_ == 0)
                 return 0;
             uint32_t sorted[kSamples];
             std::copy(samples_, samples_ + n_, sorted);
             std::sort(sorted, sorted + n_);
-            return sorted[(n_ * 80 + 99) / 100 - 1];
+            return sorted[n_ - 1 - std::min(skip, n_ - 1)];
         }
 
-    private:
         uint32_t samples_[kSamples] = {};
         size_t at_ = 0, n_ = 0;
     };

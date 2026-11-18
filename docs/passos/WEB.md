@@ -202,10 +202,11 @@ is reliable and ordered, so the server sends a browser each input once (an ENet 
 whose network stops is sent only pings, not a growing pile of repeats. A browser that comes back sends everything it queued at once; the
 server reads a connection 64 KB at a time, so any burst is fine (only a lobby line over 64 KB closes the connection).
 Each player has their own input delay, re-picked by the server every 500 ms from the round trips (`adviseDelay` in
-`native/net/wotm_net_proto.hpp`, `docs/ONLINE.md`): half their round trip plus half the slowest other player's, at the level each
-round trip stays at or under 4/5 of the last 8 s (`RttWindow`: up to 3 high samples of 16 are left out, so a short spike costs a wait
-instead of raising everyone's delay), plus 3 ms. With everyone at a steady 20, 60 and 120 ms that is 2, 4 and 8 frames in a 1 vs 1
-(60 Hz) and 1, 2 and 4 frames with 3 to 8 players (30 Hz); jitter adds to it. A match starts at the largest player's delay, and at least 2.
+`native/net/wotm_net_proto.hpp`, `docs/ONLINE.md`): half their round trip plus half the slowest other player's, at the level each round
+trip stays at or under 4/5 of the last 8 s (`RttWindow` riseLevel: up to 3 high samples of 16 are left out, so a short spike costs a
+wait instead of raising everyone's delay; the delay falls only for fallLevel, which leaves out one), plus 3 ms. With everyone at a
+steady 20, 60 and 120 ms that is 2, 4 and 8 frames in a 1 vs 1 (60 Hz) and 1, 2 and 4 frames with 3 to 8 players (30 Hz); jitter adds
+to it. A match starts at the largest player's delay, and at least 2.
 A Mac or Windows build that plays the site must be built from `wip/browser`: its build id (a hash of `native/`) differs from `wotlane/mac`'s, and the server refuses a different build.
 
 During a match:

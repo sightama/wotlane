@@ -235,7 +235,7 @@ namespace wotm_net
         // a round trip at its high end: ENet's smoothed one plus twice its variation (a WebSocket's is a single ping)
         uint32_t rttHighOf(PeerRef peer) const;
         uint32_t rttOf(PeerRef peer) const;   // the plain round trip (what a player is told: proto::Rtt)
-        std::vector<uint32_t> rttLevels(Match &m);
+        std::vector<uint32_t> rttLevels(Match &m, bool fall = false);
         void pace(Match &m, const Lobby &l);
 
         ServerConfig cfg_;
