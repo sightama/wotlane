@@ -153,7 +153,8 @@ to the console) and starts once that many players are in; `--code <code> --name 
   phone or tablet (`web/lobby.js` `phoneDevice`: the browser's mobile flag, an Android or mobile User-Agent, or touch as the primary
   pointer; the server also checks the lobby WebSocket's User-Agent) says `hz=30` in its lobby `HELLO`, and so does a computer that
   this browser measured unable to hold 60 in its last 60 Hz match (`web/rate.js`: its own game frames per second, not counting the
-  time it waited for the network, median of 5 s windows after the first 20 s, under 55; its first slow match still runs at 60). A match
+  time it waited for the network, median of 5 s windows after the first 20 s, under 55 of 60 or 27.5 of 30; its first slow match still
+  runs at its old rate). Such a computer also draws light in its matches, like a phone (60 Hz, 75% scale). A match
   with such a member runs in the game's 30 Hz mode (`proto::matchStep`): half the frames for the same game time. Offline the game
   measures real time and lowers its own update rate, so a phone keeps normal speed there either way.
 - **5 to 8 players:** the game itself only has 4 player slots and 4 cameras. Players 5 to 8 drive monsters in the computer-player slots
