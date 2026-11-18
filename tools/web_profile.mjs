@@ -17,7 +17,7 @@ await page.goto(fight.href);
 const log = () => page.evaluate(() => window.wotmLog || []);
 const t0 = Date.now();
 while (!(await log()).some((l) => l.includes('ready: stage on screen'))) {
-  if (Date.now() - t0 > 120000) { console.error('no stage after 120 s'); process.exit(1); }
+  if (Date.now() - t0 > 120000) { console.error('no stage after 120 s'); await browser.close(); process.exit(1); }
   await page.waitForTimeout(500);
 }
 await page.waitForTimeout(5000);
@@ -26,8 +26,8 @@ const report = (a, b, what) => console.log(`${what}: presented ${((b.frames - a.
 const a = await counters();
 await page.waitForTimeout(Number(secs) * 1000);
 const b = await counters();
-report(a, b, `${which} ${await page.evaluate(() => navigator.userAgent.match(/Chrome\/\d+/)?.[0])}`);
-console.log('page sees:', JSON.stringify(await page.evaluate(() => { const gl = document.createElement('canvas').getContext('webgl2'); const ext = gl?.getExtension('WEBGL_debug_renderer_info'); return { cores: navigator.hardwareConcurrency, renderer: ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl?.getParameter(gl.RENDERER), timerRes: (() => { let m = 1e9, p = performance.now(); for (let i = 0; i < 1e5; i++) { const q = performance.now(); if (q > p) { m = Math.min(m, q - p); p = q; } } return m; })() }; })));
+report(a, b, `${which} ${await page.evaluate(() => navigator.userAgent.match(/(Chrome|Firefox)\/\d+/)?.[0] ?? 'unknown')}`);
+console.log('page sees:', JSON.stringify(await page.evaluate(() => { const gl = document.createElement('canvas').getContext('webgl2'); const ext = gl?.getExtension('WEBGL_debug_renderer_info'); const renderer = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl?.getParameter(gl.RENDERER); gl?.getExtension('WEBGL_lose_context')?.loseContext(); return { cores: navigator.hardwareConcurrency, renderer, timerRes: (() => { let m = 1e9, p = performance.now(); for (let i = 0; i < 1e5; i++) { const q = performance.now(); if (q > p) { m = Math.min(m, q - p); p = q; } } return m; })() }; })));
 
 const cdp = await page.context().newCDPSession(page);
 await cdp.send('Profiler.enable');

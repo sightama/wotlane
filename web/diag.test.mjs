@@ -387,6 +387,16 @@ test('software drawing is read from a context that refuses a major performance c
   assert.equal(readSoftwareGl(winWith(true)), 1);
   assert.equal(readSoftwareGl(winWith(false)), 0);
   assert.equal(readSoftwareGl({ document: { createElement: () => ({ getContext: () => null }) } }), undefined);   // no WebGL at all
+  assert.equal(readSoftwareGl({ document: { createElement: () => ({ getContext: () => { throw new Error('blocked'); } }) } }), undefined);
+  // the caveat context is asked first, alone: a plain one is only made once it was refused, so a refusal for lack of room is not software
+  const asked = [];
+  readSoftwareGl({ document: { createElement: () => ({ getContext: (kind, opts) => { asked.push([kind, !!opts?.failIfMajorPerformanceCaveat]); return {}; } }) } });
+  assert.deepEqual(asked, [['webgl2', true]]);
+  // no answer is not kept: a later call asks again
+  const win = { document: { createElement: () => ({ getContext: () => null }) } };
+  readSoftwareGl(win);
+  win.document.createElement = () => ({ getContext: (kind, opts) => (opts?.failIfMajorPerformanceCaveat ? null : {}) });
+  assert.equal(readSoftwareGl(win), 1);
   const f = Object.fromEntries(deviceFields({ navigator: {}, matchMedia: () => ({ matches: false }), wotmGpu: 'Brave', wotmSoftwareGl: 1 }));
   assert.equal(f.gl_sw, 1);
 });

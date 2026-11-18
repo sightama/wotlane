@@ -188,20 +188,27 @@ export function readGpu(win) {
   return win.wotmGpu;
 }
 
-// Whether WebGL draws in software, from a context asked to fail on a major performance caveat (refused on a software renderer): 1 or 0,
-// once per page; undefined without WebGL. Unlike the renderer string, a browser that masks it (Brave reports "Brave") still answers this
+// Whether WebGL2 (the game's) draws in software: a context asked to fail on a major performance caveat is refused while a plain one is
+// given (1), or the caveat context is given (0: none detected; a browser may not flag every software renderer). Undefined without WebGL
+// or on an error, and then asked again next time. The caveat context is asked first and alone, so a refusal for lack of room (too many
+// contexts, a lost GPU) is not read as software. Unlike the renderer string, a browser that masks it (Brave reports "Brave") answers this
 export function readSoftwareGl(win) {
-  if (win.wotmSoftwareGl !== undefined) return win.wotmSoftwareGl ?? undefined;
-  let sw = null;
+  if (win.wotmSoftwareGl !== undefined) return win.wotmSoftwareGl;
+  const make = (opts) => win.document?.createElement('canvas').getContext('webgl2', opts) ?? null;
+  const drop = (gl) => gl?.getExtension?.('WEBGL_lose_context')?.loseContext();
+  let sw;
   try {
-    const make = (opts) => win.document?.createElement('canvas').getContext('webgl', opts);
-    const plain = make({});
-    const fast = plain ? make({ failIfMajorPerformanceCaveat: true }) : null;
-    if (plain) sw = fast ? 0 : 1;
-    for (const gl of [plain, fast]) gl?.getExtension?.('WEBGL_lose_context')?.loseContext();
+    const fast = make({ failIfMajorPerformanceCaveat: true });
+    drop(fast);
+    if (fast) sw = 0;
+    else {
+      const plain = make({});
+      drop(plain);
+      if (plain) sw = 1;
+    }
   } catch { /* no WebGL here */ }
-  win.wotmSoftwareGl = sw;
-  return sw ?? undefined;
+  if (sw !== undefined) win.wotmSoftwareGl = sw;
+  return sw;
 }
 
 // main-thread tasks over 50 ms, where the browser reports them (Chrome and Edge; Firefox has no such entries: take() gives null)
