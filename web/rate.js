@@ -66,7 +66,8 @@ export class RateMemory {
 export function rememberedHealth(storage) {
   try {
     const h = JSON.parse(storage?.getItem(HEALTH_KEY));
-    return [h?.fps, h?.workMs, h?.hz].every((n) => typeof n === 'number' && Number.isFinite(n)) ? { fps: h.fps, workMs: h.workMs, hz: h.hz } : null;
+    const inRange = (n, max) => typeof n === 'number' && n >= 0 && n <= max;   // what the server's HEALTH accepts
+    return inRange(h?.fps, 1000) && inRange(h?.workMs, 1000) && Number.isInteger(h?.hz) && h.hz >= 1 && h.hz <= 240 ? { fps: h.fps, workMs: h.workMs, hz: h.hz } : null;
   } catch { return null; }
 }
 

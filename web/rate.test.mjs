@@ -88,3 +88,8 @@ test('rememberedHealth: nothing stored, junk or storage that throws gives null',
 test('healthLine is the HEALTH command for a lobby', () => {
   assert.equal(healthLine({ fps: 27.4, workMs: 13.24, hz: 60 }), 'HEALTH 27.4 13.2 60');
 });
+
+test('rememberedHealth refuses numbers the server would refuse', () => {
+  for (const h of [{ fps: 1001, workMs: 1, hz: 60 }, { fps: -1, workMs: 1, hz: 60 }, { fps: 30, workMs: 1, hz: 0 }, { fps: 30, workMs: 1, hz: 30.5 }, { fps: 30, workMs: 1, hz: 300 }])
+    assert.equal(rememberedHealth({ getItem: () => JSON.stringify(h) }), null, JSON.stringify(h));
+});

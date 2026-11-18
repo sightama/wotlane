@@ -445,7 +445,7 @@ namespace wotm_net
         for (const Lobby::Ban &b : l.bans)
             if (b.name == name)
                 return void(c.link->sendLine("ERROR you were removed from this lobby; try again in " +
-                                             std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(b.until - now).count() / 1000 + 1) + " s"));
+                                             std::to_string((std::chrono::duration_cast<std::chrono::milliseconds>(b.until - now).count() + 999) / 1000) + " s"));
         if (l.match)
             return void(c.link->sendLine("ERROR lobby is in a match; wait for it to end"));
         if (static_cast<int>(l.members.size()) >= cfg_.maxPlayers)
@@ -557,6 +557,7 @@ namespace wotm_net
         if (target < 0)
             return void(c.link->sendLine("ERROR " + name + " is not in this lobby"));
         const auto now = Clock::now();
+        l->bans.erase(std::remove_if(l->bans.begin(), l->bans.end(), [now](const Lobby::Ban &b) { return b.until <= now; }), l->bans.end());
         l->bans.push_back({name, now + std::chrono::milliseconds(cfg_.kickBanMs)});
         log("lobby %s: %s removed %s", l->code.c_str(), c.name.c_str(), name.c_str());
         diagEvent(*l, "event=kick owner=" + c.name + " player=" + name);

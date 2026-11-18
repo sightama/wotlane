@@ -11,6 +11,8 @@ const WORK_WARN = 0.72;            // work per frame over this share of the fram
 const WORK_BAD = 0.95;             // ... and red when it fills the frame (16 ms of 16.7)
 
 const ORDER = ['good', 'warn', 'bad'];
+// a member's entry (a name such as "constructor" is not an entry of the object's prototype)
+const own = (map, name) => (Object.hasOwn(map, name) ? map[name] : undefined);
 const worst = (a, b) => (ORDER.indexOf(a) >= ORDER.indexOf(b) ? a : b);
 
 export function pingLevel(ms) {
@@ -32,9 +34,9 @@ const rate = (h) => `${Math.round(h.fps)} fps of ${h.hz}`;
 
 // `pings`: name to ms (null: not measured); `healths`: name to health
 export function memberStatus(name, pings, healths) {
-  const ms = pings[name];
+  const ms = own(pings, name);
   const ping = pingLevel(ms);
-  const h = healths[name];
+  const h = own(healths, name);
   const level = deviceLevel(h);
   const text = { none: 'device not measured yet', good: 'device ok', warn: `device borderline: ${h && rate(h)}`, bad: `device too slow: ${h && rate(h)}` }[level];
   return { ping: { level: ping, text: ping === 'none' ? '' : `${ms} ms` }, device: { level, text } };
@@ -43,8 +45,8 @@ export function memberStatus(name, pings, healths) {
 export function lobbyWarnings(names, pings, healths) {
   const out = [];
   for (const name of names) {
-    if (pingLevel(pings[name]) === 'bad') out.push(`${name}: ping ${pings[name]} ms is high, so everyone's input will feel laggy.`);
-    if (deviceLevel(healths[name]) === 'bad') out.push(`${name}: this device runs ${rate(healths[name])} and would slow the match for everyone.`);
+    if (pingLevel(own(pings, name)) === 'bad') out.push(`${name}: ping ${pings[name]} ms is high, so everyone's input will feel laggy.`);
+    if (deviceLevel(own(healths, name)) === 'bad') out.push(`${name}: this device runs ${rate(healths[name])} and would slow the match for everyone.`);
   }
   return out;
 }
