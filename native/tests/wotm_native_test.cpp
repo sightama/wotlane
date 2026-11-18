@@ -495,7 +495,7 @@ namespace
 
     // The engine applies this PC's volume on top of the game's group volume: the game still reads back its own value
     // (snd_GetMasterVolume), effects and music are separate, 0 is silence
-    TEST(sound_player_volume_scales_one_group_only)
+    TEST(sound_player_volume_keeps_effects_and_music_apart)
     {
         auto &e = wotm::snd::Engine::get();
         e.setMasterVolume(0, 0x400);
