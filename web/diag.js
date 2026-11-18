@@ -74,6 +74,7 @@ export function deviceFields(win) {
     ['dl_mbps', conn.downlink],
     ['est_rtt_ms', conn.rtt],
     ['gpu', readGpu(win) ?? undefined],
+    ['gl_sw', readSoftwareGl(win)],
   ]);
 }
 
@@ -185,6 +186,29 @@ export function readGpu(win) {
   } catch { /* no WebGL here */ }
   win.wotmGpu = name ?? null;
   return win.wotmGpu;
+}
+
+// Whether WebGL2 (the game's) draws in software: a context asked to fail on a major performance caveat is refused while a plain one is
+// given (1), or the caveat context is given (0: none detected; a browser may not flag every software renderer). Undefined without WebGL
+// or on an error, and then asked again next time. The caveat context is asked first and alone, so a refusal for lack of room (too many
+// contexts, a lost GPU) is not read as software. Unlike the renderer string, a browser that masks it (Brave reports "Brave") answers this
+export function readSoftwareGl(win) {
+  if (win.wotmSoftwareGl !== undefined) return win.wotmSoftwareGl;
+  const make = (opts) => win.document?.createElement('canvas').getContext('webgl2', opts) ?? null;
+  const drop = (gl) => gl?.getExtension?.('WEBGL_lose_context')?.loseContext();
+  let sw;
+  try {
+    const fast = make({ failIfMajorPerformanceCaveat: true });
+    drop(fast);
+    if (fast) sw = 0;
+    else {
+      const plain = make({});
+      drop(plain);
+      if (plain) sw = 1;
+    }
+  } catch { /* no WebGL here */ }
+  if (sw !== undefined) win.wotmSoftwareGl = sw;
+  return sw;
 }
 
 // main-thread tasks over 50 ms, where the browser reports them (Chrome and Edge; Firefox has no such entries: take() gives null)

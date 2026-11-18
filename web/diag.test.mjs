@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   SCHEMA, diagValue, diagLine, browserName, deviceFields, FrameWatch, LongTaskWatch, installAudioWatch, readGame, latencySource, windowFields, gpuName,
-  TaskLagWatch, DiscWatch,
+  TaskLagWatch, DiscWatch, readSoftwareGl,
   DiagReporter, joinFields, reportFields,
 } from './diag.js';
 
@@ -378,4 +378,25 @@ test('a periodic report carries the disc bytes of its window', () => {
   const f = fieldsOf(r.sent[0]);
   assert.equal(f.disc_net_mb, '1.0');
   assert.equal(f.disc_hit_mb, '2.0');
+});
+
+// a browser that masks the renderer string (Brave reports "Brave") still refuses a context that asks to fail on a major performance
+// caveat when it draws in software: gl_sw=1
+test('software drawing is read from a context that refuses a major performance caveat, not from the renderer string', () => {
+  const winWith = (refuses) => ({ document: { createElement: () => ({ getContext: (kind, opts) => (opts?.failIfMajorPerformanceCaveat && refuses ? null : { kind, getExtension: () => null }) }) } });
+  assert.equal(readSoftwareGl(winWith(true)), 1);
+  assert.equal(readSoftwareGl(winWith(false)), 0);
+  assert.equal(readSoftwareGl({ document: { createElement: () => ({ getContext: () => null }) } }), undefined);   // no WebGL at all
+  assert.equal(readSoftwareGl({ document: { createElement: () => ({ getContext: () => { throw new Error('blocked'); } }) } }), undefined);
+  // the caveat context is asked first, alone: a plain one is only made once it was refused, so a refusal for lack of room is not software
+  const asked = [];
+  readSoftwareGl({ document: { createElement: () => ({ getContext: (kind, opts) => { asked.push([kind, !!opts?.failIfMajorPerformanceCaveat]); return {}; } }) } });
+  assert.deepEqual(asked, [['webgl2', true]]);
+  // no answer is not kept: a later call asks again
+  const win = { document: { createElement: () => ({ getContext: () => null }) } };
+  readSoftwareGl(win);
+  win.document.createElement = () => ({ getContext: (kind, opts) => (opts?.failIfMajorPerformanceCaveat ? null : {}) });
+  assert.equal(readSoftwareGl(win), 1);
+  const f = Object.fromEntries(deviceFields({ navigator: {}, matchMedia: () => ({ matches: false }), wotmGpu: 'Brave', wotmSoftwareGl: 1 }));
+  assert.equal(f.gl_sw, 1);
 });

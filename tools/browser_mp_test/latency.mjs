@@ -15,7 +15,7 @@ const USAGE = `Usage: node tools/browser_mp_test/latency.mjs [options]
   --spike 4:6:160:400      player 4 (1-based) gets +160 ms for 400 ms every 6 s (repeatable)
   --secs 90                seconds of play once every tab has started
   --press-ms 700           mean time between one tab's presses (each a 120 ms tap of Space, the cross button)
-  --browser chromium|chrome  --firefox K (the last K tabs use Playwright's Firefox)  --headed  --unlock-frames
+  --browser chromium|chrome|brave  --firefox K (the last K tabs use Playwright's Firefox)  --headed  --unlock-frames
   --site <dir>  --data <dir>  --server <file>   as in run.mjs (defaults: <repo>/runtime/web_dist, <repo>/runtime/web_data,
                                                 native/net/build/wotm_server)
   --env NAME=VALUE         a game environment variable for every tab (repeatable; test only, as run.mjs adds WOTM_PADLOG)

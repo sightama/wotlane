@@ -20,7 +20,7 @@ const USAGE = `Usage: node tools/browser_mp_test/run.mjs [options]
   --server <file>          local: the wotm_server binary (default native/net/build/wotm_server)
   --disc <dir>            extracted disc folder, for the created map (default <repo>/disc if present)
   --url <url>              live: the site (default https://playwotm.com/)   --password <pw>  live: only for a site behind the password gate
-  --browser chromium|chrome  chromium: headless shell with software GL (default); chrome: the installed Chrome (real GPU)
+  --browser chromium|chrome|brave  chromium: headless shell with software GL (default); chrome: the installed Chrome (real GPU); brave: Brave (WOTM_BRAVE)
   --headed                 show the browser windows            --isolation context|browser  one shared browser or one per player
   --unlock-frames          animation frames at full rate in covered windows too (headless Chromium: as fast as it can), so the game interpolates frames
   --ai                     the game's AI plays every seat (WOTM_AIVSAI=1 on the page address)
