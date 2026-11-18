@@ -72,6 +72,7 @@ export function deviceFields(win) {
     ['net', conn.effectiveType],
     ['dl_mbps', conn.downlink],
     ['est_rtt_ms', conn.rtt],
+    ['gpu', readGpu(win) ?? undefined],
   ]);
 }
 
@@ -103,8 +104,63 @@ export class FrameWatch {
     const v = this.intervals.sort((a, b) => a - b);
     this.intervals = [];
     if (!v.length) return null;
-    return { n: v.length, p95: v[Math.min(v.length - 1, Math.floor(v.length * 0.95))], max: v[v.length - 1], late: v.filter((x) => x > LATE_FRAME_MS).length };
+    return { n: v.length, med: v[v.length >> 1], p95: v[Math.min(v.length - 1, Math.floor(v.length * 0.95))], max: v[v.length - 1],
+      late: v.filter((x) => x > LATE_FRAME_MS).length };
   }
+}
+
+// How late a task posted to the page runs: the match's WebSocket messages, sent and received on this thread, wait in the same queue
+// behind the drawing. `post(fn)` runs fn as a new task (a MessageChannel message); `now()` in ms
+export class TaskLagWatch {
+  constructor({ now, post }) {
+    Object.assign(this, { now, post });
+    this.n = 0;
+    this.sum = 0;
+    this.max = 0;
+  }
+
+  probe() {
+    const t = this.now();
+    this.post(() => {
+      const d = this.now() - t;
+      ++this.n;
+      this.sum += d;
+      this.max = Math.max(this.max, d);
+    });
+  }
+
+  take() {
+    if (!this.n) return null;
+    const out = { n: this.n, avg: this.sum / this.n, max: this.max };
+    this.n = 0;
+    this.sum = 0;
+    this.max = 0;
+    return out;
+  }
+}
+
+// The GPU from WebGL's unmasked renderer string: the model inside ANGLE's "ANGLE (vendor, model, backend)", and "software ..." for a
+// renderer without a GPU (SwiftShader, llvmpipe, Microsoft Basic Render Driver: hardware acceleration off or the GPU blocked)
+export function gpuName(renderer) {
+  if (!renderer) return undefined;
+  const inner = /^ANGLE \((.*)\)$/.exec(renderer)?.[1];
+  const parts = inner ? inner.split(', ') : [renderer];
+  const model = parts.length >= 3 ? parts.slice(1, -1).join(', ') : parts[parts.length > 1 ? 1 : 0];
+  return /SwiftShader|llvmpipe|softpipe|Basic Render|Software/i.test(renderer) ? `software ${model}` : model;
+}
+
+// the renderer string of a WebGL context made for the purpose, once per page (undefined where WebGL or the debug extension is missing)
+export function readGpu(win) {
+  if (win.wotmGpu !== undefined) return win.wotmGpu;
+  let name;
+  try {
+    const gl = win.document?.createElement('canvas').getContext('webgl');
+    const ext = gl?.getExtension('WEBGL_debug_renderer_info');
+    name = gpuName(ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl?.getParameter(gl.RENDERER));
+    gl?.getExtension('WEBGL_lose_context')?.loseContext();
+  } catch { /* no WebGL here */ }
+  win.wotmGpu = name ?? null;
+  return win.wotmGpu;
 }
 
 // main-thread tasks over 50 ms, where the browser reports them (Chrome and Edge; Firefox has no such entries: take() gives null)
@@ -222,6 +278,7 @@ export function windowFields(prev, cur) {
     ['wait_ms', whole(since('waitMs'))],
     ['waits_tot', cur.waits],
     ['wait_tot_ms', whole(cur.waitMs)],
+    ['raf_med_ms', fix(raf?.med)],
     ['raf_p95_ms', fix(raf?.p95)],
     ['raf_max_ms', fix(raf?.max)],
     ['late', raf?.late],
@@ -233,6 +290,9 @@ export function windowFields(prev, cur) {
     ['au_max_ms', whole(audio?.maxGapMs)],
     ['au_state', audio?.state],
     ['hid_s', cur.hiddenMs > 0 ? whole(cur.hiddenMs / 1000) : undefined],
+    ['focus_pct', whole(cur.focusPct)],
+    ['lag_ms', fix(cur.taskLag?.avg)],
+    ['lag_max_ms', whole(cur.taskLag?.max)],
   ]);
 }
 
@@ -256,15 +316,18 @@ export function reportFields({ saved, device, lobby, name, build }) {
 
 // Every SAMPLE_EVERY_MS reads the game's counters (the ping is sampled this often, for its jitter) and every REPORT_EVERY_MS sends the
 // window as a periodic report; finish() sends the last one (why=end) with the device. `base`: [key, value] pairs on every report (build,
-// lobby, name, hz, players). `send(line)` puts a line on the lobby socket; `store.set` keeps the latest report for a hand-sent one
+// lobby, name, hz, players). `send(line)` puts a line on the lobby socket; `store.set` keeps the latest report for a hand-sent one;
+// `hasFocus()` and `lag` (TaskLagWatch) are read at every sample
 // after the page reloads. A source that throws is left out, never reported as a failure of the page.
 export class DiagReporter {
-  constructor({ send, base, now, setTimer, clearTimer, store, frames, longTasks, audio, game, device, isHidden }) {
-    Object.assign(this, { send, base, now, setTimer, clearTimer, store, frames, longTasks, audio, game, device, isHidden });
+  constructor({ send, base, now, setTimer, clearTimer, store, frames, longTasks, audio, game, device, isHidden, hasFocus, lag }) {
+    Object.assign(this, { send, base, now, setTimer, clearTimer, store, frames, longTasks, audio, game, device, isHidden, hasFocus, lag });
     this.seq = 0;
     this.started = false;
     this.pings = [];
     this.hiddenMs = 0;
+    this.samples = 0;
+    this.focused = 0;
   }
 
   begin() {
@@ -285,6 +348,9 @@ export class DiagReporter {
     const game = this.read();
     if (Number.isFinite(game.pingMs)) this.pings.push(game.pingMs);
     if (this.isHidden()) this.hiddenMs += SAMPLE_EVERY_MS;
+    ++this.samples;
+    try { if (this.hasFocus?.()) ++this.focused; } catch { /* no focus reading */ }
+    try { this.lag?.probe(); } catch { /* no task probe */ }
     this.latest = game;
     if (this.now() - this.lastReportAt >= REPORT_EVERY_MS) this.report('periodic', game);
   }
@@ -296,7 +362,8 @@ export class DiagReporter {
   report(why, game) {
     const now = this.now();
     const cur = { t: now - this.start, ...game, pings: this.pings, raf: this.take(this.frames), lt: this.take(this.longTasks),
-      audio: this.take(this.audio), hiddenMs: this.hiddenMs };
+      audio: this.take(this.audio), hiddenMs: this.hiddenMs, taskLag: this.take(this.lag),
+      focusPct: this.hasFocus && this.samples ? (100 * this.focused) / this.samples : undefined };
     const fields = [['v', SCHEMA], ['why', why], ['seq', ++this.seq], ...this.base, ...windowFields(this.prev, cur)];
     if (why === 'end') fields.push(...this.device());
     this.send(diagLine(fields));
@@ -305,6 +372,8 @@ export class DiagReporter {
     this.prev = { ...cur, t: cur.t };
     this.pings = [];
     this.hiddenMs = 0;
+    this.samples = 0;
+    this.focused = 0;
     this.lastReportAt = now;
   }
 
