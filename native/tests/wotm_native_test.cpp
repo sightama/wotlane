@@ -268,6 +268,32 @@ namespace
         CHECK(near(r.fwd[0] * r.fwd[0] + r.fwd[1] * r.fwd[1] + r.fwd[2] * r.fwd[2], 1.f));
     }
 
+    // A HUD element (the health bar's fill, scaled by the health) goes to the blended camera as Scene::showBlend does it: the newest
+    // frame's matrix, rebased from its camera to the blended one. The older frame's HUD is not an input, so a previous health
+    // value cannot be presented, and the bar keeps its pose and size relative to the camera at every blend point
+    TEST(hud_blend_keeps_the_newest_health_and_its_place_on_screen)
+    {
+        const GameCamera a = cam(0, 0, 5, 0), b = cam(40, 10, 8, 20);
+        const M4 invB = ip::rigidInverse(ip::cameraToWorld(b));
+        for (const float health : {1.0f, 0.4f, 0.05f})
+        {
+            M4 bar = wotm::ident();   // placed in front of camera B, x scaled by the health fraction
+            bar.m[0][0] = health * 30.f, bar.m[1][1] = 4.f, bar.m[2][2] = 1.f;
+            bar.m[3][0] = 12.f, bar.m[3][1] = 3.f, bar.m[3][2] = 60.f;
+            const M4 inWorldB = mulM4(bar, ip::cameraToWorld(b));
+            for (const float alpha : {0.f, 0.25f, 0.5f, 0.99f, 1.f})
+            {
+                const GameCamera c = ip::lerpCamera(a, b, alpha);
+                const M4 shown = mulM4(mulM4(inWorldB, invB), ip::cameraToWorld(c));
+                CHECK(sameM4(mulM4(shown, ip::rigidInverse(ip::cameraToWorld(c))), bar, 1e-2f));   // same place on screen
+                float len = 0.f;
+                for (int k = 0; k < 3; ++k) len += shown.m[0][k] * shown.m[0][k];
+                CHECK(near(std::sqrt(len), health * 30.f, 1e-2f));   // the bar's length is the newest health's
+            }
+            CHECK(sameM4(mulM4(mulM4(inWorldB, invB), ip::cameraToWorld(ip::lerpCamera(a, b, 1.f))), inWorldB, 1e-2f));
+        }
+    }
+
     // The browser's blending guard (PaceGuard): judged by the present interval actually reached, since the drawing's cost is in
     // the browser's GPU process, out of sight of this thread
     TEST(pace_guard_keeps_blending_while_frames_keep_the_period)
