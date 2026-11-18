@@ -512,6 +512,29 @@ namespace
         CHECK(e.adjustToGroup(0x4000, 0) == full && e.adjustToGroup(0x4000, 1) == full);
     }
 
+    // The game spreads its effects over several groups (voices 3, ambient 4 and 5, the pause menu's 2, announcer 6, fades 8): this PC's
+    // effects volume reaches every one of them, and only group 1 is music
+    TEST(sound_player_effects_volume_reaches_every_effects_group)
+    {
+        auto &e = wotm::snd::Engine::get();
+        for (int g = 0; g < 32; ++g)
+            e.setMasterVolume(g, 0x400);
+        e.setPlayerVolume(0, 0);
+        e.setPlayerVolume(1, 100);
+        const int groups[] = {0, 2, 3, 4, 5, 6, 8, 14, 15, 31};
+        for (const int g : groups)
+            CHECK(e.adjustToGroup(0x4000, g) == 0);
+        CHECK(e.adjustToGroup(0x4000, 1) > 0);   // music keeps playing
+        e.setPlayerVolume(0, 100);
+        int full[sizeof groups / sizeof groups[0]];
+        for (size_t i = 0; i < sizeof groups / sizeof groups[0]; ++i)
+            full[i] = e.adjustToGroup(0x4000, groups[i]);
+        e.setPlayerVolume(0, 50);
+        for (size_t i = 0; i < sizeof groups / sizeof groups[0]; ++i)
+            CHECK(e.adjustToGroup(0x4000, groups[i]) < full[i] && e.adjustToGroup(0x4000, groups[i]) > 0);
+        e.setPlayerVolume(0, 100);
+    }
+
     // The window at start (#6): the largest size of the frame's aspect that fits in 90% of the monitor, whatever the render resolution
     TEST(window_fits_the_monitor_not_the_render_resolution)
     {
