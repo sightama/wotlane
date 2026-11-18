@@ -23,6 +23,7 @@ namespace wotm_net
         static constexpr double kSlowWindowSec = 15.0; // the pace measured over this long...
         static constexpr double kSlowShare = 0.75;     // ...under this share of the match's rate
         static constexpr double kLastShare = 0.6;      // the bottleneck is alone at the back in at least this share of the samples
+        static constexpr double kFreezeSec = 1.0;      // the window's longest freeze, from this long to half the window, is one outage
 
         enum class Reason { None, Away, Slow };
         struct Member
@@ -95,17 +96,28 @@ namespace wotm_net
             const double span = t - first.t;
             if (first.t - start_ < kGraceSec - 1e-6 || span < kSlowWindowSec - 1e-6)
                 return {};
-            const double pace = (frame - first.frame) / span;
+            // one outage is not a slow device: the window's longest freeze, from kFreezeSec to half the window, is left out of the pace and
+            // of who was at the back (a longer one is judged: a page that never moves, a connection that is gone)
+            const Freeze freeze = longestFreeze();
+            const bool outage = freeze.seconds >= kFreezeSec && freeze.seconds < kSlowWindowSec / 2;
+            const double moving = span - (outage ? freeze.seconds : 0.0);
+            const double pace = (frame - first.frame) / moving;
             if (pace >= kSlowShare * hz)
                 return {};
             // the bottleneck: the member alone at the back (the only one with the largest trail, above 0) in most samples. How far it
             // trails is capped by the input delay, so on a short delay it is about one frame: the count is what tells it apart
             std::vector<int> last(members.size(), 0);
-            for (const Sample &s : samples_)
-                if (const int at = aloneAtBack(s.members, members); at >= 0)
+            size_t counted = 0;
+            for (size_t k = 0; k < samples_.size(); ++k)
+            {
+                if (outage && k >= freeze.first && k <= freeze.last)
+                    continue;
+                ++counted;
+                if (const int at = aloneAtBack(samples_[k].members, members); at >= 0)
                     ++last[static_cast<size_t>(at)];
+            }
             const auto worst = std::max_element(last.begin(), last.end());
-            if (*worst < kLastShare * static_cast<double>(samples_.size()))
+            if (*worst < kLastShare * static_cast<double>(counted))
                 return {};
             return named(static_cast<int>(worst - last.begin()), Reason::Slow, pace);
         }
@@ -135,6 +147,26 @@ namespace wotm_net
             uint32_t frame;
             std::vector<Member> members;
         };
+        // the longest run of samples on one frame in the window: from samples_[first] to samples_[last], `seconds` long
+        struct Freeze
+        {
+            size_t first = 0, last = 0;
+            double seconds = 0;
+        };
+        Freeze longestFreeze() const
+        {
+            Freeze best;
+            for (size_t i = 0; i < samples_.size();)
+            {
+                size_t j = i;
+                while (j + 1 < samples_.size() && samples_[j + 1].frame == samples_[i].frame)
+                    ++j;
+                if (samples_[j].t - samples_[i].t > best.seconds)
+                    best = {i, j, samples_[j].t - samples_[i].t};
+                i = j + 1;
+            }
+            return best;
+        }
         // a decision starts a fresh window: the match's pace after a drop is a new measurement
         Decision named(int slot, Reason reason, double pace)
         {

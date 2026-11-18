@@ -230,6 +230,37 @@ namespace
         CHECK(runHoldback(g, t, frame, 10, 60, {0, 0, 0}, {false, true, false}).slot < 0);   // in the background, keeping up
     }
 
+    // One network outage (a player's connection held for 6 s, the desync matrix's stall) freezes everyone with that player alone at
+    // the back, which over a 15 s window reads as 18 of 30 frames a second: it is not a slow device, so the longest freeze of the
+    // window (over 1 s) is left out of the pace and of who was at the back. Freezes that keep coming, and a device that is slow all
+    // along, are still named
+    TEST(holdback_keeps_a_player_through_one_outage)
+    {
+        // normal play at 30 Hz where member 1 trails by a frame in 4 samples of 10 (its farther path): never named on its own
+        const auto play = [](wotm_net::Holdback &h, double &t, uint32_t &frame, double secs) {
+            wotm_net::Holdback::Decision d;
+            for (int i = 0; i < static_cast<int>(secs * 10 + 0.5) && d.slot < 0; ++i)
+                d = runHoldback(h, t, frame, 0.1, 30, {0, i % 10 < 4 ? 1u : 0u, 0}, {false, false, false}, 30);
+            return d;
+        };
+        wotm_net::Holdback h;
+        double t = 0;
+        uint32_t frame = 0;
+        CHECK(play(h, t, frame, 20).slot < 0);
+        CHECK(runHoldback(h, t, frame, 6, 0, {0, 3, 0}, {false, false, false}, 30).slot < 0);   // the outage
+        CHECK(play(h, t, frame, 30).slot < 0);                                                  // and the match goes on
+        wotm_net::Holdback r;
+        t = 0, frame = 0;
+        CHECK(play(r, t, frame, 20).slot < 0);
+        wotm_net::Holdback::Decision d;
+        for (int i = 0; i < 10 && d.slot < 0; ++i)   // 3 s frozen every 5 s: over a third of the time
+        {
+            d = runHoldback(r, t, frame, 3, 0, {0, 3, 0}, {false, false, false}, 30);
+            if (d.slot < 0)
+                d = play(r, t, frame, 2);
+        }
+        CHECK(d.slot == 1 && d.reason == wotm_net::Holdback::Reason::Slow);
+    }
     // never down to one player: in a 2-player match nobody is named, whatever happens
     TEST(holdback_never_leaves_a_match_with_one_player)
     {
