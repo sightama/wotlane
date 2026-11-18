@@ -166,6 +166,37 @@ namespace wotm_sync
         return s;
     }
 
+    uint32_t g_netStalls = 0;    // waits for the other players' input in the match (netWaitFrame)
+    double g_netStallMs = 0.0;
+
+    // Input latency (wotm_latency.hpp, the page's diagnostics report): a sample that presses a button no earlier sample held starts a
+    // probe for the frame that carries it, timed from the earliest key or button the page saw go down since the previous sample
+    // (wotmWebTakeInputAt; each sample takes it, pressed or not)
+    uint16_t g_latencyButtons = 0xFFFFu;   // the buttons of the previous sample (reset at each match start, latencyReset)
+
+    void latencyReset()
+    {
+        g_latencyButtons = 0xFFFFu;
+        wotm::latency::tracker().reset();
+#ifdef __EMSCRIPTEN__
+        wotmWebTakeInputAt();
+#endif
+    }
+
+    void latencyProbe(const wotm_net::PadState &s, uint32_t frame)
+    {
+        const double now = wotm::latency::nowMs();
+        const bool pressed = (g_latencyButtons & static_cast<uint16_t>(~s.buttons)) != 0u;   // active low: a bit that went 1 -> 0
+        g_latencyButtons = s.buttons;
+#ifdef __EMSCRIPTEN__
+        const double pressAt = wotmWebTakeInputAt();
+#else
+        const double pressAt = 0.0;
+#endif
+        if (pressed && frame != wotm_net::MatchClient::kNoFrame)
+            wotm::latency::tracker().sampled(frame, pressAt, now, g_netStallMs);
+    }
+
     // start of frame `index`: samples the local controllers (they apply at index + delay)
     void sampleInputs(uint32_t index)
     {
@@ -191,7 +222,8 @@ namespace wotm_sync
                 if (start)
                     s.buttons &= static_cast<uint16_t>(~wotm::personalpause::kStart);
             }
-            g_net->pushSample(s);   // fills frame index + this player's current delay (the delay may step: LocalSchedule)
+            const uint32_t at = g_net->pushSample(s);   // fills frame index + this player's current delay (the delay may step: LocalSchedule)
+            latencyProbe(s, at);
             if (!g_loggedLocal && !idle(s))
             {
                 g_loggedLocal = true;
@@ -222,6 +254,8 @@ namespace wotm_sync
         const wotm_net::PadState s = ours ? inputFor(static_cast<int>(port + 2u * slot), g_index) : wotm_net::PadState{};
         if (ours)
             ps2_stubs::setPadOverrideState(s.buttons, s.lx, s.ly, s.rx, s.ry);
+        if (ours && g_net && g_levelLoaded)
+            wotm::latency::tracker().frameStarted(g_index, wotm::latency::nowMs(), g_netStallMs);   // the frame applies its input
         g_origPadRead(rdram, ctx, runtime);
         if (!ours)
             return;
@@ -526,9 +560,7 @@ namespace wotm_sync
     // End of the frame: the next one only starts with everyone's inputs for it. Stalled for more than 250 ms, the screen says who is
     // missing; afterwards shiftHostDeadlines drops the vsyncs that fell due during the stall (without that, they became a burst of
     // frames), and the game scheduler's vblank grid, which kept running, gives the next one on time.
-    uint32_t g_netStalls = 0;
-    double g_netStallMs = 0.0;
-    // the same, for the current pace window (netPace)
+    // the waits of the current pace window (netPace); the whole match's are g_netStalls and g_netStallMs (above, with latencyProbe)
     uint32_t g_paceStalls = 0;
     double g_paceStallMs = 0.0;
 
@@ -804,7 +836,10 @@ namespace wotm_sync
         if (!g_fixedStep)
             return;
         if (g_net)
+        {
             netStart();
+            latencyReset();
+        }
         g_inputs = wotm_net::InputTimeline(kControllers, g_inputDelay);
         for (const InputRecord &r : g_inputPlay)
             g_inputs.set(static_cast<int>(r.controller), r.index, r.state);

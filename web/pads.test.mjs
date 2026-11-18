@@ -325,3 +325,31 @@ test('a getGamepads that throws leaves the game with the last good answer, and a
   window.document.hidden = false;
   assert.equal(navigator.getGamepads()[0], null);
 });
+
+// the input latency probe (native/wotm_latency.hpp) needs the moment a button went down: the pad's own timestamp when it has a
+// plausible one, else the time the hub looked
+test('a button that goes down on any pad reports its time once; holding it or letting go reports nothing', () => {
+  const window = Object.assign(new EventTarget(), { Event, setInterval: () => 0, clearInterval: () => {} });
+  const raws = [standardPad({ index: 0, id: 'Pad A', timestamp: 90 })];
+  const navigator = { getGamepads: () => raws };
+  const presses = [];
+  let clock = 100;
+  installPads({ window, navigator, virtual: new VirtualPad(), virtualWanted: () => false, now: () => clock, onPress: (t) => presses.push(t) });
+  navigator.getGamepads();
+  assert.deepEqual(presses, []);
+  clock = 110;
+  raws[0] = standardPad({ index: 0, id: 'Pad A', timestamp: 105, buttons: buttons(17, { [STD.CROSS]: 1 }) });
+  navigator.getGamepads();
+  assert.deepEqual(presses, [105]);
+  clock = 120;
+  navigator.getGamepads();
+  raws[0] = standardPad({ index: 0, id: 'Pad A', timestamp: 118, buttons: buttons(17) });
+  navigator.getGamepads();
+  assert.deepEqual(presses, [105]);
+  raws[0] = standardPad({ index: 0, id: 'Pad A', timestamp: 0, buttons: buttons(17, { [STD.CIRCLE]: 1 }) });
+  navigator.getGamepads();
+  assert.deepEqual(presses, [105, 120], 'no plausible pad time: the time the hub looked');
+  raws[0] = standardPad({ index: 0, id: 'Pad A', timestamp: 500, buttons: buttons(17, { [STD.CIRCLE]: 1, [STD.SQUARE]: 1 }) });
+  navigator.getGamepads();
+  assert.deepEqual(presses, [105, 120, 120], 'a pad time in the future is not plausible either');
+});

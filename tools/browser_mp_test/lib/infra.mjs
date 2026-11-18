@@ -19,7 +19,7 @@ export async function loadPlaywright() {
   return createRequire(join(root, 'x.js'))('playwright');
 }
 
-function freePort() {
+export function freePort() {
   return new Promise((res, rej) => {
     const s = createServer();
     s.listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => res(port)); });
@@ -37,8 +37,9 @@ async function waitHttp(url, ms = 15000) {
 }
 
 // Local target. `site` is a built web_dist folder, `data` a folder with game.iso and SCUS_971.97, `server` the wotm_server binary
-// (native/net/build/wotm_server, built by `sh tools/test_net.sh notest`).
-export async function startLocal({ site, data, server, outDir, maxPlayers = 8 }) {
+// (native/net/build/wotm_server, built by `sh tools/test_net.sh notest`); `diagDir` makes the server keep the players' diagnostics reports
+// there (--diag-dir, one file per match).
+export async function startLocal({ site, data, server, outDir, maxPlayers = 8, diagDir }) {
   for (const [what, p] of [['site', join(site, 'index.html')], ['data', join(data, 'game.iso')], ['server', server]])
     if (!existsSync(p)) throw new Error(`local target: ${what} not found at ${p}`);
   mkdirSync(outDir, { recursive: true });
@@ -51,13 +52,15 @@ export async function startLocal({ site, data, server, outDir, maxPlayers = 8 })
     children.push(c);
     return c;
   };
-  run(server, ['--port', String(tcp), '--ws-port', String(ws), '--players', String(maxPlayers), '--lobbies', '64'], serverLog);
+  run(server, ['--port', String(tcp), '--ws-port', String(ws), '--players', String(maxPlayers), '--lobbies', '64', ...(diagDir ? ['--diag-dir', diagDir] : [])], serverLog);
   run('python3', [join(REPO, 'tools/serve_web.py'), '--port', String(web), '--site', site, '--data', data], 'ignore');
   await waitHttp(`http://127.0.0.1:${web}/version.json`);
   const pageUrl = `http://127.0.0.1:${web}/?server=ws://127.0.0.1:${ws}`;
   return {
     kind: 'local',
     pageUrl,
+    webPort: web,
+    wsPort: ws,
     serverLogPath,
     serverLog: () => (existsSync(serverLogPath) ? readFileSync(serverLogPath, 'utf8') : ''),
     buildId: JSON.parse(readFileSync(join(site, 'version.json'), 'utf8')).build,

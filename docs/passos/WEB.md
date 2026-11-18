@@ -172,7 +172,9 @@ last one when it ends (`wotmDiagFinish`, called by `wotmQuit` and Leave the matc
 for the socket to empty; `pagehide` also sends it). `DiagReporter` samples every 500 ms (the ping, for its jitter) and builds each report
 from the difference of two samples. Its sources only read: the game loop's presented-frame counter (`globalThis.wotmFrames`), the match
 counters the game publishes (`wotmWebNetStats` in `native/wotm_web.h`, set every game frame in `netPace`, read through the exported
-`wotm_web_net_stat(i)`: frame, waits, wait ms, delay, ping), `FrameWatch` (animation frame intervals), `LongTaskWatch` (a
+`wotm_web_net_stat(i)`: frame, waits, wait ms, delay, ping), the input latency window (`latencySource`: `wotm_web_latency_take` then
+`wotm_web_latency(i)`, once per report; the page feeds the probe each keydown time in `boot.js` and each pad button press in `touch.js`
+through `wotm_web_input_at`, which only stores a time), `FrameWatch` (animation frame intervals), `LongTaskWatch` (a
 `PerformanceObserver` for `longtask`; Firefox has none, so those fields are left out), and `installAudioWatch`, which adds an `audioprocess`
 listener to each `ScriptProcessorNode` the game's audio makes (installed when the page loads; a callback later than 1.5 buffers counts as a
 dropped buffer; a page whose audio doesn't use script processors reports no `au_` fields). Nothing here writes to the game, so determinism is

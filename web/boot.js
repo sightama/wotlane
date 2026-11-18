@@ -166,6 +166,11 @@
     };
     showLoading(matchEnv ? 57 << 20 : 27 << 20);   // a first visit's download to a fight, or to the title
     document.addEventListener('visibilitychange', tellHidden);
+    // a key going down is the input latency probe's press time (wotm_web_input_at, native/wotm_webfs.cpp; pads report theirs in
+    // touch.js); a key held down repeats its keydown, which is no new press
+    window.addEventListener('keydown', (e) => {
+      if (!e.repeat) window.Module?._wotm_web_input_at?.(performance.timeOrigin + e.timeStamp);
+    }, true);
     window.addEventListener('pagehide', syncSaves);
     if (matchEnv) watchStalls();
     // the game reads its mods at start, so the repo's built-in mods are in place first

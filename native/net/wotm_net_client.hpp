@@ -60,8 +60,10 @@ namespace wotm_net
 
         // local input that applies on frame `frame` (sampled `delay` frames earlier)
         void pushLocal(uint32_t frame, const PadState &s);
-        // the local sample taken at the start of a frame: it fills the frame(s) the delay schedule gives it (LocalSchedule)
-        void pushSample(const PadState &s);
+        // the local sample taken at the start of a frame: it fills the frame(s) the delay schedule gives it (LocalSchedule). Returns
+        // the frame that carries this sample (kNoFrame: not in a running match, or the schedule skipped it)
+        static constexpr uint32_t kNoFrame = 0xFFFFFFFFu;
+        uint32_t pushSample(const PadState &s);
         // waits up to `ms` for everyone's inputs for the frame; false if some are missing, or if the match stopped
         bool waitFrame(uint32_t frame, int ms);
         PadState input(int player, uint32_t frame) const;
@@ -91,6 +93,10 @@ namespace wotm_net
         std::thread thread_;
         std::atomic<bool> stop_{false};
         std::atomic<uint32_t> rtt_{0};
+        // the round trip the server measures (proto::Rtt): once it has sent one, the ping reported is the server's, since a browser's
+        // transport can't time the pings itself
+        std::atomic<uint32_t> serverRtt_{0};
+        std::atomic<bool> haveServerRtt_{false};
         std::unique_ptr<Transport> net_;
         bool connected_ = false;
         ClientConfig cfg_;

@@ -63,3 +63,14 @@ jump,fast,turbo` apply to every lobby; `--target live` needs no password on the 
 load over twice the cores is `OVERLOAD` (inconclusive), not a failure. Results: `results.md` and `results.json` in `--out`, with each trial's stage and
 seed. Run it under `caffeinate -dis` (display sleep freezes tabs), from the tree the `web_dist` was built from. See
 `docs/investigacoes/2026-11-16/desync-matrix/`.
+
+## Input latency
+
+`node tools/browser_mp_test/latency.mjs --players 4 --rtt 60,60,70,80 --jitter 15 --spike 4:6:150:400 --secs 120 --browser chrome --unlock-frames`
+plays a local AI match with every tab behind its own `tools/net_lagproxy.py --tcp` link (round trip, jitter, and a periodic spike on
+one player), taps Space in every tab every 0.35 to 1 s (`--press-ms`), and prints each player's input latency from the server's
+diagnostics files (`lat_` fields, `docs/ONLINE.md` "Diagnostics"): presses, the total (press to the first present that draws it) and its
+stages, the delays and pings seen. `--browser chrome` uses the GPU; the default headless Chromium draws in software, at a few frames a
+second on a busy machine, which the present stage then shows. Results: `summary.json`, the diag files, `server.log` and `proxy.log` in
+`--out`. The summary reader is `lib/latency.mjs` (tested in `test/latency.test.mjs`). The keys are Playwright's, sent straight to the page:
+the time the system and the browser take to deliver a real key is not in the numbers.

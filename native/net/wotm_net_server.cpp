@@ -972,6 +972,11 @@ namespace wotm_net
         return rtt + testRttMs_.load();
     }
 
+    uint32_t Server::rttOf(PeerRef peer) const
+    {
+        return (peer.enet ? peer.enet->roundTripTime : peer.ws->link->rttMs()) + testRttMs_.load();
+    }
+
     // each player's recent round trip at its high end (0 for a player who left: nobody waits for them)
     std::vector<uint32_t> Server::rttHighs(Match &m)
     {
@@ -981,7 +986,8 @@ namespace wotm_net
         return out;
     }
 
-    // During the match, every paceMs: samples each player's round trip and sends a player whose delay should change its new one (Pace).
+    // During the match, every paceMs: samples each player's round trip, tells each player theirs (Rtt) and sends a player whose delay
+    // should change its new one (Pace).
     // The window makes a rise immediate and a fall wait until the high samples leave it
     void Server::pace(Match &m, const Lobby &l)
     {
@@ -991,7 +997,10 @@ namespace wotm_net
         m.lastPace = now;
         for (Slot &s : m.slots)
             if (s.peer && !s.gone)
+            {
                 s.rtt.add(rttHighOf(s.peer));
+                send(s.peer, proto::kControl, proto::encode(proto::Rtt{rttOf(s.peer)}), true);
+            }
         const std::vector<uint32_t> highs = rttHighs(m);
         const double frame = proto::frameMs(m.step);
         for (size_t i = 0; i < m.slots.size(); ++i)

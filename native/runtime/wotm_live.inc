@@ -290,6 +290,7 @@ static void wotmBootPresent(uint32_t eePc, uint64_t vsync)
 #include "wotm_preview.hpp"   // previews for the VIDEO tab options (wotm_mainmenu.inc)
 #include "wotm_cheats.h"   // debug menu (F1)
 #include "wotm_netstatus.h"   // network match: on-screen message, debug keys off
+#include "wotm_latency.hpp"   // network match: input latency probes (a capture and the present that takes it)
 bool wotmHoldGame(bool hold);  // wotm_foto.inc: holds the EE thread at the frame boundary (interpolation self-test)
 #include <chrono>
 #include <deque>
@@ -739,6 +740,7 @@ struct Capture
     {
         snap = std::move(s);
         fresh = true;
+        wotm::latency::tracker().captured(wotm::latency::nowMs());
     }
     void drop() { fresh = false; }   // with m locked
     std::atomic<bool> on{false};   // the present draws natively (turned on by the first call to wotmDrawNative)
@@ -1829,6 +1831,8 @@ static bool wotmDrawNative(const uint8_t *rdram)
     // New game frame: the snapshot captured on the EE thread (wotmCaptureFrame). In replay (--vu1cmp) no game is running and the
     // snapshot's RAM is fixed: collection happens right here. The following draws repeat the snapshot.
     wotm::Snapshot sn;
+    uint32_t takenFrame = 0;   // input latency (wotm_latency.hpp): the game frame of a snapshot taken from the capture
+    bool haveTakenFrame = false;
     bool fresh = false;   // new snapshot in this present (redraw, below)
     if (wotm_live::g_localCollect)
     {
@@ -1847,6 +1851,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
         {
             sn = std::move(cap.snap);
             cap.fresh = false;
+            haveTakenFrame = wotm::latency::tracker().newest(takenFrame);   // input latency: the frame this snapshot is
         }
     }
     if (sn.valid)
@@ -1883,6 +1888,8 @@ static bool wotmDrawNative(const uint8_t *rdram)
         S.prev2.chase.reset();
         S.prev = std::move(S.snap);
         S.snap = std::move(sn);
+        if (haveTakenFrame)
+            wotm::latency::tracker().taken(takenFrame);
         fresh = true;
         if (S.snap.hostT > 0.0)
         {
@@ -2063,6 +2070,10 @@ static bool wotmDrawNative(const uint8_t *rdram)
         S.lastAlpha = interpOn ? alpha - (interpOld ? 2.f : 0.f) : -1.f;   // the (P, A) pair sits below -1
         s_blends += interpOn && alpha < 1.f;
         s_lastBlend = interpOn;
+        // input latency: the newest frame this image gives any weight and the newest it shows whole, in frames the present took back
+        // from the latest (the pair is A-B, or P-A when B came early)
+        const int pairBack = interpOn && interpOld ? 1 : 0;
+        wotm::latency::tracker().drew(!interpOn ? 0 : pairBack + (alpha > 0.f ? 0 : 1), !interpOn ? 0 : pairBack + (alpha >= 1.f ? 0 : 1));
     }
     wotm::GameCamera gc = S.snap.cam;
     if (rerender)

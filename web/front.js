@@ -5,7 +5,7 @@ import { initCreations, addLobbyChoices } from './creations_ui.js';
 import { initSettings } from './settings_ui.js';
 import { lightMatchDrawing, readSettings, settingsSaved } from './settings.js';
 import { playStartupMovies } from './movies.js';
-import { DiagReporter, FrameWatch, LongTaskWatch, TaskLagWatch, deviceFields, diagLine, flushSocket, installAudioWatch, joinFields, readGame, reportFields } from './diag.js';
+import { DiagReporter, FrameWatch, LongTaskWatch, TaskLagWatch, deviceFields, diagLine, flushSocket, installAudioWatch, joinFields, latencySource, readGame, reportFields } from './diag.js';
 import { deliverReport, initReport } from './report_ui.js';
 import { RateMemory, healthLine, rememberedHealth } from './rate.js';
 import { lobbyWarnings, memberStatus } from './lobby_status.js';
@@ -203,6 +203,7 @@ function startDiag(client, socket, match, build) {
     isHidden: () => document.hidden,
     hasFocus: () => document.hasFocus(),
     lag: new TaskLagWatch({ now: () => performance.now(), post: postTask }),
+    latency: latencySource(window),
   });
   diagReporter.begin();
   // the last report goes out as the match ends: boot.js calls this before it reloads the page (the game quit, or Leave the match)

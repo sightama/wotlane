@@ -39,6 +39,7 @@
 #include "net/wotm_monsters.hpp"     // monsters and costumes present on the disc (WOTM_MATCH)
 #include "net/wotm_net_client.hpp"   // network match client (wotm_sync.inc)
 #include "wotm_netstatus.h"          // on-screen network message and disabled debug keys (wotm_live.inc)
+#include "wotm_latency.hpp"          // input latency probes for the page's diagnostics report (wotm_sync.inc, wotm_live.inc)
 #ifdef __EMSCRIPTEN__
 #include "wotm_web.h"                 // browser: the tab is hidden (Away), a long network wait for the page to offer leaving (wotm_sync.inc)
 #endif

@@ -18,7 +18,7 @@
 
 namespace wotm_net::diag
 {
-    constexpr size_t kMaxFields = 48;      // fields kept from one report
+    constexpr size_t kMaxFields = 64;      // fields kept from one report
     constexpr size_t kMaxKeyBytes = 16;    // a key: a lower-case letter, then a-z, 0-9 and _
     constexpr size_t kMaxValueBytes = 48;  // a value: A-Z, a-z, 0-9 and . _ : , / + -
     constexpr size_t kMaxNoteBytes = 200;  // the player's own words of a "Send report": the one free text (percent-encoded on the wire)

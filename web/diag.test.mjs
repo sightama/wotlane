@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  SCHEMA, diagValue, diagLine, browserName, deviceFields, FrameWatch, LongTaskWatch, installAudioWatch, readGame, windowFields, gpuName,
+  SCHEMA, diagValue, diagLine, browserName, deviceFields, FrameWatch, LongTaskWatch, installAudioWatch, readGame, latencySource, windowFields, gpuName,
   TaskLagWatch,
   DiagReporter, joinFields, reportFields,
 } from './diag.js';
@@ -144,6 +144,37 @@ test('a window is the difference of two samples: rates, the cost of a frame, wai
 test('a window missing its sources leaves their fields out; counters that start at zero need no earlier sample', () => {
   const f = Object.fromEntries(windowFields({ t: 0 }, { t: 5000, presented: 295, workMs: 1000, frame: 300 }));
   assert.deepEqual(f, { up_s: 5, fps: '59.0', gfps: '60.0', work_ms: '3.4', frame: 300 });
+});
+
+test('the input latency is read once per report from the wasm module (a take), and a game without it gives nothing', () => {
+  const calls = [];
+  const Module = {
+    _wotm_web_latency_take: () => calls.push('take'),
+    _wotm_web_latency: (i) => { calls.push(i); return [12, 151.4, 210, 260, 6.2, 99.5, 4, 3.1, 9.4, 1, 30.2][i]; },
+  };
+  assert.deepEqual(latencySource({ Module }).take(),
+    { n: 12, total: 151.4, p95: 210, max: 260, sample: 6.2, delay: 99.5, stall: 4, sim: 3.1, present: 9.4, unknown: 1, blend: 30.2 });
+  assert.deepEqual(calls, ['take', 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+  assert.equal(latencySource({}).take(), null);
+});
+
+test('a window carries the input latency of the presses it saw, and none when there were none', () => {
+  const lat = { n: 12, total: 151.44, p95: 210, max: 260, sample: 6.24, delay: 99.5, stall: 4, sim: 3.1, present: 9.4, unknown: 0, blend: 30.2 };
+  const f = Object.fromEntries(windowFields({ t: 0 }, { t: 5000, lat }));
+  assert.deepEqual(f, { up_s: 5, lat_n: 12, lat_ms: '151.4', lat_p95_ms: '210.0', lat_max_ms: '260.0', lat_in_ms: '6.2', lat_dl_ms: '99.5',
+    lat_st_ms: '4.0', lat_sim_ms: '3.1', lat_pr_ms: '9.4', lat_bl_ms: '30.2' });
+  assert.equal(Object.fromEntries(windowFields({ t: 0 }, { t: 5000, lat: { ...lat, unknown: 3 } })).lat_unk, 3);
+  const noTimes = Object.fromEntries(windowFields({ t: 0 }, { t: 5000, lat: { ...lat, unknown: 12 } }));
+  assert.deepEqual([noTimes.lat_n, noTimes.lat_unk, noTimes.lat_dl_ms, noTimes.lat_ms, noTimes.lat_p95_ms, noTimes.lat_max_ms, noTimes.lat_in_ms],
+    [12, 12, '99.5', undefined, undefined, undefined, undefined], 'no press with a page time: no total and no sample stage');  assert.deepEqual(Object.fromEntries(windowFields({ t: 0 }, { t: 5000, lat: { ...lat, n: 0 } })), { up_s: 5 });
+});
+
+test('a periodic report carries the latency taken for its window', () => {
+  const r = reporterFor({ extra: { latency: { take: () => ({ n: 3, total: 120, p95: 130, max: 130, sample: 5, delay: 100, stall: 0, sim: 3, present: 12, unknown: 0, blend: 0 }) } } });
+  r.reporter.begin();
+  for (let i = 0; i < 10; ++i) { r.advance(500); r.t.tick(); }
+  const first = fieldsOf(r.sent[0]);
+  assert.deepEqual([first.lat_n, first.lat_ms, first.lat_dl_ms], ['3', '120.0', '100.0']);
 });
 
 function fakeTimers() {

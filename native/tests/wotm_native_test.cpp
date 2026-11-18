@@ -1,5 +1,5 @@
 // ABOUTME: Unit tests for the pure parts of the native layer (no game, no window): frame interpolation from wotm_interp.hpp (matrices,
-// ABOUTME: camera, cuts, projection), the settings profile for network matches, the mod digest, the map creator's stagemap and lock-on target cycling. Build and run: tools\test_native.bat
+// ABOUTME: camera, cuts, projection), the settings profile for network matches, the mod digest, the map creator's stagemap and lock-on target cycling, the input latency stages. Build and run: tools\test_native.bat
 #include "wotm_interp.hpp"
 #include "wotm_settings.hpp"
 #include "wotm_snd.hpp"
@@ -16,6 +16,7 @@
 #include "wotm_rtz.hpp"
 #include "wotm_hudedge.hpp"
 #include "wotm_pace.hpp"
+#include "wotm_latency.hpp"
 #include "wotm_trig_goldens.hpp"
 #include "net/wotm_modifiers.hpp"
 #include "wotm_tint.hpp"
@@ -5274,6 +5275,138 @@ TEST(watchdog_pace_window_rate_and_counting)
     CHECK(!pc::measure(1000, 1120, 2.0, false, 1.5, false).counted);   // a loading gap of over 1 s
     CHECK(pc::measure(1000, 1120, 2.0, false, 1.0, false).counted);
     CHECK(!pc::measure(1000, 1120, 2.0, false, 0.02, true).counted);   // a deliberate pause
+}
+
+// Input latency (wotm_latency.hpp): one press followed through sample, frame start, capture and present, split into its stages
+TEST(latency_press_is_split_into_its_stages)
+{
+    wotm::latency::Tracker t;
+    t.sampled(10, 1000.0, 1004.0, 50.0);   // seen by the page at 1000, sampled at 1004 for frame 10, 50 ms of network waits so far
+    t.frameStarted(9, 1020.0, 50.0);       // an earlier frame starts nothing
+    t.frameStarted(10, 1070.0, 56.0);      // 6 ms of the 66 were waits for the others' input
+    t.captured(1075.0);
+    t.taken(10);
+    t.drew(0, 0);
+    t.presented(1083.0);
+    const wotm::latency::Window w = t.take();
+    CHECK(w.n == 1u);
+    CHECK(w.total == 83.0 && w.p95 == 83.0 && w.max == 83.0);
+    CHECK(w.sample == 4.0 && w.delay == 60.0 && w.stall == 6.0 && w.sim == 5.0 && w.present == 8.0 && w.blend == 0.0);
+    CHECK(t.take().n == 0u);   // a window is taken once
+}
+
+// The present that draws a frame is the first one after the draw took it: a capture that arrives after the draw waits for the next present
+TEST(latency_present_counts_only_frames_the_draw_took)
+{
+    wotm::latency::Tracker t;
+    t.sampled(5, 0.0, 100.0, 0.0);   // the page gave no press time: the press counts from the sample
+    t.frameStarted(5, 150.0, 0.0);
+    t.taken(4);                       // the draw took an older frame
+    t.drew(0, 0);
+    t.captured(160.0);
+    t.presented(165.0);
+    CHECK(t.take().n == 0u);
+    t.taken(5);
+    t.drew(0, 0);
+    t.presented(181.0);
+    const wotm::latency::Window w = t.take();
+    CHECK(w.n == 1u && w.unknownPress == 1u && w.present == 21.0);
+    CHECK(w.total == 0.0 && w.p95 == 0.0 && w.max == 0.0 && w.sample == 0.0);   // no press time: no total (counting from the sample would read low)
+    CHECK(w.unknownPress == 1u);
+}
+
+// Frame interpolation draws a blend of the last frames: the press counts as shown at the first present that gives its frame any weight,
+// and the time until a present shows that frame whole is the blend stage
+TEST(latency_blend_until_the_frame_is_shown_whole)
+{
+    wotm::latency::Tracker t;
+    t.frameStarted(7, 50.0, 0.0);
+    t.captured(55.0);
+    t.taken(7);                        // frame 7
+    t.drew(0, 0);
+    t.presented(60.0);
+    t.sampled(8, 70.0, 72.0, 0.0);
+    t.frameStarted(8, 90.0, 0.0);
+    t.captured(100.0);
+    t.taken(8);                        // frame 8; frame 7 is the one before it
+    t.drew(1, 1);                      // alpha 0: the image is still frame 7
+    t.presented(107.0);
+    t.drew(0, 1);                      // part of frame 8
+    t.presented(114.0);
+    CHECK(t.take().n == 0u);           // not shown whole yet
+    t.drew(0, 0);
+    t.presented(135.0);
+    const wotm::latency::Window w = t.take();
+    CHECK(w.n == 1u && w.total == 44.0 && w.present == 14.0 && w.blend == 21.0);
+}
+
+// The present asks for the newest captured frame under the capture's lock; a page time too far before the sample is not this press;
+// a new match starts from nothing
+TEST(latency_newest_capture_implausible_press_and_reset)
+{
+    wotm::latency::Tracker t;
+    uint32_t f = 0;
+    CHECK(!t.newest(f));
+    t.frameStarted(3, 10.0, 0.0);
+    t.captured(12.0);
+    CHECK(t.newest(f) && f == 3u);
+    t.sampled(9, 100.0, 5000.0, 0.0);   // 4.9 s: a key from long before (or another clock), counted from the sample
+    t.frameStarted(9, 5050.0, 0.0);
+    t.captured(5051.0);
+    t.taken(9);
+    t.drew(0, 0);
+    t.presented(5060.0);
+    const wotm::latency::Window w = t.take();
+    CHECK(w.n == 1u && w.unknownPress == 1u && w.total == 0.0 && w.present == 9.0);
+    t.sampled(20, 6000.0, 6001.0, 0.0);
+    t.reset();
+    CHECK(t.pending() == 0u && !t.newest(f) && t.take().n == 0u);
+}
+
+// A press with no page time counts in the later stages but not in the total, p95, max or sample
+TEST(latency_unknown_press_stays_out_of_the_total)
+{
+    wotm::latency::Tracker t;
+    t.sampled(1, 0.0, 100.0, 0.0);      // no page time
+    t.sampled(1, 90.0, 100.0, 0.0);     // seen 10 ms before the sample
+    t.frameStarted(1, 120.0, 0.0);
+    t.captured(130.0);
+    t.taken(1);
+    t.drew(0, 0);
+    t.presented(140.0);
+    const wotm::latency::Window w = t.take();
+    CHECK(w.n == 2u && w.unknownPress == 1u);
+    CHECK(w.total == 50.0 && w.p95 == 50.0 && w.max == 50.0 && w.sample == 10.0);
+    CHECK(w.delay == 20.0 && w.sim == 10.0 && w.present == 10.0);
+}
+
+// Medians per stage and the total's 95th percentile and max over a window; a press that never reaches the screen expires
+TEST(latency_window_medians_and_expiry)
+{
+    wotm::latency::Tracker t;
+    for (uint32_t i = 0; i < 20; ++i)
+    {
+        const double at = 1000.0 * (i + 1), total = i == 19 ? 200.0 : 50.0 + i;   // 50..68 and one 200
+        t.sampled(i * 10, at, at, 0.0);
+        t.frameStarted(i * 10, at + total - 2.0, 0.0);
+        t.captured(at + total - 1.0);
+        t.taken(i * 10);
+        t.drew(0, 0);
+        t.presented(at + total);
+    }
+    const wotm::latency::Window w = t.take();
+    CHECK(w.n == 20u);
+    CHECK(w.total == 59.5);   // median of 50..68 and 200
+    CHECK(w.p95 == 68.0 && w.max == 200.0);
+    t.sampled(500, 30000.0, 30000.0, 0.0);   // never started (the match ended)
+    t.sampled(600, 33000.0, 33000.0, 0.0);
+    t.frameStarted(600, 33050.0, 0.0);
+    t.captured(33051.0);
+    t.taken(600);
+    t.drew(0, 0);
+    t.presented(33060.0);
+    CHECK(t.take().n == 1u);
+    CHECK(t.pending() == 0u);   // frame 500 expired: frame 600 already reached the screen
 }
 
 // Inflate (wotm_zip.hpp): a fixed-Huffman deflate stream, as the game's zipInflateBlockFixed hands it to zipInflateCodes, in a fake
