@@ -105,13 +105,13 @@ Gain: ~8 ms average of `lat_pr_ms` (the capture lands at a random point of the d
 
 Gain: Brave players stop dropping a match to 0 to 24 frames a second. Cost: unknown until reproduced. Risk: none to others.
 
-- [ ] Install Brave on the Mac (`brew install --cask brave-browser`), run `latency.mjs` and `tools/web_fps.mjs` with Brave's binary (Playwright `executablePath`), Shields on and off. Check: WebGL renderer (software?), `performance.now()` resolution, `Atomics.wait` wake latency, long tasks. Fix in the page (a Brave notice exists as a stopgap) or the build according to the finding.
+- [x] (done, see Handoff: #150) Install Brave on the Mac (`brew install --cask brave-browser`), run `latency.mjs` and `tools/web_fps.mjs` with Brave's binary (Playwright `executablePath`), Shields on and off. Check: WebGL renderer (software?), `performance.now()` resolution, `Atomics.wait` wake latency, long tasks. Fix in the page (a Brave notice exists as a stopgap) or the build according to the finding.
 
 ### Task 7: Match start without a boot stall for everyone
 
 Gain: no 2.6 to 4.8 s freeze at the start. Cost: small to medium. Risk: low.
 
-- [ ] Find what the slow client was doing in those seconds (its page log: disc chunks, shader compile, level load) and start the match clock once every client reports its first frame ready (or preload what it was missing). Measure `in_gap_max_ms` of the first server window.
+- [x] (done as a prefetch, see Handoff: #149) Find what the slow client was doing in those seconds (its page log: disc chunks, shader compile, level load) and start the match clock once every client reports its first frame ready (or preload what it was missing). Measure `in_gap_max_ms` of the first server window.
 
 ### Task 8: Smooth catch-up instead of stalls (time sync)
 
@@ -130,7 +130,8 @@ Gain: fewer visible hitches when one PC runs ahead (GGRS frame advantage: the le
 
 ## Handoff (2026-11-18)
 
-**Live** (server and web `wl-9715672f5f0a089d`, wip/browser `dbe04bc4`; probe, `check_web.sh` and a live 2-player smoke 16/16 pass):
+**Live**: server `wl-9715672f5f0a089d` (wip/browser `dbe04bc4`); web wasm `wl-1399328c72ce0743` with the page of wip/browser `07a58f17`
+(`check_web.sh` PASSED, live 2-player smoke 21/0 after each of the two deploys of 2026-11-18).
 
 | PR | what | measured (local, Mac under load) |
 |---|---|---|
@@ -140,6 +141,9 @@ Gain: fewer visible hitches when one PC runs ahead (GGRS frame advantage: the le
 | #144 | task 2: `ee_busy_ms`, `ee_idle_ms`, `fr_len`, `vbl_late_ms`, `vbl_slow`, `au_buf_ms`; cap 80; test knob `WOTM_FRAMESPIN` | Firefox tab in a 1v1: busy 19 ms per 16.7 ms frame, every frame rounded to 2 vsyncs |
 | #147 | task 3, done without a new grid: fixed-step frames wait at their boundary on the vblank clock (after the capture); `rtMain`'s `timer1Handler` vsync wait skipped | spin 20 ms at 60 Hz: 30 -> 37 fps, sim 33 -> 26 ms; spin 35 at 30 Hz: 19 -> 21.6 fps; Firefox 1v1: 30-34 -> 40-55 fps |
 | #145 | task 4: no frame interpolation in a network match | -17 ms at 60 Hz, -33 ms at 30 Hz |
+| #148 | the vblank timer thread sleeps in 2 ms slices (`EeVBlankClock::wakeAt`): browsers oversleep a timed `Atomics.wait` in proportion to its length | `vbl_late_ms` 1v1 2.3 -> 0.33 ms, 4p 30 Hz 2.3-3.8 -> 0.45 ms (Chrome, Mac); total latency within noise (the lateness was a near-constant offset) |
+| #149 | task 7, done as a prefetch: the lobby fetches its match's disc chunks (stage, each monster and costume: `web/match_chunks.json`) while it waits; diag `disc_net_mb`, `disc_hit_mb` | root cause from live 68LN/VKA5: the slowest client downloading ~22 MiB of fight data on demand (VKA5 peepee at 236 fps sat at frame 0 for ~15 s). 20 Mbps line, 30 s lobby: start load 16.5 -> 3.35 s, all from the cache |
+| #150 | task 6: Brave is not the cause, software WebGL is; diag `gl_sw` (a context that fails on a major performance caveat) and a front-panel notice for any browser drawing in software | Brave with the GPU = Chrome (107 fps, same profile, 5 us timers, only `cores` masked); Brave `--disable-gpu`: 5.3 fps, 96% of the main thread in GL calls, like the live Brave players |
 | coord #6 | `match_diag.py` prints the latency, game thread and vblank clock per player, flags rounded frames and coarse timers | |
 
 1 vs 1, 60 Hz, rtt 40, total input latency: ~111 ms now (was ~120-140). All desync matrices: 0 desync.
@@ -147,7 +151,17 @@ Gain: fewer visible hitches when one PC runs ahead (GGRS frame advantage: the le
 **Windows evidence to read from the next real match** (`sh scripts/match_diag.sh <code>` in coord): per player `game thread: busy X ms ...; frames by length a,b,c,d; vblank clock Y ms late`.
 - `ee_busy_ms` near or over the frame (16.7 / 33.3 ms): the game thread is CPU-bound (Firefox wasm, a weak CPU).
 - `fr_len` third bucket large: frames still round to an extra vsync (should be rare after #147).
-- `vbl_late_ms` several ms (Windows default timer 15.6 ms?) and `vbl_slow` high: coarse timer; the vblank clock itself is the next fix. It is ~3.8 ms even in Chrome on the Mac.
+- `vbl_late_ms` several ms and `vbl_slow` high after #148: a coarse system timer (Windows 15.6 ms), which 2 ms slices can't help;
+  then the frame boundary needs a short spin before its deadline. Under 1 ms: the timer is fine.
 - `lat_ms` and stages; `au_buf_ms` and `au_gaps` for the audio path; Brave reports `gpu=Brave`, `cores` farbled.
+- `gl_sw=1` on the join line: that player draws WebGL in software (the likely Brave case); their own front panel now says so.
+  Whether the probe catches Windows WARP in Chrome, Edge and Brave is untested: a Windows player with `gl_sw=0` and very low `fps` and
+  long tasks is the case to ask about (their `chrome://gpu` or `brave://gpu`).
+- The first windows' `disc_net_mb`: a start that still waits on its download (a lobby started within a second, or a cold cache).
 
-**Remaining tasks**, in order: vblank clock lateness (new, from `vbl_late_ms`), 7 (match start: the ~2.6 to 4.8 s freeze while one client boots; start when everyone reports frame 0), 6 (Brave repro), 5 (phase-locked present), 8 (time sync), 9 (rollback synctest go/no-go), the TODO item on short freezes that keep coming (holdback), and an online opt-in for interpolation if Lane wants smoothness back.
+**Remaining tasks**, in order: read the next real match (above; brief 2 item d); 7b only if `in_gap_max_ms` of the first window still
+shows a hold with the prefetch in (start the match clock when every client reports frame 0); the ~40 MB wasm downloads at match start on
+a cold cache (every deploy makes it cold for everyone: 17 s at 20 Mbps), 5 (phase-locked present), 8 (time sync), 9 (rollback synctest go/no-go), the TODO item on short freezes that keep coming (holdback), and an online opt-in for interpolation if Lane wants smoothness back.
+
+**Master ports**: per-PR ports of the online-seamless stack are skipped (coordinator, 2026-11-18): master lacks #133 to #150, and a
+single batch port (runtime rebuild and desync matrix) is its own task once the rollback and pacing work settles.

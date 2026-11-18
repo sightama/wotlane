@@ -1,7 +1,7 @@
 // ABOUTME: Checks the lobby's member list end to end in a real browser with three players on a local wotm_server: each member's ping
 // ABOUTME: and device health chips, the warning, and the owner's Remove (with the ban) and Make owner. No game is loaded.
-// Run: node tools/browser_lobby_test/run.mjs [--browser chromium|firefox|all]   (needs sh tools/test_net.sh notest first, and Playwright:
-// see tools/browser_mp_test/README.md)
+// Run: node tools/browser_lobby_test/run.mjs [--browser chromium|firefox|brave|all]   (needs sh tools/test_net.sh notest first, and Playwright:
+// see tools/browser_mp_test/README.md; brave: the installed Brave, WOTM_BRAVE names its binary; all skips Brave where it is not installed)
 import { spawn, execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
@@ -17,7 +17,8 @@ try { playwright = require('playwright'); } catch { playwright = require(join(ex
 
 const arg = process.argv.indexOf('--browser');
 const which = arg > 0 ? process.argv[arg + 1] : 'chromium';
-const browsers = which === 'all' ? ['chromium', 'firefox'] : [which];
+const BRAVE = process.env.WOTM_BRAVE || '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser';
+const browsers = which === 'all' ? ['chromium', 'firefox', ...(existsSync(BRAVE) ? ['brave'] : [])] : [which];
 
 const server = join(repo, 'native/net/build/wotm_server');
 if (!existsSync(server)) throw new Error('build the server first: sh tools/test_net.sh notest');
@@ -46,10 +47,11 @@ const chip = (page, name, kind) => row(page, name).locator('.' + kind);
 const text = (locator) => locator.textContent({ timeout: 8000 });
 const waitFor = async (page, fn, arg, ms = 10000) => { try { await page.waitForFunction(fn, arg, { timeout: ms }); return true; } catch { return false; } };
 
-// `brave`: the page answers navigator.brave.isBrave() with true, as Brave does
-async function player(browser, name, health, brave = false) {
+// `softwareGl`: the page reads its WebGL as drawn in software, or not, whatever this host's browser draws with (diag.js readSoftwareGl
+// keeps its answer in window.wotmSoftwareGl)
+async function player(browser, name, health, softwareGl = false) {
   const context = await browser.newContext();
-  if (brave) await context.addInitScript(() => Object.defineProperty(navigator, 'brave', { value: { isBrave: async () => true } }));
+  await context.addInitScript((sw) => { window.wotmSoftwareGl = sw; }, softwareGl ? 1 : 0);
   if (health) await context.addInitScript((h) => { try { localStorage.setItem('wotlane.deviceHealth', JSON.stringify(h)); } catch { /* none */ } }, health);
   const page = await context.newPage();
   await page.goto(`http://127.0.0.1:${sitePort}/?server=ws://127.0.0.1:${ports.ws}`);
@@ -59,11 +61,11 @@ async function player(browser, name, health, brave = false) {
 
 async function run(browserName) {
   const tag = (s) => `${browserName}: ${s}`;
-  const browser = await playwright[browserName].launch();
+  const browser = browserName === 'brave' ? await playwright.chromium.launch({ executablePath: BRAVE }) : await playwright[browserName].launch();
   try {
     const ana = await player(browser, 'Ana');
     const bia = await player(browser, 'Bia', { fps: 27, workMs: 13.2, hz: 60 });
-    const cai = await player(browser, 'Cai', { fps: 60, workMs: 5, hz: 60 }, true);
+    const cai = await player(browser, 'Cai', { fps: 60, workMs: 5, hz: 60 });
     await ana.click('#host');
     await ana.waitForSelector('#inLobby:not([hidden])');
     const code = (await text(ana.locator('#code'))).trim();
@@ -96,14 +98,23 @@ async function run(browserName) {
       JSON.stringify(await buttons(ana, 'Bia')) === '["Make owner","Remove"]' && (await buttons(ana, 'Ana')).length === 0);
     check(tag('a guest has no owner buttons'), (await buttons(bia, 'Cai')).length === 0 && (await buttons(cai, 'Ana')).length === 0);
 
-    // Brave: Cai's own screen carries the notice, nobody else's does, and the owner (only) sees Cai's browser marked
+    // drawing in software: Dee's own screen carries the notice, nobody else's does, and every member sees Dee's device chip red with the
+    // reason and a warning, before Dee has a measured match
+    const dee = await player(browser, 'Dee', null, true);
+    await dee.fill('#joinCode', code);
+    await dee.click('#join');
+    await dee.waitForSelector('#inLobby:not([hidden])');
     const notice = (p) => p.locator('#deviceNote');
-    check(tag('a Brave player\'s own screen shows the Shields notice'), await waitFor(cai, () => !document.getElementById('deviceNote').hidden) &&
-      (await text(notice(cai))) === "Brave's Shields can slow this game a lot. For the best experience use Chrome, Edge or Firefox, or turn Shields off for playwotm.com and enable graphics acceleration.");
-    check(tag('another browser shows no notice'), (await notice(ana).isHidden()) && (await notice(bia).isHidden()));
-    check(tag('the owner sees Cai\'s Brave hint'), await waitFor(ana, () => document.querySelector('#members li[data-name="Cai"] .browser')?.textContent === 'Brave', null, 10000));
-    check(tag('and no hint on a browser that is not Brave'), (await text(chip(ana, 'Bia', 'browser'))) === '');
-    check(tag('a guest sees no Brave hint'), (await text(chip(bia, 'Cai', 'browser'))) === '');
+    check(tag('a player drawing in software sees the notice on their own screen'), !(await notice(dee).isHidden()) &&
+      (await text(notice(dee))).startsWith('This browser is drawing the game without your graphics card'));
+    check(tag('nobody else has a notice'), (await notice(ana).isHidden()) && (await notice(bia).isHidden()) && (await notice(cai).isHidden()));
+    const swShown = await Promise.all([ana, cai].map((p) => waitFor(p, () =>
+      document.querySelector('#members li[data-name="Dee"] .device')?.textContent === 'software graphics (hardware acceleration off)', null, 8000)));
+    check(tag('the others see Dee\'s device chip as software graphics'), swShown.every(Boolean) && (await chip(ana, 'Dee', 'device').getAttribute('class')).includes('bad'));
+    check(tag('and are warned about it'), (await text(cai.locator('#lobbyWarnings'))).includes('Dee: this browser draws without the graphics card'));
+    await dee.click('#leave');
+    check(tag('Dee leaves, and the warning with them'), await waitFor(ana, () => document.querySelectorAll('#members li').length === 3 &&
+      !document.getElementById('lobbyWarnings').textContent.includes('Dee')));
 
     // Remove asks twice; one click only arms it
     await row(ana, 'Bia').getByRole('button', { name: 'Remove' }).click();
@@ -126,8 +137,6 @@ async function run(browserName) {
     check(tag('the old owner loses the controls and the buttons'), await waitFor(ana, () => document.getElementById('ownerOnly').hidden &&
       document.querySelectorAll('#members button').length === 0));
     check(tag('the new owner has the buttons, with Ana now removable'), await waitFor(cai, () => document.querySelectorAll('#members li[data-name="Ana"] button').length === 2));
-    check(tag('after the handoff the new owner sees Ana\'s row without a Brave chip and the old owner no chip at all'),
-      (await text(chip(cai, 'Ana', 'browser'))) === '' && (await text(chip(ana, 'Cai', 'browser'))) === '');
     check(tag('the old owner is told'), (await text(ana.locator('#frontMsg'))).includes('Cai is the owner now'));
   } finally {
     await browser.close();

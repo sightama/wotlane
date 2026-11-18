@@ -12,6 +12,8 @@ sh tools/build_web.sh                       # builds <runtime>/web_dist (see doc
 npm install --prefix tools/browser_mp_test  # playwright (or have it in the global npm root; run.mjs falls back to it)
 node tools/browser_mp_test/run.mjs --players 1,2,3,4,5,6,7,8 --disc <extracted disc folder>
 node tools/browser_mp_test/run.mjs --target live --players 1,2,4   # shorter confirmation pass
+node tools/browser_mp_test/run.mjs --target live --players 2 --browser chrome --firefox 1   # live smoke after a deploy: Chrome with Firefox
+node tools/browser_mp_test/run.mjs --target live --players 2 --browser brave                # ... and Brave (the supported browsers)
 node --test tools/browser_mp_test/test/     # the log readers
 ```
 

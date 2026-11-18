@@ -20,9 +20,11 @@ export function pingLevel(ms) {
   return ms < PING_GOOD_MS ? 'good' : ms < PING_BAD_MS ? 'warn' : 'bad';
 }
 
-// `health`: { fps (frames a second of the device's own time), workMs (per frame), hz (the match's rate) } or undefined
+// `health`: { fps (frames a second of the device's own time), workMs (per frame), hz (the match's rate), softwareGl (its browser draws
+// in software) }, without the numbers before the device ran a match, or undefined
 export function deviceLevel(health) {
-  if (!health) return 'none';
+  if (health?.softwareGl) return 'bad';
+  if (typeof health?.fps !== 'number') return 'none';
   const share = health.fps / health.hz;
   const frameMs = 1000 / health.hz;
   const byRate = share >= DEVICE_GOOD ? 'good' : share >= DEVICE_BAD ? 'warn' : 'bad';
@@ -32,22 +34,26 @@ export function deviceLevel(health) {
 
 const rate = (h) => `${Math.round(h.fps)} fps of ${h.hz}`;
 
-// `pings`: name to ms (null: not measured); `healths`: name to health; `braves`: the names of the members on Brave
-export function memberStatus(name, pings, healths, braves = new Set()) {
+const SOFTWARE_GL = 'software graphics (hardware acceleration off)';
+
+// `pings`: name to ms (null: not measured); `healths`: name to health
+export function memberStatus(name, pings, healths) {
   const ms = own(pings, name);
   const ping = pingLevel(ms);
   const h = own(healths, name);
   const level = deviceLevel(h);
-  const text = { none: 'device not measured yet', good: 'device ok', warn: `device borderline: ${h && rate(h)}`, bad: `device too slow: ${h && rate(h)}` }[level];
-  const browser = braves.has(name) ? { level: 'warn', text: 'Brave', title: "Brave's Shields can slow the game a lot" } : { level: 'none', text: '', title: '' };
-  return { ping: { level: ping, text: ping === 'none' ? '' : `${ms} ms` }, device: { level, text }, browser };
+  const text = h?.softwareGl ? SOFTWARE_GL
+    : { none: 'device not measured yet', good: 'device ok', warn: `device borderline: ${h && rate(h)}`, bad: `device too slow: ${h && rate(h)}` }[level];
+  return { ping: { level: ping, text: ping === 'none' ? '' : `${ms} ms` }, device: { level, text } };
 }
 
 export function lobbyWarnings(names, pings, healths) {
   const out = [];
   for (const name of names) {
     if (pingLevel(own(pings, name)) === 'bad') out.push(`${name}: ping ${pings[name]} ms is high, so everyone's input will feel laggy.`);
-    if (deviceLevel(own(healths, name)) === 'bad') out.push(`${name}: this device runs ${rate(healths[name])} and would slow the match for everyone.`);
+    const h = own(healths, name);
+    if (h?.softwareGl) out.push(`${name}: this browser draws without the graphics card (hardware acceleration off) and would slow the match for everyone.`);
+    else if (deviceLevel(h) === 'bad') out.push(`${name}: this device runs ${rate(h)} and would slow the match for everyone.`);
   }
   return out;
 }
