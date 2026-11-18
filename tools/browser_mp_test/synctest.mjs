@@ -7,12 +7,12 @@ import { REPO, freePort, loadPlaywright, launchBrowsers, launchFirefox } from '.
 
 const USAGE = `usage: node tools/browser_mp_test/synctest.mjs [options]
   --browser chrome|chromium|firefox   default chrome (the real one, its GPU)
-  --back N        frames back at every frame (WOTM_SYNCTEST, default 2)
+  --back N        frames back at every frame (WOTM_SYNCTEST, 1 to 15, default 2)
   --match SPEC    direct fight (WOTM_MATCH, default 3,1,1; 8 monsters: 3,1,2,4,5,7,8,9,1)
   --step 1|2      fixed step in fields (WOTM_FIXEDSTEP, default 1 = 60 Hz; 2 = 30 Hz)
   --minutes M     how long to run (default 3)
   --site DIR      built page (default <runtime>/web_dist)   --data DIR   game.iso and SCUS_971.97 (default <runtime>/web_data)
-  --env K=V       more game environment (repeatable: WOTM_SYNCTEST_SKIP=sound, WOTM_FRAMESPIN=8, WOTM_SYNCTEST=0 for no synctest)
+  --env K=V       more game environment (repeatable: WOTM_SYNCTEST_SKIP=sound, WOTM_FRAMESPIN=8)
   --out DIR       where the game's log goes (default <runtime>/browser_synctest)   --headed
 Exit status 1 when the game logged a mismatch or no check ran.`;
 
@@ -38,6 +38,7 @@ function args() {
   o.site = resolve(o.site || join(rt, 'web_dist'));
   o.data = resolve(o.data || join(rt, 'web_data'));
   o.out = resolve(o.out || join(rt, 'browser_synctest'));
+  if (!(Number.isInteger(o.back) && o.back >= 1 && o.back <= 15)) { console.error('--back takes 1 to 15'); process.exit(2); }
   return o;
 }
 
@@ -64,7 +65,8 @@ async function main() {
   const pw = await loadPlaywright();
   const browser = o.browser === 'firefox' ? await launchFirefox(pw, { headed: o.headed })
     : (await launchBrowsers(pw, { n: 1, browser: o.browser, headed: o.headed, unlockFrames: true }))[0];
-  const tag = `${o.browser}_${o.step === 2 ? '30hz' : '60hz'}_back${o.back}_${o.match.split(',').length - 1}m`;
+  const extra = Object.entries(o.env).map(([k, v]) => `_${k.replace(/^WOTM_/, '').toLowerCase()}${v}`).join('').replace(/[^A-Za-z0-9_.-]/g, '-');
+  const tag = `${o.browser}_${o.step === 2 ? '30hz' : '60hz'}_back${o.back}_${o.match.split(',').length - 1}m${extra}`;
   const logPath = join(o.out, `${tag}.log`);
   const lines = [];
   let mismatches = 0, checks = 0;

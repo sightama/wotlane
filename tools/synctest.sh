@@ -16,12 +16,14 @@ usage: sh tools/synctest.sh [--back <n>] [--match <spec>] [--step 1|2] [--second
   --build    build folder inside the runtime folder (default build_dev)
   VAR=value  more environment for the game (WOTM_SYNCTEST_SKIP=sound, WOTM_SYNCTEST_TRACE=<frame>, WOTM_FRAMESPIN=<ms>...)
 The run uses WOTM_SEED=7 and no sound output. Prints the synctest's lines (cost every 300 frames, mismatches) and a
-summary; exit status 1 when a mismatch was logged or no check ran. Needs a display (the game opens a window).
+summary; exit status 1 when a mismatch was logged or no cost line came (checks are counted from the cost lines, one per 300
+fight frames). Needs a display (the game opens a window).
 EOF
 }
 
 back=2 match=3,1,1 step=1 seconds=120 log= build=build_dev ai=1
 while [ $# -gt 0 ]; do
+    case $1 in --back|--match|--step|--seconds|--log|--build) [ $# -ge 2 ] || { usage >&2; exit 2; } ;; esac
     case $1 in
         -h|--help) usage; exit 0 ;;
         --back) back=$2; shift 2 ;;
@@ -36,6 +38,7 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+case $back in [1-9]|1[0-5]) ;; *) fail "--back takes 1 to 15 (got $back)" ;; esac
 rt=$(runtime_dir)
 exe=$rt/$build/ps2xRuntime/wotm
 [ -x "$exe" ] || fail "no $exe (sh tools/build_runtime.sh)"

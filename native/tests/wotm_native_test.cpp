@@ -719,6 +719,51 @@ namespace
         CHECK(t.boundary(7) == S::SaveAndBack && t.back() == 6);
     }
 
+    // A redo that reaches a later frame than its target without passing it has diverged: it ends there instead of waiting forever,
+    // and the history starts over
+    TEST(rollback_synctest_a_redo_past_its_target_ends)
+    {
+        using S = rb::SyncTest::Step;
+        rb::SyncTest t(2);
+        t.boundary(0);
+        t.boundary(1);
+        CHECK(t.boundary(2) == S::SaveAndBack);
+        CHECK(t.boundary(3) == S::Overshot && !t.resimulating());
+        CHECK(t.boundary(4) == S::Save);   // the history starts over: the diverged present was never saved
+        CHECK(t.boundary(5) == S::Save);
+        CHECK(t.boundary(6) == S::SaveAndBack && t.back() == 4);
+    }
+
+    // A count read from a snapshot can't ask for more items than the bytes left could hold (a damaged snapshot fails, it doesn't allocate)
+    TEST(rollback_reader_counts_fit_the_bytes_left)
+    {
+        std::vector<uint8_t> bytes;
+        std::vector<rb::Blob> blobs;
+        rb::Writer w{bytes, blobs};
+        w.pod(uint32_t(3));
+        w.bytes("abcdef", 6);
+        w.pod(uint32_t(0x7FFFFFFFu));
+        rb::Reader r{bytes.data(), bytes.data() + bytes.size(), blobs};
+        CHECK(r.count(2) == 3 && r.ok);
+        char six[6];
+        r.bytes(six, 6);
+        CHECK(r.count(1) == 0 && !r.ok);
+    }
+
+    // Snapshots with a different number of pieces are not equal
+    TEST(rollback_compare_sees_another_piece_count)
+    {
+        uint32_t a = 1, b = 2;
+        rb::State one, two;
+        one.add(rb::memoryPiece("a", &a, sizeof a));
+        two.add(rb::memoryPiece("a", &a, sizeof a));
+        two.add(rb::memoryPiece("b", &b, sizeof b));
+        rb::Snapshot s1, s2;
+        one.save(s1, 0);
+        two.save(s2, 0);
+        CHECK(!two.compare(s1, s2).equal);
+    }
+
     // A bank of the game's format (Bank::parse): sound 0 is a tone, a RAND_PLAY between two tones (state kept in the grain) and an
     // LFO on the pitch; sound 1 a tone whose sample loops; sound 2 starts sound 1 as a child, then branches to sound 0. Sample 0
     // (offset 0) loops, sample 1 (offset 64) ends after 2 blocks.
@@ -845,6 +890,129 @@ namespace
         CHECK(out1 == out2);
         CHECK(st.compare(after, again).equal);
         CHECK(std::any_of(out1.begin(), out1.end(), [](int16_t s) { return s != 0; }));
+        e.stopAll();
+        e.unloadBank(bank);
+        e.setFrameLocked(false);
+    }
+
+    // A .VAG stream (mono, big-endian header, ADPCM from 0x30) read through the engine's sector reader: music and voices are streams
+    std::vector<uint8_t> testStream()
+    {
+        std::vector<uint8_t> f(2048 * 3, 0);
+        std::memcpy(f.data(), "VAGp", 4);
+        const uint32_t size = uint32_t(f.size() - 0x30), rate = 24000;
+        for (int i = 0; i < 4; ++i)
+        {
+            f[12 + i] = uint8_t(size >> (24 - 8 * i));
+            f[16 + i] = uint8_t(rate >> (24 - 8 * i));
+        }
+        for (size_t b = 0x30; b + 16 <= f.size(); b += 16)
+        {
+            f[b] = 0x23;
+            for (size_t i = 2; i < 16; ++i)
+                f[b + i] = uint8_t(0x41 + 3 * (b + i));
+        }
+        return f;
+    }
+
+    // A stream's samples are shared by the snapshots (one blob), and its voice comes back pointing at them: the replay after a restore
+    // gives the same samples, and a stream started after the snapshot is gone
+    TEST(sound_engine_snapshot_replays_a_stream)
+    {
+        auto &e = wotm::snd::Engine::get();
+        const std::vector<uint8_t> file = testStream();
+        e.setReader([&](uint32_t lsn, uint32_t sectors, uint8_t *dst) {
+            if (lsn != 500 || sectors * 2048u > file.size())
+                return false;
+            std::memcpy(dst, file.data(), sectors * 2048u);
+            return true;
+        });
+        e.setFrameLocked(true);
+        const uint32_t music = e.playStream(500, 0x400, 0, 1);
+        CHECK(music != 0);
+        auto frames = [&](int n, std::vector<int16_t> &out) {
+            for (int f = 0; f < n; ++f)
+            {
+                e.advanceFrame(1);
+                std::vector<int16_t> buf(2 * 800);
+                e.mix(buf.data(), 800);
+                out.insert(out.end(), buf.begin(), buf.end());
+            }
+        };
+        std::vector<int16_t> warm, out1, out2;
+        frames(2, warm);
+        rb::State st;
+        st.add(e.rollbackPiece());
+        rb::Snapshot before;
+        st.save(before, 0);
+        CHECK(before.blobs.size() == 1);
+        const uint32_t second = e.playStream(500, 0x200, 90, 1);
+        frames(4, out1);
+        CHECK(e.playing(second));
+        CHECK(st.load(before));
+        CHECK(e.playing(music) && !e.playing(second));
+        frames(4, out2);
+        CHECK(out1 != out2);   // the second stream was in the first run only
+        CHECK(st.load(before));
+        std::vector<int16_t> out3, out4;
+        frames(4, out3);
+        CHECK(st.load(before));
+        frames(4, out4);
+        CHECK(out3 == out4 && std::any_of(out3.begin(), out3.end(), [](int16_t s) { return s != 0; }));
+        e.stopAll();
+        e.setFrameLocked(false);
+        e.setReader(nullptr);
+    }
+
+    // A snapshot that refers to other banks (one was loaded since) is refused, and the engine stays exactly as it was
+    TEST(sound_engine_refused_snapshot_changes_nothing)
+    {
+        auto &e = wotm::snd::Engine::get();
+        e.setFrameLocked(true);
+        const uint32_t bank = e.loadBankData(testSoundBank());
+        e.play(bank, 1, 0x400, 0, 0, 0);
+        rb::State st;
+        st.add(e.rollbackPiece());
+        rb::Snapshot old, now, after;
+        st.save(old, 0);
+        e.advanceFrame(1);
+        const uint32_t later = e.play(bank, 0, 0x400, 0, 0, 0);
+        const uint32_t other = e.loadBankData(testSoundBank());
+        st.save(now, 0);
+        CHECK(!st.load(old));
+        st.save(after, 0);
+        CHECK(st.compare(now, after).equal && e.playing(later));
+        // the same when the snapshot breaks off midway (its last sound cut short): nothing of it is applied
+        rb::Snapshot cut = now;
+        e.play(bank, 1, 0x300, 90, 0, 0);
+        rb::Snapshot changed;
+        st.save(changed, 0);
+        cut.bytes.resize(cut.bytes.size() - 6);
+        cut.ends.back() -= 6;
+        CHECK(!st.load(cut));
+        st.save(after, 0);
+        CHECK(st.compare(changed, after).equal);
+        e.stopAll();
+        e.unloadBank(other);
+        e.unloadBank(bank);
+        e.setFrameLocked(false);
+    }
+
+    // A frame run again by a rollback advances the engine but queues nothing to hear
+    TEST(sound_engine_silent_frames_advance_but_queue_nothing)
+    {
+        auto &e = wotm::snd::Engine::get();
+        e.setFrameLocked(true);
+        const uint32_t bank = e.loadBankData(testSoundBank());
+        e.play(bank, 1, 0x400, 0, 0, 0);
+        const uint32_t tick = e.tickCount();
+        std::vector<int16_t> drain(2 * 48000);   // what earlier frames queued
+        e.mix(drain.data(), 48000);
+        e.advanceFrame(1, false);
+        CHECK(e.tickCount() > tick);
+        std::vector<int16_t> buf(2 * 800, 7);
+        e.mix(buf.data(), 800);
+        CHECK(std::all_of(buf.begin(), buf.end(), [](int16_t s) { return s == 0; }));
         e.stopAll();
         e.unloadBank(bank);
         e.setFrameLocked(false);

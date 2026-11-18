@@ -1485,7 +1485,7 @@ index 67c8184..c8310ea 100644
  
  #endif
 diff --git a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
-index c5e31c4..1d61f43 100644
+index c5e31c4..4aa9f53 100644
 --- a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
 +++ b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
 @@ -4,10 +4,55 @@
@@ -1751,12 +1751,14 @@ index c5e31c4..1d61f43 100644
                                EeEvent{EeEventType::VBlankStart, 0, 0});
              }
              processEvent(scheduled.event);
-@@ -1994,8 +2075,12 @@ void EeScheduler::writeGuestU32(uint32_t address, uint32_t value)
+@@ -1994,8 +2075,14 @@ void EeScheduler::writeGuestU32(uint32_t address, uint32_t value)
      std::memcpy(m_rdram + physical, &value, sizeof(value));
  }
  
 +std::atomic<unsigned long long> g_wotmIdleUs{0}, g_wotmIdleCalls{0};
 +std::atomic<unsigned long long> g_wotmVblankWakes{0}, g_wotmVblankLateUs{0}, g_wotmVblankSlowWakes{0};   // counted by EeSchedulerGame.cpp only
++std::atomic<uint32_t> g_wotmInvocations[8];   // counted by EeSchedulerGame.cpp only (rollback's synctest reports them)
++std::atomic<uint32_t> g_wotmLastInvocationPc{0};
  void EeScheduler::waitForEvent()
  {
 +    WotmUsTimer wotmIdleTimer(g_wotmIdleUs);
@@ -1764,7 +1766,7 @@ index c5e31c4..1d61f43 100644
      std::unique_lock lock(m_eventMutex);
      if (!m_events.empty() || m_stopRequested.load(std::memory_order_acquire))
      {
-@@ -2010,48 +2095,54 @@ void EeScheduler::waitForEvent()
+@@ -2010,48 +2097,54 @@ void EeScheduler::waitForEvent()
          return;
      }
  
@@ -1846,7 +1848,7 @@ index c5e31c4..1d61f43 100644
  }
  
  void EeScheduler::scheduleEvent(uint64_t deadlineCycle,
-@@ -2068,21 +2159,17 @@ void EeScheduler::scheduleEvent(uint64_t deadlineCycle,
+@@ -2068,21 +2161,17 @@ void EeScheduler::scheduleEvent(uint64_t deadlineCycle,
  
  void EeScheduler::updateNextDeadline()
  {

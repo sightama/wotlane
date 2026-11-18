@@ -254,7 +254,7 @@ namespace wotm_sync
         const wotm_net::PadState s = ours ? inputFor(static_cast<int>(port + 2u * slot), g_index) : wotm_net::PadState{};
         if (ours)
             ps2_stubs::setPadOverrideState(s.buttons, s.lx, s.ly, s.rx, s.ry);
-        if (ours && g_net && g_levelLoaded)
+        if (ours && g_net && g_levelLoaded && !wotm_rollback::resimulating())
             wotm::latency::tracker().frameStarted(g_index, wotm::latency::nowMs(), g_netStallMs);   // the frame applies its input
         g_origPadRead(rdram, ctx, runtime);
         if (!ours)

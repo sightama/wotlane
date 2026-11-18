@@ -40,6 +40,7 @@
 #include "net/wotm_net_client.hpp"   // network match client (wotm_sync.inc)
 #include "wotm_netstatus.h"          // on-screen network message and disabled debug keys (wotm_live.inc)
 #include "wotm_latency.hpp"          // input latency probes for the page's diagnostics report (wotm_sync.inc, wotm_live.inc)
+#include "wotm_rollback.hpp"         // snapshots of the game state and the synctest schedule (wotm_rollback.inc)
 #ifdef __EMSCRIPTEN__
 #include "wotm_web.h"                 // browser: the tab is hidden (Away), a long network wait for the page to offer leaving (wotm_sync.inc)
 #endif
@@ -103,6 +104,8 @@ void wotmBarRect(float x0, float y0, float x1, float y1, uint8_t r, uint8_t g, u
 void wotmBarTex(float x0, float y0, float x1, float y1, uint64_t tex0, float u0, float v0, float u1, float v1);   // wotm_live.inc: portrait
 void wotmBarView(int view);   // wotm_live.inc: view of the bars that follow
 void wotmSoundFrame(unsigned fields, bool output);   // wotm_snd.inc: sound advances one game frame (deterministic mode)
+wotm::rollback::Piece wotmSoundRollbackPiece();   // wotm_snd.inc: the sound engine as a rollback snapshot piece
+uint32_t wotmSoundBankGeneration();               // wotm_snd.inc: sound banks loaded and unloaded so far (a change is a barrier)
 bool wotmPersonalPause(uint16_t buttons, bool &start);   // wotm_mainmenu.inc: network match, this player's own menu (personal pause)
 void wotmHudAnchor(const uint8_t *rdram, float cx, float cy, const float *world, bool bars);   // wotm_live.inc: health icon (photo mode)
 void wotmHudAnchorEnd();
@@ -127,8 +130,6 @@ std::atomic<bool> g_wotmCheatWin{false};
 #include "wotm_personalpause.hpp"   // network match: what this PC sends while its own menu is open (wotm_sync.inc)
 #include "wotm_detmath.hpp"   // trig with the same bits on every machine, for results that reach guest RAM (wotm_orbit.inc, lock-on)
 #include "wotm_zip.hpp"   // the stages' .TEX/.RTX unzip on the host (zipInflateCodesNative)
-#include "wotm_rollback.hpp"   // snapshots of the game state and the synctest schedule (wotm_rollback.inc)
-#include "wotm_snd.hpp"   // the sound engine is game state in a snapshot (wotm_rollback.inc)
 #include "ps2_stubs.h"   // the runtime's host state the game reads back (wotm_rollback.inc)
 std::atomic<bool> g_wotmFreeCam{false};
 std::atomic<bool> g_wotmFreeCamPad{false};
@@ -1047,16 +1048,18 @@ namespace
         // only on entry: resuming mid-function (after a sceGsSyncV in the loop) already has D_006F8DC0 updated
         if (ctx->pc == kTimerWaitForMinUpdateRate)
         {
+            // a frame run again by a rollback was drawn, logged, paced and stopped on the first time: only its state is redone
+            const bool redo = wotm_rollback::resimulating();
             // [field] for the previous frame: this runs every frame (timerGetUpdateRate doesn't: in the menu and at the start of a stage
             // there are frames with no call, and the line added up two frames)
-            if (g_fieldLog)
+            if (g_fieldLog && !redo)
                 fieldLogFrame(rdram, ctx, runtime);
-            wotm_modifiers::statsFrame(rdram);
+            if (!redo)
+                wotm_modifiers::statsFrame(rdram);
             // frame ready (update, hier, particleDraw) and the next one hasn't started: native drawing copies the scene here
-            emitChaseHud(rdram);
+            if (!redo)
+                emitChaseHud(rdram);
             wotm_split4::trainingHudLate(rdram, ctx, runtime);   // training mode: the dummy's HUD if HUD 0's update was paused
-            // a frame run again by a rollback was drawn, paced and stopped on the first time: only its state is redone
-            const bool redo = wotm_rollback::resimulating();
             if (!redo)
                 wotmCaptureFrame(rdram);
             // pause (F7/F6/F8, wotm_foto.inc): the finished frame stays on screen and the next one doesn't start. A frame with a stop counts as 1 field:

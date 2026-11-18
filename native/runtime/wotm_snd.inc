@@ -372,6 +372,9 @@ void wotmSndInstall(PS2Runtime &runtime)
 // Game frame boundary in deterministic mode (wotm_sync.inc): the engine advances by `fields` fields; a resimulated frame (rollback) is
 // mixed but not heard
 void wotmSoundFrame(unsigned fields, bool output) { wotm::snd::Engine::get().advanceFrame(fields, output); }
+// Rollback (wotm_rollback.inc): the engine as a snapshot piece, and how many banks were loaded or unloaded so far (a change is a barrier)
+wotm::rollback::Piece wotmSoundRollbackPiece() { return wotm::snd::Engine::get().rollbackPiece(); }
+uint32_t wotmSoundBankGeneration() { return wotm::snd::Engine::get().bankGeneration(); }
 // This PC's effects and music volume (AUDIO tab, WOTM_VOL_SFX / WOTM_VOL_MUSIC) into the engine; every presented frame (wotm_live.inc),
 // so a panel change is heard at once. The engine only refreshes the playing sounds when a value changes.
 void wotmApplyAudioSettings()
@@ -394,5 +397,10 @@ void wotmSndInstall(PS2Runtime &)
     std::fprintf(stderr, "[snd] native sound off: native/wotm_snd.hpp is missing (WOTM_NATIVE_DIR)\n");
 }
 void wotmSoundFrame(unsigned, bool) {}
+#if __has_include("wotm_rollback.hpp")
+#include "wotm_rollback.hpp"
+wotm::rollback::Piece wotmSoundRollbackPiece() { return {"sound engine", [](wotm::rollback::Writer &) {}, [](wotm::rollback::Reader &) {}}; }
+uint32_t wotmSoundBankGeneration() { return 0; }
+#endif
 void wotmApplyAudioSettings() {}
 #endif

@@ -52,6 +52,7 @@ for p in $pieces; do
         line=${first%%:*}
         sed -n "$((line + 1)),$((line + 8))p" "$log" | grep '^\[synctest\]   ' | cut -c1-160 || true
     else
-        echo "no mismatch in ${seconds}s ($(grep -c '^\[synctest\] frame' "$log" 2>/dev/null || echo 0) cost lines)"
+        lines=$(grep -c '^\[synctest\] frame' "$log" 2>/dev/null) || true   # grep -c prints 0 itself when nothing matches
+        echo "no mismatch in ${seconds}s (${lines:-0} cost lines)"
     fi
 done

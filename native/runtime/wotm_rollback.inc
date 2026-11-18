@@ -137,9 +137,10 @@ namespace wotm_rollback
         {
             logRanges(original, redone);
             std::fprintf(stderr, "[synctest]   guest calls queued so far: interrupt %u, alarm %u, GS callback %u, RPC callback %u, syscall %u, exit %u, "
-                         "HLE %u (last at 0x%x)\n",
+                         "HLE %u, SIF command %u (last at 0x%x)\n",
                          g_wotmInvocations[0].load(), g_wotmInvocations[1].load(), g_wotmInvocations[2].load(), g_wotmInvocations[3].load(),
-                         g_wotmInvocations[4].load(), g_wotmInvocations[5].load(), g_wotmInvocations[6].load(), g_wotmLastInvocationPc.load());
+                         g_wotmInvocations[4].load(), g_wotmInvocations[5].load(), g_wotmInvocations[6].load(), g_wotmInvocations[7].load(),
+                         g_wotmLastInvocationPc.load());
         }
     }
 
@@ -289,7 +290,7 @@ namespace wotm_rollback
         add(rb::memoryPiece("modifiers: gravity", &wotm_modifiers::g_gravityWritten, sizeof wotm_modifiers::g_gravityWritten));
         add(fastClipsPiece());
         add(atomicPiece("intro skip armed", wotm_training::g_introArmed));
-        add(wotm::snd::Engine::get().rollbackPiece());
+        add(wotmSoundRollbackPiece());
         std::fprintf(stderr, "[synctest] snapshot: %zu pieces:", g_state.size());
         for (size_t i = 0; i < g_state.size(); ++i)
             std::fprintf(stderr, "%s %s", i ? "," : "", g_state.piece(i).name.c_str());
@@ -306,7 +307,7 @@ namespace wotm_rollback
     void init(PS2Runtime &runtime)
     {
         const char *e = std::getenv("WOTM_SYNCTEST");
-        if (!e || !*e)
+        if (!e || std::atoi(e) <= 0)   // unset or 0: off
             return;
         if (!wotm_sync::g_fixedStep || wotm_sync::g_net)
         {
@@ -342,6 +343,10 @@ namespace wotm_rollback
     {
         if (!g_test || !wotm_sync::g_levelLoaded)
             return;
+        // timerWaitForMinUpdateRate is also called by the menus (uiMain) and the shell's loop: only rtMain's call is a fight frame, and a
+        // snapshot restored from another caller would resume on another host call chain
+        if (GPR_U32(ctx, 31) - kFightLoop >= kFightLoopSize)
+            return barrier("frame outside the fight loop");
         if (g_state.size() == 0)
         {
             g_ctx = ctx;
@@ -354,7 +359,7 @@ namespace wotm_rollback
             barrier("thread change");
             return;
         }
-        if (const uint32_t banks = wotm::snd::Engine::get().bankGeneration(); banks != g_soundBanks)
+        if (const uint32_t banks = wotmSoundBankGeneration(); banks != g_soundBanks)
         {
             g_soundBanks = banks;
             barrier("sound bank change");
@@ -365,6 +370,11 @@ namespace wotm_rollback
         {
         case rb::SyncTest::Step::Resimulated:
             return;
+        case rb::SyncTest::Step::Overshot:
+            ++g_mismatches, ++g_mismatchesTotal;
+            std::fprintf(stderr, "[synctest] MISMATCH: the redo reached frame %u without passing frame %u, where it started\n", frame,
+                         g_test->target());
+            break;
         case rb::SyncTest::Step::Compare:
         {
             g_resim.add(ms(g_restoreEnd, t0));
@@ -395,10 +405,10 @@ namespace wotm_rollback
         if (frame == g_traceFrame)
             g_traceDone[0] = true;
         g_state.save(g_slots[g_test->slot(frame)], frame);
-        if (frame % 3000u == 0u)   // the pieces' sizes now and then (the sound engine's and the upper RAM's vary)
-            logSizes(g_slots[g_test->slot(frame)]);
         const auto t1 = clk::now();
         g_save.add(ms(t0, t1));
+        if (frame % 3000u == 0u)   // the pieces' sizes now and then (the sound engine's and the upper RAM's vary)
+            logSizes(g_slots[g_test->slot(frame)]);
         if (!g_test->resimulating())
         {
             g_presentStart = t1;
@@ -407,7 +417,9 @@ namespace wotm_rollback
         }
         if (!g_state.load(g_slots[g_test->slot(g_test->back())]))
         {
-            std::fprintf(stderr, "[synctest] the snapshot of frame %u can't be restored: synctest off\n", g_test->back());
+            // some pieces may be restored and others not: the game can't go on from that
+            std::fprintf(stderr, "[synctest] MISMATCH: the snapshot of frame %u can't be restored: the game stops\n", g_test->back());
+            g_runtime->requestStop();
             g_test.reset();
             return;
         }

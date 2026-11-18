@@ -59,6 +59,13 @@ struct Reader {
         return v;
     }
     template <class T> void pod(T &v) { v = pod<T>(); }
+    // a count of items of at least `each` bytes that follow: 0 and not ok when the bytes left can't hold that many
+    uint32_t count(size_t each) {
+        const uint32_t n = pod<uint32_t>();
+        if (ok && n <= static_cast<size_t>(end - p) / std::max<size_t>(each, 1)) return n;
+        ok = false;
+        return 0;
+    }
     Blob blob() {
         const auto i = pod<uint32_t>();
         if (i < blobs.size()) return blobs[i];
@@ -130,6 +137,8 @@ public:
     // a and b were saved from this State; a difference past the last piece (piece == size()) is in the shared data
     Diff compare(const Snapshot &a, const Snapshot &b) const {
         Diff d;
+        if (a.ends.size() != b.ends.size())
+            return {false, std::min(a.ends.size(), b.ends.size()), 0, 0};
         for (size_t i = 0; i < pieces_.size() && i < a.ends.size() && i < b.ends.size(); ++i) {
             const size_t atA = i ? a.ends[i - 1] : 0, atB = i ? b.ends[i - 1] : 0;
             const size_t na = a.ends[i] - atA, nb = b.ends[i] - atB;
@@ -168,6 +177,7 @@ public:
         SaveAndBack,   // save it, then restore `back()` and run the frames up to this one again
         Resimulated,   // a frame on the way back to the target: nothing to do
         Compare,       // back at the target: compare the state with the one saved here
+        Overshot,      // a redo reached a later frame than the target without passing it: it diverged (the history starts over)
     };
 
     explicit SyncTest(uint32_t frames) : n_(std::max<uint32_t>(frames, 1u)) {}
@@ -180,9 +190,10 @@ public:
 
     Step boundary(uint32_t frame) {
         if (resim_) {
-            if (frame != target_) return Step::Resimulated;
+            if (frame < target_) return Step::Resimulated;
             resim_ = false;
-            return Step::Compare;
+            if (frame != target_) started_ = false;
+            return frame == target_ ? Step::Compare : Step::Overshot;
         }
         if (!started_) {
             started_ = true;
