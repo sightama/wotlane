@@ -813,12 +813,24 @@ namespace wotm_net
                 lead = std::max(lead, m.inputs.nextMissing(static_cast<int>(i)));
                 frame = std::min(frame, m.inputs.nextMissing(static_cast<int>(i)));
             }
+        // each member's trail, less what its longer path to the server alone accounts for
+        uint32_t minRtt = 0xFFFFFFFFu;
+        for (const Slot &s : m.slots)
+            if (!s.gone && s.peer)
+                minRtt = std::min(minRtt, rttHighOf(s.peer));
         std::vector<Holdback::Member> members;
         for (size_t i = 0; i < m.slots.size(); ++i)
         {
             const Slot &s = m.slots[i];
             const bool active = !s.gone && s.peer;
-            members.push_back({active ? lead - m.inputs.nextMissing(static_cast<int>(i)) : 0u, s.away, active});
+            uint32_t behind = 0;
+            if (active)
+            {
+                behind = lead - m.inputs.nextMissing(static_cast<int>(i));
+                const uint32_t path = Holdback::latencyFrames(rttHighOf(s.peer), minRtt, proto::frameMs(m.step));
+                behind = behind > path ? behind - path : 0u;
+            }
+            members.push_back({behind, s.away, active});
         }
         const double t = std::chrono::duration<double>(now.time_since_epoch()).count();
         const int hz = 60 / std::max(1, m.step);

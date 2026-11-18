@@ -36,11 +36,26 @@ namespace wotm_net
             double pace = 0;       // the match's frames per second over the window (Slow)
         };
 
+        // The frames a member's inputs trail just from its longer path to the server (its round trip against the shortest one, one
+        // way): a healthy device on a far connection trails this much, so it isn't counted against it
+        static uint32_t latencyFrames(uint32_t rttMs, uint32_t minRttMs, double frameMs)
+        {
+            return rttMs > minRttMs && frameMs > 0 ? static_cast<uint32_t>((rttMs - minRttMs) / 2.0 / frameMs) : 0u;
+        }
+
         // t: seconds (any origin); frame: the match's frame (the first one some member's input is missing for); hz: the match's rate
         Decision update(double t, uint32_t frame, int hz, const std::vector<Member> &members)
         {
+            // the match moves once every page has loaded the stage and sent a real input: until then a page still loading holds every
+            // frame back without being slow, so the grace counts from the first frame the match plays
+            if (!seen_)
+                seen_ = true, firstFrame_ = frame;
             if (!started_)
+            {
+                if (frame <= firstFrame_)
+                    return {};
                 started_ = true, start_ = t;
+            }
             awaySince_.resize(members.size(), -1.0);
             for (size_t i = 0; i < members.size(); ++i)
                 awaySince_[i] = members[i].active && members[i].away ? (awaySince_[i] < 0 ? t : awaySince_[i]) : -1.0;
@@ -106,7 +121,8 @@ namespace wotm_net
             return {slot, reason, pace};
         }
 
-        bool started_ = false;
+        bool seen_ = false, started_ = false;
+        uint32_t firstFrame_ = 0;
         double start_ = 0;
         std::deque<Sample> samples_;
         std::vector<double> awaySince_;
