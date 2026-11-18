@@ -2028,8 +2028,8 @@ static bool wotmDrawNative(const uint8_t *rdram)
         }
         suspend = suspend || paced;
 #endif
-        const bool want = wotm::settings::on(wotm::settings::Interp) && (presentHz > 60 || (presentHz > 0 && slowGame)) && !suspend &&
-                          !wotm_live::g_localCollect;
+        const bool want = wotm::interp::wanted(wotm::settings::on(wotm::settings::Interp), presentHz, slowGame, suspend, wotm_live::g_localCollect,
+                                               wotm::settings::g_netProfile.load(std::memory_order_relaxed));
         wotm_live::g_interpCull.store(want, std::memory_order_relaxed);
         const bool trainOverlay = wotm_training::g_on.load(std::memory_order_relaxed) &&
                                   (wotm_training::g_opts.load(std::memory_order_relaxed) &

@@ -280,10 +280,24 @@ namespace wotm_sync
     PS2Runtime::RecompiledFunction g_origSyncV = nullptr;
     uint32_t g_syncCalls = 0;
 
+    // timer1Handler, at the end of every rtMain frame, waits here for the next vsync, after the frame is complete and before
+    // timerWaitForMinUpdateRate captures it for drawing. In fixed step the frame is paced at its boundary instead, after the capture
+    // (wotm_overrides.cpp waitMinRateByVblanks), so this call only counts the parity: the finished frame reaches the screen without
+    // waiting for a vsync, and a frame that runs past its budget doesn't wait for one more. Only rtMain's call: the dialog and menu loops
+    // (ShellRtLoop, uiMain) keep their own wait
+    constexpr uint32_t kTimer1HandlerSize = 0xC0u;   // kTimer1Handler: wotm_overrides.cpp
+    bool g_timer1InFight = false;   // the running timer1Handler was called by rtMain (wotm_overrides.cpp timer1HandlerNative)
+
     void syncVParity(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         const bool entry = ctx->pc == kSyncV;
         const uint32_t ra = GPR_U32(ctx, 31);
+        if (entry && g_timer1InFight && ra - kTimer1Handler < kTimer1HandlerSize)
+        {
+            SET_GPR_U32(ctx, 2, g_syncCalls++ & 1u);
+            ctx->pc = ra;
+            return;
+        }
         g_origSyncV(rdram, ctx, runtime);
         if (entry && ctx->pc == ra)
             SET_GPR_U32(ctx, 2, g_syncCalls++ & 1u);
@@ -617,6 +631,11 @@ namespace wotm_sync
             std::fprintf(stderr, "[net] frame %u: %u waits for the network, %.0f ms in total\n", frame, g_netStalls, g_netStallMs);
     }
 
+    // the game frames by length since the match started (netPace, for the page): without their network waits, in frame periods, up to
+    // 1.25, 1.75, 2.25 and longer; a frame that rounds up to a whole extra vsync lands in the third. Pauses and hidden tabs land in
+    // the last. Reset at the match start (levelLoad)
+    uint32_t g_framePeriods[4] = {};
+    double g_framePeriodAt = 0.0, g_framePeriodStallMs = 0.0;
     // Every frame: notes a change of this player's input delay (the server's Pace advice). Every 600 frames: the delay, ping and the
     // stalls of the window, the numbers the felt lag comes from (tools/net_check.py sums them up per player)
     constexpr uint32_t kPaceFrames = 600u;
@@ -624,7 +643,21 @@ namespace wotm_sync
     void netPace(uint32_t frame)
     {
 #ifdef __EMSCRIPTEN__
-        wotmWebNetStats(frame, g_netStalls, g_netStallMs, g_net->delay(), g_net->rttMs());   // for the page's diagnostics report
+        // For the page's diagnostics report: the game thread's idle time (the EE scheduler's, EeSchedulerGame.cpp wotmIdleWait), its
+        // frames by length (g_framePeriods) and the vblank clock's wakes (how late a timer wakes on this browser and system)
+        const double now = wotm::latency::nowMs();
+        const double period = 1000.0 / 60.0 * wotm::modifiers::vsyncsPerFrame(g_fixedStep, g_mods);
+        if (g_framePeriodAt > 0.0)
+        {
+            const double r = (now - g_framePeriodAt - (g_netStallMs - g_framePeriodStallMs)) / period;
+            ++g_framePeriods[r <= 1.25 ? 0 : r <= 1.75 ? 1 : r <= 2.25 ? 2 : 3];
+        }
+        g_framePeriodAt = now;
+        g_framePeriodStallMs = g_netStallMs;
+        wotmWebNetStats(frame, g_netStalls, g_netStallMs, g_net->delay(), g_net->rttMs(), ::g_wotmIdleUs.load(std::memory_order_relaxed) / 1000.0,
+                        g_framePeriods, ::g_wotmVblankLateUs.load(std::memory_order_relaxed) / 1000.0,
+                        static_cast<double>(::g_wotmVblankWakes.load(std::memory_order_relaxed)),
+                        static_cast<double>(::g_wotmVblankSlowWakes.load(std::memory_order_relaxed)));
 #endif
         if (const uint32_t d = g_net->delay(); d != wotm_netstatus::g_delay.load())
         {
@@ -839,6 +872,8 @@ namespace wotm_sync
         {
             netStart();
             latencyReset();
+            std::fill(std::begin(g_framePeriods), std::end(g_framePeriods), 0u);
+            g_framePeriodAt = 0.0;
         }
         g_inputs = wotm_net::InputTimeline(kControllers, g_inputDelay);
         for (const InputRecord &r : g_inputPlay)

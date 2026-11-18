@@ -74,6 +74,7 @@
   .chip.good { border-color: var(--good); color: var(--good); }
   .chip.warn { border-color: var(--warn); color: var(--warn); }
   .chip.bad { border-color: var(--bad); color: var(--bad); }
+  #braveNote { margin: 0; padding: 8px 12px; border: 1px solid var(--warn); border-radius: 6px; color: var(--warn); font-size: 13px; }
   #lobbyWarnings { margin: 0; padding: 8px 12px; list-style: none; border: 1px solid var(--bad); border-radius: 6px; color: var(--bad); font-size: 13px; }
   #lobbyWarnings:empty { display: none; }
   #chatLog { margin: 0; padding: 0; list-style: none; max-height: 8em; overflow-y: auto; font-size: 13px; overflow-wrap: anywhere; }
@@ -123,6 +124,7 @@
 <div id="front">
   <div id="home" class="card">
     <h1>War of the Monsters</h1>
+    <p id="braveNote" hidden role="note"></p>
     <div class="row">
       <label>Name <input id="name" maxlength="16" autocomplete="nickname"></label>
       <label>Monster <select id="monster"></select></label>

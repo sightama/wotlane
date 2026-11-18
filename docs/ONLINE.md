@@ -144,10 +144,12 @@ to the console) and starts once that many players are in; `--code <code> --name 
   refuses the join with "game configuration differs from the others: the mods (creations) differ".
 - Debug keys that change the game or pause it are off: F1 (cheats), F5 (free camera), F6/F7/F8 (pause, step, photo).
 - Input delay: 1 frame on a LAN, about 3 to 8 over the internet (each frame is 16.7 ms; 33 ms with 3 or more players, where the game
-  runs its own 30 Hz mode, as it does when a phone or tablet is in the match). Each player has their own: the time their input takes to reach the slowest other player (half their ping
-  plus half that player's, at the high end of the last few seconds). The server re-measures every half second and the game moves the
-  delay one frame at a time, on a frame where your buttons did not change, so a press is not lost or doubled (a delay that must
-  grow while the buttons keep changing for 30 frames goes ahead anyway).
+  runs its own 30 Hz mode, as it does when a phone or tablet is in the match). Each player has their own: the time their input takes to
+  reach the slowest other player (half their ping plus half that player's, at the level their ping stays at or under 4/5 of the last 8
+  s: a spike shorter than that costs a short wait instead of a frame of delay for everyone; once raised, the delay comes down only when
+  at most one sample of the last 8 s is still high, so spikes that keep coming hold it instead of moving it up and down). The server
+  re-measures every half second and the game moves the delay one frame at a time, on a frame where your buttons did not change, so a
+  press is not lost or doubled (a delay that must grow while the buttons keep changing for 30 frames goes ahead anyway).
 - **30 Hz with a phone or a slow computer:** every game frame of an online match is exactly 1/60 s of game time (fixed step, so every
   PC computes the same thing), so a device that computes fewer than 60 game frames a second would slow the whole match down, sound included. A
   phone or tablet (`web/lobby.js` `phoneDevice`: the browser's mobile flag, an Android or mobile User-Agent, or touch as the primary
@@ -161,13 +163,15 @@ to the console) and starts once that many players are in; `--code <code> --name 
   (`native/net/wotm_net_holdback.hpp`, sampled every 100 ms) drops a member whose game is in the background for over 3 s while it holds
   everyone back (alone at the back in at least 60% of those samples; a game that keeps up in the background is left alone), or the one
   the others keep waiting on (alone at the back in at least 60% of the samples) while the match's pace stays under 75% of its rate for
-  15 s. It is the same path as leaving: that monster is neutral from the first frame the server lacks, on every page, and the others
-  play on. The dropped page stops with the reason ("your device or connection could not keep up", or "your game was in the
-  background"); the server logs it and writes `event=dropped` to the match's diagnostics. Not in the first 10 s after the match starts
-  moving (a page still loading the stage holds every frame back without being slow), so a slow drop comes 25 s in at the earliest;
-  a member's trail is counted less the frames its longer path to the server alone accounts for (a far but healthy player is not
-  named). Never down to one player: a 2-player match is never cut. Two slow members in one match take turns at the back, so neither
-  is named.
+  15 s. One outage is not slowness: the window's longest freeze, from 1 s to 7.5 s, is left out of the pace and of who was at the back,
+  once a minute for the whole match (a connection held for 6 s keeps its player); a second freeze within the minute (anyone's), a
+  freeze past 7.5 s (named once it passes 7.5 s) and a device slow all along still count. It is the same path as leaving: that monster
+  is neutral from the first frame the server lacks, on every page, and the others play on. The dropped page stops with the reason
+  ("your device or connection could not keep up", or "your game was in the background"); the server logs it and writes `event=dropped`
+  to the match's diagnostics. Not in the first 10 s after the match starts moving (a page still loading the stage holds every frame
+  back without being slow), so a slow drop comes 25 s in at the earliest; a member's trail is counted less the frames its longer path
+  to the server alone accounts for (a far but healthy player is not named). Never down to one player: a 2-player match is never cut.
+  Two slow members in one match take turns at the back, so neither is named.
 - **5 to 8 players:** the game itself only has 4 player slots and 4 cameras. Players 5 to 8 drive monsters in the computer-player slots
   (same controls and moves as players 1 to 4), and their screen uses a camera made by wotlane that follows from behind and above, since
   the game has no camera for them. It does not avoid buildings like the game's camera does, which is why it stays high. Every PC
@@ -185,23 +189,28 @@ to the console) and starts once that many players are in; `--code <code> --name 
 When an online match goes badly (lag, stutter, a freeze) the server holds what every player's page and the server itself saw, so the
 cause can be read afterwards without asking anyone to copy logs.
 
-- **What a page sends.** The browser version sends `DIAG <key=value>...` lines over its lobby connection (`web/diag.js`; the lines
-  are never relayed and never answered): once on joining a lobby (`why=join`: the device and the build), every 5 s of a match
+- **What a page sends.** The browser version sends `DIAG <key=value>...` lines over its lobby connection (`web/diag.js`; the lines are
+  never relayed and never answered): once on joining a lobby (`why=join`: the device and the build), every 5 s of a match
   (`why=periodic`) and once when the match ends (`why=end`, with the device again). A periodic report holds, for the last 5 s: `fps`
-  (frames presented) and `gfps` (game frames computed per second; `hz` is what it should be, 60 or 30), `work_ms` (the game loop's
-  time per presented frame), `waits` and `wait_ms` (how often and for how long the game was blocked waiting for the other players'
-  input; `waits_tot` and `wait_tot_ms` since the start), `delay` (input delay, frames), `ping_ms`, `ping_max_ms` and `jitter_ms` (the round
-  trip the server measures and sends each player every 500 ms: a browser can't time its WebSocket pings itself), `late`
-  (animation frames that took over 25 ms), `raf_med_ms` (the median interval: the rate the page really gets, about 33 under a 30 fps
-  power-saving cap), `raf_p95_ms` and `raf_max_ms`, `lt_n`, `lt_ms` and `lt_max_ms` (main-thread tasks over
-  50 ms, Chrome and Edge only), `au_cb`, `au_gaps` and `au_max_ms` (audio callbacks, and the ones later than 1.5 buffers, which are
-  dropped buffers), `hid_s` (seconds the tab was hidden), `focus_pct` (share of samples with the page focused), `lag_ms` and
-  `lag_max_ms` (how late a task posted to the page ran: the match WebSocket waits in that queue), the input latency (below), plus
-  `up_s`, `frame`, `build`, `players`. The device is the class of device:
-  `touch`, `mobile`, `os`, `ua` (browser name and major version, for example `Chrome-131`; never the user agent string), `cores`,
-  `mem_gb`, `dpr`, `scr` (window size), `net`, `dl_mbps` and `est_rtt_ms` (the browser's own connection estimate), `gpu` (the GPU model
-  from WebGL, `software ...` when the browser draws without one: hardware acceleration off or the GPU blocked). A field the browser
-  can't give is left out.
+  (frames presented) and `gfps` (game frames computed per second; `hz` is what it should be, 60 or 30), `work_ms` (the game loop's time
+  per presented frame), `ee_busy_ms` and `ee_idle_ms` (the game thread's own time per game frame: busy, and idle waiting for a vblank
+  or an event; wall time: the window less those idle waits and the waits for the network, so a device whose game thread can't keep up
+  shows a busy time near the frame's 16.7 or 33.3 ms), `fr_len` (the game frames by length, without their network waits: how many took
+  up to 1.25, 1.75, 2.25 and more frame periods; frames that round up to a whole extra vsync land in the third, pauses and hidden tabs
+  in the last), `vbl_late_ms` and `vbl_slow` (how late, on average, the game's vblank clock woke past its target, and how many of its
+  wakes were over half a vblank late: under a ms on a fine timer, several ms on a coarse system timer), `waits`
+  and `wait_ms` (how often and for how long the game was blocked waiting for the other players' input; `waits_tot` and `wait_tot_ms`
+  since the start), `delay` (input delay, frames), `ping_ms`, `ping_max_ms` and `jitter_ms` (the round trip the server measures and
+  sends each player every 500 ms: a browser can't time its WebSocket pings itself), `late` (animation frames that took over 25 ms),
+  `raf_med_ms` (the median interval: the rate the page really gets, about 33 under a 30 fps power-saving cap), `raf_p95_ms` and
+  `raf_max_ms`, `lt_n`, `lt_ms` and `lt_max_ms` (main-thread tasks over 50 ms, Chrome and Edge only), `au_cb`, `au_gaps` and
+  `au_max_ms` (audio callbacks, and the ones later than 1.5 buffers, which are dropped buffers), `au_buf_ms` (the length of one audio
+  buffer), `hid_s` (seconds the tab was hidden), `focus_pct` (share of samples with the page focused), `lag_ms` and `lag_max_ms` (how
+  late a task posted to the page ran: the match WebSocket waits in that queue), the input latency (below), plus `up_s`, `frame`,
+  `build`, `players`. The device is the class of device: `touch`, `mobile`, `os`, `ua` (browser name and major version, for example
+  `Chrome-131`; never the user agent string), `cores`, `mem_gb`, `dpr`, `scr` (window size), `net`, `dl_mbps` and `est_rtt_ms` (the
+  browser's own connection estimate), `gpu` (the GPU model from WebGL, `software ...` when the browser draws without one: hardware
+  acceleration off or the GPU blocked). A field the browser can't give is left out.
 - **Input latency.** The `lat_` fields follow each button or key that went down in the window, from the moment the page saw it to the
   first present that draws the game frame applying it (`native/wotm_latency.hpp`; the page gives the time of each keydown and of each pad
   button it sees go down, `wotm_web_input_at`, and the game takes the earliest one since its previous sample; a pad counts from its own
@@ -216,10 +225,11 @@ cause can be read afterwards without asking anyone to copy logs.
   the compositor and the display add their own time after it, which a page can't see. Measured on this computer by
   `node tools/browser_mp_test/latency.mjs` (tabs behind `tools/net_lagproxy.py --tcp` links with a round trip, jitter and spikes).
 - **What the server adds.** Every 5 s of a started match, one line per player: `transport` (ws or enet), `hz`, `delay`, `rtt_ms`,
-  `rtt_high_ms`, `in_pkts` (input packets since the last line), `in_gap_avg_ms` and `in_gap_max_ms` (how far apart the player's input
-  packets arrived), `behind_max` and `behind_avg` (frames the player's inputs trailed the player furthest ahead, sampled every 100 ms;
-  in lockstep this is who the others wait for) and `away`. Events: `join` (with `half_rate`), `match_start`, `start`, `delay` (each
-  delay change), `away`, `left`, `desync`, `match_over`.
+  `rtt_high_ms`, `rtt_level_ms` (the round trip the delay covers: what the ping stays at or under 4/5 of the last 8 s), `in_pkts`
+  (input packets since the last line), `in_gap_avg_ms` and `in_gap_max_ms` (how far apart the player's input packets arrived),
+  `behind_max` and `behind_avg` (frames the player's inputs trailed the player furthest ahead, sampled every 100 ms; in lockstep this
+  is who the others wait for) and `away`. Events: `join` (with `half_rate`), `match_start`, `start`, `delay` (each
+  delay change, with the `rtt_level_ms` it covers), `away`, `left`, `desync`, `match_over`.
 - **Where it goes.** Every line is journaled (`journalctl -u wotlane-server`, lines starting `[diag]`). With `--diag-dir <folder>`
   (the live server uses `/var/log/wotlane`) each line is also appended, with a UTC time, to that lobby's file: `<UTC time>-<code>-lobby.log`
   until the match starts, then `<UTC time>-<code>-match.log`. Files older than `--diag-days` (default 7) are deleted, and the oldest go
@@ -228,8 +238,8 @@ cause can be read afterwards without asking anyone to copy logs.
   file is written.
 - **Privacy.** The lines hold the player's chosen name, the browser and device class above, and timings; no address, no user agent
   string, no language, and never chat text (the server's chat code is the only place that reads it, and it writes nothing). A DIAG line
-  is checked by `native/net/wotm_net_diag.hpp`: keys are lower-case words, values are short tokens of letters, digits and `. _ : , / + -`,
-  at most 64 fields; anything else is dropped. The keys the server's own lines use (`src`, `lobby`, `player`, `event`, `slot`,
+  is checked by `native/net/wotm_net_diag.hpp`: keys are lower-case words, values are short tokens of letters, digits and `. _ : , / +
+  -`, at most 80 fields; anything else is dropped. The keys the server's own lines use (`src`, `lobby`, `player`, `event`, `slot`,
   `transport`) can't be repeated by a report. A connection may send 10 DIAG lines per 10 s.
 - **Who the line is about.** From a connection in a lobby the server writes `src=client lobby=<code> player=<name>` itself. A report
   from a connection in no lobby (a page back on its front panel after a match) says which lobby and player it was, and nothing proves

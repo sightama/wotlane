@@ -82,7 +82,9 @@ For online play start `wotm_server --ws-port <port>`; a page opened from `localh
   (`interp::PaceGuard`, `wotm_interp.hpp`): a moving average over 1.4 periods suspends it (the scene goes back to one redraw per game
   frame, presented at the display rate), and it is tried again after 10 s, twice as long after each failed try (up to 160 s), with an
   `[interp]` line in the log each time. The Settings page's Frame rate (`WOTM_HZ`: Display rate or 60) caps the rate the drawing assumes (an unmeasured display counts as 60), so 60 turns
-  interpolation off; Vsync has no effect in the browser. Online matches stay in step because nothing the drawing does reaches the game.
+  interpolation off; Vsync has no effect in the browser. Online matches stay in step because nothing the drawing does reaches the game,
+  and they never blend (`interp::wanted`): the newest game frame goes to the screen as soon as it is captured, since showing it a frame late
+  is input lag.
   The rate is measured once: a window moved to a screen with another rate keeps the first one until the next Play. Measuring the rate
   from frame times follows nfsu2-web (`web/src/app/display.ts`, https://github.com/th0mk/nfsu2-web, MIT License, Copyright (c) th0mk).
 - **Graphics:** the native layer's GL calls go to WebGL2 (`native/wotm_glad_web.cpp`); its GLSL 330 shaders become GLSL ES 3.00
@@ -162,25 +164,28 @@ from `version.json` in `WOTM_BUILDID`.
 
 **Device health:** a second chip says how the member's browser ran its last online match, so a device that can't keep up shows before the match starts. `web/rate.js` (`RateMemory`, fed every diag window) keeps the median of the last minute of the device's own frames a second (`ownRate`: frames over the time not spent waiting for the network), its ms of work per frame and the match's Hz in localStorage (`wotlane.deviceHealth`), once a match has run 20 s past its loading seconds. On joining a lobby the page sends `HEALTH <own fps> <work ms> <hz>` (numbers in range, else an ERROR); once a second the server sends the lobby `HEALTH <code> <name:fps:work_ms:hz,...>` for the members that sent one. The page judges the numbers against the match's rate (`deviceLevel`): green from 92% of it, red under 75%, and work per frame over 72% of the frame time is yellow, over 95% red (a 30 Hz phone is judged against 30). A red device gets a warning for everyone; a member who has never played online shows "device not measured yet". The numbers come from the member's own page, so they are a hint, not a check. `HEALTH` is an extra line for older clients to skip.
 
+**Brave:** Brave's Shields (and the masked graphics it reports) slowed online matches on some computers to a few frames a second. `web/brave.js` asks `navigator.brave.isBrave()`; a Brave player's own front panel shows the notice "Brave's Shields can slow this game a lot. For the best experience use Chrome, Edge or Firefox, or turn Shields off for playwotm.com and enable graphics acceleration.", and on joining a lobby the page sends `BRAVE`. The server relays `BRAVE <code> <names,...>` each second with the pings, and the owner's member list marks those members with a "Brave" chip (guests see none). `BRAVE` is an extra line; a server from before it answers `ERROR unknown command: BRAVE`, which the page ignores (the notice still shows, the owner's chip does not).
+
 **Owner controls:** while the lobby waits, the owner has Make owner and Remove on every other member's row (each asks "Sure?" once). `OWNER <name>` makes that member the owner: the server answers everyone with `MEMBERS`, and the page of the old owner drops the stage, wins and Start controls. `KICK <name>` removes a member: the server sends them `KICKED <code> <seconds>`, takes them out of the lobby (the others get `MEMBERS`) and keeps their connection open, so they land on the Host/Join choice with the reason; a `JOIN` of that lobby under the same name is refused ("you were removed from this lobby; try again in N s") for `ServerConfig::kickBanMs` (60 s); the ban is the lobby's and goes when it closes. The ban is by name and by address: the server keeps the removed member's address in memory only (never logged or sent) and refuses a join from it under any name. The address is the TCP peer's, except when that peer is this machine (the Caddy in front of the server): then it is the client address Caddy passes on, Cloudflare's `CF-Connecting-IP`, else the first `X-Forwarded-For` hop (what Caddy sets for a client that reaches it without Cloudflare); a `CF-Connecting-IP` that is present but not an address gives no address (the `X-Forwarded-For` beside it would be Cloudflare's own edge); with neither header the ban is by name alone. Addresses are compared as lower case text, so IPv6 spellings and IPv4-mapped forms count as different addresses. Members behind one shared address (a household) are banned together for the minute. The server cannot tell whether a request came through Cloudflare, and Caddy passes `CF-Connecting-IP` on unchanged, so a client that reaches Caddy without Cloudflare (the origin address with the site's Host header) can put any address in it: it can dodge its own ban, or, from inside a lobby it gets kicked from, ban an address it knows for a minute in that lobby. Closing that is a Caddy change (accept the header only from Cloudflare's ranges), not a server one. Both commands are owner only and refused once the match has started. `KICK`, `OWNER`, `HEALTH` and `KICKED` are extra lines, so the protocol number stays 5.
 
 **Chat:** a text box in the lobby sends `CHAT <text>` (up to 200 bytes of printable text; the server drops control characters and trims the ends, and allows 5 lines per 10 s per member, then answers "chatting too fast"). The server sends `CHAT <code> <name> <text>` to everyone in the lobby, the sender too, and only while the lobby waits (`ERROR chat is only open before the match` after the start). The page shows the last 50 lines as plain text (`textContent`) and clears them when it joins a lobby. `CHAT` is an extra line for older clients to skip, so the protocol number stays 5.
 
-**Diagnostics:** the page reports how an online match runs to the server (`web/diag.js`, written up in `docs/ONLINE.md`, "Diagnostics"). It
-sends `DIAG` lines over the lobby connection, which stays open during the match: one on joining a lobby, one every 5 s of the match and a
-last one when it ends (`wotmDiagFinish`, called by `wotmQuit` and Leave the match in `boot.js` before the page reloads, with a 300 ms wait
-for the socket to empty; `pagehide` also sends it). `DiagReporter` samples every 500 ms (the ping, for its jitter) and builds each report
-from the difference of two samples. Its sources only read: the game loop's presented-frame counter (`globalThis.wotmFrames`), the match
-counters the game publishes (`wotmWebNetStats` in `native/wotm_web.h`, set every game frame in `netPace`, read through the exported
-`wotm_web_net_stat(i)`: frame, waits, wait ms, delay, ping), the input latency window (`latencySource`: `wotm_web_latency_take` then
-`wotm_web_latency(i)`, once per report; the page feeds the probe each keydown time in `boot.js` and each pad button press in `touch.js`
-through `wotm_web_input_at`, which only stores a time), `FrameWatch` (animation frame intervals), `LongTaskWatch` (a
-`PerformanceObserver` for `longtask`; Firefox has none, so those fields are left out), and `installAudioWatch`, which adds an `audioprocess`
-listener to each `ScriptProcessorNode` the game's audio makes (installed when the page loads; a callback later than 1.5 buffers counts as a
-dropped buffer; a page whose audio doesn't use script processors reports no `au_` fields). Nothing here writes to the game, so determinism is
-untouched; the wasm change adds counters and an export, and changes the build id like any change under `native/`. `LobbyClient.diag()` sends
-a line and stops sending once the server answers `ERROR unknown command: DIAG`; `sendDiag()` resolves once a `LIST` sent after the line is
-answered, which is how the page knows the server read it.
+**Diagnostics:** the page reports how an online match runs to the server (`web/diag.js`, written up in `docs/ONLINE.md`,
+"Diagnostics"). It sends `DIAG` lines over the lobby connection, which stays open during the match: one on joining a lobby, one every 5
+s of the match and a last one when it ends (`wotmDiagFinish`, called by `wotmQuit` and Leave the match in `boot.js` before the page
+reloads, with a 300 ms wait for the socket to empty; `pagehide` also sends it). `DiagReporter` samples every 500 ms (the ping, for its
+jitter) and builds each report from the difference of two samples. Its sources only read: the game loop's presented-frame counter
+(`globalThis.wotmFrames`), the match counters the game publishes (`wotmWebNetStats` in `native/wotm_web.h`, set every game frame in
+`netPace`, read through the exported `wotm_web_net_stat(i)`: frame, waits, wait ms, delay, ping, the game thread's idle ms), the input
+latency window (`latencySource`: `wotm_web_latency_take` then `wotm_web_latency(i)`, once per report; the page feeds the probe each
+keydown time in `boot.js` and each pad button press in `touch.js` through `wotm_web_input_at`, which only stores a time), `FrameWatch`
+(animation frame intervals), `LongTaskWatch` (a `PerformanceObserver` for `longtask`; Firefox has none, so those fields are left out),
+and `installAudioWatch`, which adds an `audioprocess` listener to each `ScriptProcessorNode` the game's audio makes (installed when the
+page loads; a callback later than 1.5 buffers counts as a dropped buffer; a page whose audio doesn't use script processors reports no
+`au_` fields). Nothing here writes to the game, so determinism is untouched; the wasm change adds counters and an export, and changes
+the build id like any change under `native/`. `LobbyClient.diag()` sends a line and stops sending once the server answers `ERROR
+unknown command: DIAG`; `sendDiag()` resolves once a `LIST` sent after the line is answered, which is how the page knows the server
+read it.
 
 **Send report** (`web/report_ui.js`): the card the front panel's Send report button (shown after a match; the page keeps the last report in
 `sessionStorage` under `wotlane.lastdiag`) and Settings, Online tab, open. It sends the last match's numbers, this device and a note of up
@@ -202,9 +207,11 @@ is reliable and ordered, so the server sends a browser each input once (an ENet 
 whose network stops is sent only pings, not a growing pile of repeats. A browser that comes back sends everything it queued at once; the
 server reads a connection 64 KB at a time, so any burst is fine (only a lobby line over 64 KB closes the connection).
 Each player has their own input delay, re-picked by the server every 500 ms from the round trips (`adviseDelay` in
-`native/net/wotm_net_proto.hpp`, `docs/ONLINE.md`): half their round trip plus half the slowest other player's, at the high end of the
-last 4 s, plus 3 ms. With everyone at a steady 20, 60 and 120 ms that is 2, 4 and 8 frames in a 1 vs 1 (60 Hz) and 1, 2 and 4 frames
-with 3 to 8 players (30 Hz); jitter adds to it. A match starts at the largest player's delay, and at least 2.
+`native/net/wotm_net_proto.hpp`, `docs/ONLINE.md`): half their round trip plus half the slowest other player's, at the level each round
+trip stays at or under 4/5 of the last 8 s (`RttWindow` riseLevel: up to 3 high samples of 16 are left out, so a short spike costs a
+wait instead of raising everyone's delay; the delay falls only for fallLevel, which leaves out one), plus 3 ms. With everyone at a
+steady 20, 60 and 120 ms that is 2, 4 and 8 frames in a 1 vs 1 (60 Hz) and 1, 2 and 4 frames with 3 to 8 players (30 Hz); jitter adds
+to it. A match starts at the largest player's delay, and at least 2.
 A Mac or Windows build that plays the site must be built from `wip/browser`: its build id (a hash of `native/`) differs from `wotlane/mac`'s, and the server refuses a different build.
 
 During a match:

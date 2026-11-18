@@ -230,6 +230,65 @@ namespace
         CHECK(runHoldback(g, t, frame, 10, 60, {0, 0, 0}, {false, true, false}).slot < 0);   // in the background, keeping up
     }
 
+    // normal play at 30 Hz where member 1 trails by a frame in 4 samples of 10 (its farther path): never named on its own
+    wotm_net::Holdback::Decision holdbackPlay(wotm_net::Holdback &h, double &t, uint32_t &frame, double secs, int phase = 0)
+    {
+        wotm_net::Holdback::Decision d;
+        for (int i = 0; i < static_cast<int>(secs * 10 + 0.5) && d.slot < 0; ++i)
+            d = runHoldback(h, t, frame, 0.1, 30, {0, (i + phase) % 10 < 4 ? 1u : 0u, 0}, {false, false, false}, 30);
+        return d;
+    }
+    wotm_net::Holdback::Decision holdbackFreeze(wotm_net::Holdback &h, double &t, uint32_t &frame, double secs)
+    {
+        return runHoldback(h, t, frame, secs, 0, {0, 3, 0}, {false, false, false}, 30);
+    }
+
+    // One network outage (a player's connection held for 6 s, the desync matrix's stall) freezes everyone with that player alone at
+    // the back, which over a 15 s window reads as 18 of 30 frames a second: it is not a slow device, so the window's longest freeze
+    // (1 s to half the window) is left out of the pace and of who was at the back, once a minute
+    TEST(holdback_keeps_a_player_through_one_outage)
+    {
+        wotm_net::Holdback h;
+        double t = 0;
+        uint32_t frame = 0;
+        CHECK(holdbackPlay(h, t, frame, 20).slot < 0);
+        CHECK(holdbackFreeze(h, t, frame, 6).slot < 0);   // the outage
+        CHECK(holdbackPlay(h, t, frame, 60).slot < 0);    // and the match goes on
+        CHECK(holdbackFreeze(h, t, frame, 7).slot < 0);   // another, a minute later
+        CHECK(holdbackPlay(h, t, frame, 30).slot < 0);
+    }
+
+    // Still named: freezes that keep coming (3 s every 5 s, whatever the phase), a long one every 20 s (only one a minute is excused),
+    // two close together, and one over half the window (a connection that is gone)
+    TEST(holdback_names_freezes_that_keep_coming_and_long_ones)
+    {
+        for (int phase = 0; phase < 10; phase += 3)
+        {
+            wotm_net::Holdback h;
+            double t = 0;
+            uint32_t frame = 0;
+            CHECK(holdbackPlay(h, t, frame, 20 + 0.1 * phase, phase).slot < 0);
+            wotm_net::Holdback::Decision d;
+            for (int i = 0; i < 10 && d.slot < 0; ++i)
+                if ((d = holdbackFreeze(h, t, frame, 3)).slot < 0)
+                    d = holdbackPlay(h, t, frame, 2, phase);
+            CHECK(d.slot == 1 && d.reason == wotm_net::Holdback::Reason::Slow);
+        }
+        const auto named = [](std::initializer_list<std::pair<bool, double>> steps) {
+            wotm_net::Holdback h;
+            double t = 0;
+            uint32_t frame = 0;
+            wotm_net::Holdback::Decision d = holdbackPlay(h, t, frame, 20);
+            for (const auto &s : steps)
+                if (d.slot < 0)
+                    d = s.first ? holdbackFreeze(h, t, frame, s.second) : holdbackPlay(h, t, frame, s.second);
+            return d.slot == 1;
+        };
+        CHECK(named({{true, 7}, {false, 13}, {true, 7}, {false, 13}, {true, 7}, {false, 13}}));   // 7 s every 20 s
+        CHECK(named({{true, 6}, {false, 3}, {true, 4}, {false, 15}}));                             // two in one window
+        CHECK(named({{true, 9}, {false, 15}}));                                                    // over half the window
+        CHECK(!named({{true, 7}, {false, 60}}));                                                   // just under: kept
+    }
     // never down to one player: in a 2-player match nobody is named, whatever happens
     TEST(holdback_never_leaves_a_match_with_one_player)
     {
@@ -613,17 +672,41 @@ namespace
         CHECK(p::adviseDelay(3, {40}, 0, f60) == 1u);       // nobody else to reach
     }
 
-    TEST(proto_rtt_window_keeps_the_highest_recent_round_trip)
+    // The delay rises for the round trip a player has 4/5 of the time (the last 16 samples, 8 s at the server's 500 ms): a spike shorter
+    // than that costs a short wait instead of raising everyone's delay, and a lasting rise counts within 2 s. It falls only once at
+    // most one high sample is left, so spikes that keep coming hold it up instead of moving it up and down. The first samples count at
+    // their high end.
+    TEST(proto_rtt_window_rises_for_four_fifths_and_falls_for_all_but_one)
     {
         p::RttWindow w;
-        CHECK(w.high() == 0u);
+        CHECK(w.riseLevel() == 0u && w.fallLevel() == 0u);
         w.add(40);
         w.add(90);
         w.add(50);
-        CHECK(w.high() == 90u);
+        CHECK(w.riseLevel() == 90u && w.fallLevel() == 90u);
         for (size_t i = 0; i < p::RttWindow::kSamples; ++i)
-            w.add(30);
-        CHECK(w.high() == 30u);   // the spike left the window
+            w.add(60);
+        CHECK(w.riseLevel() == 60u);
+        for (int i = 0; i < 3; ++i)
+            w.add(230);   // 68LN: one player's ping spikes to 130 to 230 ms every few seconds
+        CHECK(w.riseLevel() == 60u);   // three spikes in 8 s: no rise
+        w.add(230);
+        CHECK(w.riseLevel() == 230u && w.fallLevel() == 230u);   // a fourth: 2 s of it in 8 s is the player's ping now
+        for (int i = 0; i < 13; ++i)
+            w.add(60);
+        CHECK(w.riseLevel() == 60u && w.fallLevel() == 230u);   // three left: no new rise, but no fall yet
+        for (int i = 0; i < 2; ++i)
+            w.add(60);
+        CHECK(w.fallLevel() == 60u);   // one left: the delay may fall
+    }
+
+    // the advice rises for the rise levels and falls only as far as the fall levels allow
+    TEST(proto_advice_rises_for_the_rise_level_and_falls_for_the_fall_level)
+    {
+        const double f30 = 1000.0 / 30.0;
+        CHECK(p::adviseDelay(2, {230, 60}, {230, 60}, 1, f30) == 5u);   // (60 + 230) / 2 + 3 = 148 ms
+        CHECK(p::adviseDelay(5, {60, 60}, {230, 60}, 1, f30) == 5u);    // the spikes keep coming: it stays
+        CHECK(p::adviseDelay(5, {60, 60}, {60, 60}, 1, f30) == 3u);     // they stopped: 63 ms is 1.9 frames, 3 with half a frame spare
     }
 
     TEST(proto_pace_roundtrip)
@@ -2024,6 +2107,36 @@ namespace
         CHECK(readUntil(ms[0]->socket, "ERROR") == "ERROR the match has started");
     }
 
+    // BRAVE: a page that runs in the Brave browser says so (its Shields can slow the game a lot); the lobby relays the names each second
+    // with the pings (BRAVE <code> <names>), and the flag leaves with the member
+    TEST(lobby_members_see_who_runs_brave)
+    {
+        ServerConfig cfg = testConfig();
+        RunningServer rs(cfg);
+        CHECK(rs.ok);
+        LineSocket a, b, c;
+        CHECK(hello(c, cfg.port) == "WELCOME 0");
+        c.sendLine("BRAVE");
+        CHECK(readUntil(c, "ERROR") == "ERROR join a lobby first");
+        CHECK(hello(a, cfg.port) == "WELCOME 0");
+        const std::string code = createLobby(a, "Lobby", "Ana", 3);
+        CHECK(hello(b, cfg.port) == "WELCOME 1");
+        b.sendLine("JOIN " + code + " Bia 1");
+        CHECK(readUntil(b, "JOINED") == "JOINED " + code);
+        b.sendLine("BRAVE");
+        CHECK(readUntil(a, "BRAVE " + code + " ") == "BRAVE " + code + " Bia");
+        a.sendLine("BRAVE");
+        CHECK(readUntil(b, "BRAVE " + code + " Ana,Bia") == "BRAVE " + code + " Ana,Bia");
+        b.sendLine("LEAVE");
+        CHECK(readUntil(b, "LEFT") == "LEFT " + code);
+        b.sendLine("JOIN " + code + " Bia 1");   // back without saying it again: not listed
+        CHECK(readUntil(b, "JOINED") == "JOINED " + code);
+        std::string line;
+        for (int i = 0; i < 6 && line != "BRAVE " + code + " Ana"; ++i)   // lines sent before the LEAVE may still arrive
+            line = readUntil(a, "BRAVE " + code + " ");
+        CHECK(line == "BRAVE " + code + " Ana");
+    }
+
     // HEALTH <own fps> <work ms> <hz>: a page tells the lobby how its device ran its last match; the lobby relays every member's
     // numbers each second with the pings (HEALTH <code> <name:fps:work_ms:hz,...>); a member that sent none is left out; bad numbers
     // are refused
@@ -2533,9 +2646,9 @@ namespace
         for (size_t i = 0; i < diag::kMaxFields + 10; ++i)
             line += " k" + std::to_string(i) + "=1";
         CHECK(diag::parse(p::words(line), many) && many.fields.size() == diag::kMaxFields);
-        // a page's last report holds the window (web/diag.js windowFields, up to 39 with the input latency), the base (v, why, seq,
-        // build, lobby, name, hz, players) and the device (deviceFields, up to 12): all of it has to fit
-        CHECK(diag::kMaxFields >= 39u + 8u + 12u);
+        // a page's last report holds the window (web/diag.js windowFields, up to 44 with the input latency and the game thread's
+        // time), the base (v, why, seq, build, lobby, name, hz, players) and the device (deviceFields, up to 12): all of it has to fit
+        CHECK(diag::kMaxFields >= 44u + 8u + 12u);
         diag::Report none;
         CHECK(!diag::parse(p::words("DIAG"), none));
         CHECK(!diag::parse(p::words("DIAG Bad-Key=1"), none));

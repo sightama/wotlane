@@ -32,14 +32,15 @@ export function deviceLevel(health) {
 
 const rate = (h) => `${Math.round(h.fps)} fps of ${h.hz}`;
 
-// `pings`: name to ms (null: not measured); `healths`: name to health
-export function memberStatus(name, pings, healths) {
+// `pings`: name to ms (null: not measured); `healths`: name to health; `braves`: the names of the members on Brave
+export function memberStatus(name, pings, healths, braves = new Set()) {
   const ms = own(pings, name);
   const ping = pingLevel(ms);
   const h = own(healths, name);
   const level = deviceLevel(h);
   const text = { none: 'device not measured yet', good: 'device ok', warn: `device borderline: ${h && rate(h)}`, bad: `device too slow: ${h && rate(h)}` }[level];
-  return { ping: { level: ping, text: ping === 'none' ? '' : `${ms} ms` }, device: { level, text } };
+  const browser = braves.has(name) ? { level: 'warn', text: 'Brave', title: "Brave's Shields can slow the game a lot" } : { level: 'none', text: '', title: '' };
+  return { ping: { level: ping, text: ping === 'none' ? '' : `${ms} ms` }, device: { level, text }, browser };
 }
 
 export function lobbyWarnings(names, pings, healths) {
