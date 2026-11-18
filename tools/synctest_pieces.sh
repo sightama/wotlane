@@ -18,12 +18,14 @@ EOF
 
 seconds=75 out= jobs=2 pieces= extra=
 while [ $# -gt 0 ]; do
+    case $1 in --seconds|--out|--jobs) [ $# -ge 2 ] || { usage >&2; exit 2; } ;; esac
     case $1 in
         -h|--help) usage; exit 0 ;;
         --seconds) seconds=$2; shift 2 ;;
         --out) out=$2; shift 2 ;;
         --jobs) jobs=$2; shift 2 ;;
         --) shift; extra="$*"; break ;;
+        -*) usage >&2; exit 2 ;;
         *) pieces="$pieces $1"; shift ;;
     esac
 done

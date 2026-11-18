@@ -919,7 +919,8 @@ namespace
             }
             else if (ra == kFadeStepSyncVRa[0] || ra == kFadeStepSyncVRa[1])
             {
-                wotmCaptureFadeStep(rdram);
+                if (!wotm_rollback::resimulating())
+                    wotmCaptureFadeStep(rdram);
                 wotmShellFadeStep();
                 fadeRa = ra;
             }

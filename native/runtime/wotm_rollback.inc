@@ -356,6 +356,8 @@ namespace wotm_rollback
         {
             std::fprintf(stderr, "[synctest] the boundary runs on another guest thread's context: barrier\n");
             g_ctx = ctx;
+            g_state = rb::State{};   // the "CPU context" piece points at the context it was built with
+            addPieces(rdram, ctx);
             barrier("thread change");
             return;
         }

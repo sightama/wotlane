@@ -5,11 +5,11 @@ restore it and redo frames with the same result, and what does a redone frame co
 spike (`docs/investigacoes/2026-11-16/rollback-spike/README.md`) set before building a hybrid netcode.
 
 **Answer: GO on correctness, with a small payoff.** With the snapshot below, every fight frame restored 2 or 3 frames back and redone
-gives the same state byte for byte: 0 mismatches over the runs listed in "Runs" (Chrome and Firefox, 1 vs 1 at 60 Hz and 8 monsters at
+gives the same state byte for byte: 0 mismatches over the runs listed in "Runs", once the stream blobs compared by content (Chrome and Firefox, 1 vs 1 at 60 Hz and 8 monsters at
 30 Hz, native Mac, AI and a human player pressing buttons and turning the camera). Two determinism leaks the lockstep could not see were
 found and fixed on the way. The cost is what limits the payoff: a redone frame costs about as much as a played one (no drawing, but the
-same game logic), so the rollback window that fits a frame is 1 to 2 frames in Chrome on a fast Mac and 0 in Firefox or on a slower
-machine (see "Cost" and "Expected latency").
+same game logic), so the rollback window that fits a frame is 1 frame in Chrome on a fast Mac at 60 Hz (0 with 8 monsters at 30 Hz)
+and 0 in Firefox or on a slower machine (see "Cost" and "Expected latency").
 
 ## The synctest
 
@@ -18,8 +18,9 @@ machine (see "Cost" and "Expected latency").
 state is saved into a ring of n + 1 slots; after n frames of history, every frame restores the slot from n frames back and the game
 runs those frames again with the same inputs (the input timeline is not part of the snapshot). Back at the frame where it started, the
 whole snapshot is compared byte by byte with the one saved there. A byte compare is stronger than the hash the brief asked for and names
-the piece, the address and every differing range. Redone frames skip the drawing capture, the pacing wait, sound output and input
-sampling. Stage loads, frames of a dialog loop and sound bank changes are barriers (the history starts over).
+the piece, the address and every differing range. Redone frames skip the frame and fade-step drawing capture, the chase HUD, the pacing wait, sound output
+and input sampling. The smaller capture hooks (fonts, flares, letterbox, HUD pieces) still queue into the pending drawing lists in a
+redo, so after a rollback the next drawn frame carries n frames of them: harmless in the synctest, to be reset in a hybrid. Stage loads, frames of a dialog loop and sound bank changes are barriers (the history starts over).
 
 Restoring at the boundary needs no host stack work: the guest has one thread, nothing is parked in a host call there, and the restored
 CPU context resumes at the same pc and return address, so the recompiled `rtMain` carries on. `WOTM_SYNCTEST_TRACE=<frame>` records the
@@ -97,7 +98,8 @@ frames and compares 40 MB), so 30 minutes of wall clock is fewer game minutes; t
 ## Cost
 
 Median of the 300-frame window averages / worst window, ms (`tools/synctest_cost.py`). "Redone frame" is one resimulated frame (game
-logic, no drawing capture); "played frame" is the frame's own work without the pacing wait. The compare only exists in the synctest.
+logic, no drawing capture); "played frame" is the frame's own work without the pacing wait (the log and `synctest_cost.py` call them "resimulated
+frame" and "present frame"). The compare only exists in the synctest.
 
 | | save | restore | redone frame | played frame |
 |---|---|---|---|---|
@@ -120,10 +122,11 @@ with some margin, since a frame that runs long slows every player in a fixed-ste
 
 | | today's delay stage | W that fits | delay with W (floor 2 frames at 60 Hz, 1 at 30 Hz) | gain |
 |---|---|---|---|---|
-| 1 vs 1, rtt 40, Chrome, fast Mac | ~65 ms (4 frames) | 1 to 2 (5.9 + 2.8 + W x 5.6 <= 16.7) | 2 to 3 frames | 17 to 33 ms of ~111 ms total |
+| 1 vs 1, rtt 40, Chrome, fast Mac | ~65 ms (4 frames) | 1 (5.9 + 2.8 + W x 5.6 <= 16.7: 14.3 with W = 1, 19.9 with W = 2) | 3 frames | 17 ms of ~111 ms total |
 | 1 vs 1, Firefox, any machine | ~65 ms | 0 (a played frame is ~19 ms already, PR #144) | unchanged | 0 |
 | 1 vs 1, an ordinary laptop (2 to 3 times slower) | ~65 ms | 0 | unchanged | 0 |
-| 4 to 8 players, 30 Hz, Chrome, fast Mac | ~133 ms (4 frames) | 1 (native: 10.6 + 5 + 9.7 <= 33.3) | 3 frames | 33 ms of ~210 to 245 ms |
+| 4 to 8 players, 30 Hz, Chrome, fast Mac | ~133 ms (4 frames) | 0 (15.2 + 4.1 + 14.8 = 34.1, over 33.3) | unchanged | 0 |
+| 4 to 8 players, 30 Hz, native, fast Mac | ~133 ms (4 frames) | 1 (10.6 + 5 + 9.7 <= 33.3) | 3 frames | 33 ms of ~210 to 245 ms |
 | 4 to 8 players, Firefox | ~133 ms | 0 (25.9 + 7 already near 33.3) | unchanged | 0 |
 
 Rollback also costs every frame a save (1.4 ms in Chrome, 3.5 ms in Firefox with 8 monsters) whether or not anything is mispredicted,
@@ -157,3 +160,5 @@ and with 7 remote players a misprediction lands on most frames, so the whole win
 - The orbit camera's inputs and the pad state showed nothing missing in these runs; a recorded human match (`WOTM_INPUTPLAY`) would
   exercise more paths than a pad script.
 - Dialog loops are barriers in this synctest; restoring from them is the next step.
+- The runtime scheduler's queued invocations (vblank, DMAC handler) are not in the snapshot; none was queued at a boundary in these
+  runs (no mismatch), but a pass does not prove it can't happen.

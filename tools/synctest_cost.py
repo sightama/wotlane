@@ -44,6 +44,9 @@ def main(argv):
             print(__doc__)
             return 0
         if argv[i] == "--skip":
+            if i + 1 >= len(argv) or not argv[i + 1].isdigit():
+                print("error: --skip needs a number of windows\n" + __doc__, file=sys.stderr)
+                return 2
             skip = int(argv[i + 1])
             i += 2
             continue
