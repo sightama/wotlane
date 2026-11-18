@@ -23,3 +23,14 @@ test('per player: presses, the press-weighted mean of each stage, the worst p95 
   assert.deepEqual(s.delayChanges, [{ player: 'P1', from: 3, to: 4 }]);
   assert.equal(s.startDelay, 3);
 });
+
+test('the total and the sample stage are weighted by the presses that had a page time; a window without any gives them nothing', () => {
+  const s = latencySummary([
+    '2026-11-18T01:31:00Z src=client lobby=ABCD player=P1 v=1 why=periodic seq=1 lat_n=10 lat_unk=5 lat_ms=150.0 lat_in_ms=10.0 lat_dl_ms=100.0',
+    '2026-11-18T01:31:05Z src=client lobby=ABCD player=P1 v=1 why=periodic seq=2 lat_n=4 lat_unk=4 lat_dl_ms=130.0',
+  ].join('\n'));
+  assert.equal(s.players.P1.presses, 14);
+  assert.equal(s.players.P1.total, 150);
+  assert.equal(s.players.P1.sample, 10);
+  assert.equal(s.players.P1.delay, (100 * 10 + 130 * 4) / 14);
+});

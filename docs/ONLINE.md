@@ -193,13 +193,16 @@ cause can be read afterwards without asking anyone to copy logs.
   can't give is left out.
 - **Input latency.** The `lat_` fields follow each button or key that went down in the window, from the moment the page saw it to the
   first present that draws the game frame applying it (`native/wotm_latency.hpp`; the page gives the time of each keydown and of each pad
-  button it sees go down, `wotm_web_input_at`): `lat_n` presses, `lat_ms` (median), `lat_p95_ms` and `lat_max_ms` of that total, and the
-  medians of its stages: `lat_in_ms` (the page saw it until the game sampled it), `lat_dl_ms` (the sample until the game frame that
-  applies it starts, without waits: the input delay), `lat_st_ms` (waits for the other players' input in between), `lat_sim_ms` (that
-  frame's start to its capture for drawing), `lat_pr_ms` (the capture to the animation frame after the draw that first includes it).
-  `lat_bl_ms` is apart: with frame interpolation on, the time from that present to the first one that shows the frame whole (the blend
-  of the last two frames gives the newest a growing weight). `lat_unk` counts presses the page gave no time for (counted from the
-  sample). The compositor and the display add their own time after the present, which a page can't see. Measured on this computer by
+  button it sees go down, `wotm_web_input_at`, and the game takes the earliest one since its previous sample; a pad counts from its own
+  timestamp, the touch controls from the animation frame that read them, which leaves out up to one frame): `lat_n` presses,
+  `lat_ms` (median), `lat_p95_ms` and `lat_max_ms` of that total, and the medians of its stages: `lat_in_ms` (the page saw it until
+  the game sampled it), `lat_dl_ms` (the sample until the game frame that applies it starts, without waits: the input delay),
+  `lat_st_ms` (waits for the other players' input in between), `lat_sim_ms` (that frame's start to its capture for drawing),
+  `lat_pr_ms` (the capture to the animation frame after the draw that first includes it). `lat_bl_ms` is apart: with frame
+  interpolation on, the time from that present to the first one that shows the frame whole (the blend of the last two frames gives the
+  newest a growing weight). `lat_unk` counts presses the page gave no time for (they count in the stages from `lat_dl_ms` on, not in
+  the total or `lat_in_ms`). A present is timed at the animation frame after the draw, so it is a multiple of the display's refresh;
+  the compositor and the display add their own time after it, which a page can't see. Measured on this computer by
   `node tools/browser_mp_test/latency.mjs` (tabs behind `tools/net_lagproxy.py --tcp` links with a round trip, jitter and spikes).
 - **What the server adds.** Every 5 s of a started match, one line per player: `transport` (ws or enet), `hz`, `delay`, `rtt_ms`,
   `rtt_high_ms`, `in_pkts` (input packets since the last line), `in_gap_avg_ms` and `in_gap_max_ms` (how far apart the player's input

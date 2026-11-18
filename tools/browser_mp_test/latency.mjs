@@ -128,6 +128,7 @@ async function main() {
   const summary = { options: o, ...latencySummary(text) };
   writeFileSync(join(o.out, 'summary.json'), JSON.stringify(summary, null, 2));
   console.log(`start delay ${summary.startDelay}, ${summary.delayChanges.length} delay changes`);
+  console.log("each stage: the mean of the windows' medians weighted by presses; p95 and max: the worst window's");
   console.log('player  presses  total  p95  max | sample delay stall sim present | blend | delays  ping ms  gfps');
   for (const [name, p] of Object.entries(summary.players))
     console.log(`${name.padEnd(7)} ${String(p.presses).padStart(7)}  ${fmt(p.total)}  ${fmt(p.p95)}  ${fmt(p.max)} | ${fmt(p.sample)} ${fmt(p.delay)} ${fmt(p.stall)} ` +

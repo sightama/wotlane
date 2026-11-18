@@ -164,7 +164,9 @@ test('a window carries the input latency of the presses it saw, and none when th
   assert.deepEqual(f, { up_s: 5, lat_n: 12, lat_ms: '151.4', lat_p95_ms: '210.0', lat_max_ms: '260.0', lat_in_ms: '6.2', lat_dl_ms: '99.5',
     lat_st_ms: '4.0', lat_sim_ms: '3.1', lat_pr_ms: '9.4', lat_bl_ms: '30.2' });
   assert.equal(Object.fromEntries(windowFields({ t: 0 }, { t: 5000, lat: { ...lat, unknown: 3 } })).lat_unk, 3);
-  assert.deepEqual(Object.fromEntries(windowFields({ t: 0 }, { t: 5000, lat: { ...lat, n: 0 } })), { up_s: 5 });
+  const noTimes = Object.fromEntries(windowFields({ t: 0 }, { t: 5000, lat: { ...lat, unknown: 12 } }));
+  assert.deepEqual([noTimes.lat_n, noTimes.lat_unk, noTimes.lat_dl_ms, noTimes.lat_ms, noTimes.lat_p95_ms, noTimes.lat_max_ms, noTimes.lat_in_ms],
+    [12, 12, '99.5', undefined, undefined, undefined, undefined], 'no press with a page time: no total and no sample stage');  assert.deepEqual(Object.fromEntries(windowFields({ t: 0 }, { t: 5000, lat: { ...lat, n: 0 } })), { up_s: 5 });
 });
 
 test('a periodic report carries the latency taken for its window', () => {

@@ -5236,7 +5236,7 @@ TEST(latency_press_is_split_into_its_stages)
     t.frameStarted(9, 1020.0, 50.0);       // an earlier frame starts nothing
     t.frameStarted(10, 1070.0, 56.0);      // 6 ms of the 66 were waits for the others' input
     t.captured(1075.0);
-    t.taken();
+    t.taken(10);
     t.drew(0, 0);
     t.presented(1083.0);
     const wotm::latency::Window w = t.take();
@@ -5252,16 +5252,17 @@ TEST(latency_present_counts_only_frames_the_draw_took)
     wotm::latency::Tracker t;
     t.sampled(5, 0.0, 100.0, 0.0);   // the page gave no press time: the press counts from the sample
     t.frameStarted(5, 150.0, 0.0);
-    t.taken();                        // the draw took an older frame
+    t.taken(4);                       // the draw took an older frame
     t.drew(0, 0);
     t.captured(160.0);
     t.presented(165.0);
     CHECK(t.take().n == 0u);
-    t.taken();
+    t.taken(5);
     t.drew(0, 0);
     t.presented(181.0);
     const wotm::latency::Window w = t.take();
-    CHECK(w.n == 1u && w.total == 81.0 && w.sample == 0.0 && w.present == 21.0);
+    CHECK(w.n == 1u && w.unknownPress == 1u && w.present == 21.0);
+    CHECK(w.total == 0.0 && w.p95 == 0.0 && w.max == 0.0 && w.sample == 0.0);   // no press time: no total (counting from the sample would read low)
     CHECK(w.unknownPress == 1u);
 }
 
@@ -5272,13 +5273,13 @@ TEST(latency_blend_until_the_frame_is_shown_whole)
     wotm::latency::Tracker t;
     t.frameStarted(7, 50.0, 0.0);
     t.captured(55.0);
-    t.taken();                         // frame 7
+    t.taken(7);                        // frame 7
     t.drew(0, 0);
     t.presented(60.0);
     t.sampled(8, 70.0, 72.0, 0.0);
     t.frameStarted(8, 90.0, 0.0);
     t.captured(100.0);
-    t.taken();                         // frame 8; frame 7 is the one before it
+    t.taken(8);                        // frame 8; frame 7 is the one before it
     t.drew(1, 1);                      // alpha 0: the image is still frame 7
     t.presented(107.0);
     t.drew(0, 1);                      // part of frame 8
@@ -5288,6 +5289,46 @@ TEST(latency_blend_until_the_frame_is_shown_whole)
     t.presented(135.0);
     const wotm::latency::Window w = t.take();
     CHECK(w.n == 1u && w.total == 44.0 && w.present == 14.0 && w.blend == 21.0);
+}
+
+// The present asks for the newest captured frame under the capture's lock; a page time too far before the sample is not this press;
+// a new match starts from nothing
+TEST(latency_newest_capture_implausible_press_and_reset)
+{
+    wotm::latency::Tracker t;
+    uint32_t f = 0;
+    CHECK(!t.newest(f));
+    t.frameStarted(3, 10.0, 0.0);
+    t.captured(12.0);
+    CHECK(t.newest(f) && f == 3u);
+    t.sampled(9, 100.0, 5000.0, 0.0);   // 4.9 s: a key from long before (or another clock), counted from the sample
+    t.frameStarted(9, 5050.0, 0.0);
+    t.captured(5051.0);
+    t.taken(9);
+    t.drew(0, 0);
+    t.presented(5060.0);
+    const wotm::latency::Window w = t.take();
+    CHECK(w.n == 1u && w.unknownPress == 1u && w.total == 0.0 && w.present == 9.0);
+    t.sampled(20, 6000.0, 6001.0, 0.0);
+    t.reset();
+    CHECK(t.pending() == 0u && !t.newest(f) && t.take().n == 0u);
+}
+
+// A press with no page time counts in the later stages but not in the total, p95, max or sample
+TEST(latency_unknown_press_stays_out_of_the_total)
+{
+    wotm::latency::Tracker t;
+    t.sampled(1, 0.0, 100.0, 0.0);      // no page time
+    t.sampled(1, 90.0, 100.0, 0.0);     // seen 10 ms before the sample
+    t.frameStarted(1, 120.0, 0.0);
+    t.captured(130.0);
+    t.taken(1);
+    t.drew(0, 0);
+    t.presented(140.0);
+    const wotm::latency::Window w = t.take();
+    CHECK(w.n == 2u && w.unknownPress == 1u);
+    CHECK(w.total == 50.0 && w.p95 == 50.0 && w.max == 50.0 && w.sample == 10.0);
+    CHECK(w.delay == 20.0 && w.sim == 10.0 && w.present == 10.0);
 }
 
 // Medians per stage and the total's 95th percentile and max over a window; a press that never reaches the screen expires
@@ -5300,7 +5341,7 @@ TEST(latency_window_medians_and_expiry)
         t.sampled(i * 10, at, at, 0.0);
         t.frameStarted(i * 10, at + total - 2.0, 0.0);
         t.captured(at + total - 1.0);
-        t.taken();
+        t.taken(i * 10);
         t.drew(0, 0);
         t.presented(at + total);
     }
@@ -5312,7 +5353,7 @@ TEST(latency_window_medians_and_expiry)
     t.sampled(600, 33000.0, 33000.0, 0.0);
     t.frameStarted(600, 33050.0, 0.0);
     t.captured(33051.0);
-    t.taken();
+    t.taken(600);
     t.drew(0, 0);
     t.presented(33060.0);
     CHECK(t.take().n == 1u);

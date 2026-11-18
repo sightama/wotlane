@@ -19,6 +19,7 @@ namespace wotm_net
             return false;
         }
         connected_ = false;
+        haveServerRtt_ = false;   // the last connection's round trip says nothing about this one
         const std::string where = isWebSocketAddress(c.host) ? c.host : c.host + ":" + std::to_string(c.port);
         {
             std::lock_guard<std::mutex> lk(mu_);

@@ -280,6 +280,7 @@ export function windowFields(prev, cur) {
   const pings = (cur.pings ?? []).filter(Number.isFinite);
   const { raf, lt, audio } = cur;
   const lat = cur.lat?.n > 0 ? cur.lat : undefined;
+  const timed = lat && lat.unknown < lat.n ? lat : undefined;   // the total and the sample stage need presses with a page time
   return present([
     ['up_s', whole(cur.t / 1000)],
     ['fps', fix(perSecond(presented))],
@@ -310,10 +311,10 @@ export function windowFields(prev, cur) {
     ['lag_ms', fix(cur.taskLag?.avg)],
     ['lag_max_ms', whole(cur.taskLag?.max)],
     ['lat_n', lat?.n],
-    ['lat_ms', fix(lat?.total)],
-    ['lat_p95_ms', fix(lat?.p95)],
-    ['lat_max_ms', fix(lat?.max)],
-    ['lat_in_ms', fix(lat?.sample)],
+    ['lat_ms', fix(timed?.total)],
+    ['lat_p95_ms', fix(timed?.p95)],
+    ['lat_max_ms', fix(timed?.max)],
+    ['lat_in_ms', fix(timed?.sample)],
     ['lat_dl_ms', fix(lat?.delay)],
     ['lat_st_ms', fix(lat?.stall)],
     ['lat_sim_ms', fix(lat?.sim)],

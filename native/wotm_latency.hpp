@@ -30,7 +30,8 @@ namespace wotm::latency
     // percentile and max. The stages are medians: sample (the page saw the press, the game sampled it), delay (sample to the start of the
     // frame that applies it, without the waits), stall (waits for the other players' input in between), sim (that frame's logic, start
     // to capture), present (capture to the first present that draws it), blend (frame interpolation: from that present to the first one
-    // that shows the frame whole; not in total). unknownPress: presses the page gave no time for (counted from the sample)
+    // that shows the frame whole; not in total). unknownPress: presses the page gave no time for; they count in the stages from delay on,
+    // not in total, p95, max or sample (0 when every press was one)
     struct Window
     {
         uint32_t n = 0, unknownPress = 0;
@@ -42,6 +43,7 @@ namespace wotm::latency
     {
     public:
         static constexpr size_t kMaxPending = 32, kMaxDone = 4096;   // a build that never takes a window keeps at most kMaxDone
+        static constexpr double kMaxSampleMs = 1000.0;   // a page time further before the sample is some other key's, not this press's
 
         // a press seen by the page at pressAt (0: unknown), sampled at `at`, applies on `frame`; stallMs: the waits for the network so far
         void sampled(uint32_t frame, double pressAt, double at, double stallMs)
@@ -51,7 +53,7 @@ namespace wotm::latency
                 pending_.pop_front();
             Probe p;
             p.frame = frame;
-            p.known = pressAt > 0.0 && pressAt <= at;
+            p.known = pressAt > 0.0 && pressAt <= at && at - pressAt < kMaxSampleMs;
             p.press = p.known ? pressAt : at;
             p.sample = at;
             p.stallAtSample = stallMs;
@@ -83,15 +85,32 @@ namespace wotm::latency
                     p.captured = at;
         }
 
-        // the present took the newest captured frame to draw (under the capture's lock); the frames it took before stay for drew()
-        void taken()
+        // the newest captured frame (false before the first): the present asks under the capture's lock as it takes the snapshot
+        bool newest(uint32_t &frame) const
         {
             std::lock_guard<std::mutex> lk(mu_);
-            if (!haveCaptured_)
-                return;
+            frame = lastCaptured_;
+            return haveCaptured_;
+        }
+
+        // the present keeps `frame` as the newest it draws (where its own last snapshots move along: the frames before it stay for drew())
+        void taken(uint32_t frame)
+        {
+            std::lock_guard<std::mutex> lk(mu_);
             std::copy_backward(taken_, taken_ + kTaken - 1, taken_ + kTaken);
-            taken_[0] = lastCaptured_;
+            taken_[0] = frame;
             tookCount_ = std::min<size_t>(tookCount_ + 1, kTaken);
+        }
+
+        // a new match: nothing of the last one counts
+        void reset()
+        {
+            std::lock_guard<std::mutex> lk(mu_);
+            pending_.clear();
+            done_.clear();
+            haveRunning_ = haveCaptured_ = false;
+            tookCount_ = 0;
+            drawn_ = Drawn{};
         }
 
         // the present drew an image: the newest frame it gives any weight is the one `visibleBack` takes before the latest (0: the latest),
@@ -141,23 +160,28 @@ namespace wotm::latency
             if (w.n == 0)
                 return w;
             std::vector<double> v;
-            auto median = [&](double Done::*field) {
+            // the median over every press, or over the ones with a page time (a press counted from its sample would read low)
+            auto median = [&](double Done::*field, bool knownOnly) {
                 v.clear();
                 for (const Done &d : done_)
-                    v.push_back(d.*field);
+                    if (!knownOnly || !d.unknownPress)
+                        v.push_back(d.*field);
                 std::sort(v.begin(), v.end());
                 const size_t m = v.size() / 2;
-                return v.size() % 2 ? v[m] : (v[m - 1] + v[m]) / 2.0;
+                return v.empty() ? 0.0 : v.size() % 2 ? v[m] : (v[m - 1] + v[m]) / 2.0;
             };
-            w.sample = median(&Done::sample);
-            w.delay = median(&Done::delay);
-            w.stall = median(&Done::stall);
-            w.sim = median(&Done::sim);
-            w.present = median(&Done::present);
-            w.blend = median(&Done::blend);
-            w.total = median(&Done::total);   // last: v stays sorted by total
-            w.p95 = v[static_cast<size_t>(std::ceil(0.95 * v.size())) - 1];
-            w.max = v.back();
+            w.delay = median(&Done::delay, false);
+            w.stall = median(&Done::stall, false);
+            w.sim = median(&Done::sim, false);
+            w.present = median(&Done::present, false);
+            w.blend = median(&Done::blend, false);
+            w.sample = median(&Done::sample, true);
+            w.total = median(&Done::total, true);   // last: v stays sorted by total
+            if (!v.empty())
+            {
+                w.p95 = v[(v.size() * 95 + 99) / 100 - 1];   // nearest rank
+                w.max = v.back();
+            }
             for (const Done &d : done_)
                 w.unknownPress += d.unknownPress ? 1u : 0u;
             done_.clear();

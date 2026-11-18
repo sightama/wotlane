@@ -170,21 +170,29 @@ namespace wotm_sync
     double g_netStallMs = 0.0;
 
     // Input latency (wotm_latency.hpp, the page's diagnostics report): a sample that presses a button no earlier sample held starts a
-    // probe for the frame that carries it. The page's time of the input (wotmWebInputAt) counts when it came after the previous sample
+    // probe for the frame that carries it, timed from the earliest key or button the page saw go down since the previous sample
+    // (wotmWebTakeInputAt; each sample takes it, pressed or not)
+    uint16_t g_latencyButtons = 0xFFFFu;   // the buttons of the previous sample (reset at each match start, latencyReset)
+
+    void latencyReset()
+    {
+        g_latencyButtons = 0xFFFFu;
+        wotm::latency::tracker().reset();
+#ifdef __EMSCRIPTEN__
+        wotmWebTakeInputAt();
+#endif
+    }
+
     void latencyProbe(const wotm_net::PadState &s, uint32_t frame)
     {
-        static uint16_t prevButtons = 0xFFFFu;
-        static double prevAt = 0.0;
         const double now = wotm::latency::nowMs();
-        const bool pressed = (prevButtons & static_cast<uint16_t>(~s.buttons)) != 0u;   // active low: a bit that went 1 -> 0
-        prevButtons = s.buttons;
+        const bool pressed = (g_latencyButtons & static_cast<uint16_t>(~s.buttons)) != 0u;   // active low: a bit that went 1 -> 0
+        g_latencyButtons = s.buttons;
 #ifdef __EMSCRIPTEN__
-        const double page = wotmWebInputAt();
-        const double pressAt = page > prevAt ? page : 0.0;
+        const double pressAt = wotmWebTakeInputAt();
 #else
         const double pressAt = 0.0;
 #endif
-        prevAt = now;
         if (pressed && frame != wotm_net::MatchClient::kNoFrame)
             wotm::latency::tracker().sampled(frame, pressAt, now, g_netStallMs);
     }
@@ -828,7 +836,10 @@ namespace wotm_sync
         if (!g_fixedStep)
             return;
         if (g_net)
+        {
             netStart();
+            latencyReset();
+        }
         g_inputs = wotm_net::InputTimeline(kControllers, g_inputDelay);
         for (const InputRecord &r : g_inputPlay)
             g_inputs.set(static_cast<int>(r.controller), r.index, r.state);

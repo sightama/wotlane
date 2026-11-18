@@ -1831,6 +1831,8 @@ static bool wotmDrawNative(const uint8_t *rdram)
     // New game frame: the snapshot captured on the EE thread (wotmCaptureFrame). In replay (--vu1cmp) no game is running and the
     // snapshot's RAM is fixed: collection happens right here. The following draws repeat the snapshot.
     wotm::Snapshot sn;
+    uint32_t takenFrame = 0;   // input latency (wotm_latency.hpp): the game frame of a snapshot taken from the capture
+    bool haveTakenFrame = false;
     bool fresh = false;   // new snapshot in this present (redraw, below)
     if (wotm_live::g_localCollect)
     {
@@ -1849,7 +1851,7 @@ static bool wotmDrawNative(const uint8_t *rdram)
         {
             sn = std::move(cap.snap);
             cap.fresh = false;
-            wotm::latency::tracker().taken();
+            haveTakenFrame = wotm::latency::tracker().newest(takenFrame);   // input latency: the frame this snapshot is
         }
     }
     if (sn.valid)
@@ -1886,6 +1888,8 @@ static bool wotmDrawNative(const uint8_t *rdram)
         S.prev2.chase.reset();
         S.prev = std::move(S.snap);
         S.snap = std::move(sn);
+        if (haveTakenFrame)
+            wotm::latency::tracker().taken(takenFrame);
         fresh = true;
         if (S.snap.hostT > 0.0)
         {

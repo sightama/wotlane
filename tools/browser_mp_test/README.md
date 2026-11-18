@@ -71,4 +71,5 @@ one player), taps Space in every tab every 0.35 to 1 s (`--press-ms`), and print
 diagnostics files (`lat_` fields, `docs/ONLINE.md` "Diagnostics"): presses, the total (press to the first present that draws it) and its
 stages, the delays and pings seen. `--browser chrome` uses the GPU; the default headless Chromium draws in software, at a few frames a
 second on a busy machine, which the present stage then shows. Results: `summary.json`, the diag files, `server.log` and `proxy.log` in
-`--out`. The summary reader is `lib/latency.mjs` (tested in `test/latency.test.mjs`).
+`--out`. The summary reader is `lib/latency.mjs` (tested in `test/latency.test.mjs`). The keys are Playwright's, sent straight to the page:
+the time the system and the browser take to deliver a real key is not in the numbers.
