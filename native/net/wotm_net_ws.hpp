@@ -83,7 +83,14 @@ namespace wotm_net::ws
     {
         std::string path, key;
         std::string userAgent;   // the browser's User-Agent (empty when it sent none)
+        std::string clientAddress;   // the client's address as a proxy says it (CF-Connecting-IP, else X-Forwarded-For's first hop); empty if none
     };
+
+    // text that can be an IPv4 or IPv6 address (hex digits, . and :, up to 45 characters): all a proxy header is trusted to hold
+    inline bool plausibleAddress(std::string_view s)
+    {
+        return !s.empty() && s.size() <= 45 && s.find_first_not_of("0123456789abcdefABCDEF.:") == std::string_view::npos;
+    }
 
     // the value of header `name` (any case) in an HTTP head, or nullopt
     inline std::optional<std::string> header(std::string_view head, std::string_view name)
@@ -122,6 +129,16 @@ namespace wotm_net::ws
         return true;
     }
 
+    // an address from a proxy header: blanks trimmed, lower case; empty when it is not plausible
+    inline std::string cleanAddress(std::string s)
+    {
+        const size_t b = s.find_first_not_of(" \t"), e = s.find_last_not_of(" \t");
+        s = b == std::string::npos ? std::string() : s.substr(b, e - b + 1);
+        for (char &ch : s)
+            ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        return plausibleAddress(s) ? s : std::string();
+    }
+
     // a client's opening request (everything up to the blank line): GET <path> with Upgrade: websocket and a key
     inline std::optional<Handshake> parseHandshake(std::string_view request)
     {
@@ -134,7 +151,12 @@ namespace wotm_net::ws
         if (!upgrade || !equalsNoCase(*upgrade, "websocket") || !key || key->empty())
             return std::nullopt;
         const auto ua = header(request, "User-Agent");
-        return Handshake{std::string(request.substr(4, pathEnd - 4)), *key, ua ? *ua : std::string()};
+        std::string address;
+        if (const auto cf = header(request, "CF-Connecting-IP"))
+            address = cleanAddress(*cf);   // present: it is the answer, valid or not (X-Forwarded-For would be Cloudflare's own edge)
+        else if (const auto xff = header(request, "X-Forwarded-For"))
+            address = cleanAddress(xff->substr(0, xff->find(',')));
+        return Handshake{std::string(request.substr(4, pathEnd - 4)), *key, ua ? *ua : std::string(), address};
     }
 
     inline std::string handshakeAnswer(std::string_view clientKey)
@@ -143,11 +165,12 @@ namespace wotm_net::ws
                acceptKey(clientKey) + "\r\n\r\n";
     }
 
-    inline std::string handshakeRequest(std::string_view host, std::string_view path, std::string_view key)
+    // `extraHeaders`: whole header lines, each ending in CRLF (tests: what a proxy adds)
+    inline std::string handshakeRequest(std::string_view host, std::string_view path, std::string_view key, std::string_view extraHeaders = {})
     {
         return "GET " + std::string(path) + " HTTP/1.1\r\nHost: " + std::string(host) +
                "\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: " + std::string(key) +
-               "\r\nSec-WebSocket-Version: 13\r\n\r\n";
+               "\r\nSec-WebSocket-Version: 13\r\n" + std::string(extraHeaders) + "\r\n";
     }
 
     // a frame; `mask` = client to server (RFC 6455 5.3), with a fixed key: masking is a proxy-cache safeguard, not secrecy

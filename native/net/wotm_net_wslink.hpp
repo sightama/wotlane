@@ -24,7 +24,7 @@ namespace wotm_net
         explicit WsLink(LineSocket accepted) : sock_(std::move(accepted)), server_(true), parser_(true) {}
 
         // ws://host:port/path; waits up to `timeoutMs` for the server's answer
-        bool connect(const std::string &url, int timeoutMs, std::string &err)
+        bool connect(const std::string &url, int timeoutMs, std::string &err, const std::string &extraHeaders = {})
         {
             const std::string scheme = "ws://";
             if (url.compare(0, scheme.size(), scheme) != 0)
@@ -42,7 +42,7 @@ namespace wotm_net
             for (uint8_t &b : nonce)
                 b = static_cast<uint8_t>(rd());
             const std::string key = ws::base64(nonce, sizeof nonce);
-            const std::string req = ws::handshakeRequest(hostPort, path, key);
+            const std::string req = ws::handshakeRequest(hostPort, path, key, extraHeaders);
             if (!sock_.sendBytes(req.data(), req.size()))
                 return err = "could not send the WebSocket request", false;
             std::string head;
@@ -80,6 +80,11 @@ namespace wotm_net
         const std::string &path() const { return path_; }
         // the browser's User-Agent from the handshake (empty for a client that sent none)
         const std::string &userAgent() const { return userAgent_; }
+        // the client's address from the handshake's proxy headers (empty when there are none); only meaningful when the TCP peer is the proxy
+        const std::string &forwardedAddress() const { return forwardedAddress_; }
+        // server side: the TCP peer's address, kept for the server's own use
+        void setPeerIp(std::string ip) { peerIp_ = std::move(ip); }
+        const std::string &peerIp() const { return peerIp_; }
 
         bool pump() override
         {
@@ -109,6 +114,7 @@ namespace wotm_net
                     return fail();
                 path_ = h->path;
                 userAgent_ = h->userAgent;
+                forwardedAddress_ = h->clientAddress;
                 ready_ = true;
                 const std::string rest = head_.substr(end + 4);
                 head_.clear();
@@ -229,7 +235,7 @@ namespace wotm_net
         LineSocket sock_;
         bool server_ = false, ready_ = false;
         ws::FrameParser parser_{false};
-        std::string head_, path_, userAgent_;
+        std::string head_, path_, userAgent_, forwardedAddress_, peerIp_;
         std::deque<std::string> lines_;
         std::deque<std::vector<uint8_t>> packets_;
         uint32_t rttMs_ = 0;

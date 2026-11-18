@@ -57,5 +57,5 @@ test('the owner controls read as plain sentences', () => {
   assert.equal(friendlyError('you can\'t remove yourself; leave instead'), 'To go, press Leave.');
   assert.equal(friendlyError('you are the owner already'), 'You are the owner already.');
   assert.equal(friendlyError('the match has started'), 'The match has started. That works again once it ends.');
-  assert.equal(friendlyError('you were removed from this lobby; try again in 42 s'), 'The owner removed you from that lobby. You can join it again in 42 seconds.');
+  assert.equal(friendlyError('you were removed from this lobby; try again in 42 s'), 'The owner removed you, or someone on your connection, from that lobby. You can join it again in 42 seconds.');
 });

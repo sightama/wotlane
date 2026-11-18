@@ -203,8 +203,9 @@ namespace wotm_net
     void Server::acceptAndReadLobby()
     {
         LineSocket s;
-        while (listener_.accept(s))
-            addConn(std::make_unique<LineSocket>(std::move(s)));
+        std::string peerIp;
+        while (listener_.accept(s, &peerIp))
+            addConn(std::make_unique<LineSocket>(std::move(s)), false, proto::clientAddress(peerIp, ""));
         for (size_t i = 0; i < conns_.size(); ++i)
         {
             if (!conns_[i])
@@ -221,9 +222,10 @@ namespace wotm_net
         }
     }
 
-    void Server::addConn(std::unique_ptr<LineLink> link, bool halfRate)
+    void Server::addConn(std::unique_ptr<LineLink> link, bool halfRate, std::string address)
     {
         auto c = std::make_unique<Conn>();
+        c->address = std::move(address);
         c->link = std::move(link);
         c->halfRate = halfRate;
         auto free = std::find(conns_.begin(), conns_.end(), nullptr);
@@ -443,7 +445,7 @@ namespace wotm_net
         const auto now = Clock::now();
         l.bans.erase(std::remove_if(l.bans.begin(), l.bans.end(), [now](const Lobby::Ban &b) { return b.until <= now; }), l.bans.end());
         for (const Lobby::Ban &b : l.bans)
-            if (b.name == name)
+            if (b.name == name || (!b.address.empty() && b.address == c.address))
                 return void(c.link->sendLine("ERROR you were removed from this lobby; try again in " +
                                              std::to_string((std::chrono::duration_cast<std::chrono::milliseconds>(b.until - now).count() + 999) / 1000) + " s"));
         if (l.match)
@@ -558,7 +560,7 @@ namespace wotm_net
             return void(c.link->sendLine("ERROR " + name + " is not in this lobby"));
         const auto now = Clock::now();
         l->bans.erase(std::remove_if(l->bans.begin(), l->bans.end(), [now](const Lobby::Ban &b) { return b.until <= now; }), l->bans.end());
-        l->bans.push_back({name, now + std::chrono::milliseconds(cfg_.kickBanMs)});
+        l->bans.push_back({name, conns_[static_cast<size_t>(target)]->address, now + std::chrono::milliseconds(cfg_.kickBanMs)});
         log("lobby %s: %s removed %s", l->code.c_str(), c.name.c_str(), name.c_str());
         diagEvent(*l, "event=kick owner=" + c.name + " player=" + name);
         conns_[static_cast<size_t>(target)]->link->sendLine("KICKED " + l->code + " " + std::to_string((cfg_.kickBanMs + 999) / 1000));
@@ -1135,8 +1137,12 @@ namespace wotm_net
         if (!cfg_.wsPort)
             return;
         LineSocket s;
-        while (wsListener_.accept(s))
+        std::string peerIp;
+        while (wsListener_.accept(s, &peerIp))
+        {
             wsPending_.push_back(std::make_unique<WsLink>(std::move(s)));
+            wsPending_.back()->setPeerIp(peerIp);
+        }
         for (size_t i = 0; i < wsPending_.size();)
         {
             const bool alive = wsPending_[i]->pump();
@@ -1153,7 +1159,8 @@ namespace wotm_net
             if (link->path() == "/lobby")
             {
                 const bool phone = proto::halfRateUserAgent(link->userAgent());
-                addConn(std::move(link), phone);   // lines that arrived with the handshake wait in the link for acceptAndReadLobby
+                const std::string address = proto::clientAddress(link->peerIp(), link->forwardedAddress());
+                addConn(std::move(link), phone, address);   // lines that arrived with the handshake wait in the link for acceptAndReadLobby
             }
             else if (link->path() == "/match")
             {

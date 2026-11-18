@@ -81,6 +81,7 @@ namespace wotm_net
             bool halfRate = false;   // HELLO hz=30: the device can't compute 60 game frames a second (a phone); its matches run at 30 Hz
             int lobby = -1;
             std::string name;
+            std::string address;   // where it connects from (proto::clientAddress), "" if unknown; never logged or sent
             proto::Pick pick;   // monster and skin for the next match
             Clock::time_point chatWindow{};   // start of the current chat window and the lines sent in it
             int chatLines = 0;
@@ -163,13 +164,13 @@ namespace wotm_net
             std::unique_ptr<Match> match;
             Clock::time_point lastPings{};   // the last PINGS line sent to the members
             std::string diagFile;            // where this lobby's diagnostics go: its own file, then its match's
-            struct Ban { std::string name; Clock::time_point until; };
+            struct Ban { std::string name, address; Clock::time_point until; };   // address "" = unknown: the name alone
             std::vector<Ban> bans;           // members the owner removed, by name, until the time given (the lobby's own: gone when it closes)
         };
 
         void log(const char *fmt, ...);
         void acceptAndReadLobby();
-        void addConn(std::unique_ptr<LineLink> link, bool halfRate = false);   // halfRate: a phone (its WebSocket User-Agent)
+        void addConn(std::unique_ptr<LineLink> link, bool halfRate = false, std::string address = {});   // halfRate: a phone (its WebSocket User-Agent)
         void handleLine(int c, const std::string &line);
         void createLobby(int c, const std::vector<std::string> &w);
         void joinLobby(int c, const std::vector<std::string> &w);
