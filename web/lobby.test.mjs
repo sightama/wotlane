@@ -215,7 +215,7 @@ test('halfRateDevice: a phone or tablet plays online at 30 Hz whatever it plays 
   // a desktop this browser measured unable to hold 60 game frames a second in its last 60 Hz match (web/rate.js)
   assert.equal(halfRateDevice({ matchMedia: none, navigator: { userAgent: desktopUa }, localStorage: { getItem: (k) => (k === 'wotlane.slowDevice' ? '1' : null) } }), true);
   assert.equal(halfRateDevice({ matchMedia: none, navigator: { userAgent: desktopUa }, localStorage: { getItem: () => '0' } }), false);
-  // that desktop is still not a phone: it keeps its own drawing settings (settings.js phoneMatchDrawing)
+  // that desktop is still not a phone: it keeps its own drawing settings (settings.js lightMatchDrawing)
   assert.equal(phoneDevice({ matchMedia: none, navigator: { userAgent: desktopUa }, localStorage: { getItem: () => '1' } }), false);
   assert.equal(phoneDevice({ matchMedia: none, navigator: { userAgent: pixelUa } }), true);
 });

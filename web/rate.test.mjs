@@ -48,8 +48,19 @@ test('rememberedSlow: nothing stored, or storage that throws, is not slow', () =
   assert.equal(rememberedSlow(undefined), false);
 });
 
-test('RateMemory keeps the device health of a match (own frames a second, ms of work per frame, game Hz)', () => {
-  for (const hz of [60]) {
+test('RateMemory: a device that can not even hold 30 in a 30 Hz match (5QMC: ~24) is remembered as slow; holding 30 there says nothing about 60', () => {
+  const store = new Map();
+  const m = new RateMemory({ get: (k) => store.get(k) ?? null, set: (k, v) => store.set(k, v) });
+  feed(m, { hz: 30, gfps: 18.4, waitMs: 1100, windows: 8 });   // 18.4 / (1 - 0.22) = ~23.6 of 30
+  assert.equal(store.get(SLOW_KEY), '1');
+  const held = new Map([[SLOW_KEY, '1']]);
+  const m2 = new RateMemory({ get: (k) => held.get(k) ?? null, set: (k, v) => held.set(k, v) });
+  feed(m2, { hz: 30, gfps: 18, waitMs: 2000, windows: 8 });     // 18 / 0.6 = 30: kept up at 30 Hz
+  assert.equal(held.get(SLOW_KEY), '1');
+});
+
+test('RateMemory keeps the device health of a match (own frames a second, ms of work per frame, game Hz), at 30 Hz too', () => {
+  for (const hz of [60, 30]) {
     const store = new Map();
     const m = new RateMemory({ get: (k) => store.get(k) ?? null, set: (k, v) => store.set(k, v) });
     for (let i = 0; i < 6; ++i) m.add(win({ hz, up_s: 25 + 5 * i, gfps: 27, wait_ms: 0, work_ms: 13.2 }));
