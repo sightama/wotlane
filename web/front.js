@@ -1,9 +1,9 @@
 // ABOUTME: The browser version's front panel: single player, or an online lobby on the game server (Host shows a 4-letter code,
 // ABOUTME: Join takes one). When the owner starts, every member's game loads with the match environment (boot.js wotmStart).
-import { LobbyClient, halfRateDevice, phoneDevice, inviteLink, lastLobbyNotice, lobbyRow, lobbySocketUrl, matchEnv } from './lobby.js';
+import { LobbyClient, halfRateDevice, inviteLink, lastLobbyNotice, lobbyRow, lobbySocketUrl, matchEnv } from './lobby.js';
 import { initCreations, addLobbyChoices } from './creations_ui.js';
 import { initSettings } from './settings_ui.js';
-import { phoneMatchDrawing, readSettings, settingsSaved } from './settings.js';
+import { lightMatchDrawing, readSettings, settingsSaved } from './settings.js';
 import { playStartupMovies } from './movies.js';
 import { DiagReporter, FrameWatch, LongTaskWatch, TaskLagWatch, deviceFields, diagLine, flushSocket, installAudioWatch, joinFields, readGame, reportFields } from './diag.js';
 import { deliverReport, initReport } from './report_ui.js';
@@ -180,11 +180,12 @@ async function sendReport(note) {
   });
 }
 
-// a phone's drawing settings for an online match (settings.js phoneMatchDrawing); nothing on a computer, or when the file can't be read
-async function phoneDrawing() {
-  if (!phoneDevice(window)) return {};
+// the light drawing settings for an online match (settings.js lightMatchDrawing) on a phone or a device measured too slow for its
+// matches (lobby.js halfRateDevice); nothing on another computer, or when the file can't be read
+async function lightDrawing() {
+  if (!halfRateDevice(window)) return {};
   try {
-    return phoneMatchDrawing(await readSettings(await navigator.storage.getDirectory()));
+    return lightMatchDrawing(await readSettings(await navigator.storage.getDirectory()));
   } catch {
     return {};
   }
@@ -209,7 +210,7 @@ async function connect(build) {
     front.hidden = true;
     await settingsSaved();   // a change made a moment ago is in the file before the game reads it
     startDiag(client, ws, match, build);
-    window.wotmStart({ ...matchEnv(match, serverUrl('/match')), ...(await phoneDrawing()) }, build);
+    window.wotmStart({ ...matchEnv(match, serverUrl('/match')), ...(await lightDrawing()) }, build);
   };
   await client.ready;
   return client;
