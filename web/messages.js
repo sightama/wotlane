@@ -30,7 +30,7 @@ const MESSAGES = [
   [/^you can't remove yourself/, 'To go, press Leave.'],
   [/^you are the owner already/, 'You are the owner already.'],
   [/^the match has started/, 'The match has started. That works again once it ends.'],
-  [/^you were removed from this lobby; try again in (\d+) s/, (m) => `The owner removed you from that lobby. You can join it again in ${m[1]} seconds.`],
+  [/^you were removed from this lobby; try again in (\d+) s/, (m) => `The owner removed you, or someone on your connection, from that lobby. You can join it again in ${m[1]} seconds.`],
   [/^HEALTH /, 'Something went wrong talking to the game server. Reload the page and try again.'],
   [/ is not in this lobby$/, 'That player is not in the lobby any more.'],
   [/^monster has no free costume/, 'Every costume of that monster is taken in this lobby. Pick another monster.'],

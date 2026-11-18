@@ -1484,6 +1484,11 @@ namespace
         CHECK(addr("X-Forwarded-For: 203.0.113.9, 10.0.0.2\r\n") == "203.0.113.9");
         CHECK(addr("X-Forwarded-For: 203.0.113.9\r\nCF-Connecting-IP: 198.51.100.7\r\n") == "198.51.100.7");
         CHECK(addr("CF-Connecting-IP: <script>\r\n") == "");
+        CHECK(addr("CF-Connecting-IP: 198.51.100.7 \t\r\n") == "198.51.100.7");   // trailing blanks
+        CHECK(addr("CF-Connecting-IP: 2001:DB8::A\r\n") == "2001:db8::a");         // one spelling per address
+        CHECK(addr("X-Forwarded-For:  203.0.113.9 ,10.0.0.2\r\n") == "203.0.113.9");
+        // a CF-Connecting-IP that is there but not an address is no reason to take X-Forwarded-For: through Cloudflare that is a shared edge
+        CHECK(addr("CF-Connecting-IP: junk!\r\nX-Forwarded-For: 203.0.113.9\r\n") == "");
         CHECK(addr("CF-Connecting-IP: " + std::string(60, '1') + "\r\n") == "");
         // the proxy's own address is the TCP peer: only then is the header believed
         CHECK(p::clientAddress("127.0.0.1", "198.51.100.7") == "198.51.100.7");
