@@ -2,7 +2,7 @@
 // ABOUTME: tools/net_lobby.py's match_env) and the lobby client's requests and replies over a fake WebSocket. Run: node --test web/
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { PROTOCOL, parseLine, parseMembers, matchEnv, lobbySocketUrl, lastLobbyNotice, inviteLink, lobbyRow, parsePings, parseChat, LobbyClient, halfRateDevice } from './lobby.js';
+import { PROTOCOL, parseLine, parseMembers, matchEnv, lobbySocketUrl, lastLobbyNotice, inviteLink, lobbyRow, parsePings, parseChat, LobbyClient, halfRateDevice, phoneDevice } from './lobby.js';
 
 const MATCH_LINE = 'MATCH lobby=QZXW players=2 stage=9 wins=2 mods=jump,turbo monsters=5,1 names=Ana,Bia ' +
   'seed=12345 step=1 you=1 token=00aa11bb22cc33dd port=7777';
@@ -212,6 +212,12 @@ test('halfRateDevice: a phone or tablet plays online at 30 Hz whatever it plays 
   assert.equal(halfRateDevice({ matchMedia: none, navigator: { userAgentData: { mobile: false }, userAgent: desktopUa, maxTouchPoints: 10 } }), false);
   assert.equal(halfRateDevice({ matchMedia: none, navigator: { userAgent: desktopUa } }), false);
   assert.equal(halfRateDevice({}), false);
+  // a desktop this browser measured unable to hold 60 game frames a second in its last 60 Hz match (web/rate.js)
+  assert.equal(halfRateDevice({ matchMedia: none, navigator: { userAgent: desktopUa }, localStorage: { getItem: (k) => (k === 'wotlane.slowDevice' ? '1' : null) } }), true);
+  assert.equal(halfRateDevice({ matchMedia: none, navigator: { userAgent: desktopUa }, localStorage: { getItem: () => '0' } }), false);
+  // that desktop is still not a phone: it keeps its own drawing settings (settings.js phoneMatchDrawing)
+  assert.equal(phoneDevice({ matchMedia: none, navigator: { userAgent: desktopUa }, localStorage: { getItem: () => '1' } }), false);
+  assert.equal(phoneDevice({ matchMedia: none, navigator: { userAgent: pixelUa } }), true);
 });
 
 test('LobbyClient: a refused HELLO closes the socket quietly, so the refusal stays on screen', async () => {
