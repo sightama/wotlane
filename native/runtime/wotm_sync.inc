@@ -591,6 +591,9 @@ namespace wotm_sync
 
     void netPace(uint32_t frame)
     {
+#ifdef __EMSCRIPTEN__
+        wotmWebNetStats(frame, g_netStalls, g_netStallMs, g_net->delay(), g_net->rttMs());   // for the page's diagnostics report
+#endif
         if (const uint32_t d = g_net->delay(); d != wotm_netstatus::g_delay.load())
         {
             std::fprintf(stderr, "[net] delay %u -> %u frames at frame %u\n", wotm_netstatus::g_delay.load(), d, frame);

@@ -20,6 +20,8 @@ namespace
     constexpr const char *kDiscFiles[] = {"SCUS_971.97", "game.iso"};
     std::atomic<bool> g_hidden{false};
     std::atomic<double> g_stallMs{0};
+    // the match's counters for the page's diagnostics (wotmWebNetStats): index = web/diag.js NET_STAT
+    std::atomic<double> g_netStats[5];
     std::mutex g_stallMu;
     std::string g_stallText;
 }
@@ -68,9 +70,20 @@ void wotmWebNetStall(double ms, const char *text)
     g_stallMs = ms;
 }
 
+void wotmWebNetStats(uint32_t frame, uint32_t waits, double waitMs, uint32_t delay, uint32_t pingMs)
+{
+    g_netStats[0] = frame;
+    g_netStats[1] = waits;
+    g_netStats[2] = waitMs;
+    g_netStats[3] = delay;
+    g_netStats[4] = pingMs;
+}
+
 // called by the page (boot.js)
 extern "C"
 {
+    // the match's counters, as wotmWebNetStats set them: 0 frame, 1 waits, 2 wait ms, 3 delay, 4 ping (anything else: 0)
+    EMSCRIPTEN_KEEPALIVE double wotm_web_net_stat(int which) { return which >= 0 && which < 5 ? g_netStats[which].load() : 0; }
     EMSCRIPTEN_KEEPALIVE void wotm_web_set_hidden(int hidden) { g_hidden = hidden != 0; }
     EMSCRIPTEN_KEEPALIVE double wotm_web_net_stall_ms() { return g_stallMs.load(); }
     // the text stays valid until the next call (the page reads it right away)

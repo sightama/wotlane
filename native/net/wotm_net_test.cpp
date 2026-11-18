@@ -5,6 +5,7 @@
 #include "wotm_monsters.hpp"
 #include "wotm_lobby_client.hpp"
 #include "wotm_net_client.hpp"
+#include "wotm_net_diag.hpp"
 #include "wotm_net_master.hpp"
 #include "wotm_net_proto.hpp"
 #include "wotm_net_server.hpp"
@@ -12,10 +13,14 @@
 #include "wotm_net_ws.hpp"
 #include "wotm_net_wslink.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <cctype>
 #include <chrono>
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <map>
 #include <memory>
 #include <thread>
@@ -1999,6 +2004,299 @@ namespace
         while (a.status() != Status::Lost && std::chrono::steady_clock::now() < until)
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         CHECK(a.status() == Status::Lost);
+    }
+
+    // ---- diagnostics: DIAG lines from the pages, the server's own per-player view, the per-match files ----
+
+    namespace fs = std::filesystem;
+    namespace diag = wotm_net::diag;
+
+    fs::path tempDir(const std::string &tag)
+    {
+        const fs::path dir = fs::temp_directory_path() / ("wotm_net_test_" + tag + "_" + std::to_string(freePort()));
+        fs::remove_all(dir);
+        fs::create_directories(dir);
+        return dir;
+    }
+
+    std::string readFile(const fs::path &path)
+    {
+        std::ifstream in(path, std::ios::binary);
+        return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+    }
+
+    // everything the server wrote under `dir`, files in name order
+    std::string readDiagDir(const fs::path &dir)
+    {
+        std::vector<fs::path> files;
+        for (const auto &e : fs::directory_iterator(dir))
+            files.push_back(e.path());
+        std::sort(files.begin(), files.end());
+        std::string all;
+        for (const fs::path &f : files)
+            all += readFile(f);
+        return all;
+    }
+
+    // waits (up to 3 s) until what the server wrote under `dir` contains `text`; returns it all
+    std::string waitForDiag(const fs::path &dir, const std::string &text)
+    {
+        std::string all;
+        for (int i = 0; i < 300; ++i)
+        {
+            all = readDiagDir(dir);
+            if (all.find(text) != std::string::npos)
+                break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        return all;
+    }
+
+    size_t countOf(const std::string &haystack, const std::string &needle)
+    {
+        size_t n = 0;
+        for (size_t at = haystack.find(needle); at != std::string::npos; at = haystack.find(needle, at + 1))
+            ++n;
+        return n;
+    }
+
+    TEST(diag_report_keeps_clean_fields_and_a_decoded_note)
+    {
+        diag::Report r;
+        CHECK(diag::parse(p::words("DIAG v=1 why=periodic fps=59.8 lobby=AB2C note=slow%20and%20laggy%20caf%C3%A9"), r));
+        CHECK(r.get("fps") == "59.8" && r.get("why") == "periodic" && r.get("lobby") == "AB2C");
+        CHECK(r.get("missing").empty());
+        CHECK(r.note == "slow and laggy caf\xc3\xa9");
+        CHECK(diag::format(r) == "v=1 why=periodic fps=59.8 lobby=AB2C note=\"slow and laggy caf\xc3\xa9\"");
+    }
+
+    TEST(diag_report_drops_bad_keys_long_values_control_characters_and_bad_notes)
+    {
+        diag::Report r;
+        CHECK(diag::parse(p::words("DIAG Bad-Key=1 ok=1 long=" + std::string(diag::kMaxValueBytes + 1, 'x') + " a=b=c quote=a\"b empty= noeq 9x=1 " +
+                                   "note=a%0Ab%00c%7F%22quoted%22%5Cslash"), r));
+        CHECK(r.fields.size() == 1u && r.get("ok") == "1");   // the bad key, the long value, a second '=', a quote, an empty value, a word without '=' are dropped
+        CHECK(r.note == "abc\"quoted\"\\slash");               // control characters go, the rest stays
+        CHECK(diag::format(r) == "ok=1 note=\"abc\\\"quoted\\\"\\\\slash\"");   // quotes and backslashes are escaped in the log line
+
+        diag::Report bad;
+        CHECK(diag::parse(p::words("DIAG ok=1 note=%FF%FEbad"), bad));
+        CHECK(bad.note.empty());   // not UTF-8: the note is dropped, the numbers stay
+        diag::Report long_;
+        CHECK(diag::parse(p::words("DIAG note=" + std::string(diag::kMaxNoteBytes + 50, 'n')), long_));
+        CHECK(long_.note.size() == diag::kMaxNoteBytes);
+        diag::Report many;
+        std::string line = "DIAG";
+        for (size_t i = 0; i < diag::kMaxFields + 10; ++i)
+            line += " k" + std::to_string(i) + "=1";
+        CHECK(diag::parse(p::words(line), many) && many.fields.size() == diag::kMaxFields);
+        diag::Report none;
+        CHECK(!diag::parse(p::words("DIAG"), none));
+        CHECK(!diag::parse(p::words("DIAG Bad-Key=1"), none));
+    }
+
+    TEST(diag_archive_writes_per_match_files_and_prunes_old_ones_and_the_oldest_over_the_cap)
+    {
+        const fs::path dir = tempDir("archive");
+        diag::Limits lim;
+        lim.keepDays = 7;
+        lim.maxTotalBytes = 300;
+        lim.maxFileBytes = 100;
+        diag::Archive a(dir.string(), lim);
+        CHECK(a.enabled());
+        const std::string f1 = a.begin("AB2C", "match");
+        CHECK(f1.size() > 15u && f1.find("-AB2C-match.log") != std::string::npos);
+        a.append(f1, "line one");
+        a.append(f1, "line two");
+        CHECK(readFile(dir / f1) == "line one\nline two\n");
+        CHECK(a.latest("AB2C") == f1 && a.latest("ZZZZ").empty());
+        const std::string f1b = a.begin("AB2C", "match");   // a second one in the same second is its own file
+        CHECK(f1b != f1 && a.latest("AB2C") == f1b);
+
+        for (int i = 0; i < 20; ++i)
+            a.append(f1, std::string(20, 'x'));   // past the per-file cap: dropped, with one marker
+        const std::string capped = readFile(dir / f1);
+        CHECK(capped.size() < 100u + 60u && countOf(capped, "truncated") == 1u);
+
+        const std::string stale = a.begin("OLD2", "lobby");
+        a.append(stale, "old");
+        fs::last_write_time(dir / stale, fs::file_time_type::clock::now() - std::chrono::hours(24 * 8));
+        a.prune();
+        CHECK(!fs::exists(dir / stale) && fs::exists(dir / f1));
+
+        // over the total: the oldest go first, the newest stays
+        std::vector<std::string> names;
+        for (int i = 0; i < 4; ++i)
+        {
+            names.push_back(a.begin("T" + std::to_string(i) + "XX", "match"));
+            a.append(names.back(), std::string(90, 'y'));
+            fs::last_write_time(dir / names.back(), fs::file_time_type::clock::now() - std::chrono::hours(1 + (3 - i)));
+        }
+        a.prune();
+        uint64_t total = 0;
+        for (const auto &e : fs::directory_iterator(dir))
+            total += fs::file_size(e.path());
+        CHECK(total <= lim.maxTotalBytes);
+        CHECK(fs::exists(dir / names[3]) && !fs::exists(dir / names[0]));
+    }
+
+    TEST(diag_archive_is_off_without_a_folder)
+    {
+        diag::Archive a("", diag::Limits{});
+        CHECK(!a.enabled());
+        CHECK(a.begin("AB2C", "match").empty());
+        a.append("", "nowhere");
+        a.prune();
+    }
+
+    // a page's report is journaled under its player's name and lobby, in that lobby's file; chat text never reaches the files
+    TEST(diag_report_is_filed_under_the_player_and_never_holds_the_chat)
+    {
+        const fs::path dir = tempDir("report");
+        ServerConfig cfg = testConfig();
+        cfg.diagDir = dir.string();
+        RunningServer rs(cfg);
+        LineSocket a;
+        CHECK(hello(a, cfg.port) == "WELCOME 0");
+        const std::string code = createLobby(a, "Lobby", "Ana", 3);
+        a.sendLine("CHAT my secret plans");
+        a.sendLine("DIAG v=1 why=join cores=8 dpr=2 ua=Chrome-131");
+        a.sendLine("DIAG v=1 why=periodic fps=58.1 gfps=30 lobby=ZZZZ name=Mallory");   // what the connection is in wins over what it claims
+        const std::string all = waitForDiag(dir, "fps=58.1");
+        CHECK(all.find("src=client lobby=" + code + " player=Ana v=1 why=join cores=8 dpr=2 ua=Chrome-131") != std::string::npos);
+        CHECK(all.find("player=Ana v=1 why=periodic fps=58.1 gfps=30") != std::string::npos);
+        CHECK(all.find("Mallory") == std::string::npos && all.find("ZZZZ") == std::string::npos);
+        CHECK(all.find("secret") == std::string::npos);
+        CHECK(all.size() > 21u && all[4] == '-' && all[10] == 'T' && all[19] == 'Z' && all[20] == ' ');   // each line starts with an ISO UTC time
+    }
+
+    // After a match the page is back on its front panel, with no lobby connection: its report says which lobby and who it was. Nothing
+    // proves that, so it is filed apart (reports-<date>.log) and labeled as a claim: it can't put lines into a lobby's own file
+    TEST(diag_report_from_outside_a_lobby_is_filed_apart_as_a_claim)
+    {
+        const fs::path dir = tempDir("stray");
+        ServerConfig cfg = testConfig();
+        cfg.diagDir = dir.string();
+        RunningServer rs(cfg);
+        LineSocket a, stray;
+        CHECK(hello(a, cfg.port) == "WELCOME 0");
+        const std::string code = createLobby(a, "Lobby", "Ana", 3);
+        CHECK(hello(stray, cfg.port) == "WELCOME 1");
+        stray.sendLine("DIAG v=1 why=report lobby=" + code + " name=Ana fps=12 note=laggy%20after%20the%20first%20minute");
+        stray.sendLine("DIAG v=1 why=report lobby=WXYZ name=Zed fps=13 note=no%20such%20lobby");
+        stray.sendLine("DIAG v=1 why=report fps=14");
+        const std::string all = waitForDiag(dir, "fps=14");
+        CHECK(all.find("src=client_outside claimed_lobby=" + code + " claimed_player=Ana v=1 why=report fps=12 note=\"laggy after the first minute\"") !=
+              std::string::npos);
+        CHECK(all.find("src=client_outside claimed_lobby=WXYZ claimed_player=Zed v=1 why=report fps=13") != std::string::npos);
+        CHECK(all.find("src=client_outside claimed_lobby=- claimed_player=- v=1 why=report fps=14") != std::string::npos);
+        size_t looseFiles = 0;
+        for (const auto &e : fs::directory_iterator(dir))
+        {
+            const std::string name = e.path().filename().string();
+            if (name.rfind("reports-", 0) == 0)
+            {
+                ++looseFiles;
+                CHECK(readFile(e.path()).find("fps=12") != std::string::npos);
+            }
+            else
+                CHECK(readFile(e.path()).find("fps=12") == std::string::npos);   // the lobby's own file never holds a claim
+        }
+        CHECK(looseFiles == 1u);
+    }
+
+    // a client's keys never read as the server's: the line's own fields (src, lobby, player, event, ...) can't be repeated by a report
+    TEST(diag_report_cannot_repeat_the_servers_own_keys)
+    {
+        const fs::path dir = tempDir("keys");
+        ServerConfig cfg = testConfig();
+        cfg.diagDir = dir.string();
+        RunningServer rs(cfg);
+        LineSocket a;
+        CHECK(hello(a, cfg.port) == "WELCOME 0");
+        const std::string code = createLobby(a, "Lobby", "Ana", 3);
+        a.sendLine("DIAG src=server event=match_over player=Bia slot=1 transport=ws fps=9");
+        const std::string all = waitForDiag(dir, "fps=9");
+        CHECK(all.find("src=client lobby=" + code + " player=Ana fps=9") != std::string::npos);
+        CHECK(countOf(all, "event=match_over") == 0u && all.find("player=Bia") == std::string::npos && all.find("slot=1") == std::string::npos);
+    }
+
+    // a lobby member can't fill a file so far that the server's own lines stop: reports only get part of the cap
+    TEST(diag_reports_leave_room_for_the_servers_own_lines)
+    {
+        const fs::path dir = tempDir("room");
+        diag::Limits lim;
+        lim.maxFileBytes = 400;
+        diag::Archive a(dir.string(), lim);
+        const std::string file = a.begin("AB2C", "match");
+        for (int i = 0; i < 20; ++i)
+            a.append(file, std::string(40, 'c'), false);
+        const size_t afterClients = readFile(dir / file).size();
+        CHECK(afterClients <= 300u + 60u);   // three quarters of the cap, plus the one marker line
+        a.append(file, std::string(40, 's'), true);
+        a.append(file, std::string(40, 's'), true);
+        CHECK(readFile(dir / file).find(std::string(40, 's')) != std::string::npos);
+        CHECK(readFile(dir / file).size() <= 400u + 60u);
+    }
+
+    TEST(diag_reports_are_rate_limited_per_connection)
+    {
+        const fs::path dir = tempDir("rate");
+        ServerConfig cfg = testConfig();
+        cfg.diagDir = dir.string();
+        RunningServer rs(cfg);
+        LineSocket a;
+        CHECK(hello(a, cfg.port) == "WELCOME 0");
+        createLobby(a, "Lobby", "Ana", 3);
+        for (int i = 0; i < p::kDiagBurst + 25; ++i)
+            a.sendLine("DIAG v=1 why=periodic fps=" + std::to_string(i));
+        a.sendLine("PING-LIKE flush");   // answered with an ERROR once every line before it was handled
+        CHECK(readUntil(a, "ERROR").rfind("ERROR unknown command", 0) == 0);
+        CHECK(countOf(readDiagDir(dir), "why=periodic") == static_cast<size_t>(p::kDiagBurst));
+    }
+
+    TEST(diag_needs_a_hello_and_the_file_only_exists_when_a_folder_is_set)
+    {
+        ServerConfig cfg = testConfig();
+        RunningServer rs(cfg);   // no diag folder: reports are only journaled
+        LineSocket raw;
+        CHECK(raw.connect("127.0.0.1", cfg.port, 2000));
+        raw.sendLine("DIAG v=1 fps=1");
+        CHECK(readUntil(raw, "ERROR").rfind("ERROR send HELLO first", 0) == 0);
+        LineSocket a;
+        CHECK(hello(a, cfg.port) == "WELCOME 0");
+        a.sendLine("DIAG v=1 fps=1");
+        a.sendLine("DIAG garbage");   // nothing usable: ignored, no answer
+        a.sendLine("LIST");
+        CHECK(readUntil(a, "END") == "END");   // the connection still works
+    }
+
+    // the server's own view of each player in a started match: transport, Hz, delay, round trip, how input packets arrived
+    TEST(diag_server_view_reports_each_player_of_a_match)
+    {
+        const fs::path dir = tempDir("view");
+        ServerConfig cfg = wsTestConfig();
+        cfg.diagDir = dir.string();
+        cfg.diagEveryMs = 150;
+        RunningServer rs(cfg);
+        auto ms = formMatch(cfg.port, {"Ana", "Bia"}, {3, 1});
+        ClientConfig ca = clientFor(cfg.port, *ms[0]), cb = clientFor(cfg.port, *ms[1]);
+        cb.host = wsUrl(cfg, "/match");
+        MatchClient a, b;
+        std::string err;
+        CHECK(a.start(ca, err) && b.start(cb, err));
+        CHECK(a.waitStarted(5000) && b.waitStarted(5000));
+        exchange(a, b, 120);
+        const std::string all = waitForDiag(dir, "player=Bia slot=1");
+        CHECK(all.find("event=match_start players=2 hz=60") != std::string::npos);
+        CHECK(all.find("src=server lobby=") != std::string::npos);
+        CHECK(all.find("player=Ana slot=0 transport=enet hz=60 delay=") != std::string::npos);
+        CHECK(all.find("player=Bia slot=1 transport=ws hz=60 delay=") != std::string::npos);
+        CHECK(all.find("in_pkts=") != std::string::npos && all.find("in_gap_max_ms=") != std::string::npos && all.find("behind_max=") != std::string::npos);
+        size_t files = 0;
+        for (const auto &e : fs::directory_iterator(dir))
+            files += e.path().filename().string().find("-match.log") != std::string::npos ? 1 : 0;
+        CHECK(files == 1u);
     }
 }
 

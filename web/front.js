@@ -5,6 +5,8 @@ import { initCreations, addLobbyChoices } from './creations_ui.js';
 import { initSettings } from './settings_ui.js';
 import { settingsSaved } from './settings.js';
 import { playStartupMovies } from './movies.js';
+import { DiagReporter, FrameWatch, LongTaskWatch, deviceFields, diagLine, flushSocket, installAudioWatch, joinFields, readGame, reportFields } from './diag.js';
+import { deliverReport, initReport } from './report_ui.js';
 
 const MONSTERS = [[1, 'Congar'], [2, 'Robo-47'], [3, 'Togera'], [4, 'Ultra V'], [5, 'Preytor'], [7, 'Kineticlops'], [8, 'Magmo'],
   [9, 'Raptros'], [10, 'Agamo'], [11, 'Zorgulon']];
@@ -109,6 +111,57 @@ function showMemberList() {
   }));
 }
 
+// Diagnostics: while a match runs, the lobby connection (which stays open) carries a DIAG report every 5 s and a last one when the match
+// ends (web/diag.js). It reads counters; it never touches the game. The audio watch is installed at load, before the game makes its
+// audio context
+const audioWatch = installAudioWatch(window);
+const LAST_DIAG = 'wotlane.lastdiag';
+let diagReporter = null;
+
+function startDiag(client, socket, match, build) {
+  diagReporter = new DiagReporter({
+    send: (line) => { try { client.diag(line); } catch { /* the connection is gone: the report is lost, the match goes on */ } },
+    base: [['build', build], ['lobby', match.lobby], ['name', myName], ['hz', 60 / Number(match.step)], ['players', match.players]],
+    now: () => performance.now(),
+    setTimer: (fn, ms) => setInterval(fn, ms),
+    clearTimer: (id) => clearInterval(id),
+    store: { set: (v) => { try { sessionStorage.setItem(LAST_DIAG, JSON.stringify(v)); } catch { /* private window: not kept */ } } },
+    frames: new FrameWatch({ raf: (cb) => requestAnimationFrame(cb), doc: document }),
+    longTasks: new LongTaskWatch(window.PerformanceObserver),
+    audio: audioWatch,
+    game: () => readGame(window),
+    device: () => deviceFields(window),
+    isHidden: () => document.hidden,
+  });
+  diagReporter.begin();
+  // the last report goes out as the match ends: boot.js calls this before it reloads the page (the game quit, or Leave the match)
+  window.wotmDiagFinish = async () => {
+    try {
+      diagReporter?.finish();
+      await flushSocket(socket);
+    } catch { /* a report that can't be sent is not worth holding the page */ }
+  };
+  window.addEventListener('pagehide', () => diagReporter?.finish());
+}
+
+function lastDiag() {
+  try { return JSON.parse(sessionStorage.getItem(LAST_DIAG)); } catch { return null; }
+}
+
+// the hand-sent report: the last match's numbers, this device, the lobby and the name, and the player's note
+async function sendReport(note) {
+  const build = await buildId();
+  const line = diagLine(reportFields({ saved: lastDiag(), device: deviceFields(window), lobby: lobby?.code ?? '', name: cleanName($('name').value), build }), note);
+  return deliverReport({
+    line, lobby,
+    connect: async () => {
+      const client = new LobbyClient(new WebSocket(serverUrl('/lobby')), build);
+      await client.ready;
+      return client;
+    },
+  });
+}
+
 async function connect(build) {
   const ws = new WebSocket(serverUrl('/lobby'));
   const client = new LobbyClient(ws, build, { halfRate: halfRateDevice(window) });
@@ -127,6 +180,7 @@ async function connect(build) {
     try { sessionStorage.setItem('wotlane.lobby', client.code); } catch { /* private window: not kept */ }
     front.hidden = true;
     await settingsSaved();   // a change made a moment ago is in the file before the game reads it
+    startDiag(client, ws, match, build);
     window.wotmStart(matchEnv(match, serverUrl('/match')), build);
   };
   await client.ready;
@@ -222,6 +276,7 @@ async function hostOrJoin(join) {
     const build = await buildId();
     lobby = await connect(build);
     showLobby(join ? await lobby.join(code, name, monster) : await lobby.create(name, monster), !join);
+    lobby.diag(diagLine(joinFields([['build', build], ['lobby', lobby.code], ['name', name]], deviceFields(window))));
     if (!join) await sendSettings();
   } catch (e) {
     say(friendlyError(e.message));
@@ -298,6 +353,7 @@ function init() {
   }
   initCreations(STAGES);
   initSettings({ remember, recall });
+  initReport({ send: sendReport }).available(!!lastDiag());   // after a match the page has reloaded: its numbers are what the report holds
   if (window.wotmDirect) {
     front.hidden = true;
     buildId().then((b) => window.wotmStart(null, b));
