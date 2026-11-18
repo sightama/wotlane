@@ -243,6 +243,7 @@ namespace
         void boundary(uint8_t *rdram, R5900Context *ctx);   // rtMain's frame boundary, right before wotm_sync::frame
         void barrier(const char *why);   // a point the state can't be rolled back across
         void init(PS2Runtime &runtime);
+        void installRedoSkips(PS2Runtime &runtime);   // WOTM_SYNCTEST_REDO_SKIP: after every other hook
         double g_paceWaitMs = 0.0;   // the pacing wait in this boundary (waitMinRateByVblanks): not the game's time
     }
 #include "wotm_sync.inc"
@@ -2985,6 +2986,7 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
     wotmCustomInstall(runtime);  // after the skins: wraps their SetAIMonster
     wotmTrainingInstall(runtime);   // last: the outermost hook on update/takeHit/takeDamage (sees the damage the cheats let through)
     wotmTrigCheckInstall(runtime);
+    wotm_rollback::installRedoSkips(runtime);
     if (g_minRate > 0)
         std::fprintf(stderr, "[wotm] updateRate >= %d (dt <= 1/%d) for the whole game (WOTM_RATEMIN)\n", g_minRate, g_minRate);
     else
