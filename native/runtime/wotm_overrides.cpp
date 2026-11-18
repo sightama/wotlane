@@ -43,7 +43,8 @@
 #ifdef __EMSCRIPTEN__
 #include "wotm_web.h"                 // browser: the tab is hidden (Away), a long network wait for the page to offer leaving (wotm_sync.inc)
 #endif
-
+// the EE scheduler's idle time (EeSchedulerGame.cpp wotmIdleWait), for the page's diagnostics report (wotm_sync.inc netPace)
+extern std::atomic<unsigned long long> g_wotmIdleUs;
 #ifdef _WIN32
 extern "C" __declspec(dllimport) unsigned long __stdcall GetModuleFileNameA(void *module, char *path, unsigned long size);
 #else

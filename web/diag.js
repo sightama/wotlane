@@ -233,8 +233,8 @@ export function installAudioWatch(win) {
 
 // The game's counters since it started: frames presented and the time its loop worked (wotm_webfs.cpp wotmFrames), and from the wasm
 // module (wotm_web_net_stat, native/wotm_webfs.cpp): the game frame, the waits for the other players and their total ms, the input
-// delay in frames and the ping. Only reads.
-export const NET_STAT = { frame: 0, waits: 1, waitMs: 2, delay: 3, pingMs: 4 };
+// delay in frames, the ping, and the ms the game thread spent idle (waiting for a vblank or an event). Only reads.
+export const NET_STAT = { frame: 0, waits: 1, waitMs: 2, delay: 3, pingMs: 4, idleMs: 5 };
 export function readGame(win) {
   const m = win.Module;
   const f = win.wotmFrames;
@@ -242,6 +242,7 @@ export function readGame(win) {
   return {
     presented: f?.frames, workMs: f?.workMs,
     frame: stat(NET_STAT.frame), waits: stat(NET_STAT.waits), waitMs: stat(NET_STAT.waitMs), delay: stat(NET_STAT.delay), pingMs: stat(NET_STAT.pingMs),
+    idleMs: stat(NET_STAT.idleMs),
   };
 }
 
@@ -286,6 +287,8 @@ export function windowFields(prev, cur) {
     ['fps', fix(perSecond(presented))],
     ['gfps', fix(perSecond(frames))],
     ['work_ms', presented > 0 && Number.isFinite(cur.workMs) ? fix((cur.workMs - (prev.workMs ?? 0)) / presented) : undefined],
+    ['ee_busy_ms', frames > 0 && Number.isFinite(cur.idleMs) ? fix((cur.t - prev.t - since('idleMs') - (since('waitMs') ?? 0)) / frames) : undefined],
+    ['ee_idle_ms', frames > 0 && Number.isFinite(cur.idleMs) ? fix(since('idleMs') / frames) : undefined],
     ['frame', cur.frame],
     ['delay', cur.delay],
     ['ping_ms', cur.pingMs],

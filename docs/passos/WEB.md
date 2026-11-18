@@ -168,21 +168,22 @@ from `version.json` in `WOTM_BUILDID`.
 
 **Chat:** a text box in the lobby sends `CHAT <text>` (up to 200 bytes of printable text; the server drops control characters and trims the ends, and allows 5 lines per 10 s per member, then answers "chatting too fast"). The server sends `CHAT <code> <name> <text>` to everyone in the lobby, the sender too, and only while the lobby waits (`ERROR chat is only open before the match` after the start). The page shows the last 50 lines as plain text (`textContent`) and clears them when it joins a lobby. `CHAT` is an extra line for older clients to skip, so the protocol number stays 5.
 
-**Diagnostics:** the page reports how an online match runs to the server (`web/diag.js`, written up in `docs/ONLINE.md`, "Diagnostics"). It
-sends `DIAG` lines over the lobby connection, which stays open during the match: one on joining a lobby, one every 5 s of the match and a
-last one when it ends (`wotmDiagFinish`, called by `wotmQuit` and Leave the match in `boot.js` before the page reloads, with a 300 ms wait
-for the socket to empty; `pagehide` also sends it). `DiagReporter` samples every 500 ms (the ping, for its jitter) and builds each report
-from the difference of two samples. Its sources only read: the game loop's presented-frame counter (`globalThis.wotmFrames`), the match
-counters the game publishes (`wotmWebNetStats` in `native/wotm_web.h`, set every game frame in `netPace`, read through the exported
-`wotm_web_net_stat(i)`: frame, waits, wait ms, delay, ping), the input latency window (`latencySource`: `wotm_web_latency_take` then
-`wotm_web_latency(i)`, once per report; the page feeds the probe each keydown time in `boot.js` and each pad button press in `touch.js`
-through `wotm_web_input_at`, which only stores a time), `FrameWatch` (animation frame intervals), `LongTaskWatch` (a
-`PerformanceObserver` for `longtask`; Firefox has none, so those fields are left out), and `installAudioWatch`, which adds an `audioprocess`
-listener to each `ScriptProcessorNode` the game's audio makes (installed when the page loads; a callback later than 1.5 buffers counts as a
-dropped buffer; a page whose audio doesn't use script processors reports no `au_` fields). Nothing here writes to the game, so determinism is
-untouched; the wasm change adds counters and an export, and changes the build id like any change under `native/`. `LobbyClient.diag()` sends
-a line and stops sending once the server answers `ERROR unknown command: DIAG`; `sendDiag()` resolves once a `LIST` sent after the line is
-answered, which is how the page knows the server read it.
+**Diagnostics:** the page reports how an online match runs to the server (`web/diag.js`, written up in `docs/ONLINE.md`,
+"Diagnostics"). It sends `DIAG` lines over the lobby connection, which stays open during the match: one on joining a lobby, one every 5
+s of the match and a last one when it ends (`wotmDiagFinish`, called by `wotmQuit` and Leave the match in `boot.js` before the page
+reloads, with a 300 ms wait for the socket to empty; `pagehide` also sends it). `DiagReporter` samples every 500 ms (the ping, for its
+jitter) and builds each report from the difference of two samples. Its sources only read: the game loop's presented-frame counter
+(`globalThis.wotmFrames`), the match counters the game publishes (`wotmWebNetStats` in `native/wotm_web.h`, set every game frame in
+`netPace`, read through the exported `wotm_web_net_stat(i)`: frame, waits, wait ms, delay, ping, the game thread's idle ms), the input
+latency window (`latencySource`: `wotm_web_latency_take` then `wotm_web_latency(i)`, once per report; the page feeds the probe each
+keydown time in `boot.js` and each pad button press in `touch.js` through `wotm_web_input_at`, which only stores a time), `FrameWatch`
+(animation frame intervals), `LongTaskWatch` (a `PerformanceObserver` for `longtask`; Firefox has none, so those fields are left out),
+and `installAudioWatch`, which adds an `audioprocess` listener to each `ScriptProcessorNode` the game's audio makes (installed when the
+page loads; a callback later than 1.5 buffers counts as a dropped buffer; a page whose audio doesn't use script processors reports no
+`au_` fields). Nothing here writes to the game, so determinism is untouched; the wasm change adds counters and an export, and changes
+the build id like any change under `native/`. `LobbyClient.diag()` sends a line and stops sending once the server answers `ERROR
+unknown command: DIAG`; `sendDiag()` resolves once a `LIST` sent after the line is answered, which is how the page knows the server
+read it.
 
 **Send report** (`web/report_ui.js`): the card the front panel's Send report button (shown after a match; the page keeps the last report in
 `sessionStorage` under `wotlane.lastdiag`) and Settings, Online tab, open. It sends the last match's numbers, this device and a note of up

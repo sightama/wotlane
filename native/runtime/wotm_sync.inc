@@ -624,7 +624,8 @@ namespace wotm_sync
     void netPace(uint32_t frame)
     {
 #ifdef __EMSCRIPTEN__
-        wotmWebNetStats(frame, g_netStalls, g_netStallMs, g_net->delay(), g_net->rttMs());   // for the page's diagnostics report
+        // for the page's diagnostics report; the game thread's idle time is the EE scheduler's (EeSchedulerGame.cpp wotmIdleWait)
+        wotmWebNetStats(frame, g_netStalls, g_netStallMs, g_net->delay(), g_net->rttMs(), ::g_wotmIdleUs.load(std::memory_order_relaxed) / 1000.0);
 #endif
         if (const uint32_t d = g_net->delay(); d != wotm_netstatus::g_delay.load())
         {

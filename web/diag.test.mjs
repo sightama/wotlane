@@ -122,10 +122,10 @@ test('audio: callbacks later than 1.5 buffers are underruns; a page without scri
 
 test('the game counters are read from the wasm module and the presented-frame counter, and a game that is not there yet gives nothing', () => {
   const calls = [];
-  const Module = { _wotm_web_net_stat: (i) => { calls.push(i); return [600, 3, 120.5, 4, 55][i]; } };
-  assert.deepEqual(readGame({ Module, wotmFrames: { frames: 590, workMs: 2950.5 } }), { presented: 590, workMs: 2950.5, frame: 600, waits: 3, waitMs: 120.5, delay: 4, pingMs: 55 });
-  assert.deepEqual(calls, [0, 1, 2, 3, 4]);   // reads only
-  assert.deepEqual(readGame({}), { presented: undefined, workMs: undefined, frame: undefined, waits: undefined, waitMs: undefined, delay: undefined, pingMs: undefined });
+  const Module = { _wotm_web_net_stat: (i) => { calls.push(i); return [600, 3, 120.5, 4, 55, 9000.5][i]; } };
+  assert.deepEqual(readGame({ Module, wotmFrames: { frames: 590, workMs: 2950.5 } }), { presented: 590, workMs: 2950.5, frame: 600, waits: 3, waitMs: 120.5, delay: 4, pingMs: 55, idleMs: 9000.5 });
+  assert.deepEqual(calls, [0, 1, 2, 3, 4, 5]);   // reads only
+  assert.deepEqual(readGame({}), { presented: undefined, workMs: undefined, frame: undefined, waits: undefined, waitMs: undefined, delay: undefined, pingMs: undefined, idleMs: undefined });
 });
 
 test('a window is the difference of two samples: rates, the cost of a frame, waits for the network, ping and its jitter', () => {
@@ -141,6 +141,16 @@ test('a window is the difference of two samples: rates, the cost of a frame, wai
   });
 });
 
+// the game thread's own time per game frame: the window's time less the game's idle waits (vblank, events) and its waits for the network
+test('a window gives the game thread busy and idle ms per game frame', () => {
+  const prev = { t: 5000, frame: 300, waitMs: 100, idleMs: 2000 };
+  const cur = { t: 10000, frame: 420, waitMs: 700, idleMs: 3400 };
+  const f = Object.fromEntries(windowFields(prev, cur));
+  assert.equal(f.ee_busy_ms, '25.0');   // (5000 - 1400 - 600) / 120
+  assert.equal(f.ee_idle_ms, '11.7');   // 1400 / 120
+  assert.equal(Object.fromEntries(windowFields(prev, { ...cur, idleMs: undefined })).ee_busy_ms, undefined);
+  assert.equal(Object.fromEntries(windowFields(prev, { ...cur, frame: 300 })).ee_busy_ms, undefined);   // no frame computed
+});
 test('a window missing its sources leaves their fields out; counters that start at zero need no earlier sample', () => {
   const f = Object.fromEntries(windowFields({ t: 0 }, { t: 5000, presented: 295, workMs: 1000, frame: 300 }));
   assert.deepEqual(f, { up_s: 5, fps: '59.0', gfps: '60.0', work_ms: '3.4', frame: 300 });
