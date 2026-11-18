@@ -129,6 +129,16 @@ namespace wotm_net::ws
         return true;
     }
 
+    // an address from a proxy header: blanks trimmed, lower case; empty when it is not plausible
+    inline std::string cleanAddress(std::string s)
+    {
+        const size_t b = s.find_first_not_of(" \t"), e = s.find_last_not_of(" \t");
+        s = b == std::string::npos ? std::string() : s.substr(b, e - b + 1);
+        for (char &ch : s)
+            ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+        return plausibleAddress(s) ? s : std::string();
+    }
+
     // a client's opening request (everything up to the blank line): GET <path> with Upgrade: websocket and a key
     inline std::optional<Handshake> parseHandshake(std::string_view request)
     {
@@ -142,15 +152,10 @@ namespace wotm_net::ws
             return std::nullopt;
         const auto ua = header(request, "User-Agent");
         std::string address;
-        if (const auto cf = header(request, "CF-Connecting-IP"); cf && plausibleAddress(*cf))
-            address = *cf;
+        if (const auto cf = header(request, "CF-Connecting-IP"))
+            address = cleanAddress(*cf);   // present: it is the answer, valid or not (X-Forwarded-For would be Cloudflare's own edge)
         else if (const auto xff = header(request, "X-Forwarded-For"))
-        {
-            const std::string first = xff->substr(0, xff->find(','));
-            const size_t b = first.find_first_not_of(' '), e = first.find_last_not_of(' ');
-            if (b != std::string::npos && plausibleAddress(std::string_view(first).substr(b, e - b + 1)))
-                address = first.substr(b, e - b + 1);
-        }
+            address = cleanAddress(xff->substr(0, xff->find(',')));
         return Handshake{std::string(request.substr(4, pathEnd - 4)), *key, ua ? *ua : std::string(), address};
     }
 
