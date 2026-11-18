@@ -39,9 +39,8 @@ For online play start `wotm_server --ws-port <port>`; a page opened from `localh
   `python3 tools/web_boot_chunks.py <boot log> <SCUS_971.97>` from a boot to the title); the game starts once they are in. For an online match
   `web/match_prefetch.js` fetches the chunks of the lobby's stage and of each member's monster and costume (`web/match_chunks.json`)
   once the lobby's choices have held still for 1 s, four at a time, a new choice stopping the fetch of the one it replaces; the
-  game's boot asks again at once for what is still missing. A fight's load reads about 22 MiB (the stage, its two music tracks whole,
-  each monster) one file after another, so on a slow line the slowest player's download held every player at the match's first
-  frames. `match_chunks.json` comes from fight logs: `node tools/web_match_logs.mjs` (one direct fight per monster with that monster
+  game's boot asks again at once for what is still missing. A fight's load reads the stage, its two music tracks whole and each
+  monster one file after another, so on a slow line a match waits at its first frames for the slowest player's download. `match_chunks.json` comes from fight logs: `node tools/web_match_logs.mjs` (one direct fight per monster with that monster
   in both seats on stage 1, one per stage) then `python3 tools/web_match_chunks.py <data>/game.iso runtime/match_logs`: a file read in
   every monster's fight is the stage's, the rest of a monster's fight is the monster's, and its costumes follow the disc's file names
   (`MON/<NAME><costume>.*`, `RST/<NAME><costume>.AIC`). A map of the player's own (a map id as the stage) prefetches its monsters
