@@ -5524,6 +5524,23 @@ static void checkInflateTo(uint32_t dest)
     CHECK(s.windowPos == data.size() % z::kWindow);
 }
 
+// Esc leaves fullscreen and the pointer lock in a browser and cannot be prevented, so the pause (Start) is on Tab and Enter, and the next
+// target on T and the wheel; Esc is no default key at all (it only closes menus, wotm_pad.inc)
+TEST(default_keyboard_opens_the_pause_with_tab_not_esc)
+{
+    namespace st = wotm::settings;
+    const auto has = [](st::Bind b, int code) {
+        const uint32_t v = st::kDefaultKb[b];
+        return int(v & 0xFFFF) == code || int(v >> 16) == code;
+    };
+    constexpr int kTab = 258, kEnter = 257, kEsc = 256, kT = 84, kWheelDown = 1011;
+    CHECK(has(st::BStart, kTab) && has(st::BStart, kEnter) && !has(st::BStart, kEsc));
+    CHECK(has(st::BTargetNext, kT) && has(st::BTargetNext, kWheelDown) && !has(st::BTargetNext, kTab));
+    for (int b = 0; b < st::kBinds; ++b)
+        CHECK(!has(st::Bind(b), kEsc));
+    CHECK(st::kKbLayout == 4);   // a file from the layout where Tab was the target key gets the new defaults
+}
+
 TEST(zip_inflate_codes_decodes_a_stream_across_read_blocks_and_windows)
 {
     checkInflateTo(0x01FFFC00u);   // right after the read window: the output runs past 32 MB, as the stages' does
