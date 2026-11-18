@@ -3,6 +3,7 @@
 #pragma once
 
 #include "wotm_lockstep.hpp"
+#include "wotm_net_holdback.hpp"
 #include "wotm_net_diag.hpp"
 #include "wotm_net_proto.hpp"
 #include "wotm_net_socket.hpp"
@@ -141,7 +142,8 @@ namespace wotm_net
             InputTimeline inputs{0, 0};
             struct SlotHash { uint64_t hash = 0; std::vector<uint64_t> blocks; };   // blocks: the 256 block hashes, when sent
             std::map<uint32_t, std::vector<std::optional<SlotHash>>> hashes;
-            Clock::time_point created{}, allJoined{}, lastPace{}, lastDiag{}, lastBehind{};
+            Clock::time_point created{}, allJoined{}, lastPace{}, lastDiag{}, lastBehind{}, lastHoldback{};
+            Holdback holdback;             // takes out a member who holds the started match back (away, or the one everyone waits on)
             bool allJoinedSet = false;
         };
 
@@ -191,6 +193,7 @@ namespace wotm_net
         // the server's view of every player of a started match: transport, Hz, delay, round trip, how input packets arrived
         void diagTick(Match &m, const Lobby &l);
         void sampleBehind(Match &m);
+        void holdbackTick(Match &m, const Lobby &l);
         std::string newCode();
         int lobbyByCode(const std::string &code) const;
         int openLobbies() const;
