@@ -2107,9 +2107,10 @@ namespace
         CHECK(readUntil(ms[0]->socket, "ERROR") == "ERROR the match has started");
     }
 
-    // BRAVE: a page that runs in the Brave browser says so (its Shields can slow the game a lot); the lobby relays the names each second
-    // with the pings (BRAVE <code> <names>), and the flag leaves with the member
-    TEST(lobby_members_see_who_runs_brave)
+    // HEALTH ... sw: a page that draws WebGL in software (graphics acceleration off) says so with its health, or alone before it has
+    // any ("HEALTH sw"); the lobby relays it as a fifth field (name:fps:work_ms:hz:sw, "-" for numbers not measured yet), and the flag
+    // leaves with the member. BRAVE is no command
+    TEST(lobby_members_see_who_draws_in_software)
     {
         ServerConfig cfg = testConfig();
         RunningServer rs(cfg);
@@ -2117,24 +2118,31 @@ namespace
         LineSocket a, b, c;
         CHECK(hello(c, cfg.port) == "WELCOME 0");
         c.sendLine("BRAVE");
-        CHECK(readUntil(c, "ERROR") == "ERROR join a lobby first");
+        CHECK(readUntil(c, "ERROR") == "ERROR unknown command: BRAVE");
         CHECK(hello(a, cfg.port) == "WELCOME 0");
         const std::string code = createLobby(a, "Lobby", "Ana", 3);
         CHECK(hello(b, cfg.port) == "WELCOME 1");
         b.sendLine("JOIN " + code + " Bia 1");
         CHECK(readUntil(b, "JOINED") == "JOINED " + code);
-        b.sendLine("BRAVE");
-        CHECK(readUntil(a, "BRAVE " + code + " ") == "BRAVE " + code + " Bia");
-        a.sendLine("BRAVE");
-        CHECK(readUntil(b, "BRAVE " + code + " Ana,Bia") == "BRAVE " + code + " Ana,Bia");
+        for (const char *bad : {"HEALTH sw 60", "HEALTH 28 13 60 x", "HEALTH 28 13 60 sw sw", "HEALTH x"})
+        {
+            b.sendLine(bad);
+            CHECK(readUntil(b, "ERROR") == "ERROR HEALTH <own fps> <work ms> <hz>: numbers in range");
+        }
+        b.sendLine("HEALTH sw");
+        CHECK(readUntil(a, "HEALTH " + code + " ") == "HEALTH " + code + " Bia:-:-:-:sw");
+        b.sendLine("HEALTH 5.3 40 60 sw");
+        CHECK(readUntil(a, "HEALTH " + code + " Bia:5.3") == "HEALTH " + code + " Bia:5.3:40.0:60:sw");
+        a.sendLine("HEALTH 60 4.5 60");
+        CHECK(readUntil(b, "HEALTH " + code + " Ana:60.0:4.5:60,Bia") == "HEALTH " + code + " Ana:60.0:4.5:60,Bia:5.3:40.0:60:sw");
         b.sendLine("LEAVE");
         CHECK(readUntil(b, "LEFT") == "LEFT " + code);
         b.sendLine("JOIN " + code + " Bia 1");   // back without saying it again: not listed
         CHECK(readUntil(b, "JOINED") == "JOINED " + code);
         std::string line;
-        for (int i = 0; i < 6 && line != "BRAVE " + code + " Ana"; ++i)   // lines sent before the LEAVE may still arrive
-            line = readUntil(a, "BRAVE " + code + " ");
-        CHECK(line == "BRAVE " + code + " Ana");
+        for (int i = 0; i < 6 && line != "HEALTH " + code + " Ana:60.0:4.5:60"; ++i)   // lines sent before the LEAVE may still arrive
+            line = readUntil(a, "HEALTH " + code + " ");
+        CHECK(line == "HEALTH " + code + " Ana:60.0:4.5:60");
     }
 
     // HEALTH <own fps> <work ms> <hz>: a page tells the lobby how its device ran its last match; the lobby relays every member's
