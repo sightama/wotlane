@@ -5538,7 +5538,29 @@ TEST(default_keyboard_opens_the_pause_with_tab_not_esc)
     CHECK(has(st::BTargetNext, kT) && has(st::BTargetNext, kWheelDown) && !has(st::BTargetNext, kTab));
     for (int b = 0; b < st::kBinds; ++b)
         CHECK(!has(st::Bind(b), kEsc));
-    CHECK(st::kKbLayout == 4);   // a file from the layout where Tab was the target key gets the new defaults
+    CHECK(st::kKbLayout == 4);
+}
+
+// A settings file from layout 3 keeps the player's own keys; only the two binds still on layout 3's defaults (Start Enter+Esc, next
+// target Tab+wheel) move to the new defaults. Layouts older than 3 are not migrated (their keys are ignored altogether).
+TEST(keyboard_layout_3_keeps_custom_keys_and_moves_the_two_changed_defaults)
+{
+    namespace st = wotm::settings;
+    uint32_t kb[st::kBinds];
+    for (int b = 0; b < st::kBinds; ++b) kb[b] = st::kbPair(100 + b);
+    kb[st::BStart] = st::kbPair(257, 256);
+    kb[st::BTargetNext] = st::kbPair(258, 1011);
+    st::migrateKb(3, kb);
+    CHECK(kb[st::BStart] == st::kDefaultKb[st::BStart] && kb[st::BTargetNext] == st::kDefaultKb[st::BTargetNext]);
+    CHECK(kb[st::BCross] == st::kbPair(100 + st::BCross));
+    kb[st::BStart] = st::kbPair(80);   // a player's own Start (P) stays
+    kb[st::BTargetNext] = st::kbPair(258, 1011);
+    st::migrateKb(3, kb);
+    CHECK(kb[st::BStart] == st::kbPair(80));
+    uint32_t other[st::kBinds] = {};
+    other[st::BStart] = st::kbPair(257, 256);
+    st::migrateKb(2, other);   // not from layout 3: untouched
+    CHECK(other[st::BStart] == st::kbPair(257, 256));
 }
 
 TEST(zip_inflate_codes_decodes_a_stream_across_read_blocks_and_windows)
