@@ -324,6 +324,12 @@ namespace wotm_net
             diagReport(ci, line);
         else if (cmd == "MONSTER" && w.size() >= 2)
             changeMonster(ci, w);
+        else if (cmd == "KICK" && w.size() >= 2)
+            kickMember(ci, w[1]);
+        else if (cmd == "OWNER" && w.size() >= 2)
+            handOver(ci, w[1]);
+        else if (cmd == "HEALTH")
+            setHealth(ci, w);
         else if (cmd == "LEAVE")
         {
             const std::string code = c.lobby >= 0 ? lobbies_[static_cast<size_t>(c.lobby)].code : "";
@@ -434,6 +440,12 @@ namespace wotm_net
             return void(c.link->sendLine("ERROR empty name (use letters, digits, _ or -)"));
         if (!l.password.empty() && password != l.password)
             return void(c.link->sendLine("ERROR wrong password (the lobby has a password)"));
+        const auto now = Clock::now();
+        l.bans.erase(std::remove_if(l.bans.begin(), l.bans.end(), [now](const Lobby::Ban &b) { return b.until <= now; }), l.bans.end());
+        for (const Lobby::Ban &b : l.bans)
+            if (b.name == name)
+                return void(c.link->sendLine("ERROR you were removed from this lobby; try again in " +
+                                             std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(b.until - now).count() / 1000 + 1) + " s"));
         if (l.match)
             return void(c.link->sendLine("ERROR lobby is in a match; wait for it to end"));
         if (static_cast<int>(l.members.size()) >= cfg_.maxPlayers)
@@ -511,6 +523,83 @@ namespace wotm_net
         sendMembers(c.lobby);
     }
 
+    int Server::memberNamed(const Lobby &l, const std::string &name) const
+    {
+        for (int m : l.members)
+            if (conns_[static_cast<size_t>(m)]->name == name)
+                return m;
+        return -1;
+    }
+
+    Server::Lobby *Server::ownedWaitingLobby(int ci, const char *notOwner)
+    {
+        Conn &c = *conns_[static_cast<size_t>(ci)];
+        if (c.lobby < 0)
+            return c.link->sendLine("ERROR join a lobby first"), nullptr;
+        Lobby &l = lobbies_[static_cast<size_t>(c.lobby)];
+        if (l.host != ci)
+            return c.link->sendLine(std::string("ERROR ") + notOwner), nullptr;
+        if (l.match)
+            return c.link->sendLine("ERROR the match has started"), nullptr;
+        return &l;
+    }
+
+    // KICK <name>: the member gets KICKED <code> <seconds of ban>, leaves the lobby (the others get MEMBERS) and keeps its connection
+    void Server::kickMember(int ci, const std::string &name)
+    {
+        Conn &c = *conns_[static_cast<size_t>(ci)];
+        Lobby *l = ownedWaitingLobby(ci, "only the lobby owner can remove a member");
+        if (!l)
+            return;
+        const int target = memberNamed(*l, name);
+        if (target == ci)
+            return void(c.link->sendLine("ERROR you can't remove yourself; leave instead"));
+        if (target < 0)
+            return void(c.link->sendLine("ERROR " + name + " is not in this lobby"));
+        const auto now = Clock::now();
+        l->bans.push_back({name, now + std::chrono::milliseconds(cfg_.kickBanMs)});
+        log("lobby %s: %s removed %s", l->code.c_str(), c.name.c_str(), name.c_str());
+        diagEvent(*l, "event=kick owner=" + c.name + " player=" + name);
+        conns_[static_cast<size_t>(target)]->link->sendLine("KICKED " + l->code + " " + std::to_string((cfg_.kickBanMs + 999) / 1000));
+        leaveLobby(target);
+    }
+
+    // OWNER <name>: the lobby's settings and START go to that member; MEMBERS tells everyone
+    void Server::handOver(int ci, const std::string &name)
+    {
+        Conn &c = *conns_[static_cast<size_t>(ci)];
+        Lobby *l = ownedWaitingLobby(ci, "only the lobby owner can hand the lobby to someone else");
+        if (!l)
+            return;
+        const int target = memberNamed(*l, name);
+        if (target == ci)
+            return void(c.link->sendLine("ERROR you are the owner already"));
+        if (target < 0)
+            return void(c.link->sendLine("ERROR " + name + " is not in this lobby"));
+        l->host = target;
+        log("lobby %s: %s handed the lobby to %s", l->code.c_str(), c.name.c_str(), name.c_str());
+        diagEvent(*l, "event=owner from=" + c.name + " to=" + name);
+        sendMembers(c.lobby);
+    }
+
+    void Server::setHealth(int ci, const std::vector<std::string> &w)
+    {
+        Conn &c = *conns_[static_cast<size_t>(ci)];
+        if (c.lobby < 0)
+            return void(c.link->sendLine("ERROR join a lobby first"));
+        const auto number = [&w](size_t i, double max, double &out) {
+            if (i >= w.size())
+                return false;
+            char *end = nullptr;
+            out = std::strtod(w[i].c_str(), &end);
+            return *end == 0 && std::isfinite(out) && out >= 0 && out <= max;
+        };
+        double fps = 0, workMs = 0, hz = 0;
+        if (w.size() != 4 || !number(1, 1000, fps) || !number(2, 1000, workMs) || !number(3, 240, hz) || hz < 1 || hz != std::floor(hz))
+            return void(c.link->sendLine("ERROR HEALTH <own fps> <work ms> <hz>: numbers in range"));
+        c.hasHealth = true, c.healthFps = fps, c.healthWorkMs = workMs, c.healthHz = static_cast<int>(hz);
+    }
+
     void Server::leaveLobby(int ci)
     {
         Conn &c = *conns_[static_cast<size_t>(ci)];
@@ -520,6 +609,7 @@ namespace wotm_net
         const int li = c.lobby;
         l.members.erase(std::remove(l.members.begin(), l.members.end(), ci), l.members.end());
         c.lobby = -1;
+        c.hasHealth = false;
         if (l.host == ci)
             l.host = l.members.empty() ? -1 : l.members.front();
         log("lobby %s: %s left", l.code.c_str(), c.name.c_str());
@@ -536,6 +626,7 @@ namespace wotm_net
         log("lobby %s: empty, closed", l.code.c_str());
         l.open = false;
         l.code.clear(), l.name.clear(), l.password.clear(), l.build.clear(), l.diagFile.clear();
+        l.bans.clear();
         l.host = -1;
         return true;
     }
@@ -571,6 +662,18 @@ namespace wotm_net
             const std::string line = "PINGS " + l.code + " " + join(v, ",");
             for (int m : l.members)
                 conns_[static_cast<size_t>(m)]->link->sendLine(line);
+            v.clear();
+            for (int m : l.members)
+            {
+                const Conn &c = *conns_[static_cast<size_t>(m)];
+                char buf[64];
+                std::snprintf(buf, sizeof buf, ":%.1f:%.1f:%d", c.healthFps, c.healthWorkMs, c.healthHz);
+                if (c.hasHealth)
+                    v.push_back(c.name + buf);
+            }
+            if (!v.empty())
+                for (int m : l.members)
+                    conns_[static_cast<size_t>(m)]->link->sendLine("HEALTH " + l.code + " " + join(v, ","));
         }
     }
 
