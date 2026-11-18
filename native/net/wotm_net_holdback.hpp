@@ -20,7 +20,7 @@ namespace wotm_net
         static constexpr double kAwaySec = 3.0;        // in the background for longer than this
         static constexpr double kSlowWindowSec = 15.0; // the pace measured over this long...
         static constexpr double kSlowShare = 0.8;      // ...under this share of the match's rate
-        static constexpr double kClearFrames = 1.0;    // the bottleneck trails by at least this, and this much more than anyone else
+        static constexpr double kLastShare = 0.6;      // the bottleneck is alone at the back in at least this share of the samples
 
         enum class Reason { None, Away, Slow };
         struct Member
@@ -45,7 +45,8 @@ namespace wotm_net
             for (size_t i = 0; i < members.size(); ++i)
                 awaySince_[i] = members[i].active && members[i].away ? (awaySince_[i] < 0 ? t : awaySince_[i]) : -1.0;
             samples_.push_back({t, frame, members});
-            while (!samples_.empty() && samples_.front().t < t - kSlowWindowSec - 1e-6)
+            // the window starts at the newest sample that is at least kSlowWindowSec old (samples come every 100 ms or a little more)
+            while (samples_.size() > 1 && samples_[1].t <= t - kSlowWindowSec + 1e-6)
                 samples_.pop_front();
             if (t - start_ < kGraceSec)
                 return {};
@@ -64,26 +65,30 @@ namespace wotm_net
             const double pace = (frame - first.frame) / span;
             if (pace >= kSlowShare * hz)
                 return {};
-            // each active member's average trail over the window: the bottleneck is clearly ahead of everyone else in it
-            std::vector<double> avg(members.size(), 0.0);
+            // the bottleneck: the member alone at the back (the only one with the largest trail, above 0) in most samples. How far it
+            // trails is capped by the input delay, so on a short delay it is about one frame: the count is what tells it apart
+            std::vector<int> last(members.size(), 0);
             for (const Sample &s : samples_)
-                for (size_t i = 0; i < members.size() && i < s.members.size(); ++i)
-                    avg[i] += s.members[i].behind;
-            int worst = -1;
-            double best = -1, second = 0;
-            for (size_t i = 0; i < members.size(); ++i)
             {
-                if (!members[i].active)
-                    continue;
-                avg[i] /= static_cast<double>(samples_.size());
-                if (avg[i] > best)
-                    second = std::max(second, best), best = avg[i], worst = static_cast<int>(i);
-                else
-                    second = std::max(second, avg[i]);
+                int at = -1;
+                uint32_t most = 0;
+                bool alone = false;
+                for (size_t i = 0; i < s.members.size() && i < members.size(); ++i)
+                {
+                    if (!members[i].active)
+                        continue;
+                    if (s.members[i].behind > most)
+                        most = s.members[i].behind, at = static_cast<int>(i), alone = true;
+                    else if (s.members[i].behind == most)
+                        alone = false;
+                }
+                if (at >= 0 && alone)
+                    ++last[static_cast<size_t>(at)];
             }
-            if (worst < 0 || best < kClearFrames || best < second + kClearFrames)
+            const auto worst = std::max_element(last.begin(), last.end());
+            if (*worst < kLastShare * static_cast<double>(samples_.size()))
                 return {};
-            return named(worst, Reason::Slow, pace);
+            return named(static_cast<int>(worst - last.begin()), Reason::Slow, pace);
         }
 
     private:

@@ -110,6 +110,33 @@ namespace
         CHECK(d.slot == 2 && d.reason == wotm_net::Holdback::Reason::Slow);
     }
 
+    // on a short input delay the one waited on trails by about one frame, and only some of the time: it is still named when it is
+    // the one alone at the back in most samples
+    TEST(holdback_names_the_bottleneck_on_a_one_frame_delay)
+    {
+        wotm_net::Holdback h;
+        double t = 0;
+        uint32_t frame = 0;
+        wotm_net::Holdback::Decision d;
+        for (int i = 0; i < 400 && d.slot < 0; ++i)   // 40 s: behind 1 in 7 samples of 10, level in the rest
+            d = runHoldback(h, t, frame, 0.1, 5, {0, 0, i % 10 < 7 ? 1u : 0u}, {false, false, false});
+        CHECK(d.slot == 2 && d.reason == wotm_net::Holdback::Reason::Slow);
+    }
+
+    // the server samples every 100 ms or a little more: the window still fills
+    TEST(holdback_window_fills_with_uneven_sampling)
+    {
+        wotm_net::Holdback h;
+        uint32_t frame = 0;
+        wotm_net::Holdback::Decision d;
+        for (double t = 0; t < 40 && d.slot < 0; t += 0.107)
+        {
+            frame += 1;
+            d = h.update(t, frame, 60, {{0, false, true}, {0, false, true}, {2, false, true}});
+        }
+        CHECK(d.slot == 2);
+    }
+
     // a slow pace with no member clearly behind the others (the network, or everyone a bit slow), or a pace at 80% and over: nobody
     TEST(holdback_drops_nobody_without_a_clear_bottleneck_or_a_slow_pace)
     {
