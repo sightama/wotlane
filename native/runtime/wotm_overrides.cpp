@@ -57,6 +57,9 @@ namespace ps2_stubs   // Kernel/Stubs/Pad.cpp: pad state that scePadRead returns
 }
 
 extern std::atomic<unsigned long long> g_wotmIdleUs;
+// the vblank clock's wakes: how many, how far past their target in all (µs), and how many over half a vblank late
+// (EeSchedulerGame.cpp, the timer thread), for the page's diagnostics report (wotm_sync.inc netPace)
+extern std::atomic<unsigned long long> g_wotmVblankWakes, g_wotmVblankLateUs, g_wotmVblankSlowWakes;
 void wotmHostProfWatchThisThread();                            // ps2_hostprof.cpp (PS2X_HOSTPROF)
 void wotmHostProfDump(long long t0, long long t1, const char *tag);
 double wotmThreadCpuMs();
@@ -198,6 +201,10 @@ namespace
     // adds come from host time. The rest of the timer code (timerSetFrameStart, timerEndOfRealTimeProcessing, timerGetFrameTime...) only sees T1
     // through timerGetCurTics and moves to the host with no changes. Vsync (sceGsSyncV) still comes from the runtime's scheduler.
     constexpr uint32_t kTimer1Handler = wotm::fn::timer1Handler__FPUi;
+    constexpr uint32_t kFightLoop = wotm::fn::rtMain__Fb, kFightLoopSize = 0x848u;   // rtMain, the fight's frame loop
+    // WOTM_FRAMESPIN=<ms>: the game thread burns this long at the end of every fight frame (a slow device on demand, to compare pacing;
+    // time only, nothing the game computes changes)
+    const double g_frameSpinMs = [] { const char *e = std::getenv("WOTM_FRAMESPIN"); return e ? std::max(0.0, std::atof(e)) : 0.0; }();
     constexpr uint32_t kFieldsForAverage = 0x6F8DE4u;   // D_006F8DE4: fields since timerSetFrameStart (timerGetAverageFrameTime)
     constexpr int32_t kTicsPerField = 9619;
     constexpr uint32_t kT1Count = 0x10000800u;   // T1_COUNT: timer1Handler reads it and resets it
@@ -254,6 +261,11 @@ namespace
     {
         if (ctx->pc == kTimer1Handler)
         {
+            if (g_frameSpinMs > 0.0 && GPR_U32(ctx, 31) - kFightLoop < kFightLoopSize)
+                for (const auto until = std::chrono::steady_clock::now() + std::chrono::duration<double, std::milli>(g_frameSpinMs);
+                     std::chrono::steady_clock::now() < until;)
+                {
+                }
             const uint32_t now = gameTics();
             const int32_t elapsed = static_cast<int32_t>(now - g_t1Zero);
             g_t1Zero = now;

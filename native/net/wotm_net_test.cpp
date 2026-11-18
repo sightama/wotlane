@@ -2646,9 +2646,9 @@ namespace
         for (size_t i = 0; i < diag::kMaxFields + 10; ++i)
             line += " k" + std::to_string(i) + "=1";
         CHECK(diag::parse(p::words(line), many) && many.fields.size() == diag::kMaxFields);
-        // a page's last report holds the window (web/diag.js windowFields, up to 39 with the input latency), the base (v, why, seq,
-        // build, lobby, name, hz, players) and the device (deviceFields, up to 12): all of it has to fit
-        CHECK(diag::kMaxFields >= 39u + 8u + 12u);
+        // a page's last report holds the window (web/diag.js windowFields, up to 44 with the input latency and the game thread's
+        // time), the base (v, why, seq, build, lobby, name, hz, players) and the device (deviceFields, up to 12): all of it has to fit
+        CHECK(diag::kMaxFields >= 44u + 8u + 12u);
         diag::Report none;
         CHECK(!diag::parse(p::words("DIAG"), none));
         CHECK(!diag::parse(p::words("DIAG Bad-Key=1"), none));

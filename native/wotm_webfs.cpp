@@ -22,7 +22,7 @@ namespace
     std::atomic<bool> g_hidden{false};
     std::atomic<double> g_stallMs{0};
     // the match's counters for the page's diagnostics (wotmWebNetStats): index = web/diag.js NET_STAT
-    std::atomic<double> g_netStats[5];
+    std::atomic<double> g_netStats[13];
     std::atomic<double> g_inputAt{0};   // the earliest button or key down not taken yet (wotm_web_input_at, 0: none)
     wotm::latency::Window g_latency;    // the window the page took last (wotm_web_latency_take); main thread only
     std::mutex g_stallMu;
@@ -76,20 +76,28 @@ void wotmWebNetStall(double ms, const char *text)
     g_stallMs = ms;
 }
 
-void wotmWebNetStats(uint32_t frame, uint32_t waits, double waitMs, uint32_t delay, uint32_t pingMs)
+void wotmWebNetStats(uint32_t frame, uint32_t waits, double waitMs, uint32_t delay, uint32_t pingMs, double idleMs, const uint32_t periods[4],
+                     double vblankLateMs, double vblankWakes, double vblankSlowWakes)
 {
     g_netStats[0] = frame;
     g_netStats[1] = waits;
     g_netStats[2] = waitMs;
     g_netStats[3] = delay;
     g_netStats[4] = pingMs;
+    g_netStats[5] = idleMs;
+    for (int k = 0; k < 4; ++k)
+        g_netStats[6 + k] = periods[k];
+    g_netStats[10] = vblankLateMs;
+    g_netStats[11] = vblankWakes;
+    g_netStats[12] = vblankSlowWakes;
 }
 
 // called by the page (boot.js)
 extern "C"
 {
-    // the match's counters, as wotmWebNetStats set them: 0 frame, 1 waits, 2 wait ms, 3 delay, 4 ping (anything else: 0)
-    EMSCRIPTEN_KEEPALIVE double wotm_web_net_stat(int which) { return which >= 0 && which < 5 ? g_netStats[which].load() : 0; }
+    // the match's counters, as wotmWebNetStats set them: 0 frame, 1 waits, 2 wait ms, 3 delay, 4 ping, 5 game thread idle ms, 6 to 9
+    // frames by length, 10 vblank wake lateness ms, 11 vblank wakes, 12 wakes over half a vblank late (anything else: 0)
+    EMSCRIPTEN_KEEPALIVE double wotm_web_net_stat(int which) { return which >= 0 && which < 13 ? g_netStats[which].load() : 0; }
     // a button or key went down at `ms` (performance.timeOrigin + the event's time, the clock of emscripten_get_now): kept unless an
     // earlier one is still waiting for the game's next sample (wotmWebTakeInputAt)
     EMSCRIPTEN_KEEPALIVE void wotm_web_input_at(double ms)

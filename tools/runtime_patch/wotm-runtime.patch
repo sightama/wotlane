@@ -1455,7 +1455,7 @@ index 67c8184..c8310ea 100644
  
  #endif
 diff --git a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
-index c5e31c4..e454f4e 100644
+index c5e31c4..1d61f43 100644
 --- a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
 +++ b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
 @@ -4,10 +4,55 @@
@@ -1721,11 +1721,12 @@ index c5e31c4..e454f4e 100644
                                EeEvent{EeEventType::VBlankStart, 0, 0});
              }
              processEvent(scheduled.event);
-@@ -1994,8 +2075,11 @@ void EeScheduler::writeGuestU32(uint32_t address, uint32_t value)
+@@ -1994,8 +2075,12 @@ void EeScheduler::writeGuestU32(uint32_t address, uint32_t value)
      std::memcpy(m_rdram + physical, &value, sizeof(value));
  }
  
 +std::atomic<unsigned long long> g_wotmIdleUs{0}, g_wotmIdleCalls{0};
++std::atomic<unsigned long long> g_wotmVblankWakes{0}, g_wotmVblankLateUs{0}, g_wotmVblankSlowWakes{0};   // counted by EeSchedulerGame.cpp only
  void EeScheduler::waitForEvent()
  {
 +    WotmUsTimer wotmIdleTimer(g_wotmIdleUs);
@@ -1733,7 +1734,7 @@ index c5e31c4..e454f4e 100644
      std::unique_lock lock(m_eventMutex);
      if (!m_events.empty() || m_stopRequested.load(std::memory_order_acquire))
      {
-@@ -2010,48 +2094,54 @@ void EeScheduler::waitForEvent()
+@@ -2010,48 +2095,54 @@ void EeScheduler::waitForEvent()
          return;
      }
  
@@ -1815,7 +1816,7 @@ index c5e31c4..e454f4e 100644
  }
  
  void EeScheduler::scheduleEvent(uint64_t deadlineCycle,
-@@ -2068,21 +2158,17 @@ void EeScheduler::scheduleEvent(uint64_t deadlineCycle,
+@@ -2068,21 +2159,17 @@ void EeScheduler::scheduleEvent(uint64_t deadlineCycle,
  
  void EeScheduler::updateNextDeadline()
  {
@@ -1846,10 +1847,10 @@ index c5e31c4..e454f4e 100644
  bool EeScheduler::hasReadyAtOrAbovePriority(int priority) const
 diff --git a/ps2xRuntime/src/lib/Kernel/EeSchedulerGame.cpp b/ps2xRuntime/src/lib/Kernel/EeSchedulerGame.cpp
 new file mode 100644
-index 0000000..a81f965
+index 0000000..6e2a4e8
 --- /dev/null
 +++ b/ps2xRuntime/src/lib/Kernel/EeSchedulerGame.cpp
-@@ -0,0 +1,1334 @@
+@@ -0,0 +1,1342 @@
 +// WoTM (step 10 of docs/passos/FRONTEIRA.md in the WoTM repo): EeScheduler for the game executable (wotm), replacing EeScheduler.cpp.
 +// Measured in step 8: WotM uses a single thread (the main one), no INTC handler, one DMAC handler (hierSetDmaIntHandler,
 +// channel 1) and the vblank (sceGsSyncV); no semaphore, event flag, sleep or alarm in use. So there is no ready queue, time
@@ -1885,6 +1886,9 @@ index 0000000..a81f965
 +
 +// Read by the rest of the runtime and by the native layer (in the test executable they come from EeScheduler.cpp)
 +std::atomic<unsigned long long> g_wotmIdleUs{0}, g_wotmIdleCalls{0};
++// the vblank timer thread's wakes: how many, how far past their target in all (µs) and how many over half a vblank late (a coarse system
++// timer shows here: the page's diagnostics report, wotm_sync.inc netPace)
++std::atomic<unsigned long long> g_wotmVblankWakes{0}, g_wotmVblankLateUs{0}, g_wotmVblankSlowWakes{0};
 +bool g_wotmCycleProf = false;
 +uint32_t g_wotmFreeSpinPc = 0;            // main.cpp (PS2X_NO_VU1): particleDraw's busy-wait on the missing VU1...
 +uint32_t g_wotmFreeSpinZero[2] = {0, 0};  // ...ends right away: these RDRAM words are cleared when the checkpoint lands on it
@@ -2091,6 +2095,11 @@ index 0000000..a81f965
 +            const Clock::time_point now = Clock::now();
 +            if (!G.vblank.fire(now))   // woke early
 +                continue;
++            const auto lateUs = std::chrono::duration_cast<std::chrono::microseconds>(now - target).count();
++            g_wotmVblankWakes.fetch_add(1, std::memory_order_relaxed);
++            g_wotmVblankLateUs.fetch_add(static_cast<unsigned long long>(lateUs), std::memory_order_relaxed);
++            if (lateUs * 2 > EeVBlankClock::kPeriod.count())
++                g_wotmVblankSlowWakes.fetch_add(1, std::memory_order_relaxed);
 +            // WOTM_FIELDLOG: three vblanks without the EE reaching a checkpoint or waiting = game thread stuck in some call
 +            if (g_wotmCycleProf && !G.waiting && G.vblank.due >= 3u && !G.stallOpen)
 +            {
