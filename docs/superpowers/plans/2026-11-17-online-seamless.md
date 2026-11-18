@@ -61,7 +61,7 @@ Gain: no delay flaps on spikes (68LN: dozens of 3 to 4 to 5 changes for all memb
 
 - [x] Test `proto_rtt_window_covers_four_fifths_of_the_recent_round_trips`: 3 spikes of 230 among 60s give 60; a fourth gives 230; back to 60 once at most 3 are left.
 - [x] Implement; `sh tools/test_net.sh` passes.
-- [ ] `latency.mjs --players 4 --rtt 60,60,70,80 --jitter 15 --spike 4:6:150:400 --secs 120`: delay changes and `lat_dl_ms` against the PR #133 run; desync matrix; PR; coord `match_diag.py` reads `rtt_level_ms`.
+- [x] `latency.mjs --players 4 --rtt 60,60,70,80 --jitter 15 --spike 4:6:150:400 --secs 120`: delay changes and `lat_dl_ms` against the PR #133 run; desync matrix; PR; coord `match_diag.py` reads `rtt_level_ms`.
 
 ### Task 2: The game thread's own time per frame in the diag
 
@@ -71,8 +71,8 @@ Gain: names Jake's (and Brave's) bottleneck in one live match. Cost: small. Risk
 
 **Interfaces:** Consumes the runtime's idle accounting (`g_wotmIdleUs`, `EeSchedulerGame.cpp wotmIdleWait`). Produces diag fields `ee_busy_ms` (mean game-thread busy ms per game frame in the window) and `ee_idle_ms`.
 
-- [ ] Test in `diag.test.mjs`: `windowFields` turns cumulative busy and idle µs and frames into `ee_busy_ms`/`ee_idle_ms` per frame; absent counters leave them out.
-- [ ] Implement, `sh tools/test_web.sh`; one local Firefox match shows plausible numbers (busy well under 33 ms on the M1).
+- [x] Test in `diag.test.mjs`: `windowFields` turns cumulative busy and idle µs and frames into `ee_busy_ms`/`ee_idle_ms` per frame; absent counters leave them out.
+- [x] Implement, `sh tools/test_web.sh`; one local Firefox match shows plausible numbers (busy well under 33 ms on the M1).
 
 ### Task 3: Fixed-step frames paced on a host deadline; capture as soon as the frame is done
 
@@ -82,9 +82,9 @@ Gain: `lat_sim_ms` from ~16 (60 Hz) / ~31 (30 Hz) to the logic's own 4 to 8 ms; 
 
 **Interfaces:** Produces `wotm::framepace::Grid` with `void start(double nowMs, double periodMs)`, `double next(double nowMs)` (the next frame's start: the grid point after the last, or `nowMs` when the frame ran past it, restarting the grid after a stall over 4 periods) and `void resume(double nowMs)` (after a network wait or pause).
 
-- [ ] Tests `framepace_*`: on time keeps the grid; a 35 ms frame at 33.3 starts the next at 35 (not 50); a 200 ms stall restarts the grid from now (no burst); resume after a wait does not wait again.
-- [ ] In fixed step only: `sceGsSyncV` called from `timer1Handler` returns the parity without waiting; at the entry of `timerWaitForMinUpdateRate` the capture happens first, then the wait until `Grid::next`, then `wotm_sync::frame` (sample, network). Single player (no fixed step) unchanged.
-- [ ] `latency.mjs` 1 vs 1 and 4 players: `lat_sim_ms`, gfps; `python3 tools/determinism_check.py`; the desync matrix with `--firefox 1` added.
+- [x] (done differently, see Handoff) Tests `framepace_*`: on time keeps the grid; a 35 ms frame at 33.3 starts the next at 35 (not 50); a 200 ms stall restarts the grid from now (no burst); resume after a wait does not wait again.
+- [x] (done differently, see Handoff) In fixed step only: `sceGsSyncV` called from `timer1Handler` returns the parity without waiting; at the entry of `timerWaitForMinUpdateRate` the capture happens first, then the wait until `Grid::next`, then `wotm_sync::frame` (sample, network). Single player (no fixed step) unchanged.
+- [x] `latency.mjs` 1 vs 1 and 4 players: `lat_sim_ms`, gfps; `python3 tools/determinism_check.py`; the desync matrix with `--firefox 1` added.
 
 ### Task 4: Online 30 Hz without interpolation lag; HUD from the newest frame
 
@@ -92,8 +92,8 @@ Gain: up to 33 ms (`lat_bl_ms`) at 30 Hz on screens above 30 Hz. Cost: small. Ri
 
 **Files:** Modify `native/runtime/wotm_live.inc` (the `want` interpolation condition; HUD pair), `native/wotm_settings.hpp` (online default), settings UI copy in `web/settings_ui.js` if the option is shown there. Test `native/tests/wotm_native_test.cpp` (settings profile for network matches).
 
-- [ ] Test: the network-match settings profile at 30 Hz has interpolation off unless the player turned it on; at 60 Hz unchanged.
-- [ ] Implement; `latency.mjs` shows `lat_bl_ms` 0 and `lat_ms` down by the blend.
+- [x] Test: the network-match settings profile at 30 Hz has interpolation off unless the player turned it on; at 60 Hz unchanged.
+- [x] Implement; `latency.mjs` shows `lat_bl_ms` 0 and `lat_ms` down by the blend.
 
 ### Task 5: Present in phase with the game's frame end
 
@@ -127,3 +127,27 @@ Gain: fewer visible hitches when one PC runs ahead (GGRS frame advantage: the le
 ## Order
 
 1, 2 (both small; 2 ships with the next web deploy), 3, 4, 6, 7, 5, 8, 9. Each is its own PR; each PR's description carries its before and after numbers.
+
+## Handoff (2026-11-18)
+
+**Live** (server and web `wl-9715672f5f0a089d`, wip/browser `dbe04bc4`; probe, `check_web.sh` and a live 2-player smoke 16/16 pass):
+
+| PR | what | measured (local, Mac under load) |
+|---|---|---|
+| #133 | `lat_*` input latency per player in the diag; browsers get their ping from the server (`proto::Rtt`); diag cap 64 | 68LN-like 4p 30 Hz: ~210-245 ms (delay 133, sim 31, present 25, blend up to 33) |
+| #143 | task 1: the delay rises for `RttWindow::riseLevel` (4 of 16 samples high) and falls only for `fallLevel` (at most 1 high) | 68LN-like: 7 delay changes vs 79-107, delay stage 134 vs 150-166 ms; 1 s spikes every 4 s: 14 vs 36 changes |
+| #146 | holdback: one freeze of 1 to 7.5 s, once a minute, is not slowness | the matrix's 6 s stall keeps the player (4/4) |
+| #144 | task 2: `ee_busy_ms`, `ee_idle_ms`, `fr_len`, `vbl_late_ms`, `vbl_slow`, `au_buf_ms`; cap 80; test knob `WOTM_FRAMESPIN` | Firefox tab in a 1v1: busy 19 ms per 16.7 ms frame, every frame rounded to 2 vsyncs |
+| #147 | task 3, done without a new grid: fixed-step frames wait at their boundary on the vblank clock (after the capture); `rtMain`'s `timer1Handler` vsync wait skipped | spin 20 ms at 60 Hz: 30 -> 37 fps, sim 33 -> 26 ms; spin 35 at 30 Hz: 19 -> 21.6 fps; Firefox 1v1: 30-34 -> 40-55 fps |
+| #145 | task 4: no frame interpolation in a network match | -17 ms at 60 Hz, -33 ms at 30 Hz |
+| coord #6 | `match_diag.py` prints the latency, game thread and vblank clock per player, flags rounded frames and coarse timers | |
+
+1 vs 1, 60 Hz, rtt 40, total input latency: ~111 ms now (was ~120-140). All desync matrices: 0 desync.
+
+**Windows evidence to read from the next real match** (`sh scripts/match_diag.sh <code>` in coord): per player `game thread: busy X ms ...; frames by length a,b,c,d; vblank clock Y ms late`.
+- `ee_busy_ms` near or over the frame (16.7 / 33.3 ms): the game thread is CPU-bound (Firefox wasm, a weak CPU).
+- `fr_len` third bucket large: frames still round to an extra vsync (should be rare after #147).
+- `vbl_late_ms` several ms (Windows default timer 15.6 ms?) and `vbl_slow` high: coarse timer; the vblank clock itself is the next fix. It is ~3.8 ms even in Chrome on the Mac.
+- `lat_ms` and stages; `au_buf_ms` and `au_gaps` for the audio path; Brave reports `gpu=Brave`, `cores` farbled.
+
+**Remaining tasks**, in order: vblank clock lateness (new, from `vbl_late_ms`), 7 (match start: the ~2.6 to 4.8 s freeze while one client boots; start when everyone reports frame 0), 6 (Brave repro), 5 (phase-locked present), 8 (time sync), 9 (rollback synctest go/no-go), the TODO item on short freezes that keep coming (holdback), and an online opt-in for interpolation if Lane wants smoothness back.
