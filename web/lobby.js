@@ -77,17 +77,15 @@ export function parsePings(parsed) {
   return pings;
 }
 
-// BRAVE <code> <names,...>: the members whose browser is Brave
-export function parseBrave(parsed) {
-  return (parsed.words[1] ?? '').split(',').filter(Boolean);
-}
-
-// HEALTH <code> <name:fps:work_ms:hz,...>: how each member's device ran its last match (a member that has none is not listed)
+// HEALTH <code> <name:fps:work_ms:hz[:sw],...>: how each member's device ran its last match ("-" for numbers not measured yet), and "sw"
+// for a member whose browser draws in software (a member with neither is not listed)
 export function parseHealth(parsed) {
   const out = {};
   for (const entry of (parsed.words[1] ?? '').split(',').filter(Boolean)) {
-    const [name, fps, workMs, hz] = entry.split(':');
-    if (name) out[name] = { fps: Number(fps), workMs: Number(workMs), hz: Number(hz) };
+    const [name, fps, workMs, hz, sw] = entry.split(':');
+    if (!name) continue;
+    out[name] = fps === '-' ? {} : { fps: Number(fps), workMs: Number(workMs), hz: Number(hz) };
+    if (sw === 'sw') out[name].softwareGl = true;
   }
   return out;
 }
@@ -137,7 +135,6 @@ export class LobbyClient {
     this.onMatch = null;
     this.onPings = null;
     this.onHealth = null;
-    this.onBrave = null;
     this.onKicked = null;   // the owner removed this member: { code, seconds (before it can join that lobby again) }
     this.onChat = null;
     this.onClose = null;
@@ -163,14 +160,11 @@ export class LobbyClient {
       this.diagUnsupported = true;   // a server from before diagnostics: not an answer to any request that waits
       return;
     }
-    if (p.cmd === 'ERROR' && /^unknown command: BRAVE$/.test(p.rest)) {
-      this.braveUnsupported = true;   // likewise for a server from before BRAVE
-      return;
-    }
     if (p.cmd === 'ERROR' && /^unknown command: HEALTH$/.test(p.rest)) {
       this.healthUnsupported = true;   // likewise for a server from before the device health
       return;
     }
+    if (p.cmd === 'ERROR' && /^HEALTH /.test(p.rest)) return;   // a HEALTH this server refused (one from before "sw"): no request waits on it
     if (p.cmd === 'ERROR') {
       const w = this.waiting.shift();
       if (w) w.reject(new Error(p.rest));
@@ -186,8 +180,6 @@ export class LobbyClient {
       this.onPings?.(parsePings(p));
     } else if (p.cmd === 'HEALTH') {
       this.onHealth?.(parseHealth(p));
-    } else if (p.cmd === 'BRAVE') {
-      this.onBrave?.(parseBrave(p));
     } else if (p.cmd === 'KICKED') {
       this.code = '';
       this.onKicked?.({ code: p.words[0], seconds: Number(p.words[1]) });
@@ -258,14 +250,6 @@ export class LobbyClient {
   health(line) {
     if (this.healthUnsupported) return false;
     this.socket.send(line);
-    return true;
-  }
-
-  // this page runs in Brave (web/brave.js), for the owner's member list; the server never answers it. False, and nothing sent, once the
-  // server has said it doesn't know it
-  brave() {
-    if (this.braveUnsupported) return false;
-    this.socket.send('BRAVE');
     return true;
   }
 

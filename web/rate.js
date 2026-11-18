@@ -71,8 +71,13 @@ export function rememberedHealth(storage) {
   } catch { return null; }
 }
 
-// the HEALTH command that tells a lobby how this device runs a match
-export const healthLine = ({ fps, workMs, hz }) => `HEALTH ${fps.toFixed(1)} ${workMs.toFixed(1)} ${hz}`;
+// the HEALTH command that tells a lobby how this device runs a match (`health`: rememberedHealth, or null before any match) and whether it
+// draws in software (`softwareGl`); null when there is nothing to say
+export function healthLine(health, softwareGl = false) {
+  const sw = softwareGl ? ' sw' : '';
+  if (health) return `HEALTH ${health.fps.toFixed(1)} ${health.workMs.toFixed(1)} ${health.hz}${sw}`;
+  return softwareGl ? 'HEALTH sw' : null;
+}
 
 // `storage`: localStorage (or undefined); true when this device was measured unable to hold 60
 export function rememberedSlow(storage) {
