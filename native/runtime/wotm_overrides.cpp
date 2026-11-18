@@ -202,6 +202,7 @@ namespace
     // through timerGetCurTics and moves to the host with no changes. Vsync (sceGsSyncV) still comes from the runtime's scheduler.
     constexpr uint32_t kTimer1Handler = wotm::fn::timer1Handler__FPUi;
     constexpr uint32_t kFightLoop = wotm::fn::rtMain__Fb, kFightLoopSize = 0x848u;   // rtMain, the fight's frame loop
+    bool g_paceAtBoundary = false;   // fixed-step frames wait at their boundary (waitMinRateByVblanks is registered, no HW emulation)
     // WOTM_FRAMESPIN=<ms>: the game thread burns this long at the end of every fight frame (a slow device on demand, to compare pacing;
     // time only, nothing the game computes changes)
     const double g_frameSpinMs = [] { const char *e = std::getenv("WOTM_FRAMESPIN"); return e ? std::max(0.0, std::atof(e)) : 0.0; }();
@@ -266,6 +267,8 @@ namespace
                      std::chrono::steady_clock::now() < until;)
                 {
                 }
+            // rtMain's call skips its vsync wait (syncVParity) when the frame is paced at its boundary instead (waitMinRateByVblanks)
+            wotm_sync::g_timer1InFight = g_paceAtBoundary && GPR_U32(ctx, 31) - kFightLoop < kFightLoopSize;
             const uint32_t now = gameTics();
             const int32_t elapsed = static_cast<int32_t>(now - g_t1Zero);
             g_t1Zero = now;
@@ -1051,12 +1054,16 @@ namespace
                     WRITE32(kFieldCounter, static_cast<uint32_t>(start + static_cast<int32_t>(vblanks)));
             }
 #if !PS2X_HW_EMU
-            // Fixed step n > 1 (the 30 Hz mode of 3+ player network matches): frame() makes the frame exactly n fields long, which also
-            // satisfies the game's own wait below, so without this a fast PC ran each 2-field frame in one vsync, at up to twice the
-            // speed. The wait is in place on the vblank clock, not through the game's sceGsSyncV, whose fixed-step parity counts calls
+            // Fixed step (network matches): the frame is paced here, after the capture, until n vsyncs since it started (n = its fields:
+            // 2 in the 30 Hz mode of 3+ players). timer1Handler's own vsync wait is skipped in fixed step (wotm_sync.inc syncVParity), so
+            // a frame done early is drawn at once and waits here, and one that ran past its n vsyncs starts the next frame at once (the
+            // next one still ends on the grid). frame() makes the frame exactly n fields long, which also satisfies the game's own wait
+            // below. The wait is in place on the vblank clock, not through the game's sceGsSyncV, whose fixed-step parity counts calls
             // and must be the same on every PC. A turbo fight is 1 vsync per 2-field frame on purpose (wotm::modifiers::vsyncsPerFrame).
+            if (wotm_sync::g_timer1InFight)
+                wotm_save::poll(rdram);   // what the sceGsSyncV that timer1Handler skipped would have polled (syncVTapped)
             const int frameVsyncs = wotm::modifiers::vsyncsPerFrame(wotm_sync::g_fixedStep, wotm_sync::g_mods);
-            if (frameVsyncs > 1 && g_frameStartValid)
+            if (wotm_sync::g_fixedStep && g_frameStartValid)
             {
                 EeScheduler &ee = runtime->eeScheduler();
                 const uint64_t until = g_frameStartVsync + static_cast<uint64_t>(frameVsyncs);
@@ -2614,6 +2621,9 @@ void wotmInstallOverrides(PS2Runtime &runtime, const std::string &elfPath)
         (g_origTimer1 = runtime.lookupFunction(kTimer1Handler)))
     {
         runtime.registerFunction(kTimerWaitForMinUpdateRate, &waitMinRateByVblanks);
+#if !PS2X_HW_EMU
+        g_paceAtBoundary = true;
+#endif
         if (g_nativeTimer)
         {
             runtime.registerFunction(kTimerGetCurTics, &getCurTicsNative);
