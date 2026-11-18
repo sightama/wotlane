@@ -1178,10 +1178,10 @@ index f247ff9..5568b05 100644
      EeKernelSnapshot m_snapshot;
 diff --git a/ps2xRuntime/include/runtime/ee_vblank_clock.h b/ps2xRuntime/include/runtime/ee_vblank_clock.h
 new file mode 100644
-index 0000000..5e0e5cd
+index 0000000..0115619
 --- /dev/null
 +++ b/ps2xRuntime/include/runtime/ee_vblank_clock.h
-@@ -0,0 +1,43 @@
+@@ -0,0 +1,52 @@
 +#pragma once
 +// WoTM: the vblank clock of the game executable's scheduler (EeSchedulerGame.cpp): a fixed 16.667 ms grid on the host, kept by a
 +// host thread that counts the vblanks that fell due for the EE to apply. Header-only so ps2xTest can test it without the game
@@ -1194,6 +1194,9 @@ index 0000000..5e0e5cd
 +{
 +    using Clock = std::chrono::steady_clock;
 +    static constexpr std::chrono::microseconds kPeriod{16667};
++    // The timer thread sleeps at most this long at a time: browsers oversleep a timed Atomics.wait in proportion to its length
++    // (Chrome and Firefox on a Mac: 2.5 to 4.5 ms late on a whole period, under 0.6 ms in 2 ms slices)
++    static constexpr std::chrono::microseconds kWaitSlice{2000};
 +
 +    Clock::time_point next{};   // when the next vblank falls due
 +    uint32_t due = 0;           // vblanks that fell due and the EE has not applied yet
@@ -1202,6 +1205,12 @@ index 0000000..5e0e5cd
 +    {
 +        due = 0;
 +        next = now + kPeriod;
++    }
++
++    // Timer thread: when to wake from its next sleep (the next vblank, or one slice from now if that comes first)
++    Clock::time_point wakeAt(Clock::time_point now) const
++    {
++        return now + kWaitSlice < next ? now + kWaitSlice : next;
 +    }
 +
 +    // Timer thread, woken at or after `next`: counts one vblank and moves the grid on. After a stall of more than 4 vblanks the grid
@@ -1847,7 +1856,7 @@ index c5e31c4..1d61f43 100644
  bool EeScheduler::hasReadyAtOrAbovePriority(int priority) const
 diff --git a/ps2xRuntime/src/lib/Kernel/EeSchedulerGame.cpp b/ps2xRuntime/src/lib/Kernel/EeSchedulerGame.cpp
 new file mode 100644
-index 0000000..6e2a4e8
+index 0000000..d5e6d0d
 --- /dev/null
 +++ b/ps2xRuntime/src/lib/Kernel/EeSchedulerGame.cpp
 @@ -0,0 +1,1342 @@
@@ -2089,11 +2098,11 @@ index 0000000..6e2a4e8
 +        while (!m_stopRequested.load(std::memory_order_acquire))
 +        {
 +            const Clock::time_point target = G.vblank.next;
-+            G.timerCv.wait_until(lock, target, [this]() { return m_stopRequested.load(std::memory_order_acquire); });
++            G.timerCv.wait_until(lock, G.vblank.wakeAt(Clock::now()), [this]() { return m_stopRequested.load(std::memory_order_acquire); });
 +            if (m_stopRequested.load(std::memory_order_acquire))
 +                break;
 +            const Clock::time_point now = Clock::now();
-+            if (!G.vblank.fire(now))   // woke early
++            if (!G.vblank.fire(now))   // a slice before the vblank, or woke early
 +                continue;
 +            const auto lateUs = std::chrono::duration_cast<std::chrono::microseconds>(now - target).count();
 +            g_wotmVblankWakes.fetch_add(1, std::memory_order_relaxed);
@@ -6535,7 +6544,7 @@ index 4f979be..03042b7 100644
 +    });
  }
 diff --git a/ps2xTest/src/ps2_runtime_kernel_tests.cpp b/ps2xTest/src/ps2_runtime_kernel_tests.cpp
-index 63b12d9..ac35669 100644
+index 63b12d9..cb03eee 100644
 --- a/ps2xTest/src/ps2_runtime_kernel_tests.cpp
 +++ b/ps2xTest/src/ps2_runtime_kernel_tests.cpp
 @@ -4,6 +4,7 @@
@@ -6546,7 +6555,7 @@ index 63b12d9..ac35669 100644
  
  #include <array>
  #include <atomic>
-@@ -1564,4 +1565,39 @@ void register_ps2_runtime_kernel_tests()
+@@ -1564,4 +1565,48 @@ void register_ps2_runtime_kernel_tests()
                       "GetEntryAddress should read and return the handler address from the table");
          });
      });
@@ -6583,6 +6592,15 @@ index 63b12d9..ac35669 100644
 +            t.IsTrue(vb.fire(late), "a late wake still counts one vblank");
 +            t.IsTrue(vb.next == late + C::kPeriod, "after more than 4 periods the grid restarts from now");
 +            t.Equals(vb.due, 2u, "a stall adds one vblank, not a burst");
++        });
++
++        tc.Run("the timer thread sleeps in short slices up to the next vblank", [&](TestCase &t)
++        {
++            C vb;
++            vb.start(t0);
++            t.IsTrue(vb.wakeAt(t0) == t0 + C::kWaitSlice, "far from the vblank: one slice");
++            const auto close = vb.next - C::kWaitSlice / 2;
++            t.IsTrue(vb.wakeAt(close) == vb.next, "within a slice of the vblank: wake at the vblank");
 +        });
 +    });
  }
