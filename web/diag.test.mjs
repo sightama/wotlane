@@ -115,6 +115,7 @@ test('audio: callbacks later than 1.5 buffers are underruns; a page without scri
   assert.equal(a.gaps, 1);
   assert.equal(Math.round(a.maxGapMs), 90);
   assert.equal(a.state, 'running');
+  assert.equal(a.bufferMs.toFixed(2), '42.67');   // the buffer's own length: how much sound the page plays ahead
   assert.equal(watch.take().cb, 0);
   assert.equal(installAudioWatch({ AudioContext: class {}, performance: { now: () => 0 } }).take(), null);
   assert.equal(installAudioWatch({}).take(), null);
@@ -122,10 +123,12 @@ test('audio: callbacks later than 1.5 buffers are underruns; a page without scri
 
 test('the game counters are read from the wasm module and the presented-frame counter, and a game that is not there yet gives nothing', () => {
   const calls = [];
-  const Module = { _wotm_web_net_stat: (i) => { calls.push(i); return [600, 3, 120.5, 4, 55, 9000.5][i]; } };
-  assert.deepEqual(readGame({ Module, wotmFrames: { frames: 590, workMs: 2950.5 } }), { presented: 590, workMs: 2950.5, frame: 600, waits: 3, waitMs: 120.5, delay: 4, pingMs: 55, idleMs: 9000.5 });
-  assert.deepEqual(calls, [0, 1, 2, 3, 4, 5]);   // reads only
-  assert.deepEqual(readGame({}), { presented: undefined, workMs: undefined, frame: undefined, waits: undefined, waitMs: undefined, delay: undefined, pingMs: undefined, idleMs: undefined });
+  const Module = { _wotm_web_net_stat: (i) => { calls.push(i); return [600, 3, 120.5, 4, 55, 9000.5, 500, 40, 30, 5, 300.5, 600][i]; } };
+  assert.deepEqual(readGame({ Module, wotmFrames: { frames: 590, workMs: 2950.5 } }), { presented: 590, workMs: 2950.5, frame: 600, waits: 3, waitMs: 120.5, delay: 4, pingMs: 55, idleMs: 9000.5,
+    periods: [500, 40, 30, 5], timerLateMs: 300.5, timerWaits: 600 });
+  assert.deepEqual(calls, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);   // reads only
+  assert.deepEqual(readGame({}), { presented: undefined, workMs: undefined, frame: undefined, waits: undefined, waitMs: undefined, delay: undefined, pingMs: undefined, idleMs: undefined,
+    periods: undefined, timerLateMs: undefined, timerWaits: undefined });
 });
 
 test('a window is the difference of two samples: rates, the cost of a frame, waits for the network, ping and its jitter', () => {
@@ -142,6 +145,18 @@ test('a window is the difference of two samples: rates, the cost of a frame, wai
 });
 
 // the game thread's own time per game frame: the window's time less the game's idle waits (vblank, events) and its waits for the network
+// the game thread's frames by length (in frame periods: on time, up to 1.75, up to 2.25, longer), how late a 1 ms wait wakes on this
+// browser and system (a coarse timer makes every wait late), and the length of the audio buffer
+test('a window gives the frame lengths, the late wakes of 1 ms waits and the audio buffer length', () => {
+  const prev = { t: 0, periods: [100, 10, 5, 1], timerLateMs: 50, timerWaits: 100 };
+  const cur = { t: 5000, periods: [230, 20, 15, 2], timerLateMs: 1550, timerWaits: 200, audio: { cb: 100, gaps: 0, maxGapMs: 50, bufferMs: 42.667 } };
+  const f = Object.fromEntries(windowFields(prev, cur));
+  assert.equal(f.fr_len, '130,10,10,1');
+  assert.equal(f.tm_late_ms, '15.00');   // (1550 - 50) / 100 waits
+  assert.equal(f.au_buf_ms, '42.7');
+  assert.equal(Object.fromEntries(windowFields(prev, { t: 5000 })).fr_len, undefined);
+  assert.equal(Object.fromEntries(windowFields(prev, { ...cur, timerWaits: 100 })).tm_late_ms, undefined);   // no wait timed out
+});
 test('a window gives the game thread busy and idle ms per game frame', () => {
   const prev = { t: 5000, frame: 300, waitMs: 100, idleMs: 2000 };
   const cur = { t: 10000, frame: 420, waitMs: 700, idleMs: 3400 };

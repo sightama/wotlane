@@ -205,6 +205,7 @@ export function installAudioWatch(win) {
     const node = original.apply(this, args);
     const periodMs = ((node.bufferSize || args[0] || 4096) / (this.sampleRate || 48000)) * 1000;
     let last = null;
+    seen.bufferMs = periodMs;
     seen.made = true;
     seen.ctx = this;
     node.addEventListener('audioprocess', () => {
@@ -222,7 +223,7 @@ export function installAudioWatch(win) {
   return {
     take() {
       if (!seen.made) return null;
-      const out = { cb: seen.cb, gaps: seen.gaps, maxGapMs: seen.maxGapMs, state: seen.ctx?.state };
+      const out = { cb: seen.cb, gaps: seen.gaps, maxGapMs: seen.maxGapMs, state: seen.ctx?.state, bufferMs: seen.bufferMs };
       seen.cb = 0;
       seen.gaps = 0;
       seen.maxGapMs = 0;
@@ -233,8 +234,10 @@ export function installAudioWatch(win) {
 
 // The game's counters since it started: frames presented and the time its loop worked (wotm_webfs.cpp wotmFrames), and from the wasm
 // module (wotm_web_net_stat, native/wotm_webfs.cpp): the game frame, the waits for the other players and their total ms, the input
-// delay in frames, the ping, and the ms the game thread spent idle (waiting for a vblank or an event). Only reads.
-export const NET_STAT = { frame: 0, waits: 1, waitMs: 2, delay: 3, pingMs: 4, idleMs: 5 };
+// delay in frames, the ping, the ms the game thread spent idle (waiting for a vblank or an event), its frames by length in frame periods
+// (up to 1.25, 1.75, 2.25, longer: `periods`) and the 1 ms waits of the match's network thread that ran out (`timerWaits`) with the ms
+// they overran by in all (`timerLateMs`: how coarse this browser's timers are). Only reads.
+export const NET_STAT = { frame: 0, waits: 1, waitMs: 2, delay: 3, pingMs: 4, idleMs: 5, periods: 6, timerLateMs: 10, timerWaits: 11 };
 export function readGame(win) {
   const m = win.Module;
   const f = win.wotmFrames;
@@ -243,6 +246,8 @@ export function readGame(win) {
     presented: f?.frames, workMs: f?.workMs,
     frame: stat(NET_STAT.frame), waits: stat(NET_STAT.waits), waitMs: stat(NET_STAT.waitMs), delay: stat(NET_STAT.delay), pingMs: stat(NET_STAT.pingMs),
     idleMs: stat(NET_STAT.idleMs),
+    periods: typeof m?._wotm_web_net_stat === 'function' ? [0, 1, 2, 3].map((k) => stat(NET_STAT.periods + k)) : undefined,
+    timerLateMs: stat(NET_STAT.timerLateMs), timerWaits: stat(NET_STAT.timerWaits),
   };
 }
 
@@ -289,6 +294,8 @@ export function windowFields(prev, cur) {
     ['work_ms', presented > 0 && Number.isFinite(cur.workMs) ? fix((cur.workMs - (prev.workMs ?? 0)) / presented) : undefined],
     ['ee_busy_ms', frames > 0 && Number.isFinite(cur.idleMs) ? fix((cur.t - prev.t - since('idleMs') - (since('waitMs') ?? 0)) / frames) : undefined],
     ['ee_idle_ms', frames > 0 && Number.isFinite(cur.idleMs) ? fix(since('idleMs') / frames) : undefined],
+    ['fr_len', Array.isArray(cur.periods) ? cur.periods.map((n, k) => n - (prev.periods?.[k] ?? 0)).join(',') : undefined],
+    ['tm_late_ms', since('timerWaits') > 0 ? (since('timerLateMs') / since('timerWaits')).toFixed(2) : undefined],
     ['frame', cur.frame],
     ['delay', cur.delay],
     ['ping_ms', cur.pingMs],
@@ -308,6 +315,7 @@ export function windowFields(prev, cur) {
     ['au_cb', audio?.cb],
     ['au_gaps', audio?.gaps],
     ['au_max_ms', whole(audio?.maxGapMs)],
+    ['au_buf_ms', fix(audio?.bufferMs)],
     ['au_state', audio?.state],
     ['hid_s', cur.hiddenMs > 0 ? whole(cur.hiddenMs / 1000) : undefined],
     ['focus_pct', whole(cur.focusPct)],

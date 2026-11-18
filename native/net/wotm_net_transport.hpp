@@ -40,4 +40,9 @@ namespace wotm_net
     // WOTM_NET into what MatchClient takes: host and port for ENet ("host" alone means the default port); a WebSocket URL stays whole
     void splitServerAddress(const std::string &addr, std::string &host, uint16_t &port);
     std::unique_ptr<Transport> makeTransport(const std::string &host);
+#ifdef __EMSCRIPTEN__
+    // the browser transport's waits for an event that ran out, and the ms they overran their timeout by in all (since the start): how
+    // coarse this browser's timers are on the game's threads (a 1 ms wait that takes 15 ms shows a 15.6 ms system timer)
+    void webWaitOverrun(double &overrunMs, double &waits);
+#endif
 }

@@ -191,18 +191,21 @@ cause can be read afterwards without asking anyone to copy logs.
   (frames presented) and `gfps` (game frames computed per second; `hz` is what it should be, 60 or 30), `work_ms` (the game loop's time
   per presented frame), `ee_busy_ms` and `ee_idle_ms` (the game thread's own time per game frame: busy, and idle waiting for a vblank
   or an event; the window less those idle waits and the waits for the network, so a device whose game thread can't keep up shows a busy
-  time near the frame's 16.7 or 33.3 ms), `waits` and `wait_ms` (how often and for how long the game was blocked waiting for the other
-  players' input; `waits_tot` and `wait_tot_ms` since the start), `delay` (input delay, frames), `ping_ms`, `ping_max_ms` and
-  `jitter_ms` (the round trip the server measures and sends each player every 500 ms: a browser can't time its WebSocket pings itself),
-  `late` (animation frames that took over 25 ms), `raf_med_ms` (the median interval: the rate the page really gets, about 33 under a 30
-  fps power-saving cap), `raf_p95_ms` and `raf_max_ms`, `lt_n`, `lt_ms` and `lt_max_ms` (main-thread tasks over 50 ms, Chrome and Edge
-  only), `au_cb`, `au_gaps` and `au_max_ms` (audio callbacks, and the ones later than 1.5 buffers, which are dropped buffers), `hid_s`
-  (seconds the tab was hidden), `focus_pct` (share of samples with the page focused), `lag_ms` and `lag_max_ms` (how late a task posted
-  to the page ran: the match WebSocket waits in that queue), the input latency (below), plus `up_s`, `frame`, `build`, `players`. The
-  device is the class of device: `touch`, `mobile`, `os`, `ua` (browser name and major version, for example `Chrome-131`; never the
-  user agent string), `cores`, `mem_gb`, `dpr`, `scr` (window size), `net`, `dl_mbps` and `est_rtt_ms` (the browser's own connection
-  estimate), `gpu` (the GPU model from WebGL, `software ...` when the browser draws without one: hardware acceleration off or the GPU
-  blocked). A field the browser can't give is left out.
+  time near the frame's 16.7 or 33.3 ms), `fr_len` (the game frames by length, without their network waits: how many took up to 1.25,
+  1.75, 2.25 and more frame periods; frames that round up to a whole extra vsync land in the third), `tm_late_ms` (how far past 1 ms
+  the match's network thread wakes from a wait that runs out: about 0.1 on a fine timer, near 15 on a 15.6 ms system timer), `waits`
+  and `wait_ms` (how often and for how long the game was blocked waiting for the other players' input; `waits_tot` and `wait_tot_ms`
+  since the start), `delay` (input delay, frames), `ping_ms`, `ping_max_ms` and `jitter_ms` (the round trip the server measures and
+  sends each player every 500 ms: a browser can't time its WebSocket pings itself), `late` (animation frames that took over 25 ms),
+  `raf_med_ms` (the median interval: the rate the page really gets, about 33 under a 30 fps power-saving cap), `raf_p95_ms` and
+  `raf_max_ms`, `lt_n`, `lt_ms` and `lt_max_ms` (main-thread tasks over 50 ms, Chrome and Edge only), `au_cb`, `au_gaps` and
+  `au_max_ms` (audio callbacks, and the ones later than 1.5 buffers, which are dropped buffers), `au_buf_ms` (the length of one audio
+  buffer), `hid_s` (seconds the tab was hidden), `focus_pct` (share of samples with the page focused), `lag_ms` and `lag_max_ms` (how
+  late a task posted to the page ran: the match WebSocket waits in that queue), the input latency (below), plus `up_s`, `frame`,
+  `build`, `players`. The device is the class of device: `touch`, `mobile`, `os`, `ua` (browser name and major version, for example
+  `Chrome-131`; never the user agent string), `cores`, `mem_gb`, `dpr`, `scr` (window size), `net`, `dl_mbps` and `est_rtt_ms` (the
+  browser's own connection estimate), `gpu` (the GPU model from WebGL, `software ...` when the browser draws without one: hardware
+  acceleration off or the GPU blocked). A field the browser can't give is left out.
 - **Input latency.** The `lat_` fields follow each button or key that went down in the window, from the moment the page saw it to the
   first present that draws the game frame applying it (`native/wotm_latency.hpp`; the page gives the time of each keydown and of each pad
   button it sees go down, `wotm_web_input_at`, and the game takes the earliest one since its previous sample; a pad counts from its own
@@ -229,8 +232,8 @@ cause can be read afterwards without asking anyone to copy logs.
   file is written.
 - **Privacy.** The lines hold the player's chosen name, the browser and device class above, and timings; no address, no user agent
   string, no language, and never chat text (the server's chat code is the only place that reads it, and it writes nothing). A DIAG line
-  is checked by `native/net/wotm_net_diag.hpp`: keys are lower-case words, values are short tokens of letters, digits and `. _ : , / + -`,
-  at most 64 fields; anything else is dropped. The keys the server's own lines use (`src`, `lobby`, `player`, `event`, `slot`,
+  is checked by `native/net/wotm_net_diag.hpp`: keys are lower-case words, values are short tokens of letters, digits and `. _ : , / +
+  -`, at most 80 fields; anything else is dropped. The keys the server's own lines use (`src`, `lobby`, `player`, `event`, `slot`,
   `transport`) can't be repeated by a report. A connection may send 10 DIAG lines per 10 s.
 - **Who the line is about.** From a connection in a lobby the server writes `src=client lobby=<code> player=<name>` itself. A report
   from a connection in no lobby (a page back on its front panel after a match) says which lobby and player it was, and nothing proves

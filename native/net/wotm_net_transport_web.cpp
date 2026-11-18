@@ -6,6 +6,7 @@
 #include <emscripten.h>
 #include <emscripten/threading.h>
 
+#include <algorithm>
 #include <chrono>
 #include <condition_variable>
 #include <cstring>
@@ -25,6 +26,7 @@ namespace wotm_net
             std::condition_variable cv;
             std::map<int, std::deque<TransportEvent>> events;
             int nextId = 1;
+            double overrunMs = 0, timedOut = 0;   // waits that ran out and how far past their timeout they woke (webWaitOverrun)
         };
         Inbox &inbox()
         {
@@ -127,7 +129,15 @@ namespace wotm_net
                 std::unique_lock<std::mutex> lk(box.mu);
                 auto &q = box.events[id_];
                 if (q.empty() && waitMs > 0)
-                    box.cv.wait_for(lk, std::chrono::milliseconds(waitMs), [&] { return !q.empty(); });
+                {
+                    const auto t0 = std::chrono::steady_clock::now();
+                    if (!box.cv.wait_for(lk, std::chrono::milliseconds(waitMs), [&] { return !q.empty(); }))
+                    {
+                        const double took = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+                        box.overrunMs += std::max(0.0, took - waitMs);
+                        ++box.timedOut;
+                    }
+                }
                 if (q.empty())
                     return false;
                 ev = std::move(q.front());
@@ -155,5 +165,12 @@ namespace wotm_net
     }
 
     std::unique_ptr<Transport> makeWebSocketTransport() { return std::make_unique<WebTransport>(); }
+
+    void webWaitOverrun(double &overrunMs, double &waits)
+    {
+        std::lock_guard<std::mutex> lk(inbox().mu);
+        overrunMs = inbox().overrunMs;
+        waits = inbox().timedOut;
+    }
 }
 #endif
