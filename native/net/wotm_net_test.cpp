@@ -73,8 +73,6 @@ namespace
         return s;
     }
 
-    // A config hash is "<settings hash>:<mods digest>": a refusal says which part differs, so a player knows whether to import the
-    // host's creations or to check the match settings
     // ---- holding the match back (wotm_net_holdback.hpp) ----
 
     // feeds `secs` of 100 ms samples: the match frame advances `fps` a second; `behind[i]` frames behind for each player; returns the first
@@ -119,7 +117,7 @@ namespace
         uint32_t frame = 0;
         wotm_net::Holdback::Decision d;
         for (int i = 0; i < 400 && d.slot < 0; ++i)   // 40 s: behind 1 in 7 samples of 10, level in the rest
-            d = runHoldback(h, t, frame, 0.1, 5, {0, 0, i % 10 < 7 ? 1u : 0u}, {false, false, false});
+            d = runHoldback(h, t, frame, 0.1, 10, {0, 0, i % 10 < 7 ? 1u : 0u}, {false, false, false});
         CHECK(d.slot == 2 && d.reason == wotm_net::Holdback::Reason::Slow);
     }
 
@@ -135,6 +133,45 @@ namespace
             d = h.update(t, frame, 60, {{0, false, true}, {0, false, true}, {2, false, true}});
         }
         CHECK(d.slot == 2);
+    }
+
+    // a page still loading the stage after the start holds every frame back, but it isn't slow: the grace counts from the first frame
+    // the match plays
+    TEST(holdback_waits_for_the_match_to_move_before_judging)
+    {
+        wotm_net::Holdback h;
+        double t = 0;
+        uint32_t frame = 3;   // the start delay's neutral frames, then nothing until the last page has loaded
+        CHECK(runHoldback(h, t, frame, 40, 0, {0, 0, 3}, {false, false, false}).slot < 0);
+        CHECK(runHoldback(h, t, frame, 20, 60, {0, 0, 0}, {false, false, false}).slot < 0);
+    }
+
+    // a member on a longer path to the server trails by its extra one-way time in frames even on a healthy device: that much is not
+    // counted against it (so a whole match slowed by something else doesn't name the highest ping)
+    TEST(holdback_latency_frames_are_the_extra_one_way_time)
+    {
+        CHECK(wotm_net::Holdback::latencyFrames(100, 20, 1000.0 / 30) == 1u);   // 40 ms more one way at 33 ms frames
+        CHECK(wotm_net::Holdback::latencyFrames(160, 20, 1000.0 / 60) == 4u);   // 70 ms at 16.7 ms
+        CHECK(wotm_net::Holdback::latencyFrames(20, 20, 1000.0 / 60) == 0u);
+        CHECK(wotm_net::Holdback::latencyFrames(10, 20, 1000.0 / 60) == 0u);
+    }
+
+    // away for 2 s, back, away for 2 s again: never over 3 s in one go, so nobody; and a member that left is never named
+    TEST(holdback_counts_away_in_one_go_and_skips_members_who_left)
+    {
+        wotm_net::Holdback h;
+        double t = 0;
+        uint32_t frame = 0;
+        CHECK(runHoldback(h, t, frame, 12, 60, {0, 0, 0}, {false, false, false}).slot < 0);
+        CHECK(runHoldback(h, t, frame, 2, 60, {0, 0, 0}, {false, true, false}).slot < 0);
+        CHECK(runHoldback(h, t, frame, 0.5, 60, {0, 0, 0}, {false, false, false}).slot < 0);
+        CHECK(runHoldback(h, t, frame, 2, 60, {0, 0, 0}, {false, true, false}).slot < 0);
+        wotm_net::Holdback g;
+        uint32_t f2 = 0;
+        wotm_net::Holdback::Decision d;
+        for (double u = 0; u < 40 && d.slot < 0; u += 0.1)
+            d = g.update(u, f2 += 1, 60, {{0, false, true}, {0, false, true}, {0, false, true}, {5, true, false}});
+        CHECK(d.slot < 0);
     }
 
     // a slow pace with no member clearly behind the others (the network, or everyone a bit slow), or a pace at 80% and over: nobody
@@ -173,6 +210,8 @@ namespace
         CHECK(runHoldback(h, t, frame, 60, 20, {0, 4}, {false, true}).slot < 0);
     }
 
+    // A config hash is "<settings hash>:<mods digest>": a refusal says which part differs, so a player knows whether to import the
+    // host's creations or to check the match settings
     TEST(config_mismatch_names_the_part_that_differs)
     {
         namespace ch = wotm_net::confighash;

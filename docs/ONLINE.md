@@ -162,8 +162,11 @@ to the console) and starts once that many players are in; `--code <code> --name 
   the others keep waiting on (alone at the back in at least 60% of the samples) while the match's pace stays under 80% of its rate for
   15 s. It is the same path as leaving: that monster is neutral from the first frame the server lacks, on every page, and the others
   play on. The dropped page stops with the reason ("your device or connection could not keep up", or "your game was in the
-  background"); the server logs it and writes `event=dropped` to the match's diagnostics. Not in the first 10 s of the match, and
-  never down to one player: a 2-player match is never cut.
+  background"); the server logs it and writes `event=dropped` to the match's diagnostics. Not in the first 10 s after the match starts
+  moving (a page still loading the stage holds every frame back without being slow), so a slow drop comes 25 s in at the earliest;
+  a member's trail is counted less the frames its longer path to the server alone accounts for (a far but healthy player is not
+  named). Never down to one player: a 2-player match is never cut. Two slow members in one match take turns at the back, so neither
+  is named.
 - **5 to 8 players:** the game itself only has 4 player slots and 4 cameras. Players 5 to 8 drive monsters in the computer-player slots
   (same controls and moves as players 1 to 4), and their screen uses a camera made by wotlane that follows from behind and above, since
   the game has no camera for them. It does not avoid buildings like the game's camera does, which is why it stays high. Every PC
