@@ -67,8 +67,7 @@ async function main() {
   const pw = await loadPlaywright();
   // the startup profiler writes the profile when the browser shuts down
   const browser = await pw.firefox.launch({
-    headless: !o.headed,
-    firefoxUserPrefs: o.prefs,
+    ...firefoxOptions({ headed: o.headed, prefs: o.prefs }),
     env: {
       ...process.env,
       MOZ_PROFILER_STARTUP: '1',

@@ -9,6 +9,7 @@ import sys
 import tempfile
 import threading
 import unittest
+import unittest.mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -192,6 +193,17 @@ class ServeWebChunksTest(unittest.TestCase):
         self.assertEqual(self.get('/data/index.json', chunks='only')[0].status, 200)
         self.assertEqual(self.get('/data/game.iso', chunks='only')[0].status, 404)
         self.assertEqual(self.get('/data/game.iso', chunks='only', method='HEAD')[0].status, 404)
+
+
+class ServeWebStartTest(unittest.TestCase):
+    def test_starts_without_a_reverse_name_lookup(self):
+        # http.server names itself with socket.getfqdn, which waited 35 s on a Mac with a slow resolver (the harness gives up sooner)
+        def no_lookup(*_):
+            raise AssertionError('make_server looked up a host name')
+        with tempfile.TemporaryDirectory() as tmp, unittest.mock.patch('socket.getfqdn', no_lookup):
+            (Path(tmp) / 'index.html').write_text('<html></html>')
+            server = serve_web.make_server('127.0.0.1', 0, Path(tmp), Path(tmp))
+            server.server_close()
 
 
 if __name__ == '__main__':

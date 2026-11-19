@@ -808,12 +808,19 @@ namespace
         return c;
     }
 
-    std::string readUntil(wotm_net::LineLink &s, const std::string &prefix, int ms = 3000)
+    // the first line starting with `prefix` within `ms` in all, or "" (a lobby's PINGS every second must not keep a missing line
+    // waiting forever)
+    std::string readUntil(wotm_net::LineLink &s, const std::string &prefix, int ms = 5000)
     {
+        const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
         std::string line;
-        while (s.readLine(line, ms))
+        for (auto left = ms; left > 0; left = static_cast<int>(std::chrono::duration_cast<std::chrono::milliseconds>(until - std::chrono::steady_clock::now()).count()))
+        {
+            if (!s.readLine(line, left))
+                break;
             if (line.rfind(prefix, 0) == 0)
                 return line;
+        }
         return {};
     }
 
@@ -1549,14 +1556,17 @@ namespace
         std::string err;
         CHECK(a.start(clientFor(cfg.port, *ms[0]), err) && b.start(clientFor(cfg.port, *ms[1]), err) && c.start(clientFor(cfg.port, *ms[2]), err));
         CHECK(a.waitStarted(5000) && b.waitStarted(5000) && c.waitStarted(5000));
-        c.setAway(true);
         const uint32_t d = a.delay();
         uint32_t f = 0;
-        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(25);
+        // Caio is named once he has been alone at the back for most of his time away, so he goes away when his game freezes, whatever
+        // the first 120 frames took on a loaded machine
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(40);
         while (c.status() == Status::Running && std::chrono::steady_clock::now() < until)
         {
+            if (f == 120)   // after about 2 s Caio's game freezes in the background: no more input from it
+                c.setAway(true);
             for (MatchClient *x : {&a, &b, &c})
-                if (x != &c || f < 120)   // after about 2 s Caio's game freezes in the background: no more input from it
+                if (x != &c || f < 120)
                     x->pushLocal(f + d, pressed(static_cast<uint16_t>(f)));
             a.waitFrame(f, 50), b.waitFrame(f, 50);
             ++f;
@@ -2080,7 +2090,9 @@ namespace
         b.sendLine("CHAT hello");
         CHECK(readUntil(b, "ERROR") == "ERROR join a lobby first");
         b.sendLine("JOIN " + code + " Bia 1");
-        CHECK(readUntil(b, "ERROR") == "ERROR you were removed from this lobby; try again in 2 s");
+        // the seconds left of the 1.5 s ban, rounded up: 1 if the host took over half a second to get here
+        const std::string refused = readUntil(b, "ERROR");
+        CHECK(refused == "ERROR you were removed from this lobby; try again in 2 s" || refused == "ERROR you were removed from this lobby; try again in 1 s");
         // someone else is welcome meanwhile, and Bia can come back once the ban is over
         LineSocket d;
         CHECK(hello(d, cfg.port) == "WELCOME 1");

@@ -76,6 +76,7 @@ foreach ($c in $combos) {
     Get-ChildItem $disc -Filter 'shot_*.png' -ErrorAction SilentlyContinue | Remove-Item -Force
     $env:PS2X_SHOT_FRAMES = [string][math]::Max(60, ($Secs - 12) * 60)   # one screenshot near the end (screen frames, ~60/s)
     $start = Get-Date
+    $env:WOTM_MUTE = '1'   # test runs never make a sound (run_live.ps1 passes the environment on)
     Start-Process powershell -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$runtime\run_live.ps1`" -Auto 0 -Build $Build" -WindowStyle Minimized | Out-Null
     Start-Sleep -Seconds 5
     $early = $false

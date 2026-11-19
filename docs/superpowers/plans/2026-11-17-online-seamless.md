@@ -129,10 +129,11 @@ Gain: fewer visible hitches when one PC runs ahead (GGRS frame advantage: the le
 
 1, 2 (both small; 2 ships with the next web deploy), 3, 4, 6, 7, 5, 8, 9. Each is its own PR; each PR's description carries its before and after numbers.
 
-## Handoff (2026-11-18)
+## Handoff (2026-11-19)
 
-**Live**: server `wl-9715672f5f0a089d` (wip/browser `dbe04bc4`); web wasm `wl-1399328c72ce0743` with the page of wip/browser `07a58f17`
-(`check_web.sh` PASSED, live 2-player smoke 21/0 after each of the two deploys of 2026-11-18).
+**Live**: server and web wasm `wl-ef39b7659c3554b6`, page and runtime of wip/browser `5ec7bdaf` (deployed 2026-11-18; probe PASS,
+`check_web.sh` PASSED). Live smokes on it 2026-11-19: Brave 34/34; Chrome with Firefox 33/34 (`creations_missing`, a page gap fixed by
+#157, which is merged but not deployed: wip/browser also carries #153, so the next web deploy is coordinated with the rollback worker).
 
 | PR | what | measured (local, Mac under load) |
 |---|---|---|
@@ -146,21 +147,26 @@ Gain: fewer visible hitches when one PC runs ahead (GGRS frame advantage: the le
 | #149 | task 7, done as a prefetch: the lobby fetches its match's disc chunks (stage, each monster and costume: `web/match_chunks.json`) while it waits; diag `disc_net_mb`, `disc_hit_mb` | root cause from live 68LN/VKA5: the slowest client downloading ~22 MiB of fight data on demand (VKA5 peepee at 236 fps sat at frame 0 for ~15 s). 20 Mbps line, 30 s lobby: start load 16.5 -> 3.35 s, all from the cache |
 | #150 | task 6: Brave is not the cause, software WebGL is; diag `gl_sw` (a context that fails on a major performance caveat) and a front-panel notice for any browser drawing in software | Brave with the GPU = Chrome (107 fps, same profile, 5 us timers, only `cores` masked); Brave `--disable-gpu`: 5.3 fps, 96% of the main thread in GL calls, like the live Brave players |
 | coord #6 | `match_diag.py` prints the latency, game thread and vblank clock per player, flags rounded frames and coarse timers | |
+| #154 | Brave supported: no Brave notice, chip or `BRAVE` command; software WebGL rides `HEALTH ... sw` (every member sees a red "software graphics" chip and a warning); lobby e2e in Chromium, Firefox and Brave | lobby e2e 72 ok |
+| #155 | the vblank timer thread spins the last stretch before each vblank (`EeVBlankClock::spinLead`: the worst recent oversleep, clamped to the cap, decaying 1/32 a sleep) | Windows (live, Chrome, Firefox, Brave 158): `vbl_late_ms` 6.6-7.4 -> 0.1-0.6 ms; Mac 0.31 -> 0.01-0.12 |
+| #156 | net tests: bounded `readUntil`; the away test goes away at the freeze; the kick ban reads 1 or 2 s | flake reproduced by slowing the first 120 frames to 90 ms |
+| #157 | players already in a match cancelled for a different setup are told whose; `tools/serve_web.py` binds without a 35 s reverse lookup | local harness `creations` 2/2 |
 
 1 vs 1, 60 Hz, rtt 40, total input latency: ~111 ms now (was ~120-140). All desync matrices: 0 desync.
 
-**Windows evidence to read from the next real match** (`sh scripts/match_diag.sh <code>` in coord): per player `game thread: busy X ms ...; frames by length a,b,c,d; vblank clock Y ms late`.
+**Windows evidence** (live matches V6BJ, EA2V, 6CMX, T5H7, 68CW, 5BLP after #155; `sh scripts/match_diag.sh <code>` in coord): the vblank
+clock keeps time (0.1-0.6 ms late). What is left is CPU: Firefox's game thread is busy 19-25 ms per 16.7 ms frame (a third of its frames
+round up), Chrome 15-17 ms, Brave 12.5-13 ms (like Chrome). Reading a match:
 - `ee_busy_ms` near or over the frame (16.7 / 33.3 ms): the game thread is CPU-bound (Firefox wasm, a weak CPU).
 - `fr_len` third bucket large: frames still round to an extra vsync (should be rare after #147).
-- `vbl_late_ms` several ms and `vbl_slow` high after #148: a coarse system timer (Windows 15.6 ms), which 2 ms slices can't help;
-  then the frame boundary needs a short spin before its deadline. Under 1 ms: the timer is fine.
+- `vbl_late_ms` over 1 ms after #155: the timer thread was starved of CPU.
 - `lat_ms` and stages; `au_buf_ms` and `au_gaps` for the audio path; Brave reports `gpu=Brave`, `cores` farbled.
 - `gl_sw=1` on the join line: that player draws WebGL in software (the likely Brave case); their own front panel now says so.
   Whether the probe catches Windows WARP in Chrome, Edge and Brave is untested: a Windows player with `gl_sw=0` and very low `fps` and
   long tasks is the case to ask about (their `chrome://gpu` or `brave://gpu`).
 - The first windows' `disc_net_mb`: a start that still waits on its download (a lobby started within a second, or a cold cache).
 
-**Remaining tasks**, in order: read the next real match (above; brief 2 item d); 7b only if `in_gap_max_ms` of the first window still
+**Remaining tasks**, in order: Firefox's game-thread cost on Windows (the CPU-bound player above); 7b only if `in_gap_max_ms` of the first window still
 shows a hold with the prefetch in (start the match clock when every client reports frame 0); the ~40 MB wasm downloads at match start on
 a cold cache (every deploy makes it cold for everyone: 17 s at 20 Mbps), 5 (phase-locked present), 8 (time sync), 9 (rollback synctest go/no-go), the TODO item on short freezes that keep coming (holdback), and an online opt-in for interpolation if Lane wants smoothness back.
 

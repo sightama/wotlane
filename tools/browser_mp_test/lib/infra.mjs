@@ -98,8 +98,20 @@ async function loginCookies(base, password) {
   });
 }
 
-// Browsers: one shared by all players (separate contexts, so separate storage) or one per player (`isolation: 'browser'`).
-export async function launchBrowsers(pw, { n, browser = 'chromium', headed = false, isolation = 'context', unlockFrames = false }) {
+// No check makes a sound (Lane uses the machine's audio meanwhile): Chromium-family browsers start with these arguments and Firefox
+// with these preferences. The game still plays and mixes its sound, so the audio checks read it from the page.
+export const MUTE_ARGS = ['--mute-audio'];
+export const MUTE_PREFS = { 'media.volume_scale': '0.0' };
+
+// `opts` for playwright[engine].launch(), muted: chromium (Chrome and Brave included) and firefox; webkit has no switch for it
+export function muted(engine, opts = {}) {
+  if (engine === 'firefox') return { ...opts, firefoxUserPrefs: { ...(opts.firefoxUserPrefs ?? {}), ...MUTE_PREFS } };
+  if (engine === 'chromium') return { ...opts, args: [...(opts.args ?? []), ...MUTE_ARGS] };
+  return opts;
+}
+
+// launch options of a Chromium-family browser: Playwright's Chromium (software GL), the installed Chrome or Brave (the real GPU)
+export function chromiumOptions({ browser = 'chromium', headed = false, unlockFrames = false }) {
   const opts = { headless: !headed, args: ['--enable-unsafe-swiftshader', '--use-gl=angle', '--use-angle=swiftshader', '--ignore-gpu-blocklist',
     '--autoplay-policy=no-user-gesture-required'] };
   if (browser === 'chrome') {
@@ -115,6 +127,12 @@ export async function launchBrowsers(pw, { n, browser = 'chromium', headed = fal
     opts.args.push('--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding', '--disable-background-timer-throttling');
     if (browser === 'chromium') opts.args.push('--disable-frame-rate-limit', '--disable-gpu-vsync');
   }
+  return muted('chromium', opts);
+}
+
+// Browsers: one shared by all players (separate contexts, so separate storage) or one per player (`isolation: 'browser'`).
+export async function launchBrowsers(pw, { n, browser = 'chromium', headed = false, isolation = 'context', unlockFrames = false }) {
+  const opts = chromiumOptions({ browser, headed, unlockFrames });
   const count = isolation === 'browser' ? n : 1;
   const list = [];
   for (let i = 0; i < count; i++) list.push(await pw.chromium.launch(opts));
@@ -159,10 +177,15 @@ export class CpuMeter {
   }
 }
 
-// Firefox for the mixed lobbies (`--firefox K`: the last K players of every lobby): Playwright's own Firefox build. `prefs` are
-// about:config preferences (e.g. javascript.options.wasm_baselinejit: false, to run the wasm only in the optimizing tier).
+// Firefox's launch options, muted; `prefs` are more about:config preferences (e.g. javascript.options.wasm_baselinejit: false, to run
+// the wasm only in the optimizing tier)
+export function firefoxOptions({ headed = false, prefs = {} }) {
+  return muted('firefox', { headless: !headed, firefoxUserPrefs: prefs });
+}
+
+// Firefox for the mixed lobbies (`--firefox K`: the last K players of every lobby): Playwright's own Firefox build
 export async function launchFirefox(pw, { headed = false, prefs = {} }) {
-  return pw.firefox.launch({ headless: !headed, firefoxUserPrefs: prefs });
+  return pw.firefox.launch(firefoxOptions({ headed, prefs }));
 }
 
 // one `NAME=VALUE` about:config preference from the command line: true/false and numbers become those types
