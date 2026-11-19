@@ -38,7 +38,6 @@ $sync = Join-Path $repoDir 'tools\sync_mods.ps1'
 if (Test-Path $sync) { & $sync -Runtime $rt -Repo $repoDir }
 $env:PS2X_NO_VU1 = '1'; $env:PS2X_NO_VIF1 = '1'; $env:PS2X_NO_GS = '1'
 $env:PS2X_SCENE = '1'; $env:PS2X_FMV = '1'
-if (-not $env:WOTM_MUTE) { $env:WOTM_MUTE = '1' }   # no sound unless WOTM_MUTE=0: test runs never make a sound
 if ($Stats -eq 1) { $env:PS2X_STATS = '1' }
 if ($Auto -eq 1) {
     $script = Join-Path $rt 'pad_script.ps1'

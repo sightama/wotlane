@@ -27,3 +27,13 @@ test('muted() adds the switch to any launch options and keeps the rest', () => {
     { headless: true, firefoxUserPrefs: { 'a.b': 1, 'media.volume_scale': '0.0' } });
   assert.deepEqual(muted('webkit', { headless: true }), { headless: true });
 });
+
+test('Chrome and Brave keep their own launch options next to the mute', () => {
+  const chrome = chromiumOptions({ browser: 'chrome' });
+  assert.equal(chrome.channel, 'chrome');
+  assert.deepEqual(chrome.args, ['--autoplay-policy=no-user-gesture-required', '--mute-audio']);
+  const brave = chromiumOptions({ browser: 'brave', unlockFrames: true });
+  assert.ok(brave.executablePath);
+  assert.ok(brave.args.includes('--disable-renderer-backgrounding') && brave.args.includes('--mute-audio'));
+  assert.ok(!brave.args.includes('--disable-gpu-vsync'));   // only headless Chromium draws unthrottled
+});
