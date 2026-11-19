@@ -1,9 +1,10 @@
 // ABOUTME: Shared steps of the checks: opening N players, forming a lobby, starting the match and waiting for log lines on every tab,
 // ABOUTME: and saving each tab's log and screenshot as evidence. Each check in checks.mjs is built from these.
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { Player, sleep } from './player.mjs';
+import { diagRecord } from './diaglog.mjs';
 import { netStart, netStopped, serverLobbyLines } from './logs.mjs';
 
 // the stock monsters in the front panel's order (web/front.js MONSTERS): one each for up to 8 players
@@ -40,6 +41,7 @@ export class Run {
       invited: Boolean(invite),
       remembered,
       initScripts,
+      onDiag: this.opts.diagOut ? (who, line) => appendFileSync(this.opts.diagOut, diagRecord(new Date(), who, line)) : undefined,
       env,
       cookies: this.target.cookies,
       viewport: { width: this.opts.width, height: this.opts.lobbyHeight },
