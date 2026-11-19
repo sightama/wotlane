@@ -61,10 +61,11 @@ opacity (`web/touch.js`); a pad hub with four slots (`web/pads.js`); saves backu
 and free camera offline; startup movies; invite links, lobby chat, pings, device health chips, owner controls, kick and ban;
 a PLAY AGAIN screen when a wins target is set; send report with diagnostics (`web/diag.js`, `web/report_ui.js`).
 
-**Content already built (done):** recolor skins made in game (PR #46, in `native/wotm_creator.hpp`, `wotm_creator.inc`), travelling
+**Content already built (done):** recolor skins made in game (PR #46, in `native/wotm_creator.hpp` and `native/runtime/wotm_creator.inc`), travelling
 online by id (protocol 5, #68, #69); maps made by rearranging a stage, as an edit list applied at load (PRs #48, #49: move, turn,
-remove, copy, power-up edits, `native/wotm_stagemap.cpp` about 2480 lines); an in-game map editor with a free camera (PR #73, in the
-browser build under the front panel's Map editor); export and import of creations as zips (`web/creations.js`); a mod kit for PNG
+remove, copy, power-up edits, `native/wotm_stagemap.cpp` about 2480 lines); an in-game map editor with a free camera (PR #73, built
+on Lane's side and treated as Jake's area by Lane's comment on #77; in the browser build it is the Map editor row of the Settings
+card's Mods tab, `native/runtime/wotm_mapedit.inc`); export and import of creations as zips (`web/creations.js`); a mod kit for PNG
 textures, sounds and skins (`tools/modkit.py`, `tools/modkit_gui.py`); custom monsters as `monster.json` over a base type
 (Goliath Prime, Cerebulon; experimental).
 
@@ -76,10 +77,13 @@ options; a lobby ends when the match ends in the browser.
 **What upstream has that we do not** (`upstream/master`):
 - A level editor, `tools/level_editor/`: a three.js page served locally by `editor.py` (about 120 KB), `web/app.js` (about 334 KB),
   menus, undo and redo, multi-select, collision view, texture and light panels, sky, terrain from a heightmap, props from Blender
-  `.glb`, prefabs, markers, pedestrian and AI nets, HUD panel, pack-as-mod, a "Test in game" button, and about 25 test files. It
-  needs the player's own disc and a local Python; it is not hostable as a public page because the stage decode (`tools/lvl.py`, 3181
-  lines; `lvlprop.py`, 1695; `lvlglb.py`, 277) runs server side. The diff against our `master` for that folder is 138 files and
-  25,831 inserted lines, most of it vendored three.js and `app.js`.
+  `.glb`, prefabs, markers, pedestrian and AI nets, HUD panel, pack-as-mod, a "Test in game" button, and about 20 test files. It
+  needs the player's own disc and a local Python; it is not hostable as a public page because the stage decode (seven
+  `tools/lvl*.py` files, among them `lvl.py`, 3181 lines; `lvlprop.py`, 1695; `lvlglb.py`, 277) runs server side. It also imports
+  upstream's `tools/modkit.py` (1729 lines against our 912: it adds the disc as a folder or an `.iso`, `disc_cache`,
+  `disc_listdir`). The diff against our `master` for the folder alone is 138 files and 25,831 inserted lines, most of it vendored
+  three.js and `app.js`; with the `lvl*.py` files, `ngprig.py` and `retarget.py` it is about 34,500 lines. Upstream keeps its docs in
+  `docs/guides/` where ours are in `docs/passos/`.
 - A level patch loader in the native layer: `wotm_levelpatch.inc` (2478 lines), `wotm_levelprops.inc` (759), `wotm_levelsel.inc`
   (483), `wotm_levelreload.inc` (275), `wotm_levelpeds.inc` (244). Its patch format (`mods/<mod>/levels/<STAGE>.json`) names objects
   by handle and adds `hp`, `scale`, `traffic`, `peds`, props, terrain and path cuts that ours lacks (ours has riders, power-up edits
@@ -93,9 +97,9 @@ schemas (ours: `name`, `base`, `baseHash`, `edits`; theirs: `id`, `name`, `base`
 `levels/<ID>.json` patch). Same path, different meaning.
 
 **Performance facts that bound the work** (the audit): the game thread is the limit; 35 to 40% of it is the hierarchy walk and 23
-to 41% the VU0 programs; a redone frame costs as much as a played one, so replays play at about 3 to 4 frames per presented frame at
-best on a fast Mac and cannot be scrubbed cheaply; the main thread renderer is about 30% CPU skinning, vertex lighting and the dust
-texture. Snapshots hold 39.7 MiB (1 vs 1) to 46.9 MiB (8 monsters).
+to 41% the VU0 programs; a redone frame costs as much as a played one (about 5.6 ms in Chrome on a fast Mac, so about 3 per 16.7 ms
+there and about 1 in Firefox, where a played frame is already near 19 ms in live matches), so replays fast forward only in Chrome
+and cannot be scrubbed cheaply; the main thread renderer is about 25 to 30% CPU skinning, vertex lighting and the dust texture. Snapshots hold 39.7 MiB (1 vs 1) to 46.9 MiB (8 monsters).
 
 ## Claims and collaboration
 
@@ -103,13 +107,14 @@ Checked on 2026-11-19 with the rules in `CLAUDE.md` ("Before taking a task").
 
 | area | who has it | evidence | what this roadmap does |
 |---|---|---|---|
-| Map creator (#10), PRs #48, #49 | Jake (`jrkubic`) | filed and driven by Jake; #48, #49 merged 2026-11-15; step 2 onward (the `.NGP` writer, object editor, glTF, lobby sharing) is his plan, no assignee | **does not take it.** Proposes shared ground rules and offers the pieces he does not want (below) |
+| Map creator (#10), PRs #48, #49 | Jake (`jrkubic`) | filed and driven by Jake; #48 (rearrange) and #49 (copy) merged 2026-11-15; the issue's own steps after that (stage variants, the `.NGP` writer, object editor, glTF, lobby sharing) are his plan, no assignee | **does not take it.** Proposes shared ground rules and offers the pieces he does not want (below) |
 | Character creator (#42), PR #46 | Jake | merged 2026-11-15; steps 2 and 3 parked by Lane's review on 2026-11-16 | does not take it; reuses its folder format |
-| Map editor free camera (#77) | Jake | taken off the factory queue by Lane on 2026-11-16 as Jake's call | untouched |
-| Upstream merge (#31) | unclaimed | no assignee, no comments, no branch, no open PR | proposed as slices (Part B, B0); whoever starts claims the issue first |
+| In-game map editor (PR #73) and its free camera (#77) | Jake's area by Lane's decision | #73 and #77 were authored on Lane's side; Lane took #77 off the factory queue on 2026-11-16 as Jake's call | untouched; the split below asks Jake whether he wants it |
+| Upstream merge (#31) | unclaimed | no assignee, no comments, no branch, no open PR (Jake's `docs/upstream-claim-check` branch, PR #151, only changes the claim rules in `CLAUDE.md`) | proposed as slices (Part B, B0); whoever starts claims the issue first |
+| Port of the online stack to `master` (#160) | Jake (filed 2026-11-19) | one batch of `wip/browser` #133 to #158 onto `master`, which lacks 139 commits of `wip/browser` and has 44 of its own | B0 targets `wip/browser`, the release branch; the slices reach `master` through that port |
 | Rollback synctest and cost (#30, PR #169) | Lane's workers | branch `sightama/rollback-cost`, PR #169 open | read only; replays reuse its snapshot code after it merges |
 | Online seamless plan, 30 Hz switch (#124), desync in 3 players (#35) | Lane's workers | `docs/superpowers/plans/2026-11-17-online-seamless.md` | not touched; items here that edit `native/net/` are marked as conflict zones |
-| Performance audit items | Lane's workers | PR #169; items 1, 2, 6 and 4 in the audit's "What is being done" | Part C only sequences them |
+| Performance audit items | Lane's workers | PR #169; the audit's "Order of work": A, then F, D and B, then E, H and I; C waits for Lane | Part C only sequences them |
 | TODO.md order | Lane | `CLAUDE.md`: "the list and its order belong to the owner" | this roadmap does not edit `TODO.md`; Lane moves items |
 
 **Proposed split with Jake** (his call on every line, to be posted on #10 and #42 with a link to this document):
@@ -149,7 +154,7 @@ offline with the file as the input source, so it reuses the lockstep path instea
 - Why it is worth more than it looks: the same file reproduces a desync or a lag report. "Send report" can attach the replay, so a
   bug report carries its own reproduction, which is what the diagnostics pipeline lacks.
 - Director mode: playback is offline, so the free camera and photo mode (F5, F6, F7, F8, off online) are legal in it. Add speed
-  control (pause and step exist; fast forward runs up to the EE's real speed, 3 to 4 frames per presented frame on a fast Mac) and a
+  control (pause and step exist; fast forward is bounded by the EE's real speed: about 3 game frames per presented frame in Chrome on a fast Mac and about real time in Firefox, so fast forward is a Chrome feature) and a
   save-as-video later through WebCodecs, with the Craft Apps (`filmcraft-cli`) for trims and titles.
 - Hard limit: a replay is valid for one build. A newer build changes the computation. So replays need versioned builds (C3), or
   they die at the next deploy. The page refuses a replay for an unknown build with a plain message and, with C3, loads the right
@@ -232,9 +237,16 @@ Own rollback netcode, an unlock screen for mod skins and 5 to 8 player shared ca
    in a link, can be digest checked, and ships no game art. PNG skins and anything with models stay as files and are shared by file or
    lobby transfer only.
 4. **Digest by use, not by folder.** A match's digest covers the content that match uses (the stage or map, the custom monsters and
-   the S-class files of the chosen monsters), so owning twenty creations never blocks a join. Skins that are PNG only are class P
-   (the creator's own done-when says "the skin is drawing only"): a player who lacks one sees the base costume, and the lobby offers
-   the transfer. A skin with its own `.NGP` or sound is class S until proven otherwise and goes in the digest.
+   the S-class files of the chosen monsters), so owning twenty creations never blocks a join. Skins that are PNG only are expected
+   to be class P (the creator's own done-when says "the skin is drawing only"): a player who lacks one sees the base costume, and
+   the lobby offers the transfer. A skin with its own `.NGP` or sound is class S until proven otherwise and goes in the digest.
+   **This rests on an assumption that does not hold today.** Skin costume numbers are "assigned on each boot, in mod/id order"
+   (`MODS.md`, Skins) and the first six maps across all enabled mods take stage slots 18 to 23 (`MODS.md`, "How it loads"), so two
+   PCs with different libraries get different costume indexes and stage slots, which are game state. The digest forces identical
+   libraries today and that is what keeps it safe. The assumption becomes true only when costume index and stage slot depend on the
+   match alone (the ids in `MATCH`), never on the local library; C1 PR 1 makes that change and proves it with a two-PC match whose
+   libraries differ, through the desync matrix. Until then the digest stays by folder. The six-map cap is a stated limit of the
+   stage select, so a "library of twenty" means twenty installed and six pickable per session unless the select grows.
 5. **No hosted gallery in the first phases.** Hosting means moderation, takedowns and storage of derived game art. Links with the
    recipe inside the fragment, and transfer between lobby members, need no server storage. A content-addressed store is an optional
    last phase and Lane's decision.
@@ -245,10 +257,10 @@ Own rollback netcode, an unlock screen for mod skins and 5 to 8 player shared ca
 
 | slice | what | effort | class | notes |
 |---|---|---|---|---|
-| 1 | `tools/level_editor/`, `tools/lvl*.py`, their tests, translated and doclinted | 1 PR; mostly a copy of 25,831 lines, our work is the Portuguese pass and CI wiring (about 600 lines edited) | none (tools only) | gives creators the editor now; "Test in game" is retargeted to open the browser build with `?WOTM_MATCH=...` and the creation loaded by import |
+| 1 | `tools/level_editor/`, the seven `tools/lvl*.py` files, their tests, and upstream's `tools/modkit.py` (the editor imports its disc reading; ours is 912 lines against 1729, so this is a merge of the kit, which B4 uses too) | 2 PRs: the editor with `lvl*.py` (a copy of about 34,500 lines; the Portuguese there is nearly none: `editor.py`, `lvl.py`, `lvlprop.py` and `app.js` are English), then the kit merge (+1,674 and -262 lines to reconcile, with its 81 Portuguese lines translated) | none (tools only) | gives creators the editor now; "Test in game" is retargeted to open the browser build with `?WOTM_MATCH=...` and the creation loaded by import; docs go to `docs/passos/` not `docs/guides/`; the imported tree is checked for game bytes (rule 1) before commit |
 | 2 | **spike first:** a converter between our `stage.json` edits and upstream's `levels/<STAGE>.json` for the shared vocabulary (move, turn, remove, copy), and a comparison of the two loaders on `CENTRAL` by state hash | 1 PR, about 500 lines of Python and a report | none | answers "which loader is the base" with evidence, and checks that upstream handles and our `node` offsets name the same objects |
-| 3 | the winning loader's native files, plus the features the other loader has that it lacks | 3 to 5 PRs, about 4,000 lines landed | **S** | needs the desync matrix on a custom stage with props, scale and traffic; rename the schema collision first |
-| 4 | the monster pipeline: `files` in `monster.json`, `ngprig.py`, `modkit` monster commands, `wotm_custom.inc` changes | 3 to 4 PRs, about 3,000 lines landed | **S** | settles `TODO.md` item 8 without writing the `.NGP` writer ourselves; the Godzilla, CJ and similar mods are not imported (third party characters); only the tooling is |
+| 3 | the winning loader's native files, plus the features the other loader has that it lacks | 3 to 5 PRs, about 4,200 lines landed (the five native files total 4,239) plus a translation commit: `wotm_levelpatch.inc` alone has 153 Portuguese lines and a Portuguese header | **S** | needs the desync matrix on a custom stage with props, scale and traffic; rename the schema collision first |
+| 4 | the monster pipeline: `files` in `monster.json`, `ngprig.py`, `retarget.py`, `modkit` monster commands, `wotm_mods.hpp` and `wotm_custom.inc` changes (+2,095 and -510 lines against ours) | 3 to 4 PRs, about 3,500 lines landed, each followed by its translation commit | **S** | settles `TODO.md` item 8 without writing the `.NGP` writer ourselves. No `mods/` content comes with it: upstream's Godzilla and CJ mods carry `.NGP`, `.TEX`, `.RTX` and `.BNK` files that look disc derived plus third party characters, so rule 1 and the characters' rights both rule them out; only the tooling is imported |
 
 Slice 3 touches Jake's area: `native/wotm_stagemap.*`, `wotm_mapedit*`, `wotm_creator*`. Nothing in it starts without his reply on
 #10. If he prefers to keep his loader as the base, slice 3 becomes "port upstream's extra features into `wotm_stagemap`" and the
@@ -347,8 +359,12 @@ whole folder; skins register again after a save but stages and monsters do not. 
 loads `creation.json`, validates, assigns ids, exposes the lists the selection screens read, rescans on demand, and computes a
 digest per creation and per match (B-decision 4). The kit and the page read the same manifest. Hashing is over raw file bytes, never
 over parsed JSON, so every PC computes the same digest.
-- PRs: (1) manifest reader, registry, per-creation digest, and the digest by use in the `MATCH` line, with a native test and a
-  two-PC check that a player with unused creations joins (about 500 lines); (2) the page and kit read the manifest, the list shows
+- C1 PR 1 stays stage-agnostic: it freezes the manifest only for `skin` and leaves `kind: stage` open until the loader spike
+  (B0 slice 2) and the answer on the `stages/<id>/stage.json` collision are in, because upstream's `wotm_mods.hpp` (982 lines
+  against our 730) already parses that file with another schema.
+- PRs: (1) manifest reader, registry, per-creation digest, costume index and stage slot derived from the match alone (not from the
+  local library, see B-decision 4), and the digest by use in the `MATCH` line, with a native test and a two-PC match whose
+  libraries differ that passes the desync matrix (about 600 lines); (2) the page and kit read the manifest, the list shows
   thumbnails and classes (about 350 lines); (3) the in-game writers add the manifest on save, reviewed by Jake (about 250 lines).
 - Risk: the digest decides who may play together, so a bug that makes two honest PCs disagree blocks every match. The first PR runs
   the desync matrix and the existing `net_checks` mods test before anything else ships.
@@ -399,7 +415,7 @@ Nothing starts without its claim (issue assignment or a comment "Working on this
 | 4 | B0 slices 3 and 4 (upstream loader, monsters), C4 GPU renderer, C6 streaming, rule packs | the long, deep items; each gated by the spike or by Jake's answer |
 | later | in-browser editor, hosted gallery, captions | only on demand |
 
-PR count if everything ships: about 45 PRs. Total new code is about 12,000 lines of our own plus about 33,000 lines landed from upstream (26,000 of them the editor and its vendored libraries).
+PR count if everything ships: about 45 PRs. Total new code is about 12,000 lines of our own plus about 45,000 lines landed from upstream (34,500 of them the editor, the `lvl*.py` tools and their vendored libraries; 4,200 the native level loader; 3,500 the monster pipeline; the rest the kit merge).
 
 ## Decisions for Lane
 
@@ -409,8 +425,11 @@ Only these need a yes; everything else above is the author's call and can be ove
    break; remove it after the next deploy.
 2. **Contacting Yan** with the draft above, or leaving upstream alone and importing quietly. Recommendation: contact, because the
    schema collision exists either way.
-3. **A hosted gallery** stays out of phases 1 to 3 (B-decision 5); and whether PNG skins derived from disc art may be shared at all
-   by lobby transfer. Recommendation: allowed between lobby members, not published anywhere by us.
+3. **A hosted gallery** stays out of phases 1 to 3 (B-decision 5); and whether anything derived from disc art may be shared at all
+   by lobby transfer: PNG skins, but also `.NGP`, `.PTR`, `.TEX`, `.RTX`, `.BNK` and WAV files made from disc data, which tier 3
+   would relay. Rule 1 forbids game bytes in the repo; the site's own position on derived art is Lane's call. Recommendation:
+   recipes and original art travel freely; derived files travel only between lobby members, only with consent, and are never
+   published or stored by us. The tooling imported from upstream (B0) brings no `mods/` content.
 4. **`TODO.md` item 8** (mods that add monsters) rewritten from "write the `.NGP` writer" to "adopt upstream's pipeline". Lane edits
    the list; this document only recommends it.
 5. **Versioned builds on the VM and 10 retained builds** (about 40 MB brotli on disk, more raw). Recommendation: yes.
@@ -420,6 +439,8 @@ Only these need a yes; everything else above is the author's call and can be ove
 The failure modes this roadmap implies and no task's tests cover yet, most likely first. Each gets its test in the item's own plan.
 1. Two honest PCs computing different digests (line endings, path order, JSON key order) so nobody can join: C1 PR 1 hashes bytes
    in a fixed path order and tests the same folder from Windows and Mac line endings.
+2. Two PCs with different libraries assigning different costume indexes or stage slots, a desync that the digest by use would
+   stop hiding: C1 PR 1's two-PC match with different libraries, run through the desync matrix, before the digest narrows.
 2. A replay recorded on one build played on another, silently wrong: A1 PR 2 refuses on a build or wasm hash mismatch and a test
    plays a mutated header.
 3. A stalled spectator slowing a match: A3 PR 1's synthetic stall test.
