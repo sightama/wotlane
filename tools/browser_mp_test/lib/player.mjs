@@ -1,5 +1,6 @@
 // ABOUTME: One simulated player: a browser context of its own (so its own OPFS: saves, mods and creations) on the game's page. Drives
 // ABOUTME: the front panel (host, join, picks, start), keeps the game's page log, plays with the keyboard and can freeze its network.
+import { diagLineOf } from './diaglog.mjs';
 
 // the game's default keyboard layout (native/wotm_settings.hpp kDefaultKb): arrows d-pad (they pick menu lines), WASD the left stick, Space X, E circle
 export const KEYS = { up: 'ArrowUp', down: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight', cross: 'Space', circle: 'e', special: '1', start: 'Enter' };
@@ -45,7 +46,7 @@ export class Player {
   }
 
   // `target.url(path)` is the page address, `env` the test-only game environment, `video` a folder for a recording or undefined
-  static async open(browser, { name, index, monster, url, env = {}, viewport = { width: 640, height: 900 }, gameViewport = { width: 640, height: 400 }, videoDir, cookies, invited = false, remembered = false, initScripts = [] }) {
+  static async open(browser, { name, index, monster, url, env = {}, viewport = { width: 640, height: 900 }, gameViewport = { width: 640, height: 400 }, videoDir, cookies, invited = false, remembered = false, initScripts = [], onDiag }) {
     const context = await browser.newContext({ viewport, ...(videoDir ? { recordVideo: { dir: videoDir, size: viewport } } : {}) });
     if (remembered) await context.addInitScript((n) => { try { localStorage.setItem('wotlane.name', n); } catch { /* not kept */ } }, name);
     if (cookies) await context.addCookies(cookies);
@@ -55,6 +56,8 @@ export class Player {
     const page = await context.newPage();
     const p = new Player({ name, index, context, page, monster });
     p.gameViewport = gameViewport;
+    // every DIAG report the page sends on its lobby socket (the server's diagnostics files are out of reach on the live site)
+    if (onDiag) page.on('websocket', (ws) => ws.on('framesent', ({ payload }) => { const line = diagLineOf(payload); if (line) onDiag(p.name, line); }));
     page.on('pageerror', (e) => p.errors.push(`${e.message}${e.stack ? ' @ ' + e.stack.split('\n').slice(0, 3).join(' | ') : ''}`));
     await page.goto(url, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => document.getElementById('monster')?.options.length > 0);
