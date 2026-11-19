@@ -2,7 +2,7 @@
 // ABOUTME: Browser multiplayer test: drives N desktop-browser players (1 to 8, plus a ninth that must be refused) through the front
 // ABOUTME: panel's lobby and the match on a local wotm_server or the live site, and writes a results table. Exit code 1 on any failure.
 import { mkdirSync, existsSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import os from 'node:os';
 import { parseArgs } from 'node:util';
 import { loadPlaywright, startLocal, startLive, launchBrowsers, launchFirefox, REPO } from './lib/infra.mjs';
@@ -26,6 +26,7 @@ const USAGE = `Usage: node tools/browser_mp_test/run.mjs [options]
   --ai                     the game's AI plays every seat (WOTM_AIVSAI=1 on the page address)
   --firefox K              the last K players of each lobby use Playwright's Firefox (mixed lobbies; needs a build with Firefox support)
   --play-secs 45  --warmup-secs 20  --padlog-frames 480  --width 640  --height 400  --lobby-height 900 (the lobby window; the card scrolls when it is taller)
+  --diag-out <file>       append every DIAG line each tab sends on its lobby socket (works on live too), as: time, player name, line
   --video                  record a video per tab (webm)       --out <dir>  results folder (default <repo>/runtime/browser_mp_test/<time>)
 Exit code 0 when no row failed.
 `;
@@ -38,7 +39,7 @@ const { values: v } = parseArgs({
     url: { type: 'string', default: 'https://playwotm.com/' }, password: { type: 'string', default: process.env.WOTM_SITE_PASSWORD ?? '' },
     browser: { type: 'string', default: 'chromium' }, headed: { type: 'boolean', default: false }, isolation: { type: 'string', default: 'context' }, 'unlock-frames': { type: 'boolean', default: false }, ai: { type: 'boolean', default: false },
     'play-secs': { type: 'string', default: '45' }, 'warmup-secs': { type: 'string', default: '20' }, 'padlog-frames': { type: 'string', default: '480' },
-    width: { type: 'string', default: '640' }, height: { type: 'string', default: '400' }, 'lobby-height': { type: 'string', default: '900' }, firefox: { type: 'string', default: '0' }, video: { type: 'boolean', default: false },
+    width: { type: 'string', default: '640' }, height: { type: 'string', default: '400' }, 'lobby-height': { type: 'string', default: '900' }, firefox: { type: 'string', default: '0' }, video: { type: 'boolean', default: false }, 'diag-out': { type: 'string' },
     out: { type: 'string' }, help: { type: 'boolean', default: false },
   },
 });
@@ -49,9 +50,10 @@ const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const runtime = process.env.WOTM_RECOMP_DIR ?? join(REPO, 'runtime');
 const outDir = resolve(v.out ?? join(runtime, 'browser_mp_test', stamp));
 mkdirSync(outDir, { recursive: true });
+if (v['diag-out']) mkdirSync(dirname(resolve(v['diag-out'])), { recursive: true });
 
 const opts = {
-  maxPlayers: 8, isolation: v.isolation, video: v.video, width: Number(v.width), height: Number(v.height),
+  maxPlayers: 8, isolation: v.isolation, video: v.video, diagOut: v['diag-out'] ? resolve(v['diag-out']) : undefined, width: Number(v.width), height: Number(v.height),
   playSecs: Number(v['play-secs']), warmupSecs: Number(v['warmup-secs']), padlogFrames: Number(v['padlog-frames']),
   lobbyHeight: Number(v['lobby-height']), firefoxCount: Number(v.firefox), disc: v.disc ? resolve(v.disc) : (existsSync(join(REPO, 'disc')) ? join(REPO, 'disc') : ''),
 };

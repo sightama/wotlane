@@ -18,6 +18,7 @@
 #include "wotm_rtz_lanes.hpp"
 #include "wotm_hudedge.hpp"
 #include "wotm_pace.hpp"
+#include "wotm_pad_clock.hpp"
 #include "wotm_latency.hpp"
 #include "wotm_trig_goldens.hpp"
 #include "net/wotm_modifiers.hpp"
@@ -309,6 +310,22 @@ namespace
         CHECK(!ip::wanted(true, 144, false, false, true, false));   // replay
         CHECK(!ip::wanted(true, 144, false, false, false, true));   // network match
         CHECK(!ip::wanted(true, 60, true, false, false, true));
+    }
+
+    // PS2X_PAD scripts count seconds from the first pad read: the browser's GetTime() is a wall-clock time (about 1.8e9 s), so
+    // a script step at 1 s would never come up if it were compared to it directly
+    TEST(pad_script_clock_starts_at_the_first_reading)
+    {
+        wotm::padclock::SinceFirstCall clock;
+        CHECK(clock.seconds(1794790626.9) == 0.0);
+        CHECK(clock.seconds(1794790628.4) > 1.49 && clock.seconds(1794790628.4) < 1.51);
+    }
+
+    TEST(pad_script_clock_keeps_counting_from_a_small_raw_time)
+    {
+        wotm::padclock::SinceFirstCall clock;
+        CHECK(clock.seconds(3.0) == 0.0);
+        CHECK(clock.seconds(5.5) == 2.5);
     }
 
     // The browser's blending guard (PaceGuard): judged by the present interval actually reached, since the drawing's cost is in

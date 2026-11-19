@@ -21,6 +21,10 @@ node --test tools/browser_mp_test/test/     # the log readers
 Use `--site <dir>` to test a `web_dist` copy and `--data <dir>` for the folder with `game.iso` and `SCUS_971.97`. Results (logs,
 screenshots, `results.md`, `results.json`) go to `<runtime>/browser_mp_test/<time>/`, or `--out`.
 
+`run.mjs --diag-out <file>` (not `desync.mjs` or `latency.mjs`) appends every `DIAG` line each tab sends on its lobby socket (`web/diag.js`: the join report, the periodic ones, the last
+one) to the file, one per line as `<time> <player name> <line>`. It reads Playwright's WebSocket frame events, so it works on the live site,
+where the server's own diagnostics files (`wotm_server --diag-dir`) are out of reach, and gives a match per player.
+
 A live run targets https://playwotm.com/ (`--url` for another site; `--password` or `WOTM_SITE_PASSWORD` only for a site behind the password gate). Every tab downloads the game's data (57 MB), so keep live
 runs short, and use your own lobbies (each run makes its own). The live server's log is out of reach, so a live run judges by the tabs'
 logs only (the server-side DESYNC and "left the match" checks are local only).
@@ -54,7 +58,7 @@ logs only (the server-side DESYNC and "left the match" checks are local only).
   windows. `--isolation browser` starts one browser per player. `--firefox K` makes the last K players of every lobby use Playwright's Firefox
   (a mixed lobby; needs a build with Firefox support). The lobby gets its own window height (`--lobby-height`; the card is taller than 400 px with 8
   members and scrolls) and the game its own size (`--height`).
-- `PS2X_PAD` scripted pads are not used: in the browser build `GetTime()` is a wall-clock time, so a script's seconds never match.
+- `PS2X_PAD` scripted pads are not used: the page address doesn't pass `PS2X_PAD` to the game (`web/pageenv.js` allowlist), and the harness drives the keyboard. In the browser build a script's seconds count from the first pad read (`g_ps2PadClock`, `native/runtime/wotm_pad.inc`), because raylib's `GetTime()` is a wall-clock time there.
 
 ## Desync matrix
 

@@ -14,6 +14,8 @@
 // gives the cost: save, restore, compare, and the redone frames' time per frame.
 //   WOTM_SYNCTEST_SKIP=<piece>[,<piece>...]: leaves those pieces out of the snapshot (by name prefix: "sound", "orbit", "fixed-step"...),
 //     to see what a missing piece breaks.
+//   WOTM_SYNCTEST_REDO_SKIP=<hex address>[,...]: those guest functions return at once in the redone frames that are never shown, to
+//     find what a redo can leave out (installRedoSkips).
 //   WOTM_SYNCTEST_RAM=full: the whole 64 MB host RAM instead of the parts in use (finds state kept somewhere the snapshot doesn't cover).
 namespace wotm_rollback
 {
@@ -30,6 +32,60 @@ namespace wotm_rollback
     R5900Context *g_ctx = nullptr;   // the context the boundary saw (the fight's thread)
 
     bool resimulating() { return g_test && g_test->resimulating(); }
+
+    // the frame the game runs after the last boundary; a redone frame before the last one of a redo is never shown
+    uint32_t g_frame = 0;
+    bool hiddenRedo() { return resimulating() && g_frame + 1u < g_test->target(); }
+
+    // ---- WOTM_SYNCTEST_REDO_SKIP=<guest address>[,...]: those functions return at once in the hidden redone frames, to find what a
+    // redo can leave out without changing the state (a function whose work only feeds the drawing). The hook goes on last, over
+    // any other hook of the function.
+    constexpr int kRedoSkips = 8;
+    uint32_t g_redoSkipAddr[kRedoSkips] = {};
+    PS2Runtime::RecompiledFunction g_redoSkipOrig[kRedoSkips] = {};
+    uint64_t g_redoSkipped[kRedoSkips] = {};
+
+    template <int I> void redoSkippable(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        if (ctx->pc == g_redoSkipAddr[I] && hiddenRedo())
+        {
+            ++g_redoSkipped[I];
+            ctx->pc = GPR_U32(ctx, 31);
+            return;
+        }
+        g_redoSkipOrig[I](rdram, ctx, runtime);
+    }
+
+    template <int... I> constexpr std::array<PS2Runtime::RecompiledFunction, sizeof...(I)> redoSkipHooks(std::integer_sequence<int, I...>)
+    {
+        return {&redoSkippable<I>...};
+    }
+
+    void installRedoSkips(PS2Runtime &runtime)
+    {
+        const char *e = std::getenv("WOTM_SYNCTEST_REDO_SKIP");
+        if (!g_test || !e)
+            return;
+        static constexpr auto hooks = redoSkipHooks(std::make_integer_sequence<int, kRedoSkips>{});
+        int n = 0;
+        for (const char *p = e; *p && n < kRedoSkips;)
+        {
+            char *end = nullptr;
+            const uint32_t addr = static_cast<uint32_t>(std::strtoul(p, &end, 16));
+            if (end == p)
+                break;
+            if (PS2Runtime::RecompiledFunction f = runtime.lookupFunction(addr))
+            {
+                g_redoSkipAddr[n] = addr, g_redoSkipOrig[n] = f;
+                runtime.registerFunction(addr, hooks[static_cast<size_t>(n)]);
+                std::fprintf(stderr, "[synctest] hidden redone frames skip the function at 0x%06x\n", addr);
+                ++n;
+            }
+            else
+                std::fprintf(stderr, "[synctest] WOTM_SYNCTEST_REDO_SKIP: no function at 0x%06x\n", addr);
+            p = *end == ',' ? end + 1 : end;
+        }
+    }
 
     // ---- cost (one line per kReportFrames frames)
     constexpr uint32_t kReportFrames = 300u;
@@ -57,6 +113,12 @@ namespace wotm_rollback
                      frame, g_test->frames(), g_reported, g_save.sum / n, g_save.max, g_restore.sum / n, g_restore.max,
                      g_compare.sum / n, g_compare.max, g_resim.sum / n / back, g_resim.max / back, g_present.sum / n, g_present.max,
                      g_slots[0].bytes.size() / 1048576.0, g_checks, g_mismatches, g_mismatchesTotal, g_barriers);
+        for (int i = 0; i < kRedoSkips && g_redoSkipAddr[i]; ++i)
+        {
+            std::fprintf(stderr, "[synctest]   0x%06x skipped %llu times in hidden redone frames\n", g_redoSkipAddr[i],
+                         static_cast<unsigned long long>(g_redoSkipped[i]));
+            g_redoSkipped[i] = 0;   // per report, like the costs above
+        }
         g_save = g_restore = g_compare = g_resim = g_present = Cost{};
         g_reported = g_mismatches = g_checks = 0;
     }
@@ -367,6 +429,7 @@ namespace wotm_rollback
             barrier("sound bank change");
         }
         const uint32_t frame = wotm_sync::g_index;
+        g_frame = frame;
         const auto t0 = clk::now();
         switch (g_test->boundary(frame))
         {
@@ -425,6 +488,7 @@ namespace wotm_rollback
             g_test.reset();
             return;
         }
+        g_frame = g_test->back();
         g_restoreEnd = clk::now();
         g_restore.add(ms(t1, g_restoreEnd));
         g_presentValid = false;

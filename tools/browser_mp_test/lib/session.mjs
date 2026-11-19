@@ -1,16 +1,24 @@
 // ABOUTME: Shared steps of the checks: opening N players, forming a lobby, starting the match and waiting for log lines on every tab,
 // ABOUTME: and saving each tab's log and screenshot as evidence. Each check in checks.mjs is built from these.
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
+import { randomBytes } from 'node:crypto';
 import { Player, sleep } from './player.mjs';
+import { diagRecord } from './diaglog.mjs';
 import { netStart, netStopped, serverLobbyLines } from './logs.mjs';
 
 // the stock monsters in the front panel's order (web/front.js MONSTERS): one each for up to 8 players
 export const MONSTER_IDS = [3, 1, 2, 5, 4, 7, 8, 9];
 
+// Each run's players carry a short tag (P1-ab12). On the live site lobbies from earlier runs stay listed, and every run's host used
+// to be called P1, so a lobby list row of an earlier run matched this run's host.
+export const newRunTag = () => randomBytes(2).toString('hex');
+export const playerName = (tag, index) => `P${index + 1}-${tag}`;
+
 export class Run {
   constructor({ pw, target, browsers, opts, report, outDir, firefox = null }) {
     Object.assign(this, { pw, target, browsers, opts, report, outDir, firefox });
+    this.tag = newRunTag();
     this.refusals = [];   // refused joins seen by a check, judged by flushRefusals in checks.mjs
   }
 
@@ -26,13 +34,14 @@ export class Run {
     const firefox = this.firefox && index < n && index >= n - this.opts.firefoxCount;   // the last K players of a lobby (not the spare)
     const browser = firefox ? this.firefox : this.browsers[this.opts.isolation === 'browser' ? index % this.browsers.length : 0];
     return Player.open(browser, {
-      name: name ?? `P${index + 1}`,
+      name: name ?? playerName(this.tag, index),
       index,
       monster: monster ?? MONSTER_IDS[index % MONSTER_IDS.length],
       url: invite ? `${this.target.pageUrl}${this.target.pageUrl.includes('?') ? '&' : '?'}join=${invite}` : this.target.pageUrl,
       invited: Boolean(invite),
       remembered,
       initScripts,
+      onDiag: this.opts.diagOut ? (who, line) => appendFileSync(this.opts.diagOut, diagRecord(new Date(), who, line)) : undefined,
       env,
       cookies: this.target.cookies,
       viewport: { width: this.opts.width, height: this.opts.lobbyHeight },

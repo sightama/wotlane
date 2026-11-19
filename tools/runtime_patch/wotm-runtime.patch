@@ -1424,10 +1424,10 @@ index ea86a9c..c9c7374 100644
      struct CodeRegion
      {
 diff --git a/ps2xRuntime/include/runtime/ps2_pad.h b/ps2xRuntime/include/runtime/ps2_pad.h
-index 7755fe6..4333997 100644
+index 7755fe6..ac24e45 100644
 --- a/ps2xRuntime/include/runtime/ps2_pad.h
 +++ b/ps2xRuntime/include/runtime/ps2_pad.h
-@@ -4,6 +4,23 @@
+@@ -4,6 +4,27 @@
  #include <cstddef>
  #include <cstdint>
  
@@ -1447,6 +1447,10 @@ index 7755fe6..4333997 100644
 +// (data[4..7]: right x/y, left x/y).
 +using PS2PadKeyboardFn = void (*)(uint16_t &btns, uint8_t *data);
 +extern PS2PadKeyboardFn g_ps2PadKeyboard;
++// Seconds the PS2X_PAD timed script counts against. Without a function: raylib's GetTime() (seconds since the window opened;
++// in the browser it is a wall-clock time, so the browser build installs a clock that starts at the first read).
++using PS2PadClockFn = double (*)();
++extern PS2PadClockFn g_ps2PadClock;
 +
  class PSPadBackend
  {
@@ -4453,10 +4457,10 @@ index 37b6a4d..f2df7ed 100644
  int PS2Memory::pollDmaRegisters()
  {
 diff --git a/ps2xRuntime/src/lib/ps2_pad.cpp b/ps2xRuntime/src/lib/ps2_pad.cpp
-index 8590f14..7e48d74 100644
+index 8590f14..3bca411 100644
 --- a/ps2xRuntime/src/lib/ps2_pad.cpp
 +++ b/ps2xRuntime/src/lib/ps2_pad.cpp
-@@ -1,6 +1,16 @@
+@@ -1,6 +1,17 @@
  #include "runtime/ps2_pad.h"
  #include "ps2_host_backend.h"
 +#include <algorithm>
@@ -4470,10 +4474,11 @@ index 8590f14..7e48d74 100644
 +PS2PadDeviceMapFn g_ps2PadDeviceMap = nullptr;
 +PS2PadGamepadButtonsFn g_ps2PadGamepadButtons = nullptr;
 +PS2PadKeyboardFn g_ps2PadKeyboard = nullptr;
++PS2PadClockFn g_ps2PadClock = nullptr;
  
  namespace
  {
-@@ -23,10 +33,169 @@ namespace
+@@ -23,10 +34,169 @@ namespace
      constexpr uint16_t PAD_L1 = 0x0400u;
      constexpr uint16_t PAD_R2 = 0x0200u;
      constexpr uint16_t PAD_L2 = 0x0100u;
@@ -4621,7 +4626,7 @@ index 8590f14..7e48d74 100644
 +        }
 +        if (steps.empty() || port < 0 || port > 3)
 +            return;
-+        const double now = GetTime();
++        const double now = g_ps2PadClock ? g_ps2PadClock() : GetTime();
 +        static uint16_t lastBtns[4] = {0xFFFFu, 0xFFFFu, 0xFFFFu, 0xFFFFu};
 +        static unsigned long calls[4] = {};
 +        ++calls[port];
@@ -4644,7 +4649,7 @@ index 8590f14..7e48d74 100644
      if (!data || size < 32)
          return false;
  
-@@ -38,86 +207,13 @@ bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t s
+@@ -38,86 +208,13 @@ bool PSPadBackend::readState(int /*port*/, int /*slot*/, uint8_t *data, size_t s
      data[4] = data[5] = data[6] = data[7] = kPadStickCenter;
  
      uint16_t btns = 0xFFFFu;

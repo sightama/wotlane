@@ -177,12 +177,22 @@ export class CpuMeter {
   }
 }
 
-// Firefox's launch options, muted; `prefs` are more about:config preferences
+// Firefox's launch options, muted; `prefs` are more about:config preferences (e.g. javascript.options.wasm_baselinejit: false, to run
+// the wasm only in the optimizing tier)
 export function firefoxOptions({ headed = false, prefs = {} }) {
   return muted('firefox', { headless: !headed, firefoxUserPrefs: prefs });
 }
 
 // Firefox for the mixed lobbies (`--firefox K`: the last K players of every lobby): Playwright's own Firefox build
-export async function launchFirefox(pw, { headed = false }) {
-  return pw.firefox.launch(firefoxOptions({ headed }));
+export async function launchFirefox(pw, { headed = false, prefs = {} }) {
+  return pw.firefox.launch(firefoxOptions({ headed, prefs }));
+}
+
+// one `NAME=VALUE` about:config preference from the command line: true/false and numbers become those types
+export function firefoxPref(spec) {
+  const at = spec.indexOf('=');
+  if (at <= 0) throw new Error(`a Firefox preference is NAME=VALUE (got '${spec}')`);
+  const name = spec.slice(0, at), raw = spec.slice(at + 1);
+  const value = raw === 'true' ? true : raw === 'false' ? false : raw !== '' && !Number.isNaN(Number(raw)) ? Number(raw) : raw;
+  return [name, value];
 }
