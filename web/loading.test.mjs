@@ -55,22 +55,25 @@ test('a later download shows a note once it has gone on for a second, with its o
   assert.equal(a.text(11100), 'Loading game data (3 MB)');
 });
 
-test('the note goes away once the downloads go quiet, and the next burst counts from zero', () => {
-  const a = new StreamActivity({ quietMs: 1500 });
+test('the note goes away once the downloads go quiet; its count goes on within the same load and starts over after a long quiet', () => {
+  const a = new StreamActivity({ quietMs: 1500, resetMs: 10000 });
   a.add(MB, 0);
   a.add(MB, 1200);
   assert.equal(a.text(1300), 'Loading game data (2 MB)');
   assert.equal(a.text(2800), null);
-  a.add(MB, 9000);
-  a.add(MB, 10100);
-  assert.equal(a.text(10200), 'Loading game data (2 MB)');
+  a.add(MB, 6000);   // 4.8 s later: the same load, the count goes on
+  a.add(MB, 7100);
+  assert.equal(a.text(7200), 'Loading game data (4 MB)');
+  a.add(MB, 30000);   // a new load
+  a.add(MB, 31100);
+  assert.equal(a.text(31200), 'Loading game data (2 MB)');
 });
 
-test('the note rounds the MB down and says when it is under one', () => {
+test('the note rounds the MB down and leaves the number out under one', () => {
   const a = new StreamActivity();
   a.add(MB / 2, 0);
   a.add(MB / 4, 1100);
-  assert.equal(a.text(1200), 'Loading game data (under 1 MB)');
+  assert.equal(a.text(1200), 'Loading game data');
 });
 
 test('by default the note stays across the game\'s short gaps between the files of one load', () => {
