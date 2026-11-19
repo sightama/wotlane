@@ -3,7 +3,7 @@
 import { mkdirSync, existsSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
-import { REPO, freePort, loadPlaywright } from './lib/infra.mjs';
+import { REPO, freePort, loadPlaywright, firefoxPref } from './lib/infra.mjs';
 
 const USAGE = `usage: node tools/browser_mp_test/profile_firefox.mjs [options]
   --match SPEC    direct fight (WOTM_MATCH, default 3,1,1; 8 monsters: 3,1,2,4,5,7,8,9,1)
@@ -12,12 +12,13 @@ const USAGE = `usage: node tools/browser_mp_test/profile_firefox.mjs [options]
   --interval MS   sampling interval (default 1)
   --site DIR      built page with wasm names (default <runtime>/web_dist_prof)   --data DIR   (default <runtime>/web_data)
   --env K=V       more game environment (repeatable: WOTM_SYNCTEST=2, WOTM_FRAMESPIN=8)
+  --firefox-pref NAME=VALUE   an about:config preference (repeatable: javascript.options.wasm_lazy_tiering=false)
   --out FILE      the profile (default <runtime>/firefox_profile/<tag>.json)   --headed
 Then: python3 tools/gecko_profile_top.py <profile>. Build the page with names: in <runtime>/build_web set
 CMAKE_EXE_LINKER_FLAGS=--profiling-funcs, run tools/build_web.sh, copy web_dist aside, set the flag back.`;
 
 function args() {
-  const o = { match: '3,1,1', step: 1, seconds: 60, interval: 1, site: '', data: '', env: {}, out: '', headed: false };
+  const o = { match: '3,1,1', step: 1, seconds: 60, interval: 1, site: '', data: '', env: {}, prefs: {}, out: '', headed: false };
   const a = process.argv.slice(2);
   for (let i = 0; i < a.length; i++) {
     const k = a[i], v = () => { if (i + 1 >= a.length) { console.error(USAGE); process.exit(2); } return a[++i]; };
@@ -31,6 +32,7 @@ function args() {
     else if (k === '--out') o.out = v();
     else if (k === '--headed') o.headed = true;
     else if (k === '--env') { const [n, ...rest] = v().split('='); o.env[n] = rest.join('='); }
+    else if (k === '--firefox-pref') { const [n, val] = firefoxPref(v()); o.prefs[n] = val; }
     else { console.error(USAGE); process.exit(2); }
   }
   const rt = join(REPO, 'runtime');
@@ -66,6 +68,7 @@ async function main() {
   // the startup profiler writes the profile when the browser shuts down
   const browser = await pw.firefox.launch({
     headless: !o.headed,
+    firefoxUserPrefs: o.prefs,
     env: {
       ...process.env,
       MOZ_PROFILER_STARTUP: '1',
