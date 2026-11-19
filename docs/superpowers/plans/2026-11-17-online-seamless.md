@@ -121,8 +121,9 @@ Gain: fewer visible hitches when one PC runs ahead (GGRS frame advantage: the le
 
 ### Task 9: Rollback go/no-go (synctest), then hybrid if GO
 
-- [ ] `WOTM_SYNCTEST=<n>` in the browser build: full snapshot (guest RAM, used upper RAM, scratchpad, main context, host statics, sound engine), every frame restore n back, resimulate with the same inputs, compare hashes; resimulated frames skip capture, vsync and audio. Run 1 vs 1 (60 Hz) and 4 to 8 monsters (30 Hz) in Chrome and Firefox; report mismatches and the resimulation cost per frame.
+- [x] `WOTM_SYNCTEST=<n>` in the browser build: full snapshot (guest RAM, used upper RAM, scratchpad, main context, host statics, sound engine), every frame restore n back, resimulate with the same inputs, compare hashes; resimulated frames skip capture, vsync and audio. Run 1 vs 1 (60 Hz) and 4 to 8 monsters (30 Hz) in Chrome and Firefox; report mismatches and the resimulation cost per frame.
 - [ ] GO: write the hybrid design (delay floor 1 to 2 frames + rollback window sized from the measured cost, prediction = repeat the last input, barriers at dialogs and stage loads) with expected latency, then build it behind a setting, off by default. NO-GO: name exactly what blocks it.
+- Status: GO on correctness, payoff limited by cost (`docs/investigacoes/2026-11-18/rollback-synctest/README.md`); the hybrid is paused. What makes every frame cheaper, Chrome and Firefox measured: `docs/investigacoes/2026-11-19/performance-audit.md`.
 
 ## Order
 

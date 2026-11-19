@@ -3,7 +3,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
-import { REPO, freePort, loadPlaywright, launchBrowsers, launchFirefox } from './lib/infra.mjs';
+import { REPO, freePort, loadPlaywright, launchBrowsers, launchFirefox, firefoxPref } from './lib/infra.mjs';
 
 const USAGE = `usage: node tools/browser_mp_test/synctest.mjs [options]
   --browser chrome|chromium|firefox   default chrome (the real one, its GPU)
@@ -13,11 +13,13 @@ const USAGE = `usage: node tools/browser_mp_test/synctest.mjs [options]
   --minutes M     how long to run (default 3)
   --site DIR      built page (default <runtime>/web_dist)   --data DIR   game.iso and SCUS_971.97 (default <runtime>/web_data)
   --env K=V       more game environment (repeatable: WOTM_SYNCTEST_SKIP=sound, WOTM_FRAMESPIN=8)
+  --firefox-pref NAME=VALUE   an about:config preference for Firefox (repeatable: javascript.options.wasm_baselinejit=false runs
+                  the wasm only in the optimizing tier)
   --out DIR       where the game's log goes (default <runtime>/browser_synctest)   --headed
 Exit status 1 when the game logged a mismatch or no check ran.`;
 
 function args() {
-  const o = { browser: 'chrome', back: 2, match: '3,1,1', step: 1, minutes: 3, site: '', data: '', env: {}, out: '', headed: false };
+  const o = { browser: 'chrome', back: 2, match: '3,1,1', step: 1, minutes: 3, site: '', data: '', env: {}, prefs: {}, out: '', headed: false };
   const a = process.argv.slice(2);
   for (let i = 0; i < a.length; i++) {
     const k = a[i], v = () => a[++i];
@@ -32,6 +34,7 @@ function args() {
     else if (k === '--out') o.out = v();
     else if (k === '--headed') o.headed = true;
     else if (k === '--env') { const [n, ...rest] = v().split('='); o.env[n] = rest.join('='); }
+    else if (k === '--firefox-pref') { const [n, val] = firefoxPref(v()); o.prefs[n] = val; }
     else { console.error(USAGE); process.exit(2); }
   }
   const rt = join(REPO, 'runtime');
@@ -63,7 +66,7 @@ async function main() {
   const port = await freePort();
   const web = spawn('python3', [join(REPO, 'tools/serve_web.py'), '--port', String(port), '--site', o.site, '--data', o.data], { stdio: 'ignore' });
   const pw = await loadPlaywright();
-  const browser = o.browser === 'firefox' ? await launchFirefox(pw, { headed: o.headed })
+  const browser = o.browser === 'firefox' ? await launchFirefox(pw, { headed: o.headed, prefs: o.prefs })
     : (await launchBrowsers(pw, { n: 1, browser: o.browser, headed: o.headed, unlockFrames: true }))[0];
   const extra = Object.entries(o.env).map(([k, v]) => `_${k.replace(/^WOTM_/, '').toLowerCase()}${v}`).join('').replace(/[^A-Za-z0-9_.-]/g, '-');
   const tag = `${o.browser}_${o.step === 2 ? '30hz' : '60hz'}_back${o.back}_${o.match.split(',').length - 1}m${extra}`;
