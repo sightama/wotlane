@@ -2090,7 +2090,9 @@ namespace
         b.sendLine("CHAT hello");
         CHECK(readUntil(b, "ERROR") == "ERROR join a lobby first");
         b.sendLine("JOIN " + code + " Bia 1");
-        CHECK(readUntil(b, "ERROR") == "ERROR you were removed from this lobby; try again in 2 s");
+        // the seconds left of the 1.5 s ban, rounded up: 1 if the host took over half a second to get here
+        const std::string refused = readUntil(b, "ERROR");
+        CHECK(refused == "ERROR you were removed from this lobby; try again in 2 s" || refused == "ERROR you were removed from this lobby; try again in 1 s");
         // someone else is welcome meanwhile, and Bia can come back once the ban is over
         LineSocket d;
         CHECK(hello(d, cfg.port) == "WELCOME 1");
