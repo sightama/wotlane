@@ -2,7 +2,7 @@
 // ABOUTME: Browser multiplayer test: drives N desktop-browser players (1 to 8, plus a ninth that must be refused) through the front
 // ABOUTME: panel's lobby and the match on a local wotm_server or the live site, and writes a results table. Exit code 1 on any failure.
 import { mkdirSync, existsSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import os from 'node:os';
 import { parseArgs } from 'node:util';
 import { loadPlaywright, startLocal, startLive, launchBrowsers, launchFirefox, REPO } from './lib/infra.mjs';
@@ -50,6 +50,7 @@ const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const runtime = process.env.WOTM_RECOMP_DIR ?? join(REPO, 'runtime');
 const outDir = resolve(v.out ?? join(runtime, 'browser_mp_test', stamp));
 mkdirSync(outDir, { recursive: true });
+if (v['diag-out']) mkdirSync(dirname(resolve(v['diag-out'])), { recursive: true });
 
 const opts = {
   maxPlayers: 8, isolation: v.isolation, video: v.video, diagOut: v['diag-out'] ? resolve(v['diag-out']) : undefined, width: Number(v.width), height: Number(v.height),
