@@ -31,6 +31,8 @@ For online play start `wotm_server --ws-port <port>`; a page opened from `localh
 - **Disc:** `/disc` is a WASMFS fetch backend over `data/`: the game's reads become 1 MiB range requests, each fetched once
   (`native/wotm_webfs.cpp`). `web/data_retry.js` retries network and 5xx failures in every thread and reports each chunk, which
   `web/loading.js` shows as "Downloading game data 34% (9 of 27 MB). Only the first visit downloads this much." over the game.
+  After boot, a stage or monster not cached yet makes the game wait on its download on a black screen: while such a download goes on
+  (over a second, gaps up to 3.5 s counted as the same load) a note at the top says "Loading game data (N MB)" (`StreamActivity`).
 - **Disc cache:** `web/disc_cache.js` (loaded by the page with a script tag and, in the game's workers, by `data_retry.js`; it is not in the `--pre-js` list, so a change to it leaves the build id alone) keeps the disc's
   1 MiB chunks in the browser's Cache API, one cache per disc file and version (its ETag), each chunk stored with its SHA-256 and checked
   before use; a chunk missing or failing the check comes from the network. Nothing is stored when the Cache API is missing, the HEAD
