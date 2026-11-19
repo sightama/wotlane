@@ -31,6 +31,12 @@ Several people (Lane `sightama`, Jake `jrkubic`) and many agent sessions work in
 2. Open and draft PRs: `gh pr list --state open` and any PR that mentions the issue.
 3. Recent branches by someone else: `git fetch --all && git for-each-ref --sort=-committerdate refs/remotes --format='%(committerdate:short) %(refname:short) %(authorname)' | head -30`.
 4. `TODO.md`: the item may name who has it.
+5. **Upstream** (Yan Moura, `yanm1103/War_of_the_Monsters_recomp`). It moves fast, in Portuguese, and the fork is behind it, so what you are about to build may already exist there or be in progress. Add the remote once per clone (`git remote add upstream https://github.com/yanm1103/War_of_the_Monsters_recomp.git`), then `git fetch upstream` and check:
+   - **Done upstream:** `git log upstream/master --since="6 weeks ago" --oneline -i -E --grep '<keywords>'`, with the keywords in English and Portuguese (stage editor = "editor de fase", costume = "traje", elimination = "eliminação"/"eliminacao", campaign = "campanha", boss = "chefe"), and `git grep -i '<keyword>' upstream/master -- native tools docs`.
+   - **In progress upstream:** branches with commits not in `upstream/master` (`git for-each-ref --sort=-committerdate refs/remotes/upstream --format='%(committerdate:short) %(refname:short)'`, then `git log --oneline upstream/master..upstream/<branch>`), and `git show upstream/master:TODO.md` (Yan's open list).
+   - **Releases:** `gh release list -R yanm1103/War_of_the_Monsters_recomp` (each release says what shipped).
+
+   If it already exists upstream, the task becomes bringing it over (a cherry-pick, or the upstream merge, #31), not rebuilding it. If Yan has it in progress, tell Lane before you start, the same as for a claim by Lane or Jake.
 
 If someone other than the person you work for has claimed it or touched it in the last two weeks, **stop and tell Lane** who it is, what they have (issue comment, PR or branch) and what you were about to do. Don't start, and don't build the same thing in parallel; Lane decides with that person whether to hand it over, split it or wait. When you do take a task, claim it where others will see it: assign the issue to your account, or comment "Working on this: <who>, branch <name>". Remove the claim if you stop.
 
