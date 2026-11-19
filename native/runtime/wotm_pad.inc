@@ -12,6 +12,7 @@
 // Keyboard and mouse receivers that raylib lists as gamepads (Keychron Link) are excluded from the pad list.
 // Keys and buttons for each PS2 button: the map from wotm_settings.hpp (CONTROLS tab of the panel), installed into the fork's
 // ps2_pad.cpp (g_ps2PadKeyboard, g_ps2PadGamepadButtons); gamepad axes stay fixed.
+#include "../wotm_pad_clock.hpp"
 namespace wotm_pad
 {
 static std::atomic<bool> g_manual{false};
@@ -369,6 +370,16 @@ static void pointerFrame(const Rectangle &dst, int rw, int rh)
     if (const float w = GetMouseWheelMove(); w != 0.f)
         ms::g_wheel.fetch_add(w > 0.f ? 1 : -1, std::memory_order_relaxed);
 }
+
+#ifdef __EMSCRIPTEN__
+// The PS2X_PAD script's clock: raylib's GetTime() is a wall-clock time in the browser, so the script counts from its first read.
+static double scriptSeconds()
+{
+    static wotm::padclock::SinceFirstCall clock;
+    return clock.seconds(GetTime());
+}
+static const bool s_clockInstalled = (g_ps2PadClock = &scriptSeconds, true);
+#endif
 
 static const bool s_installed = (g_ps2PadDeviceMap = &devicesOf, g_ps2PadKeyboard = &keyboard, g_ps2PadGamepadButtons = &gamepadButtons,
                                  true);
