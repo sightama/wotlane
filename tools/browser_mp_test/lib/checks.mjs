@@ -60,7 +60,7 @@ function flushRefusals(run, n) {
 
 async function lobbyErrors(run, n, spare, code) {
   const R = run.report;
-  const dup = await spare.join(code);   // the spare is called like P1
+  const dup = await spare.join(code);   // the spare types the host's name
   // a full lobby (N=8) refuses for being full before it looks at the name
   const dupOk = !dup.joined && (n === run.opts.maxPlayers ? /full/ : /already has that name/).test(dup.first);
   const wrong = await spare.join(code === 'ZZZZ' ? 'YYYY' : 'ZZZZ');
@@ -140,7 +140,7 @@ async function lobbyList(run, n, spare, players, code) {
     await spare.page.click('#leave').catch(() => {});
     await spare.page.waitForSelector('#choose', { state: 'visible', timeout: 10000 }).catch(() => {});
   }
-  await spare.page.fill('#name', 'P1');
+  await spare.page.fill('#name', players[0].name);
   run.report.add(n, 'lobby_list', listed && joinedFromList ? 'pass' : 'fail',
     `rows: ${JSON.stringify(rows)}; listed with the right Join state: ${listed}; Join from the list worked: ${joinedFromList}`);
 }
@@ -192,7 +192,7 @@ async function capCheck(run, n, spare, code, players) {
   const intact = (await Promise.all(players.map((p) => p.members()))).every((m) => m.length === n);
   run.report.add(n, 'cap_refused', ok && intact ? 'pass' : 'fail',
     `9th join: ${JSON.stringify(r.msg)}; other tabs still list ${n} members: ${intact}`);
-  await spare.page.fill('#name', 'P1');
+  await spare.page.fill('#name', players[0].name);
 }
 
 async function picks(run, n, players) {
@@ -259,8 +259,8 @@ export async function matchSession(run, n) {
     code = lobby.code;
     R.add(n, 'lobby', lobby.ok ? 'pass' : 'fail', lobby.detail);
     if (!lobby.ok) return;
-    spare = await run.openPlayer(n, n, { name: 'P1', monster: 5, check });
-    spare.name = 'Spare';   // it types P1 (a duplicate name) but its logs and screenshots must not overwrite P1's
+    spare = await run.openPlayer(n, n, { name: players[0].name, monster: 5, check });
+    spare.name = 'Spare';   // it types the host's name (a duplicate) but its logs and screenshots must not overwrite the host's
     await lobbyErrors(run, n, spare, code);
     await lobbyPing(run, n, players);
     await lobbyChat(run, n, players);
