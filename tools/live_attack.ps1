@@ -7,6 +7,7 @@ $root = if ($env:WOTM_RECOMP_DIR) { $env:WOTM_RECOMP_DIR } elseif (Test-Path "$r
 $dr = "$root\discroot"
 $env:PS2X_SKIP_MOVIES = "1"; $env:PS2X_SKIP_CMOVIE = "1"
 $env:PS2X_NO_VU1 = "1"; $env:PS2X_NO_VIF1 = "1"; $env:PS2X_NO_GS = "1"; $env:PS2X_SCENE = "1"
+$env:WOTM_MUTE = "1"   # test runs never make a sound
 . "$root\pad_script.ps1"
 $base = Get-PadScript
 $extra = @()

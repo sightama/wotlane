@@ -4,7 +4,7 @@ import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { loadPlaywright, REPO } from '../browser_mp_test/lib/infra.mjs';
+import { loadPlaywright, muted, REPO } from '../browser_mp_test/lib/infra.mjs';
 
 const args = process.argv.slice(2);
 const opt = (name, fallback) => { const i = args.indexOf(`--${name}`); return i >= 0 ? args[i + 1] : fallback; };
@@ -333,8 +333,8 @@ mkdirSync(out, { recursive: true });
 const pw = await loadPlaywright();
 const server = opt('url') ? { url: opt('url').replace(/\/?$/, '/'), stop() {} } : await startServer();
 const browser = await (opt('browser', 'chromium') === 'chrome'
-  ? pw.chromium.launch({ channel: 'chrome', headless: true })
-  : pw.chromium.launch({ channel: 'chromium', headless: true, args: ['--use-angle=metal', '--enable-gpu', '--ignore-gpu-blocklist'] }));
+  ? pw.chromium.launch(muted('chromium', { channel: 'chrome', headless: true }))
+  : pw.chromium.launch(muted('chromium', { channel: 'chromium', headless: true, args: ['--use-angle=metal', '--enable-gpu', '--ignore-gpu-blocklist'] })));
 const results = [];
 let failed = false;
 try {

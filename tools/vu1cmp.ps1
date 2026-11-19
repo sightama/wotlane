@@ -34,6 +34,7 @@ $args = '--vu1cmp ' + (($files | ForEach-Object { "`"$_`"" }) -join ' ')
 if ($Frame -gt 0) { $args += " --frame $Frame" }
 if ($Dump) { $args += " --dump `"$Dump`"" }
 if ($NoPng) { $args += " --nopng" }
+if (-not $env:WOTM_MUTE) { $env:WOTM_MUTE = '1' }   # test runs never make a sound
 # Start-Process redirects without going through PowerShell (PS 5's `2>` writes UTF-16 and breaks long lines)
 $p = Start-Process -FilePath $exe -ArgumentList $args -WorkingDirectory "$runtime\discroot" -NoNewWindow -Wait -PassThru -RedirectStandardError $err -RedirectStandardOutput $out
 $all = @(Get-Content $err)

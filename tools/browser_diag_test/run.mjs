@@ -9,6 +9,7 @@ import { mkdtempSync, readFileSync, readdirSync, existsSync, statSync } from 'no
 import { tmpdir } from 'node:os';
 import { dirname, join, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { muted } from '../browser_mp_test/lib/infra.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, '..', '..');
@@ -47,7 +48,7 @@ const until = async (text, ms = 15000) => {
 let failures = 0;
 const check = (name, ok, detail = '') => { console.log(`${ok ? 'ok     ' : 'FAILED '} ${name}${ok ? '' : ': ' + detail}`); if (!ok) ++failures; };
 
-const browser = await playwright.chromium.launch();
+const browser = await playwright.chromium.launch(muted('chromium'));
 try {
   const page = await (await browser.newContext()).newPage();
   const url = `http://127.0.0.1:${sitePort}/?server=ws://127.0.0.1:${ports.ws}`;

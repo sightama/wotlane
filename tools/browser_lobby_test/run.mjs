@@ -8,6 +8,7 @@ import { createRequire } from 'node:module';
 import { readFileSync, existsSync, statSync } from 'node:fs';
 import { dirname, join, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { muted } from '../browser_mp_test/lib/infra.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, '..', '..');
@@ -61,7 +62,7 @@ async function player(browser, name, health, softwareGl = false) {
 
 async function run(browserName) {
   const tag = (s) => `${browserName}: ${s}`;
-  const browser = browserName === 'brave' ? await playwright.chromium.launch({ executablePath: BRAVE }) : await playwright[browserName].launch();
+  const browser = browserName === 'brave' ? await playwright.chromium.launch(muted('chromium', { executablePath: BRAVE })) : await playwright[browserName].launch(muted(browserName));
   try {
     const ana = await player(browser, 'Ana');
     const bia = await player(browser, 'Bia', { fps: 27, workMs: 13.2, hz: 60 });
