@@ -8,11 +8,11 @@ window.wotmLogStatus = function (text) {
   if (/\(ISO\).* FAILED/.test(text))   // the game waits for that read (data_retry.js already tried again)
     return 'Lost the connection to the game server. Check your connection and reload the page.';
   if (/rejected by the server: game configuration differs/.test(text))
-    return "Your game setup differs from the host's (creations or settings). Make sure you both have the same " +
+    return "Your game setup differs from the other players' (creations or settings). Make sure everyone has the same " +
       'creations imported (Your creations, on the front panel), then join again.';
   const other = /rejected by the server: the match did not start: (\S+) could not join \(game configuration differs/.exec(text);
   if (other)
     return `${other[1]}'s game setup differs from yours (creations or settings), so the match did not start. Make sure everyone has ` +
-      'the same creations imported (Your creations, on the front panel), then start again.';
+      'the same creations imported (Your creations, on the front panel), then join again.';
   return null;
 };

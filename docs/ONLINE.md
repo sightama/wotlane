@@ -142,8 +142,9 @@ to the console) and starts once that many players are in; `--code <code> --name 
   would make the PCs drift apart).
 - Mods: everyone needs the same active mods (same files, same contents), skins and maps made in game included. Otherwise the server
   refuses the join with "game configuration differs from the others: the mods (creations) differ", and the match does not start.
-  In the browser the refused player's status line says their setup differs from the host's, and everyone else's names who could
-  not join (`web/log_status.js`).
+  In the browser the refused player's status line says their setup differs from the other players' (the first to join sets what
+  the others are compared with), and the status line of each player already in names the first player who could not join for
+  that reason (`web/log_status.js`).
 - Debug keys that change the game or pause it are off: F1 (cheats), F5 (free camera), F6/F7/F8 (pause, step, photo).
 - Input delay: 1 frame on a LAN, about 3 to 8 over the internet (each frame is 16.7 ms; 33 ms with 3 or more players, where the game
   runs its own 30 Hz mode, as it does when a phone or tablet is in the match). Each player has their own: the time their input takes to

@@ -10,15 +10,16 @@ const window = {};
 vm.runInNewContext(readFileSync(new URL('./log_status.js', import.meta.url), 'utf8'), { window });
 const status = (line) => window.wotmLogStatus(line);
 
-test('the refused player is told their setup differs from the host\'s', () => {
+test('the refused player is told their setup differs from the players already in (the first to join sets it, not always the host)', () => {
   assert.match(status('[net] stopped: rejected by the server: game configuration differs from the others: the mods (creations) differ (a:b vs a:c)'),
-    /^Your game setup differs from the host's/);
+    /^Your game setup differs from the other players' \(creations or settings\)/);
 });
 
 test('the players already in are told whose setup differs, and that the match did not start', () => {
   const s = status('[net] stopped: rejected by the server: the match did not start: Bia could not join (game configuration differs from the others: the mods (creations) differ (a:b vs a:c))');
   assert.match(s, /^Bia's game setup differs from yours/);
   assert.match(s, /creations/);
+  assert.match(s, /then join again\.$/);   // a guest already in can't start the match
 });
 
 test('a disc read that failed for good says the connection was lost', () => {
