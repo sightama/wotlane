@@ -66,8 +66,10 @@ For online play start `wotm_server --ws-port <port>`; a page opened from `localh
   because the game reads the disc in 1 MiB aligned ranges (`kDiscChunkBytes`), the cache keeps 1 MiB blocks and `boot_chunks.json` lists
   them: a boot to the title is 27 requests of 1 MiB. Firefox's synchronous XHR path asks the helper first and reads the chunk files
   itself, one after another with synchronous XHR, when the helper doesn't have the range; it checks them with a JavaScript SHA-256
-  (`sha256Sync`, because SubtleCrypto can't be awaited there) and hands the helper the bytes to keep. The loading counter counts each
-  chunk that arrives, as it counts a range.
+  (`sha256Sync`, because SubtleCrypto can't be awaited there) and hands the helper the bytes to keep. It also keeps the chunks it
+  verified in memory, up to 32 MiB (`keepBytes`, the ones read longest ago go first): the sound engine reads a stream's header and
+  then the whole stream, and reads a stream again each time it plays, so those reads neither fetch nor hash again. The loading counter
+  counts each chunk that arrives, as it counts a range.
 - **Saves and settings:** `/save` is the browser's private file system (OPFS) and the game's working folder (`WOTM_SAVEDIR=/save`), so
   `settings.ini`, the memory card and `mods/` survive a reload.
 - **Disc and saves outside Chromium:** the WASMFS fetch and OPFS backends hand each read to a worker while the game's main thread waits;

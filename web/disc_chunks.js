@@ -212,11 +212,14 @@
 
   // The same read for a game worker's synchronous XHR (Firefox), which can't await anything: `read(url, start, end)` gives
   // { bytes, etag } for the bytes [start, end) of a disc file, or null when the server has no index (or does not list the file). Chunks
-  // are fetched with `Xhr`, one after the other, and checked with sha256Sync; a bad chunk is asked for again from another URL, and any
-  // failure throws (the caller, the game's own retry loop, tries the whole read again).
-  function syncChunkReader(Xhr, { tries = 3, nonce = randomNonce, log = console.error } = {}) {
+  // are fetched with `Xhr`, one after the other, and checked with sha256Sync (`hash`); a bad chunk is asked for again from another URL, and any
+  // failure throws (the caller, the game's own retry loop, tries the whole read again). Verified chunks are kept, up to `keepBytes`
+  // (the ones read longest ago go first), so the sound engine's repeated reads of a stream or bank neither fetch nor hash them again.
+  function syncChunkReader(Xhr, { tries = 3, nonce = randomNonce, log = console.error, keepBytes = 32 << 20, hash = sha256Sync } = {}) {
     const indexes = new Map();
     const manifests = new Map();
+    const kept = new Map();   // "<base><digest>/<n>" -> verified chunk bytes; Map order is the order they were last read in
+    let keptBytes = 0;
 
     function get(url) {
       const x = new Xhr();
@@ -247,13 +250,32 @@
       return manifests.get(key);
     }
 
-    function getChunk(base, name, entry, manifest, n) {
+    function fetchChunk(base, name, entry, manifest, n) {
       for (let attempt = 0; ; attempt++) {
         const r = get(chunkUrl(base, entry, n, attempt && nonce()));
         if (r.status !== 200) throw new Error(`disc chunk ${n} of ${name}: HTTP ${r.status}`);
-        if (r.bytes.length === chunkLength(manifest, n) && sha256Sync(r.bytes) === manifest.sha256[n]) return r.bytes;
+        if (r.bytes.length === chunkLength(manifest, n) && hash(r.bytes) === manifest.sha256[n]) return r.bytes;
         if (attempt + 1 >= tries) throw new Error(`disc chunk ${n} of ${name} failed its SHA-256 check`);
       }
+    }
+
+    // a verified chunk, from memory when it is kept; readRange copies out of it, so the kept bytes never change
+    function getChunk(base, name, entry, manifest, n) {
+      const key = `${base}${entry.digest}/${n}`;
+      let bytes = kept.get(key);
+      if (bytes) {
+        kept.delete(key);   // read again: the newest
+      } else {
+        bytes = fetchChunk(base, name, entry, manifest, n);
+        keptBytes += bytes.length;
+      }
+      kept.set(key, bytes);
+      for (const [k, b] of kept) {
+        if (keptBytes <= keepBytes || k === key) break;
+        kept.delete(k);
+        keptBytes -= b.length;
+      }
+      return bytes;
     }
 
     function readRange(url, start, end) {

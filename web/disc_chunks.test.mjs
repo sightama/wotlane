@@ -301,6 +301,43 @@ const s = server({ bad: (n, attempt) => (n === 0 && attempt === 0 ? WRONG : null
   assert.throws(() => syncChunkReader(fakeXhr(stuck), { log: quiet }).read('http://x/data/game.iso', 0, 8), /chunk 0/);
 });
 
+test('the sync reader keeps the chunks it verified: reading them again neither fetches nor hashes them', () => {
+  const s = server();
+  let hashes = 0;
+  const reader = syncChunkReader(fakeXhr(s), { log: quiet, hash: (b) => { hashes++; return sha256Sync(b); } });
+  const chunkGets = () => s.calls.filter((c) => /\.bin/.test(c.url)).length;
+  assert.deepEqual([...reader.read('http://x/data/game.iso', 6, 10).bytes], [6, 7, 8, 9]);
+  assert.equal(chunkGets(), 2);
+  assert.equal(hashes, 2);
+  const again = reader.read('http://x/data/game.iso', 0, 16);
+  assert.deepEqual([...again.bytes], [...FILE.slice(0, 16)]);
+  assert.equal(chunkGets(), 2, 'chunks 0 and 1 came from memory');
+  assert.equal(hashes, 2);
+  again.bytes.fill(0);   // what a read hands out is a copy: the kept chunk stays right
+  assert.deepEqual([...reader.read('http://x/data/game.iso', 0, 8).bytes], [...FILE.slice(0, 8)]);
+});
+
+test('the sync reader keeps at most keepBytes of chunks, dropping the one read longest ago', () => {
+  const s = server();
+  const reader = syncChunkReader(fakeXhr(s), { log: quiet, keepBytes: 2 * CHUNK });
+  const fetched = () => s.calls.filter((c) => /\.bin/.test(c.url)).map((c) => Number(/(\d+)\.bin/.exec(c.url)[1]));
+  reader.read('http://x/data/game.iso', 0, 8);    // keeps 0
+  reader.read('http://x/data/game.iso', 8, 16);   // keeps 0, 1
+  reader.read('http://x/data/game.iso', 0, 8);    // 0 from memory, now the newest
+  reader.read('http://x/data/game.iso', 16, 20);  // keeps 0, 2: drops 1
+  reader.read('http://x/data/game.iso', 0, 8);    // still kept
+  reader.read('http://x/data/game.iso', 8, 16);   // fetched again
+  assert.deepEqual(fetched(), [0, 1, 2, 1]);
+});
+
+test('a chunk that failed its hash is never kept', () => {
+  const s = server({ bad: (n, attempt) => (n === 0 && attempt === 0 ? WRONG : null) });
+  const reader = syncChunkReader(fakeXhr(s), { nonce: counter(), log: quiet });
+  reader.read('http://x/data/game.iso', 0, 8);
+  assert.deepEqual([...reader.read('http://x/data/game.iso', 0, 8).bytes], [...FILE.slice(0, 8)]);
+  assert.equal(s.calls.filter((c) => /\.bin/.test(c.url)).length, 2, 'the bad answer, then the good one, then memory');
+});
+
 // the worker's XMLHttpRequest: a base class the wrapper subclasses, which must not be used for the chunk requests
 class RangeXHR {
   constructor() { this.sent = 0; this.headers = {}; }
