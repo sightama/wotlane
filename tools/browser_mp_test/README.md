@@ -54,7 +54,7 @@ logs only (the server-side DESYNC and "left the match" checks are local only).
   windows. `--isolation browser` starts one browser per player. `--firefox K` makes the last K players of every lobby use Playwright's Firefox
   (a mixed lobby; needs a build with Firefox support). The lobby gets its own window height (`--lobby-height`; the card is taller than 400 px with 8
   members and scrolls) and the game its own size (`--height`).
-- `PS2X_PAD` scripted pads are not used: in the browser build `GetTime()` is a wall-clock time, so a script's seconds never match.
+- `PS2X_PAD` scripted pads are not used: the page address doesn't pass `PS2X_PAD` to the game (`web/pageenv.js` allowlist), and the harness drives the keyboard. In the browser build a script's seconds count from the first pad read (`g_ps2PadClock`, `native/runtime/wotm_pad.inc`), because raylib's `GetTime()` is a wall-clock time there.
 
 ## Desync matrix
 
