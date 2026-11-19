@@ -18,7 +18,8 @@ The order of work is at the end; it is not the order of the table.
   call made inside the hierarchy walk counts in both, and the indented rows are found by name anywhere (collision is called from the
   walk and from the update), not only under the row above them.
 - These shares differ from the earlier table in `../2026-11-18/rollback-synctest/firefox-cost.md`, which kept Firefox's wake-ups as
-  busy time and the stage load in its window; that table is what the redo-skip work used, this one is what to plan from.
+  busy time and, with 8 monsters, the fight start in its window (the sound engine's disc reads alone were 22% of its samples); that
+  table is what the redo-skip work used, this one is what to plan from.
 - **VU0 programs alone:** `sh tools/vu0bench.sh --wasm --time 3000 --ref <commit>` replays 840 recorded VU0 calls through two
   versions of the code; the same bench built for a page (scratch harness, samples preloaded, three alternating rounds) gives Chrome's
   and Firefox's own numbers.

@@ -4,7 +4,7 @@ Question: the synctest (`README.md` here) found a redone frame costs about as mu
 Firefox is 0. Where does the EE thread's time go in Firefox, and could a redone frame be made cheap enough for rollback to help
 Firefox players?
 
-**Answer: no, not by skipping work in the redo.** The drawing-only work a redo can skip is about 10% of a 1 vs 1 frame (shadows, VU1
+**Answer: no, not by skipping work in the redo.** The drawing-only work a redo can skip is about 10% of a 1 vs 1 frame on this table's basis (6% on the audit's, `../2026-11-19/performance-audit.md`) (shadows, VU1
 packets, object culling; with 8 monsters the shadow pass is not drawing-only), on top of the 2 to 5% already skipped (native capture, sound mixing). The rest is the game's own state:
 the hierarchy walk's transforms (`hier`, with the VU0 microprograms it runs, a third of all the time), animation, collision and the
 game update. A redone frame at about 0.85 to 0.9 of a played one still leaves Firefox far from fitting even one frame of rollback.
