@@ -94,7 +94,7 @@ stop_game() {   # every step may find nothing to stop (|| true: set -e would abo
 trap 'stop_game; rm -f "$disc/vu0_samples.bin" "$disc/vu0_code.bin"' EXIT
 trap 'exit 130' INT TERM
 rm -f "$disc/vu0_samples.bin" "$disc/vu0_code.bin"
-WOTM_MATCH=3,1,1 WOTM_AIVSAI=1 PS2X_DUMP_VU0=1 sh "$rt/run_live.sh" --auto 0 --exe test --build "$build" >/dev/null 2>&1 &
+WOTM_MATCH=3,1,1 WOTM_AIVSAI=1 WOTM_MUTE=1 PS2X_DUMP_VU0=1 sh "$rt/run_live.sh" --auto 0 --exe test --build "$build" >/dev/null 2>&1 &
 game=$!
 sleep "$secs"
 stop_game
