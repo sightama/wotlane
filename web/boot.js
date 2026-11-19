@@ -15,13 +15,10 @@
     const line = ((performance.now() - t0) / 1000).toFixed(2) + 's ' + text;
     lines.push(line);
     logEl.textContent += line + '\n';
-    // a disc read that still failed after data_retry.js's tries: the game waits for it, so tell the player
-    if (/\(ISO\).* FAILED/.test(text))
-      statusEl.textContent = 'Lost the connection to the game server. Check your connection and reload the page.';
-    // the server compares one hash of the match settings and the mods (creations included), so it can't say which part differs
-    if (/rejected by the server: game configuration differs/.test(text))
-      statusEl.textContent = "Your game setup differs from the host's (creations or settings). Make sure you both have the same " +
-        'creations imported (Your creations, on the front panel), then join again.';
+    // a disc read that failed for good, or a match refused for a setup that differs (log_status.js)
+    const status = window.wotmLogStatus(text);
+    if (status)
+      statusEl.textContent = status;
   }
 
   document.getElementById('logToggle').addEventListener('click', () => logEl.classList.toggle('open'));
