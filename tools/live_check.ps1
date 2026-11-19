@@ -23,6 +23,7 @@ if (-not $env:WOTM_MUTE) { $env:WOTM_MUTE = '1' }
 if (-not $env:WOTM_FULLSCREEN) { $env:WOTM_FULLSCREEN = '0' }
 if (-not $env:WOTM_MONITOR) { $env:WOTM_MONITOR = '1' }   # off the main monitor (raylib 0); on this PC: 1 = the left one
 if (-not $env:WOTM_RES) { $env:WOTM_RES = '720' }
+if (-not $env:WOTM_WINDOW) { $env:WOTM_WINDOW = $env:WOTM_RES }   # caps the screen-sized window (as gamecheck.py), so it stays 720 lines
 if (-not $env:WOTM_SETTINGS) { $env:WOTM_SETTINGS = '0' }   # this PC's settings.ini (in-game panel) does not affect the check
 if (-not $env:WOTM_BACKGROUND) { $env:WOTM_BACKGROUND = '1' }   # the game window opens without taking the focus
 foreach ($pair in ($Env -split ';' | Where-Object { $_.Trim() })) {

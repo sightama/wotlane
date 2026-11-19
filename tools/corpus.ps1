@@ -26,6 +26,22 @@ if (-not $Dir) { $Dir = Join-Path $runtime 'corpus' }
 New-Item -ItemType Directory -Force $Dir | Out-Null
 if (-not $Capture -and -not $Check) { Write-Host "Use -Capture and/or -Check (see the script header)."; exit 2 }
 
+# The game reads raw disc sectors from the ISO (PS2X_CD_IMAGE): the caller's, else the one setup used (<runtime>\.wotm_iso, or the
+# $setupIso line that setup_runtime.ps1 writes into run_live.ps1), else the first .iso in ISO\ (as gamecheck.py and run_live)
+function Find-Iso {
+    if ($env:PS2X_CD_IMAGE) { return $env:PS2X_CD_IMAGE }
+    $saved = Join-Path $runtime '.wotm_iso'
+    if (Test-Path $saved) { $p = (Get-Content $saved -TotalCount 1).Trim(); if (Test-Path -LiteralPath $p) { return $p } }
+    $live = Join-Path $runtime 'run_live.ps1'
+    if ((Test-Path $live) -and ((Get-Content $live -Raw) -match "(?m)^\`$setupIso = '((?:[^']|'')+)'")) {
+        $p = $Matches[1].Replace("''", "'"); if (Test-Path -LiteralPath $p) { return $p }
+    }
+    $iso = Get-ChildItem (Join-Path $repo 'ISO') -Filter *.iso -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($iso) { return $iso.FullName }
+    throw "No ISO found: set PS2X_CD_IMAGE or put the .iso in $repo\ISO"
+}
+$isoPath = Find-Iso
+
 # One runtime session with the given variables; writes <name>.vu1snap (+ <name>.txt with g_frame=screen) to $Dir.
 function Run-Session([string]$name, [hashtable]$vars, [int]$secs) {
     $disc = "$runtime\discroot"
@@ -36,7 +52,7 @@ function Run-Session([string]$name, [hashtable]$vars, [int]$secs) {
     }
     $env:PS2X_SKIP_MOVIES = '1'; $env:PS2X_SKIP_CMOVIE = '1'
     $env:PS2X_NO_VU1 = '1'; $env:PS2X_NO_VIF1 = '1'; $env:PS2X_NO_GS = '1'; $env:PS2X_SCENE = '1'
-    $env:PS2X_CD_IMAGE = "$repo\ISO\SCUS_971.97.War of the Monsters.iso"
+    $env:PS2X_CD_IMAGE = $isoPath
     $env:WOTM_REPO = $repo
     $env:WOTM_SETTINGS = '0'   # without the panel/launcher settings.ini
     $env:WOTM_PROMPTS = 'original'   # the game's 3D icons, as in the reference
@@ -67,10 +83,14 @@ function Run-Session([string]$name, [hashtable]$vars, [int]$secs) {
 }
 
 if ($Capture) {
-    . "$runtime\pad_script.ps1"
+    # pad_script.ps1 (run_live's pad script, Get-PadScript) lives in the runtime folder only on some setups; without it the menus
+    # session is skipped and the fights are still captured
+    $padScript = Join-Path $runtime 'pad_script.ps1'
+    $hasPad = Test-Path $padScript
+    if ($hasPad) { . $padScript }
     $sessions = [ordered]@{
         # menus: run_live's script (X skips the intro movies); the old -First 12 pressed Start before screen 20 accepted it
-        menus      = @{ PS2X_PAD = (Get-PadScript -SkipFrom 3 -First 9 -Step 1.5); WOTM_VU1CHECK_WHEN = 'mem:0x6F8464' }
+        menus      = @{ PS2X_PAD = $(if ($hasPad) { Get-PadScript -SkipFrom 3 -First 9 -Step 1.5 } else { '' }); WOTM_VU1CHECK_WHEN = 'mem:0x6F8464' }
         luta_centro = @{ WOTM_MATCH = '1,2,1'; WOTM_AIVSAI = '1'; WOTM_VU1CHECK_WHEN = 'frame:300-100000'; WOTM_VU1CHECK_SHOTS = '1' }
         luta_3ia    = @{ WOTM_MATCH = '1,2,3,4,2'; WOTM_AIVSAI = '1'; WOTM_VU1CHECK_WHEN = 'frame:300-100000'; WOTM_VU1CHECK_SHOTS = '1' }
         luta_hud    = @{ WOTM_MATCH = '1,2,1'; WOTM_AIVSAI = '1'; WOTM_VU1CHECK_WHEN = 'frame:1200-100000'; WOTM_VU1CHECK_SHOTS = '1' }
@@ -79,6 +99,7 @@ if ($Capture) {
     $wanted = if ($Only) { @($Only -split ',' | ForEach-Object { $_.Trim() }) } else { @($sessions.Keys) }
     foreach ($name in $sessions.Keys) {
         if ($wanted -notcontains $name) { continue }
+        if ($name -eq 'menus' -and -not $hasPad) { Write-Host "[menus] skipped: $padScript does not exist" -ForegroundColor Yellow; continue }
         Run-Session $name $sessions[$name] $(if ($name -eq 'menus') { [Math]::Min($Secs, 75) } else { $Secs })
     }
 }
