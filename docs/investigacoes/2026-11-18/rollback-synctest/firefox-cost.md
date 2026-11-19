@@ -76,3 +76,22 @@ What it would take for W = 1 in a Firefox 1 vs 1: played + save + restore + redo
 this also speeds every played frame and Chrome), and a snapshot that copies only the pages written since the last one (today 40 MB are
 copied each save and restore; most of the 32 MB is the stage and models, which a fight never writes). Both would need their own
 measurement before anyone counts on them.
+
+## Making every frame cheaper, ranked (2026-11-19)
+
+Windows players report Firefox at 19 to 25 ms of EE time per frame, Chrome 15 to 17, Brave 12.5 to 13 (a 1 vs 1 needs under 16.7).
+Shares below are of the EE thread's real work in Firefox 160 on the Mac (`tier_default`, `tier_eager` and `30hz_8m` profiles, last
+60 s, with the samples parked in the vsync wait left out: Firefox counts the wake-ups of that wait as busy, 10 to 12% of the samples
+under an unnamed address). "Self" is the function alone, "total" includes what it calls.
+
+| rank | what | share of the work | where it stands | risk |
+|---|---|---|---|---|
+| 1 | Firefox's lazy wasm tiering: a function called once a frame stays in the baseline compiler for minutes (`javascript.options.wasm_lazy_tiering=false`) | played frame 8.3 -> 6.6 ms, 19% less busy time; the first minute runs ~10 ms a frame | nothing on the page can override it; a tip in the page or a Mozilla bug is Lane's call | none (a browser setting) |
+| 2 | the VU0 microprograms' round toward zero, done one lane at a time in the browser (`wotm_vu0_native.cpp`, `Lanes` + `wotm_rtz.hpp`) | VU0 programs 24% (1 vs 1) and 31% (8 monsters) total; natively the same programs are ~3% of the EE's busy time (`PS2X_HOSTPROF` VU0 line, 0.5 s of ~18 s) | 4-lane SIMD versions of the same arithmetic, proven bit-exact by `rtz_*` tests and `tools/vu0bench.sh --wasm` | low: same bits or the bench fails |
+| 3 | VU1 packet assembly and object culling that the native renderer never reads (`pktAddVu1ObjAsm`, `psObjectCull`) | 2.4 to 2.8% + 1.3% (1 vs 1), 1.6% + 1.4% (8 monsters) | skipping them in a hidden redo only changes their own buffers (table above); skipping them in played frames needs proof that nothing drawn or simulated reads `hierObjPkt`, `psObjDma`, `hierAlphaPkt` (item G3 of `723b110:docs/investigacoes/2026-10-23/performance_vistas.md`) | medium: the game state hash covers those buffers, so every PC must skip alike (the build id does that) |
+| 4 | `PS2Runtime::lookupFunction`, a hash map lookup on every indirect guest call | 2.0% with lazy tiering, 0.7% eager | a flat table indexed by guest address (a PS2Recomp seam, in the runtime patch) | low |
+| 5 | `PS2Memory::writeIORegister` allocating a vector on stores from `hierTraverseAsm` (malloc under a lock) | 1.4 to 1.6% | read the seam first: the allocation may be avoidable | low |
+| 6 | `executeVU0Microprogram` copying ~1 KB of VU state each way (TODO "4 players always at 60") and the out-of-line `checkpointDue` | 1.1 to 1.3% self each | PS2Recomp seams | low |
+
+Not on the list: the hierarchy walk's transforms, animation, collision and the game update (the rest, ~60%) are the game itself, and
+the redo-skip runs above show the game reads what they compute.
