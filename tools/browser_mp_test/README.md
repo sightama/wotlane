@@ -21,7 +21,7 @@ node --test tools/browser_mp_test/test/     # the log readers
 Use `--site <dir>` to test a `web_dist` copy and `--data <dir>` for the folder with `game.iso` and `SCUS_971.97`. Results (logs,
 screenshots, `results.md`, `results.json`) go to `<runtime>/browser_mp_test/<time>/`, or `--out`.
 
-`--diag-out <file>` appends every `DIAG` line each tab sends on its lobby socket (`web/diag.js`: the join report, the periodic ones, the last
+`run.mjs --diag-out <file>` (not `desync.mjs` or `latency.mjs`) appends every `DIAG` line each tab sends on its lobby socket (`web/diag.js`: the join report, the periodic ones, the last
 one) to the file, one per line as `<time> <player name> <line>`. It reads Playwright's WebSocket frame events, so it works on the live site,
 where the server's own diagnostics files (`wotm_server --diag-dir`) are out of reach, and gives a match per player.
 
