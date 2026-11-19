@@ -95,3 +95,16 @@ under an unnamed address). "Self" is the function alone, "total" includes what i
 
 Not on the list: the hierarchy walk's transforms, animation, collision and the game update (the rest, ~60%) are the game itself, and
 the redo-skip runs above show the game reads what they compute.
+
+## Firefox's lazy wasm tiering (2026-11-19)
+
+Firefox compiles wasm with its baseline compiler first and moves a function to the optimizing one (Ion) only after enough calls
+(SpiderMonkey `WasmHeuristics.h`, `WasmBaselineCompile.cpp`: about 1000 units per bytecode byte, a call counts down at most 127). A
+function called once a frame then needs about 20 000 calls (over 5 minutes), and the big recompiled guest functions far longer.
+`--firefox-pref` (synctest and profiler scripts) compares the settings on the same build, run side by side on the Mac (1 vs 1, 60 Hz,
+played frame in the late windows): default 6.7 to 8.1 ms, `javascript.options.wasm_lazy_tiering=false` 5.4 to 7.4 ms; the profiles
+(`tier_default`, `tier_eager`) give 19% less EE busy time with eager tiering, and with the default the first minute of a fight runs
+about 10 ms a frame. A page can't ask for eager tiering; the options are a tip on the page (Lane's call) or a Mozilla bug.
+
+The same side-by-side runs found the open sound engine mismatch at frame 7181 (`TODO.md`): both Firefox runs and a native run give
+it at the same frame and offsets, so it is a gap in the sound engine's snapshot, not noise.
