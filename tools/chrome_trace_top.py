@@ -24,9 +24,10 @@ class Profile:
         self.pid, self.tid, self.name = pid, tid, name
         self.nodes = {}     # id -> (function name, parent id)
         self.samples = []   # (time ms, leaf node id)
-        self._t = None
+        self._t = 0   # the time of the last sample, us
 
-    def add_chunk(self, data, start_us):
+    def add_chunk(self, data):
+        """One ProfileChunk's data: more call tree nodes, and samples whose times follow from the previous chunk's last one."""
         prof = data.get('cpuProfile', {})
         for n in prof.get('nodes', []):
             cf = n.get('callFrame', {})
@@ -34,8 +35,6 @@ class Profile:
             url = cf.get('url') or ''
             label = f"{name} ({url.rsplit('/', 1)[-1]})" if url and not name.startswith('(') else name
             self.nodes[n['id']] = (label, n.get('parent'))
-        if self._t is None:
-            self._t = start_us
         for leaf, delta in zip(prof.get('samples', []), data.get('timeDeltas', [])):
             self._t += delta
             self.samples.append((self._t / 1000.0, leaf))
@@ -62,21 +61,31 @@ def read(path):
         events = events.get('traceEvents', [])
     thread_names = {(e['pid'], e['tid']): e.get('args', {}).get('name', '')
                     for e in events if e.get('ph') == 'M' and e.get('name') == 'thread_name'}
-    profiles, order = {}, []
+    # a profile is (pid, id); its Profile event names the sampled thread (the chunks come from a sampler thread of their own). Its
+    # chunks are read in time order from its start time, whatever order the file lists the events in (a chunk may come first)
+    starts, threads, chunks, order = {}, {}, {}, []
     for e in events:
-        if e.get('name') == 'Profile':
-            key = (e['pid'], e.get('id'))
-            if key not in profiles:
-                profiles[key] = Profile(e['pid'], e['tid'], thread_names.get((e['pid'], e['tid']), ''))
-                profiles[key]._t = e.get('args', {}).get('data', {}).get('startTime')
-                order.append(key)
-        elif e.get('name') == 'ProfileChunk':
-            key = (e['pid'], e.get('id'))
-            p = profiles.get(key)
-            if p is None:
-                p = profiles[key] = Profile(e['pid'], e['tid'], thread_names.get((e['pid'], e['tid']), ''))
-                order.append(key)
-            p.add_chunk(e.get('args', {}).get('data', {}), p._t if p._t is not None else e.get('ts', 0))
+        if e.get('name') not in ('Profile', 'ProfileChunk'):
+            continue
+        key = (e['pid'], e.get('id'))
+        if key not in chunks:
+            chunks[key] = []
+            order.append(key)
+        data = e.get('args', {}).get('data', {})
+        if e['name'] == 'Profile':
+            starts[key] = data.get('startTime')
+            threads[key] = e['tid']
+        else:
+            chunks[key].append((e.get('ts', 0), len(chunks[key]), data))
+    profiles = {}
+    for key in order:
+        pid, tid = key[0], threads.get(key)
+        p = profiles[key] = Profile(pid, tid, thread_names.get((pid, tid), ''))
+        ordered = sorted(chunks[key], key=lambda c: c[:2])
+        start = starts.get(key)
+        p._t = start if start is not None else (ordered[0][0] if ordered else 0)
+        for _, _, data in ordered:
+            p.add_chunk(data)
     return [profiles[k] for k in order]
 
 
@@ -86,6 +95,8 @@ def busy_count(p):
 
 def pick(profiles, sel):
     if sel is not None and sel.isdigit():
+        if int(sel) >= len(profiles):
+            raise SystemExit(f'no thread {sel}: there are {len(profiles)} (see --threads)')
         return profiles[int(sel)]
     want = sel if sel is not None else 'Worker'
     cands = [p for p in profiles if want.lower() in p.name.lower()]

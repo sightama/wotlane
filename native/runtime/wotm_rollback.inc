@@ -114,8 +114,11 @@ namespace wotm_rollback
                      g_compare.sum / n, g_compare.max, g_resim.sum / n / back, g_resim.max / back, g_present.sum / n, g_present.max,
                      g_slots[0].bytes.size() / 1048576.0, g_checks, g_mismatches, g_mismatchesTotal, g_barriers);
         for (int i = 0; i < kRedoSkips && g_redoSkipAddr[i]; ++i)
+        {
             std::fprintf(stderr, "[synctest]   0x%06x skipped %llu times in hidden redone frames\n", g_redoSkipAddr[i],
                          static_cast<unsigned long long>(g_redoSkipped[i]));
+            g_redoSkipped[i] = 0;   // per report, like the costs above
+        }
         g_save = g_restore = g_compare = g_resim = g_present = Cost{};
         g_reported = g_mismatches = g_checks = 0;
     }

@@ -56,6 +56,32 @@ class Tally(unittest.TestCase):
         self.assertEqual(kept, 2)
         self.assertNotIn('fc', total_c)
 
+    def test_chunks_from_sampler_threads_out_of_order(self):
+        # as Chrome writes them: each profile's chunks come from a sampler thread of their own (tid 90, 91), not the sampled thread;
+        # here a chunk also comes before its Profile event and the chunks are listed out of time order
+        def chunk(pid_, tid, ts, leaves, deltas, nodes=None):
+            prof = {'samples': leaves, **({'nodes': nodes} if nodes else {})}
+            return {'ph': 'P', 'name': 'ProfileChunk', 'pid': 1, 'tid': tid, 'id': pid_, 'ts': ts,
+                    'args': {'data': {'cpuProfile': prof, 'timeDeltas': deltas}}}
+        ev = [chunk('0x1', 90, 30, [5], [1000]),
+              chunk('0x1', 90, 20, [4, 3], [1000, 1000], NODES),
+              {'ph': 'P', 'name': 'Profile', 'pid': 1, 'tid': 7, 'id': '0x1', 'ts': 10, 'args': {'data': {'startTime': 5000}}},
+              {'ph': 'P', 'name': 'Profile', 'pid': 1, 'tid': 8, 'id': '0x2', 'ts': 10, 'args': {'data': {'startTime': 0}}},
+              chunk('0x2', 91, 25, [4], [1000], NODES)]
+        f = tempfile.NamedTemporaryFile('w', suffix='.json', delete=False)
+        json.dump(ev, f)
+        f.close()
+        ps = {p.tid: p for p in c.read(f.name)}
+        self.assertEqual(sorted(ps), [7, 8])
+        self.assertEqual(ps[7].samples, [(6.0, 4), (7.0, 3), (8.0, 5)])   # from startTime, in chunk time order
+        self.assertEqual(ps[8].samples, [(1.0, 4)])
+
+    def test_a_thread_index_out_of_range_is_a_clear_error(self):
+        ps = c.read(trace([(1, 2, '0x2', 'DedicatedWorker thread', [4], [1000])]))
+        with self.assertRaises(SystemExit) as e:
+            c.pick(ps, '5')
+        self.assertIn('--threads', str(e.exception))
+
     def test_default_thread_is_the_busiest_worker(self):
         ps = c.read(trace([(1, 1, '0x1', 'CrRendererMain', [4] * 9, [1000] * 9),
                            (1, 2, '0x2', 'DedicatedWorker thread', [4] * 2, [1000] * 2),

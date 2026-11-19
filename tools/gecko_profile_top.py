@@ -81,6 +81,8 @@ def tally(th, rows, under):
 def pick(all_threads, sel):
     """Index of the thread `sel` names (an index, or a name substring: the busiest such thread); default the busiest worker."""
     if sel is not None and sel.isdigit():
+        if int(sel) >= len(all_threads):
+            raise SystemExit(f"no thread {sel}: there are {len(all_threads)} (see --threads)")
         return int(sel)
     want = sel if sel is not None else "Worker"
     cands = [k for k, (_, t) in enumerate(all_threads) if want in str(t.get("name"))]

@@ -62,9 +62,11 @@ async function main() {
   mkdirSync(join(o.out, '..'), { recursive: true });
   const port = await freePort();
   const web = spawn('python3', [join(REPO, 'tools/serve_web.py'), '--port', String(port), '--site', o.site, '--data', o.data], { stdio: 'ignore' });
+  process.on('exit', () => web.kill());   // also when the browser fails to start
   const pw = await loadPlaywright();
   const [browser] = await launchBrowsers(pw, { n: 1, browser: o.browser, headed: o.headed, unlockFrames: true });
   let lastLog = [];
+  let tracing = false;
   try {
     const context = await browser.newContext({ viewport: { width: 960, height: 540 } });
     await context.addInitScript(envInit, { WOTM_FIXEDSTEP: String(o.step), WOTM_SEED: '7', WOTM_MUTE: '1', ...o.env });
@@ -75,10 +77,13 @@ async function main() {
     console.log(`profiling ${o.browser}: match ${o.match}, step ${o.step}, ${o.warmup} s warm-up then ${o.seconds} s; trace ${o.out}`);
     await sleep(o.warmup * 1000);
     await browser.startTracing(page, { path: o.out, categories: ['disabled-by-default-v8.cpu_profiler', 'v8', '__metadata'] });
+    tracing = true;
     await sleep(o.seconds * 1000);
+    tracing = false;
     await browser.stopTracing();
     lastLog = await page.evaluate(() => (window.wotmLog || []).slice(-3)).catch(() => []);
   } finally {
+    if (tracing) await browser.stopTracing().catch(() => {});   // what was recorded until a failure is still written
     await browser.close().catch(() => {});
     web.kill();
   }

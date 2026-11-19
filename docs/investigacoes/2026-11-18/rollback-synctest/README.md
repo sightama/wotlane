@@ -10,7 +10,7 @@ gives the same state byte for byte: 0 mismatches over the runs listed in "Runs",
 found and fixed on the way. The cost is what limits the payoff: a redone frame costs about as much as a played one (no drawing, but the
 same game logic), so the rollback window that fits a frame is 1 frame in Chrome on a fast Mac at 60 Hz (0 with 8 monsters at 30 Hz)
 and 0 in Firefox or on a slower machine (see "Cost" and "Expected latency").
-What would make every frame cheaper, played or redone, is ranked in `firefox-cost.md`.
+What would make every frame cheaper, played or redone, is in `../2026-11-19/performance-audit.md`.
 
 ## The synctest
 

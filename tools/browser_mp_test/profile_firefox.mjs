@@ -3,7 +3,7 @@
 import { mkdirSync, existsSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { spawn } from 'node:child_process';
-import { REPO, freePort, loadPlaywright, firefoxPref } from './lib/infra.mjs';
+import { REPO, freePort, loadPlaywright, firefoxPref, firefoxOptions } from './lib/infra.mjs';
 
 const USAGE = `usage: node tools/browser_mp_test/profile_firefox.mjs [options]
   --match SPEC    direct fight (WOTM_MATCH, default 3,1,1; 8 monsters: 3,1,2,4,5,7,8,9,1)
@@ -64,6 +64,7 @@ async function main() {
   mkdirSync(join(o.out, '..'), { recursive: true });
   const port = await freePort();
   const web = spawn('python3', [join(REPO, 'tools/serve_web.py'), '--port', String(port), '--site', o.site, '--data', o.data], { stdio: 'ignore' });
+  process.on('exit', () => web.kill());   // also when the browser fails to start
   const pw = await loadPlaywright();
   // the startup profiler writes the profile when the browser shuts down
   const browser = await pw.firefox.launch({
