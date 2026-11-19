@@ -3,7 +3,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
-import { REPO, freePort, loadPlaywright } from './browser_mp_test/lib/infra.mjs';
+import { REPO, freePort, loadPlaywright, muted } from './browser_mp_test/lib/infra.mjs';
 
 const USAGE = `Usage: node tools/web_match_logs.mjs [--site <dir>] [--data <dir>] [--out <dir>] [--only monster-3,stage-4]
   --site  a built page (default <repo>/runtime/web_dist)   --data  the disc folder (default <repo>/runtime/web_data)
@@ -33,7 +33,7 @@ mkdirSync(o.out, { recursive: true });
 const port = await freePort();
 const web = spawn('python3', [join(REPO, 'tools/serve_web.py'), '--port', String(port), '--site', o.site, '--data', o.data], { stdio: 'ignore' });
 const pw = await loadPlaywright();
-const browser = await pw.chromium.launch({ channel: 'chrome', headless: false, args: ['--autoplay-policy=no-user-gesture-required'] });
+const browser = await pw.chromium.launch(muted('chromium', { channel: 'chrome', headless: false, args: ['--autoplay-policy=no-user-gesture-required'] }));
 let failed = 0;
 try {
   for (const [name, match] of fights) {

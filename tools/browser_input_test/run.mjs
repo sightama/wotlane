@@ -7,6 +7,7 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync, existsSync, statSync } from 'node:fs';
 import { dirname, join, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { muted } from '../browser_mp_test/lib/infra.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, '..', '..');
@@ -32,7 +33,7 @@ let failures = 0;
 const check = (name, ok, detail = '') => { console.log(`${ok ? 'ok     ' : 'FAILED '} ${name}${ok ? '' : ': ' + detail}`); if (!ok) ++failures; };
 
 async function run(name) {
-  const browser = await playwright[name].launch();
+  const browser = await playwright[name].launch(muted(name));
   try {
     const page = await (await browser.newContext({ viewport: { width: 900, height: 600 } })).newPage();
     await page.goto(`http://127.0.0.1:${site.address().port}/`);

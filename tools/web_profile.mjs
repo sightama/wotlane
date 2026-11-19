@@ -1,6 +1,6 @@
 // ABOUTME: Profiles the browser game's main thread in a direct AI fight: presented fps and the page's work per frame, then a CPU profile
 // ABOUTME: of a few seconds with the functions that took the most self time. Usage: node tools/web_profile.mjs <chrome|brave> <page url> [secs]
-import { loadPlaywright } from './browser_mp_test/lib/infra.mjs';
+import { loadPlaywright, muted } from './browser_mp_test/lib/infra.mjs';
 
 const [which = 'chrome', url, secs = '8'] = process.argv.slice(2);
 if (!url) { console.error('usage: node tools/web_profile.mjs <chrome|brave> <page url> [secs]\n  brave: WOTM_BRAVE names its binary (default the macOS app); WOTM_BROWSER_ARGS: more browser flags (e.g. --disable-gpu)'); process.exit(2); }
@@ -8,7 +8,7 @@ const pw = await loadPlaywright();
 const opts = { headless: false, args: ['--autoplay-policy=no-user-gesture-required', ...(process.env.WOTM_BROWSER_ARGS ?? '').split(' ').filter(Boolean)] };
 if (which === 'brave') opts.executablePath = process.env.WOTM_BRAVE || '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser';
 else opts.channel = 'chrome';
-const browser = await pw.chromium.launch(opts);
+const browser = await pw.chromium.launch(muted('chromium', opts));
 const page = await (await browser.newContext({ viewport: { width: 1280, height: 720 } })).newPage();
 const fight = new URL(url);
 fight.searchParams.set('WOTM_MATCH', '3,1,1');

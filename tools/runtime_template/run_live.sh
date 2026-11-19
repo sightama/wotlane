@@ -11,6 +11,7 @@ usage: sh run_live.sh [--auto 0|1] [--stats] [--build <dir>] [--exe test]
   --stats       PS2X_STATS=1 ([native] timing lines)
   --build <dir> build folder (default build_dev)
   --exe test    run ps2EntryRunner (also picked automatically with WOTM_VU1CHECK or WOTM_FOTOS, or when wotm is missing)
+Sound is off unless WOTM_MUTE=0 (to play with sound: WOTM_MUTE=0 sh run_live.sh --auto 0).
 The ISO comes from PS2X_CD_IMAGE, else the one setup_runtime.sh used (.wotm_iso), else the first .iso in <repo>/ISO.
 EOF
 }
@@ -52,6 +53,7 @@ export PS2X_CD_IMAGE
 [ -f "$repo/tools/sync_mods.sh" ] && sh "$repo/tools/sync_mods.sh" "$rt" "$repo"
 
 export PS2X_NO_VU1=1 PS2X_NO_VIF1=1 PS2X_NO_GS=1 PS2X_SCENE=1 PS2X_FMV=1
+export WOTM_MUTE=${WOTM_MUTE:-1}   # no sound unless WOTM_MUTE=0: test runs never make a sound
 [ "$stats" -eq 1 ] && export PS2X_STATS=1
 if [ "$auto" -eq 1 ]; then
     if [ -f "$rt/pad_script.sh" ]; then . "$rt/pad_script.sh"; export PS2X_PAD
