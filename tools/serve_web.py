@@ -19,6 +19,7 @@ import http.server
 import json
 import os
 import re
+import socketserver
 import sys
 import threading
 from pathlib import Path
@@ -182,8 +183,15 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 left -= len(chunk)
 
 
+class Server(http.server.ThreadingHTTPServer):
+    def server_bind(self):
+        # binds without http.server's socket.getfqdn: a reverse lookup of the address that waited 35 s on a slow resolver
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
+
+
 def make_server(host, port, site, data, chunks='both', chunk_bytes=CHUNK_BYTES):
-    return http.server.ThreadingHTTPServer((host, port), functools.partial(Handler, site=site, data=data, chunks=chunks, chunk_bytes=chunk_bytes))
+    return Server((host, port), functools.partial(Handler, site=site, data=data, chunks=chunks, chunk_bytes=chunk_bytes))
 
 
 def runtime_dir(repo):
