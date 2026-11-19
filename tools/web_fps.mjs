@@ -2,7 +2,7 @@
 // ABOUTME: frames), the game's redraws and interpolated redraws, and a screenshot. Usage: node tools/web_fps.mjs <chrome|firefox> <page url> [secs]
 import { writeFileSync } from 'node:fs';
 import { loadavg } from 'node:os';
-import { loadPlaywright } from './browser_mp_test/lib/infra.mjs';
+import { loadPlaywright, muted } from './browser_mp_test/lib/infra.mjs';
 
 const pw = await loadPlaywright();
 
@@ -13,8 +13,8 @@ fight.searchParams.set('WOTM_MATCH', '3,1,1');   // a stage-3 fight, monsters 1 
 fight.searchParams.set('WOTM_AIVSAI', '1');
 fight.searchParams.set('PS2X_STATS', '1');
 
-const browser = which === 'firefox' ? await pw.firefox.launch({ headless: false })
-  : await pw.chromium.launch({ channel: 'chrome', headless: false, args: ['--autoplay-policy=no-user-gesture-required'] });
+const browser = which === 'firefox' ? await pw.firefox.launch(muted('firefox', { headless: false }))
+  : await pw.chromium.launch(muted('chromium', { channel: 'chrome', headless: false, args: ['--autoplay-policy=no-user-gesture-required'] }));
 const page = await (await browser.newContext({ viewport: { width: 1280, height: 720 } })).newPage();
 await page.goto(fight.href);
 const log = () => page.evaluate(() => window.wotmLog || []);
