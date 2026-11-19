@@ -44,7 +44,7 @@ step 'build vu0bench'
 bench=$rt/logs/vu0bench
 # compiled like the runtime: no FMA contraction; sse2neon on ARM (the runtime build fetched it), the runtime's x86 flags otherwise
 set -- -std=c++20 -O2 -ffp-contract=off -fno-fast-math
-if [ -f "$sse2neon/sse2neon.h" ]; then set -- "$@" -DUSE_SSE2NEON "-I$sse2neon"
+if [ -f "$sse2neon/sse2neon.h" ]; then set -- "$@" -DUSE_SSE2NEON -DSSE2NEON_PRECISE_MINMAX=1 "-I$sse2neon"   # the runtime's definitions (wotm-runtime.patch)
 else set -- "$@" -mavx2 -mbmi2 -mlzcnt -mpopcnt; fi
 run_logged "$rt/logs/vu0bench_build.log" c++ "$@" -I"$REPO/native" -I"$REPO/native/runtime" -I"$rt/PS2Recomp/ps2xRuntime/include" -I"$gen" \
     "$REPO/tools/vu0bench.cpp" "$REPO/native/runtime/wotm_vu0_native.cpp" -o "$bench"

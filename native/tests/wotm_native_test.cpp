@@ -15,6 +15,7 @@
 #include "wotm_glsl.hpp"
 #include "wotm_lockon.hpp"
 #include "wotm_rtz.hpp"
+#include "wotm_rtz_lanes.hpp"
 #include "wotm_hudedge.hpp"
 #include "wotm_pace.hpp"
 #include "wotm_latency.hpp"
@@ -5642,6 +5643,54 @@ TEST(rtz_edges)
     CHECK(bitsOf(rtz::fromInt(16777217)) == bitsOf(16777216.f));
     CHECK(bitsOf(rtz::fromInt(-16777219)) == bitsOf(-16777218.f));
     CHECK(bitsOfDouble(rtz::add(1.0, -doubleOf(0x3C80000000000001ull))) == bitsOfDouble(std::nextafter(1.0, 0.0)));
+}
+
+// The browser's VU0 rounds toward zero 2 doubles or 4 floats at a time (wotm_rtz_lanes.hpp); every lane must be what the one-value
+// functions above give, including overflow past the largest float and sums that only round in double.
+TEST(rtz_lanes_equal_one_value_at_a_time)
+{
+    namespace rtz = wotm::rtz;
+    std::vector<RtzCase> cases = rtzCases(200000);
+    cases.push_back({FLT_MAX, FLT_MAX, -FLT_MAX, 0});
+    cases.push_back({-FLT_MAX, 2.f, FLT_MAX, 0});
+    cases.push_back({1.f, -1e-30f, 1.f, 0});
+    cases.push_back({1.f, 1.f, -1.f, 0});
+    int bad = 0;
+    for (size_t k = 0; k + 4 <= cases.size(); k += 4)
+    {
+        alignas(16) float a[4], b[4], r[4];
+        alignas(16) double da[4], db[4], dc[4], p[4], e[4];
+        for (int j = 0; j < 4; ++j)
+        {
+            a[j] = cases[k + j].a;
+            b[j] = cases[k + j].b;
+            da[j] = a[j];
+            db[j] = b[j];
+            dc[j] = cases[k + j].c;
+            p[j] = da[j] * db[j];
+        }
+        const auto lanes = [&](__m128d (*op)(__m128d, __m128d), const double *x, const double *y) {
+            _mm_store_pd(e, op(_mm_load_pd(x), _mm_load_pd(y)));
+            _mm_store_pd(e + 2, op(_mm_load_pd(x + 2), _mm_load_pd(y + 2)));
+            _mm_store_ps(r, rtz::toFloatLanes(_mm_load_pd(e), _mm_load_pd(e + 2)));
+        };
+        lanes(rtz::addLanes, da, db);
+        for (int j = 0; j < 4; ++j)
+            bad += bitsOf(r[j]) != bitsOf(rtz::add(a[j], b[j])) || bitsOfDouble(e[j]) != bitsOfDouble(rtz::add(da[j], db[j]));
+        lanes(rtz::subLanes, da, db);
+        for (int j = 0; j < 4; ++j)
+            bad += bitsOf(r[j]) != bitsOf(rtz::sub(a[j], b[j])) || bitsOfDouble(e[j]) != bitsOfDouble(rtz::sub(da[j], db[j]));
+        lanes(rtz::addLanes, dc, p);
+        for (int j = 0; j < 4; ++j)
+            bad += bitsOfDouble(e[j]) != bitsOfDouble(rtz::add(dc[j], p[j]));
+        lanes(rtz::subLanes, dc, p);
+        for (int j = 0; j < 4; ++j)
+            bad += bitsOfDouble(e[j]) != bitsOfDouble(rtz::sub(dc[j], p[j]));
+        _mm_store_ps(r, rtz::toFloatLanes(_mm_load_pd(p), _mm_load_pd(p + 2)));
+        for (int j = 0; j < 4; ++j)
+            bad += bitsOf(r[j]) != bitsOf(rtz::mul(a[j], b[j]));
+    }
+    CHECK(bad == 0);
 }
 
 TEST(glsl_desktop_source_unchanged)
