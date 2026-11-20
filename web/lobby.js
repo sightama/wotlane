@@ -136,6 +136,7 @@ export class LobbyClient {
     this.onPings = null;
     this.onHealth = null;
     this.onKicked = null;   // the owner removed this member: { code, seconds (before it can join that lobby again) }
+    this.onToken = null;    // the rejoin token for this lobby: { code, token } (quick rematch, web/rematch.js keeps it)
     this.onChat = null;
     this.onClose = null;
     this.onError = null;   // an ERROR no request waits for
@@ -147,7 +148,8 @@ export class LobbyClient {
     socket.onerror = () => {};
     this.ready = this.expect(['WELCOME']);
     this.ready.catch(() => this.close());   // a refused HELLO leaves nothing to keep open
-    socket.onopen = () => socket.send(`HELLO ${PROTOCOL} ${build}${halfRate ? ' hz=30' : ''}`);
+    // rejoin=1: a token after the join, so the page that reloads after a match can come back to the same lobby (REJOIN, quick rematch)
+    socket.onopen = () => socket.send(`HELLO ${PROTOCOL} ${build}${halfRate ? ' hz=30' : ''} rejoin=1`);
   }
 
   expect(replies) {
@@ -189,6 +191,8 @@ export class LobbyClient {
       this.onMatch?.(p.fields);
     } else if (p.cmd === 'LOBBY') {
       this.lobbies?.push(parseLobby(p));
+    } else if (p.cmd === 'TOKEN') {
+      this.onToken?.({ code: this.code, token: p.words[0] });
     } else if (p.cmd === 'JOINED') {
       this.code = p.words[0];
     }
@@ -224,6 +228,13 @@ export class LobbyClient {
   // resolves with the lobby code
   async join(code, name, monster) {
     const joined = await this.request(`JOIN ${code} ${name} ${monster}`, ['JOINED', 'SETTINGS']);
+    return joined.words[0];
+  }
+
+  // back into lobby `code` after this page reloaded, with the token the server gave (TOKEN); resolves with the code once onMembers has
+  // had the members list, which says whether this player owns the lobby again
+  async rejoin(code, token) {
+    const joined = await this.request(`REJOIN ${code} ${token}`, ['JOINED', 'SETTINGS', 'MEMBERS']);
     return joined.words[0];
   }
 

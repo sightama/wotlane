@@ -34,6 +34,9 @@ const MESSAGES = [
   [/^HEALTH /, 'Something went wrong talking to the game server. Reload the page and try again.'],
   [/ is not in this lobby$/, 'That player is not in the lobby any more.'],
   [/^monster has no free costume/, 'Every costume of that monster is taken in this lobby. Pick another monster.'],
+  [/^this lobby's players are coming back/, 'That lobby\'s players are about to play a rematch. Host a lobby or join another one.'],
+  [/^can't rejoin/, 'Your place in the last lobby is gone. Join it again with its code if it is still open.'],
+  [/^the lobby is gone/, 'Your last lobby has closed. Host a new one or join another.'],
 ];
 
 function friendlyError(text) {
