@@ -92,3 +92,28 @@ A and C are live (#173; the Firefox tip, #175). Then B; D waits for a measuremen
 and equal state hashes against the current build), and the native renderer's shadows (H, the main-thread part) as a quality setting.
 Then I (Lane: off-screen civilians and vehicles may be simplified if they switch back to full simulation before any player can see
 them: a margin around every view, deterministic on every PC, checked by a recording of them entering and leaving view). G, J and K are not scheduled.
+
+## What the next items gave (2026-11-19, later)
+
+Measured on the 840 recorded VU0 calls in page benches (Chrome and Firefox, alternating rounds) and with Chrome traces; none of these
+shipped except where said.
+
+- **B, VU0 MAC flags only where read:** a generator pass dropped the MAC of 460 of 547 flag-producing operations, bit-exact (`vu0bench`
+  native and wasm). Gain within noise: native 227 to 230 ns per call against 229 to 231, Chrome -1.5 to -5.5%, Firefox +0 to +2%. The
+  costly part of the flags (classifying each result, which the results need anyway, the product's sticky check, the status, the commit)
+  can't go without changing the VU state. Not shipped.
+- **J, the VU0 call's register copies:** copying only the VF registers each program touches (a mask from the generator; `vu0bench`
+  checked it with the other registers poisoned, and a mask missing one register gave 275 mismatches) moved the wrapper's own share of
+  the Chrome game thread from 2.6% to 2.5%. The copies are not where the wrapper's cost is. Not shipped.
+- **E, the world transform cache:** inside `hierTraceCsList`, VU0 programs and their wrapper are ~62% of the time, the assembly walk
+  (`hierTraverseAsm`) 15%, `hierCsUpdateAsm` 3%, VU1 packets 4% (Chrome trace). Every object's walk starts from its position plus the
+  world eye offset and the view frustum normals (`hierCsUpdate` in `src/common/hier.cpp`), which change whenever the camera moves, so
+  a cache that gives the same bits would only hit with a still camera. Not built.
+- **I, off-screen civilians:** `PedGroup` (the civilians) is 1.5% (Firefox) to 2.1% (Chrome) of the game thread in total.
+  `VehicleNavigator` is the military vehicles' AI (they attack the monsters) and `EnemyInfo` the monsters' pair table: neither is
+  off-screen scenery. With a margin around every view, simplifying civilians would give back about 1%. Not built.
+- **VU0 rounding to nearest instead of the PS2's round toward zero**, on every build so every PC still agrees (timing only, results
+  not the PS2's): Chrome 361 -> 228 ns per call (-37%), Firefox 887 -> 520 ns (-41%); with VU0 at 23 to 41% of the game thread, about
+  8% of a Chrome frame, 10% of a Firefox 1 vs 1 and up to 17% with 8 monsters. It makes the game's VU0 math differ from the PS2's in
+  the last bit (transforms, physics, collision) and old input recordings replay differently; the check becomes native equal to wasm
+  instead of equal to the PS2 interpreter. Waiting for Lane.
