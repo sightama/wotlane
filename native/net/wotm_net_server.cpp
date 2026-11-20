@@ -11,6 +11,7 @@
 #include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
+#include <random>
 
 namespace wotm_net
 {
@@ -146,6 +147,7 @@ namespace wotm_net
         serviceEnet(ms);
         tickMatches();
         tickLobbyPings();
+        expireGhosts();
         updateCounts();
         if (archive_.enabled() && Clock::now() - lastPrune_ >= std::chrono::hours(1))
         {
@@ -216,7 +218,7 @@ namespace wotm_net
                 handleLine(static_cast<int>(i), line);
             if (conns_[i] && (!alive || !conns_[i]->link->open()))
             {
-                leaveLobby(static_cast<int>(i));
+                dropMember(static_cast<int>(i));
                 conns_[i].reset();
             }
         }
@@ -299,6 +301,7 @@ namespace wotm_net
             c.hello = true;
             c.build = w[2];
             c.halfRate = c.halfRate || proto::keyValues(w)["hz"] == "30";   // HELLO <protocol> <build> [hz=30], or a phone's User-Agent
+            c.rejoin = proto::keyValues(w)["rejoin"] == "1";                // [rejoin=1]: TOKEN on join, a ghost when it drops
             c.link->sendLine("WELCOME " + std::to_string(openLobbies()));
             return;
         }
@@ -310,7 +313,7 @@ namespace wotm_net
         if (cmd == "LIST")
         {
             for (size_t i = 0; i < lobbies_.size(); ++i)
-                if (lobbies_[i].open)
+                if (lobbies_[i].open && !(lobbies_[i].members.empty() && !lobbies_[i].ghosts.empty()))   // a lingering lobby isn't open to others
                     c.link->sendLine(lobbyLine(static_cast<int>(i)));
             c.link->sendLine("END");
         }
@@ -318,6 +321,8 @@ namespace wotm_net
             createLobby(ci, w);
         else if (cmd == "JOIN" && w.size() >= 4)
             joinLobby(ci, w);
+        else if (cmd == "REJOIN" && w.size() >= 3)
+            rejoinLobby(ci, w);
         else if (cmd == "SET")
             setLobby(ci, w);
         else if (cmd == "CHAT")
@@ -442,20 +447,15 @@ namespace wotm_net
             return void(c.link->sendLine("ERROR empty name (use letters, digits, _ or -)"));
         if (!l.password.empty() && password != l.password)
             return void(c.link->sendLine("ERROR wrong password (the lobby has a password)"));
-        const auto now = Clock::now();
-        l.bans.erase(std::remove_if(l.bans.begin(), l.bans.end(), [now](const Lobby::Ban &b) { return b.until <= now; }), l.bans.end());
-        for (const Lobby::Ban &b : l.bans)
-            if (b.name == name || (!b.address.empty() && b.address == c.address))
-                return void(c.link->sendLine("ERROR you were removed from this lobby; try again in " +
-                                             std::to_string((std::chrono::duration_cast<std::chrono::milliseconds>(b.until - now).count() + 999) / 1000) + " s"));
-        if (l.match)
-            return void(c.link->sendLine("ERROR lobby is in a match; wait for it to end"));
-        if (static_cast<int>(l.members.size()) >= cfg_.maxPlayers)
-            return void(c.link->sendLine("ERROR lobby is full"));
-        if (l.build != c.build)
-            return void(c.link->sendLine("ERROR build differs from the lobby's (" + l.build + "); everyone needs the same wotlane"));
+        if (l.members.empty() && !l.ghosts.empty())   // a lobby waiting for its players' rematch takes only them, by REJOIN
+            return void(c.link->sendLine("ERROR this lobby's players are coming back for a rematch; host or join another one"));
+        if (const std::string err = admitError(l, c, name, l.members.size() + l.ghosts.size()); !err.empty())
+            return void(c.link->sendLine(err));
         for (int m : l.members)
             if (conns_[static_cast<size_t>(m)]->name == name)
+                return void(c.link->sendLine("ERROR name already taken in the lobby"));
+        for (const Lobby::Ghost &g : l.ghosts)   // a member whose page is reloading keeps its name
+            if (g.name == name)
                 return void(c.link->sendLine("ERROR name already taken in the lobby"));
         std::string err;
         if (!monsterFits(l, pick, err))
@@ -464,12 +464,142 @@ namespace wotm_net
         addMember(ci, li, name, pick);
     }
 
+    std::string Server::admitError(Lobby &l, const Conn &c, const std::string &name, size_t seats)
+    {
+        const auto now = Clock::now();
+        l.bans.erase(std::remove_if(l.bans.begin(), l.bans.end(), [now](const Lobby::Ban &b) { return b.until <= now; }), l.bans.end());
+        for (const Lobby::Ban &b : l.bans)
+            if (b.name == name || (!b.address.empty() && b.address == c.address))
+                return "ERROR you were removed from this lobby; try again in " +
+                       std::to_string((std::chrono::duration_cast<std::chrono::milliseconds>(b.until - now).count() + 999) / 1000) + " s";
+        if (l.match)
+            return "ERROR lobby is in a match; wait for it to end";
+        if (static_cast<int>(seats) >= cfg_.maxPlayers)
+            return "ERROR lobby is full";
+        if (l.build != c.build)
+            return "ERROR build differs from the lobby's (" + l.build + "); everyone needs the same wotlane";
+        return {};
+    }
+
+    void Server::rejoinLobby(int ci, const std::vector<std::string> &w)
+    {
+        Conn &c = *conns_[static_cast<size_t>(ci)];
+        const int li = lobbyByCode(w[1]);
+        if (li < 0)
+            return void(c.link->sendLine("ERROR the lobby is gone; host or join a new one"));
+        if (c.lobby == li)
+            return void(c.link->sendLine("ERROR you are already in this lobby"));
+        Lobby &l = lobbies_[static_cast<size_t>(li)];
+        const std::string &token = w[2];
+        // the place's old connection may still be open (a phone that switched networks reloads before the server sees the drop): it
+        // gives the place up, as a ghost, and this connection takes it
+        for (int m : l.members)
+            if (!token.empty() && conns_[static_cast<size_t>(m)]->token == token)
+            {
+                dropMember(m);
+                break;
+            }
+        auto g = std::find_if(l.ghosts.begin(), l.ghosts.end(), [&](const Lobby::Ghost &x) { return x.token == token; });
+        if (token.empty() || g == l.ghosts.end())
+            return void(c.link->sendLine("ERROR can't rejoin (that place is gone or was already used); join again with the code"));
+        if (const std::string err = admitError(l, c, g->name, l.members.size()); !err.empty())
+            return void(c.link->sendLine(err));
+        std::string err;
+        if (!monsterFits(l, g->pick, err))
+            return void(c.link->sendLine("ERROR " + err));
+        leaveLobby(ci);   // out of any other lobby first; this one keeps the ghost, so it stays open
+        g = std::find_if(l.ghosts.begin(), l.ghosts.end(), [&](const Lobby::Ghost &x) { return x.token == token; });
+        if (!l.open || g == l.ghosts.end())
+            return void(c.link->sendLine("ERROR the lobby is gone; host or join a new one"));
+        const Lobby::Ghost ghost = *g;
+        l.ghosts.erase(g);   // a token is good once: the member gets a new one
+        if (ghost.owner && l.host < 0)
+            l.host = ci;
+        log("lobby %s: %s is back", l.code.c_str(), ghost.name.c_str());
+        addMember(ci, li, ghost.name, ghost.pick);
+    }
+
+    void Server::dropMember(int ci)
+    {
+        Conn &c = *conns_[static_cast<size_t>(ci)];
+        if (c.lobby < 0 || !c.rejoin || c.token.empty())
+            return leaveLobby(ci);
+        const int li = c.lobby;
+        Lobby &l = lobbies_[static_cast<size_t>(li)];
+        const bool owner = l.host == ci;
+        l.ghosts.push_back({c.name, c.token, c.address, c.pick, owner, Clock::now() + std::chrono::milliseconds(cfg_.lingerMs)});
+        l.members.erase(std::remove(l.members.begin(), l.members.end(), ci), l.members.end());
+        if (owner)
+            l.host = -1;   // kept for the owner's REJOIN
+        c.lobby = -1;
+        c.token.clear();
+        log("lobby %s: %s's page went away; their place is kept %d s", l.code.c_str(), c.name.c_str(), cfg_.lingerMs / 1000);
+        diagEvent(l, "event=ghost player=" + c.name + " owner=" + (owner ? "1" : "0"));
+        capLingering(li);
+        if (!closeIfEmpty(li))
+            sendMembers(li);
+    }
+
+    // a lobby left with only ghosts lingers only while fewer than maxLingering others do; past that its ghosts go and it closes
+    void Server::capLingering(int li)
+    {
+        Lobby &l = lobbies_[static_cast<size_t>(li)];
+        if (l.members.empty() && !l.ghosts.empty() && !l.match && lingeringLobbies() > cfg_.maxLingering)
+        {
+            log("lobby %s: too many lobbies waiting for a rematch; this one closes", l.code.c_str());
+            l.ghosts.clear();
+        }
+    }
+
+    void Server::expireGhosts()
+    {
+        const auto now = Clock::now();
+        for (size_t li = 0; li < lobbies_.size(); ++li)
+        {
+            Lobby &l = lobbies_[li];
+            if (!l.open || l.ghosts.empty())
+                continue;
+            bool any = false;
+            for (const Lobby::Ghost &g : l.ghosts)
+                if (g.until <= now)
+                {
+                    log("lobby %s: %s didn't come back", l.code.c_str(), g.name.c_str());
+                    any = true;
+                }
+            if (!any)
+                continue;
+            l.ghosts.erase(std::remove_if(l.ghosts.begin(), l.ghosts.end(), [now](const Lobby::Ghost &g) { return g.until <= now; }), l.ghosts.end());
+            const bool ownerAway = std::any_of(l.ghosts.begin(), l.ghosts.end(), [](const Lobby::Ghost &g) { return g.owner; });
+            if (l.host < 0 && !ownerAway && !l.members.empty())
+                l.host = l.members.front();   // the owner didn't come back: the lobby passes on, as when an owner leaves
+            if (!closeIfEmpty(static_cast<int>(li)))
+                sendMembers(static_cast<int>(li));
+        }
+    }
+
+    int Server::lingeringLobbies() const
+    {
+        return static_cast<int>(std::count_if(lobbies_.begin(), lobbies_.end(), [](const Lobby &l) { return l.open && l.members.empty() && !l.ghosts.empty(); }));
+    }
+
+    std::string Server::newToken()
+    {
+        static std::random_device rd;   // unguessable: the token is the only thing a REJOIN shows
+        static const char *const hex = "0123456789abcdef";
+        std::string t;
+        for (int i = 0; i < 4; ++i)
+            for (uint32_t v = rd(), k = 0; k < 8; ++k, v >>= 4)
+                t += hex[v & 15u];
+        return t;
+    }
+
     void Server::addMember(int ci, int li, const std::string &name, const proto::Pick &pick)
     {
         Conn &c = *conns_[static_cast<size_t>(ci)];
         Lobby &l = lobbies_[static_cast<size_t>(li)];
         l.members.push_back(ci);
-        if (l.host < 0)
+        const bool ownerAway = std::any_of(l.ghosts.begin(), l.ghosts.end(), [](const Lobby::Ghost &g) { return g.owner; });
+        if (l.host < 0 && !ownerAway)   // an owner's ghost keeps the lobby until it rejoins or expires
             l.host = ci;
         c.lobby = li, c.name = name, c.pick = pick;
         c.link->sendLine("JOINED " + l.code);
@@ -478,6 +608,11 @@ namespace wotm_net
         diagEvent(l, "event=join player=" + name + " transport=" + (dynamic_cast<WsLink *>(c.link.get()) ? "ws" : "tcp") +
                          " half_rate=" + (c.halfRate ? "1" : "0") + " members=" + std::to_string(l.members.size()));
         sendMembers(li);
+        if (c.rejoin)
+        {
+            c.token = newToken();
+            c.link->sendLine("TOKEN " + c.token);   // REJOIN <code> <token> brings this member back after its page reloads
+        }
     }
 
     // SET [stage=<stage number or map id>] [wins=<wins>] [mods=<list>]: owner only; an unknown modifier or a bad stage changes nothing
@@ -556,9 +691,19 @@ namespace wotm_net
         const int target = memberNamed(*l, name);
         if (target == ci)
             return void(c.link->sendLine("ERROR you can't remove yourself; leave instead"));
+        const auto now = Clock::now();
+        const auto ghost = std::find_if(l->ghosts.begin(), l->ghosts.end(), [&](const Lobby::Ghost &g) { return g.name == name; });
+        if (target < 0 && ghost != l->ghosts.end())
+        {
+            // a member whose page is reloading: its place and token go, and it can't join again for the ban, as a live member
+            l->bans.push_back({name, ghost->address, now + std::chrono::milliseconds(cfg_.kickBanMs)});
+            l->ghosts.erase(ghost);
+            log("lobby %s: %s removed %s (away)", l->code.c_str(), c.name.c_str(), name.c_str());
+            diagEvent(*l, "event=kick owner=" + c.name + " player=" + name);
+            return;
+        }
         if (target < 0)
             return void(c.link->sendLine("ERROR " + name + " is not in this lobby"));
-        const auto now = Clock::now();
         l->bans.erase(std::remove_if(l->bans.begin(), l->bans.end(), [now](const Lobby::Ban &b) { return b.until <= now; }), l->bans.end());
         l->bans.push_back({name, conns_[static_cast<size_t>(target)]->address, now + std::chrono::milliseconds(cfg_.kickBanMs)});
         log("lobby %s: %s removed %s", l->code.c_str(), c.name.c_str(), name.c_str());
@@ -617,11 +762,13 @@ namespace wotm_net
         const int li = c.lobby;
         l.members.erase(std::remove(l.members.begin(), l.members.end(), ci), l.members.end());
         c.lobby = -1;
+        c.token.clear();   // leaving on purpose gives the rejoin up
         c.hasHealth = false;
         c.softwareGl = false;
         if (l.host == ci)
             l.host = l.members.empty() ? -1 : l.members.front();
         log("lobby %s: %s left", l.code.c_str(), c.name.c_str());
+        capLingering(li);
         if (!closeIfEmpty(li))
             sendMembers(li);
     }
@@ -630,12 +777,13 @@ namespace wotm_net
     bool Server::closeIfEmpty(int li)
     {
         Lobby &l = lobbies_[static_cast<size_t>(li)];
-        if (!l.open || !l.members.empty() || l.match)
+        if (!l.open || !l.members.empty() || !l.ghosts.empty() || l.match)
             return false;
         log("lobby %s: empty, closed", l.code.c_str());
         l.open = false;
         l.code.clear(), l.name.clear(), l.password.clear(), l.build.clear(), l.diagFile.clear();
         l.bans.clear();
+        l.ghosts.clear();
         l.host = -1;
         return true;
     }
