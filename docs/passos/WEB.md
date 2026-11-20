@@ -216,9 +216,13 @@ match numbers and the note, and no chat, files or address.
 A refusal from the server (name taken, no such lobby, lobby full, lobby in a match, build differs) stays on the message line, as a plain sentence (`web/messages.js` maps every ERROR the lobby sends; a test reads them from `wotm_net_server.cpp`, and an unknown text is shown as it is). The live server runs with `--lobbies 4`: a fifth lobby creator reads "All 4 lobbies are busy. Try again soon." Leave sends `LEAVE` and returns to Host/Join without a reload (`LobbyClient.leave()`). The page's own
 `LobbyClient.close()` silences `onClose`, which only reports a connection that dropped. The panel is a flex column that scrolls
 (`#front` has `overflow-y: auto`, its card `margin: auto`), so a card taller than the window (8 members, a zoomed page) keeps Start
-reachable. After a match (or Leave the match, which reloads the page) the panel asks the server for its lobbies (`LIST`, over a short-lived
-`LobbyClient`) and offers the last lobby's code only while that lobby is listed: a finished match empties it and the server closes it.
-A lobby still in a match is named as such; one that is gone gets no note and no prefilled code.
+reachable. After a match (or Leave the match, which reloads the page) the page goes back to its lobby by itself (quick rematch,
+`web/rematch.js`): every lobby connection says `rejoin=1`, the page keeps the `TOKEN` and lobby code in the tab's `sessionStorage`
+(so two tabs keep their own places), and on load it sends `REJOIN` with them, once and only within the server's 120 s. It waits for
+the members list to know whether it owns the lobby again, then shows the lobby with the owner's Start button reading Rematch. Leave
+and a removal by the owner drop the token. Without a token, or when the rejoin is refused (the lobby is gone, the place expired, a
+match is on), the panel asks the server for its lobbies (`LIST`, over a short-lived `LobbyClient`) and offers the last lobby's code
+only while that lobby is listed. A lobby still in a match is named as such; one that is gone gets no note and no prefilled code.
 
 `wotm_server --ws-port <port> [--ws-bind <address>]` (default bind `127.0.0.1`, behind a web server that terminates HTTPS) takes these
 connections: `/lobby` behaves as a TCP lobby connection, `/match` carries binary frames of one channel byte and the same datagram as
