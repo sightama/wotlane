@@ -21,6 +21,9 @@ test('Firefox on a computer gets the tip, naming the pref and the restart', () =
   assert.match(tip, /javascript\.options\.wasm_lazy_tiering/);
   assert.match(tip, /false/);
   assert.match(tip, /restart Firefox/i);
+  assert.match(tip, /accept the warning/);
+  assert.match(tip, /every website/, 'the pref is browser-wide: the player should know');
+  assert.match(tip, /undo/);
 });
 
 test('Firefox on Android gets the tip with the caveat that about:config opens only in Beta or Nightly there', () => {

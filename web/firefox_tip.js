@@ -1,9 +1,10 @@
 // ABOUTME: The front panel's performance tip for Firefox players: a pref that has Firefox optimize the game's code fully right away instead
 // ABOUTME: of in the background (less work per frame); on Android, the caveat that about:config opens only in Beta or Nightly. Dismissible.
 
-export const FIREFOX_TIP = 'Faster in Firefox: open about:config, set javascript.options.wasm_lazy_tiering to false, then restart Firefox. ' +
-  'The game\'s code is then fully optimized right away, about 19% less work per frame.';
-export const ANDROID_CAVEAT = 'On Android, about:config opens only in Firefox Beta or Nightly.';
+export const FIREFOX_TIP = 'Faster in Firefox: open about:config (accept the warning), search for javascript.options.wasm_lazy_tiering, ' +
+  'set it to false, then restart Firefox. The game\'s code is then fully optimized as it loads: about 19% less work per frame, for a ' +
+  'slower first load. The setting applies to every website; to undo it, click the reset arrow beside it.';
+export const ANDROID_CAVEAT = 'On Android, about:config is generally only available in Firefox Beta or Nightly.';
 const DISMISSED_KEY = 'wotlane.firefoxTipDismissed';
 
 function dismissed(storage) {

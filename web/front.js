@@ -469,6 +469,7 @@ function showFirefoxTip() {
   $('firefoxTipOk').onclick = () => {
     dismissFirefoxTip(storage);
     $('firefoxTip').hidden = true;
+    $('name').focus();   // the button just went away with the tip: keyboard focus goes on to the panel's first field
   };
 }
 
