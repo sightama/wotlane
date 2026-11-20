@@ -9,11 +9,18 @@ const fixed = { PS2X_CD_IMAGE: '/disc/game.iso', WOTM_SAVEDIR: '/save', PS2X_SKI
 const params = (q) => new URLSearchParams(q);
 
 test('the allowed test switches pass from the address', () => {
-  const env = pageEnv(params('WOTM_MATCH=5,1,9&WOTM_AIVSAI=1&PS2X_STATS=1&WOTM_MAPEDIT=1'), fixed, null, null);
+  const env = pageEnv(params('WOTM_MATCH=5,1,9&WOTM_AIVSAI=1&PS2X_STATS=1&WOTM_MAPEDIT=1&WOTM_VBLANK_SPIN=0'), fixed, null, null);
   assert.equal(env.WOTM_MATCH, '5,1,9');
   assert.equal(env.WOTM_AIVSAI, '1');
   assert.equal(env.PS2X_STATS, '1');
   assert.equal(env.WOTM_MAPEDIT, '1');
+  assert.equal(env.WOTM_VBLANK_SPIN, '0');
+});
+
+test('WOTM_VBLANK_SPIN from the address reaches an online match too (the match environment does not set it)', () => {
+  const env = pageEnv(params('WOTM_VBLANK_SPIN=0'), fixed, { WOTM_NET: 'wss://x/match', WOTM_FIXEDSTEP: '1' }, 'wl-x');
+  assert.equal(env.WOTM_VBLANK_SPIN, '0');
+  assert.equal(env.WOTM_FIXEDSTEP, '1');
 });
 
 test('any other WOTM_ or PS2X_ key in the address is ignored', () => {
@@ -44,8 +51,8 @@ test('WOTM_BUILDID comes only from the build id', () => {
   assert.equal('WOTM_BUILDID' in pageEnv(params('WOTM_BUILDID=wl-address'), fixed, { WOTM_BUILDID: 'wl-match' }, null), false);
 });
 
-test('the allowlist is the four test switches', () => {
-  assert.deepEqual([...FROM_ADDRESS].sort(), ['PS2X_STATS', 'WOTM_AIVSAI', 'WOTM_MAPEDIT', 'WOTM_MATCH']);
+test('the allowlist is the five test switches', () => {
+  assert.deepEqual([...FROM_ADDRESS].sort(), ['PS2X_STATS', 'WOTM_AIVSAI', 'WOTM_MAPEDIT', 'WOTM_MATCH', 'WOTM_VBLANK_SPIN']);
 });
 
 test('an invite link names a lobby by its 4-character code, in any case', () => {
