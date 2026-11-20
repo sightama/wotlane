@@ -208,11 +208,13 @@ namespace wotm_net
         void dropMember(int c);
         // REJOIN <code> <token>: back into the lobby as the ghost the token names (single use; a new TOKEN follows)
         void rejoinLobby(int c, const std::vector<std::string> &w);
-        // the ERROR line that keeps `name` out of lobby `l` (the owner's removals, a match on, a full lobby, another build), or ""
-        std::string admitError(Lobby &l, const Conn &c, const std::string &name);
+        // the ERROR line that keeps `name` out of lobby `l` (the owner's removals, a match on, a full lobby, another build), or "";
+        // `seats`: the places taken (a JOIN counts the ghosts, whose players are coming back; their REJOIN counts only members)
+        std::string admitError(Lobby &l, const Conn &c, const std::string &name, size_t seats);
         // drops expired ghosts: an owner's passes the lobby on; a lobby with nobody left closes
         void expireGhosts();
         int lingeringLobbies() const;   // open lobbies with ghosts and no member
+        void capLingering(int lobby);
         static std::string newToken();
         bool closeIfEmpty(int lobby);
         void sendMembers(int lobby);
