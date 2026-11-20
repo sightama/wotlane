@@ -6,6 +6,9 @@
 // A program only runs if the hash of its bytes in VU0 code memory matches the generator's.
 #include "wotm_vu0_native.h"
 #include "wotm_rtz.hpp"   // the browser build (no rounding-mode control in WebAssembly)
+#if defined(__EMSCRIPTEN__)
+#include "wotm_rtz_lanes.hpp"
+#endif
 
 #include <cfloat>
 #include <cmath>
@@ -254,73 +257,43 @@ namespace
     }
 
 #if defined(__EMSCRIPTEN__)
-    // WebAssembly only rounds to nearest, so the arithmetic rounds toward zero in software (wotm_rtz.hpp), one lane at a time: the
-    // value in double (what dAdd/dSub/dMul give in round-toward-zero mode) and the float result truncated from it
-    struct Lanes
-    {
-        alignas(16) float a[4], b[4], r[4];
-        alignas(16) double e[4];
-
-        Lanes(__m128 x, __m128 y)
-        {
-            _mm_store_ps(a, x);
-            _mm_store_ps(b, y);
-        }
-        __m128 result() const { return _mm_load_ps(r); }
-        D4 exact() const { return {_mm_load_pd(e), _mm_load_pd(e + 2)}; }
-    };
+    // WebAssembly only rounds to nearest, so the arithmetic rounds toward zero in software, two lanes at a time
+    // (wotm_rtz_lanes.hpp): the value in double (what dAdd/dSub/dMul give in round-toward-zero mode) and the float result truncated
+    // from it
+    WOTM_VU0_FI __m128 truncated(D4 exact) { return wotm::rtz::toFloatLanes(exact.lo, exact.hi); }
+    WOTM_VU0_FI D4 tAdd(D4 a, D4 b) { return {wotm::rtz::addLanes(a.lo, b.lo), wotm::rtz::addLanes(a.hi, b.hi)}; }
+    WOTM_VU0_FI D4 tSub(D4 a, D4 b) { return {wotm::rtz::subLanes(a.lo, b.lo), wotm::rtz::subLanes(a.hi, b.hi)}; }
 
     template <int D>
     WOTM_VU0_FI __m128 ADD4(__m128 a, __m128 b, Fm &f)
     {
-        Lanes l(a, b);
-        for (int k = 0; k < 4; ++k)
-        {
-            l.e[k] = wotm::rtz::add((double)l.a[k], (double)l.b[k]);
-            l.r[k] = wotm::rtz::toFloat(l.e[k]);
-        }
-        return fin4<D>(l.result(), l.exact(), f);
+        const D4 e = tAdd(W(a), W(b));
+        return fin4<D>(truncated(e), e, f);
     }
     template <int D>
     WOTM_VU0_FI __m128 SUB4(__m128 a, __m128 b, Fm &f)
     {
-        Lanes l(a, b);
-        for (int k = 0; k < 4; ++k)
-        {
-            l.e[k] = wotm::rtz::sub((double)l.a[k], (double)l.b[k]);
-            l.r[k] = wotm::rtz::toFloat(l.e[k]);
-        }
-        return fin4<D>(l.result(), l.exact(), f);
+        const D4 e = tSub(W(a), W(b));
+        return fin4<D>(truncated(e), e, f);
     }
     template <int D>
     WOTM_VU0_FI __m128 MUL4(__m128 a, __m128 b, Fm &f)
     {
-        Lanes l(a, b);
-        for (int k = 0; k < 4; ++k)
-        {
-            l.e[k] = (double)l.a[k] * (double)l.b[k];   // exact
-            l.r[k] = wotm::rtz::toFloat(l.e[k]);
-        }
-        return fin4<D>(l.result(), l.exact(), f);
+        const D4 e = dMul(W(a), W(b));   // exact
+        return fin4<D>(truncated(e), e, f);
     }
 
     // madd/msub: acc +- a*b (two roundings in float), plus the product's sticky flags (calculateFmacProductSticky)
     template <int D>
     WOTM_VU0_FI __m128 MADD4(__m128 c, __m128 a, __m128 b, Fm &f, bool sub)
     {
-        Lanes l(a, b);
-        alignas(16) float acc[4];
-        alignas(16) double p[4];
-        _mm_store_ps(acc, c);
-        for (int k = 0; k < 4; ++k)
-        {
-            p[k] = (double)l.a[k] * (double)l.b[k];   // exact
-            const float pf = wotm::rtz::toFloat(p[k]);
-            l.r[k] = sub ? wotm::rtz::sub(acc[k], pf) : wotm::rtz::add(acc[k], pf);
-            l.e[k] = sub ? wotm::rtz::sub((double)acc[k], p[k]) : wotm::rtz::add((double)acc[k], p[k]);
-        }
-        f.ext |= flagsOf(classify4<D>(D4{_mm_load_pd(p), _mm_load_pd(p + 2)}));
-        return fin4<D>(l.result(), l.exact(), f);
+        const D4 p = dMul(W(a), W(b));   // exact
+        const D4 pf = W(truncated(p));
+        const D4 acc = W(c);
+        const __m128 r = truncated(sub ? tSub(acc, pf) : tAdd(acc, pf));
+        const D4 e = sub ? tSub(acc, p) : tAdd(acc, p);
+        f.ext |= flagsOf(classify4<D>(p));
+        return fin4<D>(r, e, f);
     }
 
     // ITOF0

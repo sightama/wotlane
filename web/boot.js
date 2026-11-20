@@ -54,8 +54,21 @@
       const text = progress.text(performance.now());
       if (text) return void (loadingEl.textContent = text);
       loadingEl.hidden = true;
-      channel.close();
       clearInterval(timer);
+      showStreaming(channel);
+    }, 250);
+  }
+
+  // after boot, a stage or monster not cached yet makes the game wait on its download, on a black screen (issue #112): a small note
+  // says data is loading while a burst of network chunks goes on (cache hits don't count: nobody waits for them)
+  function showStreaming(channel) {
+    const noteEl = document.getElementById('streaming');
+    const activity = new StreamActivity();
+    channel.onmessage = (e) => { if (typeof e.data === 'number') activity.add(e.data, performance.now()); };
+    setInterval(() => {
+      const text = activity.text(performance.now());
+      noteEl.hidden = !text;
+      if (text) noteEl.textContent = text;
     }, 250);
   }
 

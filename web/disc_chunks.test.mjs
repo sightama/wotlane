@@ -401,3 +401,11 @@ test('the sync reader cuts a read past the end of the file short, and has no ans
   assert.deepEqual([...reader.read('http://x/data/game.iso', 16, 40).bytes], [...FILE.slice(16)]);
   assert.equal(reader.read('http://x/data/game.iso', SIZE, SIZE + 8), null);
 });
+
+test('the sync reader reports each chunk it fetched and checked (the page shows a note while a load waits on them)', () => {
+  const sizes = [];
+  const s = server({ bad: (n, attempt) => (n === 0 && attempt === 0 ? WRONG : null) });
+  const reader = syncChunkReader(fakeXhr(s), { nonce: counter(), log: quiet, onBytes: (n) => sizes.push(n) });
+  reader.read('http://x/data/game.iso', 6, 10);
+  assert.deepEqual(sizes, [CHUNK, CHUNK], 'chunks 0 and 1 whole, the bad first answer not counted');
+});

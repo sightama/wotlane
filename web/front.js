@@ -10,6 +10,7 @@ import { deliverReport, initReport } from './report_ui.js';
 import { RateMemory, healthLine, rememberedHealth } from './rate.js';
 import { lobbyWarnings, memberStatus } from './lobby_status.js';
 import { frontNotice } from './device_notice.js';
+import { dismissFirefoxTip, firefoxTip } from './firefox_tip.js';
 
 const MONSTERS = [[1, 'Congar'], [2, 'Robo-47'], [3, 'Togera'], [4, 'Ultra V'], [5, 'Preytor'], [7, 'Kineticlops'], [8, 'Magmo'],
   [9, 'Raptros'], [10, 'Agamo'], [11, 'Zorgulon']];
@@ -457,6 +458,21 @@ async function copyInvite() {
   }
 }
 
+// Firefox's performance tip (web/firefox_tip.js): on the front panel only, never during a match, until this browser dismisses it
+function showFirefoxTip() {
+  let storage = null;
+  try { storage = window.localStorage; } catch { /* storage blocked: the tip shows each visit */ }
+  const ua = navigator.userAgent;
+  const tip = firefoxTip({ firefox: /Firefox\//.test(ua), android: /Android/.test(ua), storage });
+  $('firefoxTip').hidden = !tip;
+  $('firefoxTipText').textContent = tip;
+  $('firefoxTipOk').onclick = () => {
+    dismissFirefoxTip(storage);
+    $('firefoxTip').hidden = true;
+    $('name').focus();   // the button just went away with the tip: keyboard focus goes on to the panel's first field
+  };
+}
+
 function init() {
   // a browser that can't run the game gets a plain message instead of a page that freezes
   const problem = window.wotmSupportProblem();
@@ -477,6 +493,7 @@ function init() {
   const note = frontNotice({ softwareGl: readSoftwareGl(window) });   // this player's own screen: the front panel carries it until they leave it
   $('deviceNote').hidden = !note;
   $('deviceNote').textContent = note;
+  showFirefoxTip();
   const invited = window.inviteCode(new URLSearchParams(location.search));
   if (invited) {   // a reload doesn't join again; the address keeps its other parts
     const rest = new URLSearchParams(location.search);

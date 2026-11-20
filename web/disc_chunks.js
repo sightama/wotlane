@@ -214,7 +214,7 @@
   // { bytes, etag } for the bytes [start, end) of a disc file, or null when the server has no index (or does not list the file). Chunks
   // are fetched with `Xhr`, one after the other, and checked with sha256Sync; a bad chunk is asked for again from another URL, and any
   // failure throws (the caller, the game's own retry loop, tries the whole read again).
-  function syncChunkReader(Xhr, { tries = 3, nonce = randomNonce, log = console.error } = {}) {
+  function syncChunkReader(Xhr, { tries = 3, nonce = randomNonce, log = console.error, onBytes = null } = {}) {
     const indexes = new Map();
     const manifests = new Map();
 
@@ -251,7 +251,10 @@
       for (let attempt = 0; ; attempt++) {
         const r = get(chunkUrl(base, entry, n, attempt && nonce()));
         if (r.status !== 200) throw new Error(`disc chunk ${n} of ${name}: HTTP ${r.status}`);
-        if (r.bytes.length === chunkLength(manifest, n) && sha256Sync(r.bytes) === manifest.sha256[n]) return r.bytes;
+        if (r.bytes.length === chunkLength(manifest, n) && sha256Sync(r.bytes) === manifest.sha256[n]) {
+          onBytes?.(r.bytes.length);   // a chunk that came over the network (the page's loading note counts them)
+          return r.bytes;
+        }
         if (attempt + 1 >= tries) throw new Error(`disc chunk ${n} of ${name} failed its SHA-256 check`);
       }
     }
