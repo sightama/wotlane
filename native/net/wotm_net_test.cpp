@@ -1013,6 +1013,193 @@ namespace
         CHECK(readUntil(watcher, "") == "END");
     }
 
+    // Quick rematch (roadmap A2): a client that says HELLO ... rejoin=1 gets a TOKEN line when it joins; if its connection drops
+    // (a browser page reloads after a match), it stays in the lobby as a ghost for the linger time and comes back with REJOIN
+    std::string tokenOf(LineSocket &s)
+    {
+        const std::string t = readUntil(s, "TOKEN ");
+        return t.size() > 6 ? t.substr(6) : std::string{};
+    }
+
+    TEST(lobby_rejoin_member_gets_a_token_and_comes_back_after_a_drop)
+    {
+        ServerConfig cfg = testConfig();
+        RunningServer rs(cfg);
+        LineSocket a;
+        hello(a, cfg.port, "b1", "rejoin=1");
+        const std::string code = createLobby(a, "Lobby", "Ana", 3);
+        CHECK(tokenOf(a).size() == 32u);
+        std::string tb;
+        {
+            LineSocket b;
+            hello(b, cfg.port, "b1", "rejoin=1");
+            b.sendLine("JOIN " + code + " Bia 1");
+            tb = tokenOf(b);
+            CHECK(tb.size() == 32u);
+            CHECK(readUntil(a, "MEMBERS " + code + " Ana Ana:3,Bia:1").size() > 0u);
+        }   // Bia's page reloads
+        CHECK(readUntil(a, "MEMBERS " + code) == "MEMBERS " + code + " Ana Ana:3");   // a ghost isn't listed
+        LineSocket b2;
+        hello(b2, cfg.port, "b1", "rejoin=1");
+        b2.sendLine("REJOIN " + code + " " + tb);
+        CHECK(readUntil(b2, "JOINED") == "JOINED " + code);
+        const std::string fresh = tokenOf(b2);
+        CHECK(fresh.size() == 32u && fresh != tb);
+        CHECK(readUntil(a, "MEMBERS " + code + " Ana Ana:3,Bia:1").size() > 0u);
+        LineSocket b3;   // a token is good once
+        hello(b3, cfg.port, "b1", "rejoin=1");
+        b3.sendLine("REJOIN " + code + " " + tb);
+        CHECK(readUntil(b3, "ERROR").size() > 0u);
+        b3.sendLine("REJOIN " + code + " 0123456789abcdef0123456789abcdef");
+        CHECK(readUntil(b3, "ERROR").size() > 0u);
+    }
+
+    TEST(lobby_owner_who_drops_stays_owner_until_the_ghost_expires)
+    {
+        ServerConfig cfg = testConfig();
+        cfg.lingerMs = 500;
+        RunningServer rs(cfg);
+        LineSocket b;
+        std::string code;
+        {
+            LineSocket a;
+            hello(a, cfg.port, "b1", "rejoin=1");
+            code = createLobby(a, "Lobby", "Ana", 3);
+            hello(b, cfg.port);
+            b.sendLine("JOIN " + code + " Bia 1");
+            CHECK(readUntil(b, "JOINED") == "JOINED " + code);
+        }   // the owner's page reloads: nobody else takes the lobby yet
+        CHECK(readUntil(b, "MEMBERS " + code + " - ") == "MEMBERS " + code + " - Bia:1");
+        b.sendLine("START");
+        CHECK(readUntil(b, "ERROR").size() > 0u);
+        CHECK(readUntil(b, "MEMBERS " + code + " Bia", 3000) == "MEMBERS " + code + " Bia Bia:1");   // the ghost expired: Bia owns it
+    }
+
+    TEST(lobby_owner_rejoins_and_owns_the_lobby_again)
+    {
+        ServerConfig cfg = testConfig();
+        RunningServer rs(cfg);
+        LineSocket b;
+        std::string code, ta;
+        {
+            LineSocket a;
+            hello(a, cfg.port, "b1", "rejoin=1");
+            code = createLobby(a, "Lobby", "Ana", 3);
+            ta = tokenOf(a);
+            hello(b, cfg.port);
+            b.sendLine("JOIN " + code + " Bia 1");
+            CHECK(readUntil(b, "JOINED") == "JOINED " + code);
+        }
+        CHECK(readUntil(b, "MEMBERS " + code + " - ") == "MEMBERS " + code + " - Bia:1");
+        LineSocket a2;
+        hello(a2, cfg.port, "b1", "rejoin=1");
+        a2.sendLine("REJOIN " + code + " " + ta);
+        CHECK(readUntil(a2, "JOINED") == "JOINED " + code);
+        CHECK(readUntil(b, "MEMBERS " + code + " Ana").size() > 0u);
+        a2.sendLine("SET wins=3");   // the owner's commands work again
+        CHECK(readUntil(a2, "SETTINGS " + code + " stage=1 wins=3") == "SETTINGS " + code + " stage=1 wins=3 mods=");
+    }
+
+    TEST(lobby_left_only_by_ghosts_lingers_then_closes)
+    {
+        ServerConfig cfg = testConfig();
+        cfg.lingerMs = 500;
+        RunningServer rs(cfg);
+        LineSocket watcher;
+        hello(watcher, cfg.port);
+        {
+            LineSocket a;
+            hello(a, cfg.port, "b1", "rejoin=1");
+            CHECK(!createLobby(a, "Lobby", "Ana", 3).empty());
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        watcher.sendLine("LIST");
+        CHECK(readUntil(watcher, "LOBBY").size() > 0u);   // still there for the rejoin
+        std::this_thread::sleep_for(std::chrono::milliseconds(1200));
+        watcher.sendLine("LIST");
+        CHECK(readUntil(watcher, "") == "END");
+    }
+
+    TEST(lobby_rejoin_meets_the_kick_and_the_full_lobby)
+    {
+        ServerConfig cfg = testConfig();
+        cfg.maxPlayers = 2;
+        RunningServer rs(cfg);
+        LineSocket a;
+        hello(a, cfg.port, "b1", "rejoin=1");
+        const std::string code = createLobby(a, "Lobby", "Ana", 3);
+        std::string tb, tc;
+        {
+            LineSocket b;
+            hello(b, cfg.port, "b1", "rejoin=1");
+            b.sendLine("JOIN " + code + " Bia 1");
+            tb = tokenOf(b);
+            CHECK(readUntil(a, "MEMBERS " + code + " Ana Ana:3,Bia:1").size() > 0u);
+        }
+        CHECK(readUntil(a, "MEMBERS " + code) == "MEMBERS " + code + " Ana Ana:3");   // Bia is a ghost now
+        a.sendLine("KICK Bia");   // the owner removes the ghost: its token goes with it
+        CHECK(readUntil(a, "ERROR", 400).empty());
+        LineSocket b2;
+        hello(b2, cfg.port, "b1", "rejoin=1");
+        b2.sendLine("REJOIN " + code + " " + tb);
+        CHECK(readUntil(b2, "ERROR").size() > 0u);
+        {
+            LineSocket c;
+            hello(c, cfg.port, "b1", "rejoin=1");
+            c.sendLine("JOIN " + code + " Caio 2");
+            tc = tokenOf(c);
+        }
+        LineSocket d;
+        hello(d, cfg.port);
+        d.sendLine("JOIN " + code + " Duda 5");   // Caio's ghost doesn't hold a seat: Duda gets in
+        CHECK(readUntil(d, "JOINED") == "JOINED " + code);
+        LineSocket c2;
+        hello(c2, cfg.port, "b1", "rejoin=1");
+        c2.sendLine("REJOIN " + code + " " + tc);   // and the lobby is full now
+        CHECK(readUntil(c2, "ERROR").size() > 0u);
+    }
+
+    TEST(lobby_no_ghost_after_leave_or_without_rejoin)
+    {
+        ServerConfig cfg = testConfig();
+        RunningServer rs(cfg);
+        LineSocket a, b, c;
+        hello(a, cfg.port, "b1", "rejoin=1");
+        const std::string code = createLobby(a, "Lobby", "Ana", 3);
+        hello(b, cfg.port);
+        b.sendLine("JOIN " + code + " Bia 1");
+        CHECK(readUntil(b, "JOINED") == "JOINED " + code);
+        CHECK(readUntil(b, "TOKEN", 300).empty());   // no rejoin=1, no token
+        hello(c, cfg.port, "b1", "rejoin=1");
+        c.sendLine("JOIN " + code + " Caio 2");
+        const std::string tc = tokenOf(c);
+        c.sendLine("LEAVE");
+        CHECK(readUntil(c, "LEFT") == "LEFT " + code);
+        c.sendLine("REJOIN " + code + " " + tc);   // leaving on purpose gives the token up
+        CHECK(readUntil(c, "ERROR").size() > 0u);
+    }
+
+    TEST(lobby_lingering_lobbies_are_capped)
+    {
+        ServerConfig cfg = testConfig();
+        cfg.maxLingering = 1;
+        RunningServer rs(cfg);
+        LineSocket watcher;
+        hello(watcher, cfg.port);
+        for (const char *name : {"Ana", "Bia"})
+        {
+            LineSocket s;
+            hello(s, cfg.port, "b1", "rejoin=1");
+            CHECK(!createLobby(s, std::string("L") + name, name, 3).empty());
+        }   // both owners drop: the first lobby lingers, the second is over the cap and closes
+        std::this_thread::sleep_for(std::chrono::milliseconds(150));
+        watcher.sendLine("LIST");
+        int lobbies = 0;
+        for (std::string line; (line = readUntil(watcher, "")) != "END" && !line.empty();)
+            lobbies += line.rfind("LOBBY", 0) == 0;
+        CHECK(lobbies == 1);
+    }
+
     // members stay in the lobby during the match; once everyone leaves the match (QUIT closes the game), the lobby goes back to
     // waiting with the same members and the host can start another one
     TEST(lobby_members_stay_through_a_match_and_start_again)
