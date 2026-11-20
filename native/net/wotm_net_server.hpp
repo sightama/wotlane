@@ -36,6 +36,11 @@ namespace wotm_net
         int paceMs = 500;                       // during a match, each player's round trip is sampled and its delay re-picked this often
         int startWaitMs = 1000;                 // once everyone arrives, measures ping for this long before starting
         int joinTimeoutMs = 90000;              // anyone who doesn't reach the match in this time is dropped (the game takes ~15 s to load)
+        // quick rematch: a member whose page reloads (HELLO ... rejoin=1) stays a ghost this long, waiting for its REJOIN; a lobby left
+        // with only ghosts lingers as long. At most `maxLingering` lobbies linger at once (they count against `lobbies`); past that,
+        // a lobby left with only ghosts closes at once
+        int lingerMs = 120000;
+        int maxLingering = 4;
         int dropInputPercent = 0;               // test: discards this percentage of the input packets sent
         bool log = true;
         // public listing: with announceHost set, a thread announces this server to that master every announceEveryMs, with its lobby counts
@@ -80,6 +85,8 @@ namespace wotm_net
             bool hello = false;
             std::string build;
             bool halfRate = false;   // HELLO hz=30: the device can't compute 60 game frames a second (a phone); its matches run at 30 Hz
+            bool rejoin = false;     // HELLO rejoin=1: a page that reloads after a match; it gets a TOKEN and becomes a ghost when it drops
+            std::string token;       // its current REJOIN token (TOKEN line), "" without rejoin
             int lobby = -1;
             std::string name;
             std::string address;   // where it connects from (proto::clientAddress), "" if unknown; never logged or sent
@@ -170,6 +177,10 @@ namespace wotm_net
             std::string diagFile;            // where this lobby's diagnostics go: its own file, then its match's
             struct Ban { std::string name, address; Clock::time_point until; };   // address "" = unknown: the name alone
             std::vector<Ban> bans;           // members the owner removed, by name, until the time given (the lobby's own: gone when it closes)
+            // members whose page went away (rejoin=1): kept until `until` for their REJOIN, not listed in MEMBERS; an owner's ghost keeps
+            // the lobby's ownership from passing on
+            struct Ghost { std::string name, token, address; proto::Pick pick; bool owner = false; Clock::time_point until; };
+            std::vector<Ghost> ghosts;
         };
 
         void log(const char *fmt, ...);
@@ -193,6 +204,18 @@ namespace wotm_net
         // `except`: a member left out of the costume check (the one changing monster)
         bool monsterFits(const Lobby &l, const proto::Pick &pick, std::string &err, int except = -1) const;
         void leaveLobby(int c);
+        // a member's connection dropped: a ghost if it asked for rejoin (and the linger cap allows), else it leaves
+        void dropMember(int c);
+        // REJOIN <code> <token>: back into the lobby as the ghost the token names (single use; a new TOKEN follows)
+        void rejoinLobby(int c, const std::vector<std::string> &w);
+        // the ERROR line that keeps `name` out of lobby `l` (the owner's removals, a match on, a full lobby, another build), or "";
+        // `seats`: the places taken (a JOIN counts the ghosts, whose players are coming back; their REJOIN counts only members)
+        std::string admitError(Lobby &l, const Conn &c, const std::string &name, size_t seats);
+        // drops expired ghosts: an owner's passes the lobby on; a lobby with nobody left closes
+        void expireGhosts();
+        int lingeringLobbies() const;   // open lobbies with ghosts and no member
+        void capLingering(int lobby);
+        static std::string newToken();
         bool closeIfEmpty(int lobby);
         void sendMembers(int lobby);
         // pings the members of waiting lobbies and tells each lobby its members' round trips (PINGS)
