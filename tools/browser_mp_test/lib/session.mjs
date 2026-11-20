@@ -5,7 +5,7 @@ import { join, relative } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { Player, sleep } from './player.mjs';
 import { diagRecord } from './diaglog.mjs';
-import { netStart, netStopped, serverLobbyLines } from './logs.mjs';
+import { netStart, netStopped, serverLobbyLines, sinceReload } from './logs.mjs';
 
 // the stock monsters in the front panel's order (web/front.js MONSTERS): one each for up to 8 players
 export const MONSTER_IDS = [3, 1, 2, 5, 4, 7, 8, 9];
@@ -96,8 +96,9 @@ export async function waitAll(players, test, { timeoutMs = 120000, everyMs = 150
   return { ok: false, missing: missing.map((p) => p.name) };
 }
 
-export const hasStart = (p) => netStart(p.logText) !== null;
-export const stopped = (p) => netStopped(p.logText);
+// this page's match: a page that loaded again (quick rematch) plays a new one
+export const hasStart = (p) => netStart(sinceReload(p.logText)) !== null;
+export const stopped = (p) => netStopped(sinceReload(p.logText));
 
 // Host and join: P1 hosts, the others join one by one. Returns {code, ok, detail}; every tab must list every member
 export async function formLobby(players) {

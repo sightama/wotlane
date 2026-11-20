@@ -91,3 +91,10 @@ test('serverLobbyLines keeps the lines that name one lobby code', () => {
   const server = ['[server] lobby ABCD: start', '[server] lobby WXYZ: start', '[server] lobby 0: P1 reached the match (player 1)'].join('\n');
   assert.deepEqual(serverLobbyLines(server, 'ABCD'), ['[server] lobby ABCD: start']);
 });
+
+test('sinceReload: the page log after its last reload, or all of it before one', async () => {
+  const { RELOADED, sinceReload } = await import('../lib/logs.mjs');
+  assert.equal(sinceReload('a\nb\n'), 'a\nb\n');
+  const twice = `1s [net] start: player 1 of 2, delay 2 frames\n${RELOADED}\nx\n${RELOADED}\n2s [net] start: player 2 of 2, delay 3 frames\n`;
+  assert.deepEqual(netStart(sinceReload(twice)), { player: 2, of: 2, delay: 3 });
+});
