@@ -18,8 +18,17 @@ export function takeRejoin(storage, now) {
   } catch {
     return null;
   }
-  const fresh = kept && typeof kept.code === 'string' && typeof kept.token === 'string' && now - kept.at < LINGER_MS;
+  // the server's forms (a lobby code, 128 bits in hex): anything else in this tab's storage is not sent
+  const fresh = kept && /^[A-Z2-9]{4}$/.test(kept.code) && /^[0-9a-f]{32}$/.test(kept.token) && now - kept.at < LINGER_MS;
   return fresh ? { code: kept.code, token: kept.token } : null;
+}
+
+// the page is going away (pagehide): the server keeps the place for LINGER_MS from the moment the lobby connection drops, which is now
+export function leavingPage(storage, now) {
+  try {
+    const kept = JSON.parse(storage?.getItem(KEY) ?? 'null');
+    if (kept) storage.setItem(KEY, JSON.stringify({ ...kept, at: now }));
+  } catch { /* storage refused or unreadable: nothing to restart */ }
 }
 
 export function clearRejoin(storage) {

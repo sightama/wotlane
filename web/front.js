@@ -11,7 +11,7 @@ import { RateMemory, healthLine, rememberedHealth } from './rate.js';
 import { lobbyWarnings, memberStatus } from './lobby_status.js';
 import { frontNotice } from './device_notice.js';
 import { dismissFirefoxTip, firefoxTip } from './firefox_tip.js';
-import { clearRejoin, storeRejoin, takeRejoin } from './rematch.js';
+import { clearRejoin, leavingPage, storeRejoin, takeRejoin } from './rematch.js';
 
 const MONSTERS = [[1, 'Congar'], [2, 'Robo-47'], [3, 'Togera'], [4, 'Ultra V'], [5, 'Preytor'], [7, 'Kineticlops'], [8, 'Magmo'],
   [9, 'Raptros'], [10, 'Agamo'], [11, 'Zorgulon']];
@@ -78,16 +78,19 @@ function showLobby(code, isOwner, rematch = false) {
   else say(isOwner ? 'Send the code to your friends. Start when everyone is in.' : 'Waiting for the owner to start.');
 }
 
+// the owner's stage, wins and modifier controls show the lobby's settings
+function showLobbySettings(s) {
+  if (s.stage !== undefined) $('lobbyStage').value = s.stage;
+  if (s.wins !== undefined) $('wins').value = s.wins;
+  for (const mod of MODIFIERS) $('mod_' + mod).checked = (s.mods || '').split(',').includes(mod);
+}
 function showMembers(m) {
   if (lobby && !$('inLobby').hidden && m.owner !== myName && owner) {
     setOwner(false);
     say(`${m.owner} is the owner now.`);
   }
   if (lobby && !$('inLobby').hidden && m.owner === myName && !owner) {
-    const s = lobby.settings;   // the controls start from what the lobby has
-    if (s.stage !== undefined) $('lobbyStage').value = s.stage;
-    if (s.wins !== undefined) $('wins').value = s.wins;
-    for (const mod of MODIFIERS) $('mod_' + mod).checked = (s.mods || '').split(',').includes(mod);
+    showLobbySettings(lobby.settings);   // the controls start from what the lobby has
     setOwner(true);
     say('You are the owner now. Start when everyone is in.');
   }
@@ -386,6 +389,7 @@ async function enterLobby(enter, rematch = false) {
     lobby = await connect(build);
     const { code, isOwner } = await enter(lobby);
     showLobby(code, isOwner, rematch);
+    if (rematch && isOwner) showLobbySettings(lobby.settings);   // what the lobby still has, not what this page remembers
     // what the last match showed of this device, and whether it draws in software, for the other members
     const health = healthLine(rememberedHealth(localStorage), readSoftwareGl(window) === 1);
     if (health) lobby.health(health);
@@ -406,10 +410,9 @@ function tabStorage() {
   try { return window.sessionStorage; } catch { return null; }
 }
 
-// back from a match (the page reloads after it): this tab takes its place in the lobby back while the server keeps it (quick
-// rematch, web/rematch.js); without a place, or when the server no longer has it, the lobby's code is offered as before
-async function rejoinLastLobby() {
-  const place = takeRejoin(tabStorage(), Date.now());
+// back from a match (the page reloads after it): this tab takes its `place` in the lobby back while the server keeps it (quick
+// rematch, web/rematch.js, takeRejoin); without a place, or when the server no longer has it, the lobby's code is offered as before
+async function rejoinLastLobby(place) {
   if (!place) return offerLastLobby();
   myName = cleanName(recall('name', ''));   // the server gives back the name and monster this player had; the page remembers both
   myMonster = recall('monster', 5);
@@ -528,12 +531,16 @@ function init() {
   $('deviceNote').textContent = note;
   showFirefoxTip();
   const invited = window.inviteCode(new URLSearchParams(location.search));
+  // the server keeps a place from the moment this page's lobby connection drops: that is when the rejoin's clock starts too
+  window.addEventListener('pagehide', () => leavingPage(tabStorage(), Date.now()));
+  const place = invited ? null : takeRejoin(tabStorage(), Date.now());
   if (invited) {   // a reload doesn't join again; the address keeps its other parts
     const rest = new URLSearchParams(location.search);
     rest.delete('join');
     history.replaceState(null, '', location.pathname + (rest.size ? '?' + rest : '') + location.hash);
+    clearRejoin(tabStorage());   // the invite is the lobby this player chose
   }
-  else rejoinLastLobby();
+  else rejoinLastLobby(place);
   fill($('monster'), MONSTERS, recall('monster', 5));
   fill($('lobbyStage'), STAGES, recall('stage', 1));
   fill($('wins'), [[0, 'Endless'], ...[1, 2, 3, 4, 5].map((n) => [n, String(n)])], recall('wins', 2));
@@ -542,6 +549,7 @@ function init() {
     if (!$('monster').value) $('monster').value = '5';
     $('lobbyStage').value = recall('stage', 1);
     if (!$('lobbyStage').value) $('lobbyStage').value = '1';
+    if (lobby && owner) showLobbySettings(lobby.settings);   // a rejoined owner's lobby may play a saved map, listed only now
   }).catch(() => {}).then(() => { if (invited) acceptInvite(invited); });
   $('single').addEventListener('click', async () => {
     stopWatchingLobbies();
@@ -569,7 +577,7 @@ function init() {
   $('chatSend').addEventListener('click', sendChat);
   $('chatText').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendChat(); });
   $('refreshLobbies').addEventListener('click', refreshLobbies);
-  startWatchingLobbies();
+  if (!place) startWatchingLobbies();   // a rejoin has its own lobby; a refused one starts the watching itself
   $('start').addEventListener('click', () => lobby?.start().catch((e) => say(friendlyError(e.message))));
   $('leave').addEventListener('click', async () => {
     const leaving = lobby;

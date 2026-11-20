@@ -2,7 +2,7 @@
 // ABOUTME: given back only while the server would still hold the place, and cleared on leaving. Run: node --test web/
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { storeRejoin, takeRejoin, clearRejoin, LINGER_MS } from './rematch.js';
+import { storeRejoin, takeRejoin, clearRejoin, leavingPage, LINGER_MS } from './rematch.js';
 
 function storage({ broken = false } = {}) {
   const data = new Map();
@@ -39,4 +39,23 @@ test('leaving clears it, and broken or odd storage gives nothing without throwin
   const odd = storage();
   odd.setItem('wotlane.rejoin', '{not json');
   assert.equal(takeRejoin(odd, 1), null);
+});
+
+test('the server counts from the page going away, so leavingPage restarts the clock: a long lobby and match keep the place', () => {
+  const s = storage();
+  storeRejoin(s, 'QZXW', 'ab'.repeat(16), 0);   // the token comes at the join
+  leavingPage(s, 10 * LINGER_MS);                 // the match ends long after, and the page reloads
+  assert.deepEqual(takeRejoin(s, 10 * LINGER_MS + 3000), { code: 'QZXW', token: 'ab'.repeat(16) });
+  const none = storage();
+  leavingPage(none, 5);   // nothing kept: nothing to restart
+  assert.equal(none.getItem('wotlane.rejoin'), null);
+  assert.doesNotThrow(() => leavingPage(storage({ broken: true }), 5));
+});
+
+test('a code or token not in the server\'s form is not sent', () => {
+  for (const [code, token] of [['QZ W', 'ab'.repeat(16)], ['QZXW', 'ab'.repeat(16) + '\nCHAT x'], ['qzxw', 'ab'.repeat(16)], ['QZXW', 'AB'.repeat(16)], ['QZXW', 'ab']]) {
+    const s = storage();
+    storeRejoin(s, code, token, 0);
+    assert.equal(takeRejoin(s, 1), null, JSON.stringify([code, token]));
+  }
 });
