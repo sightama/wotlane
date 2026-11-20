@@ -88,10 +88,10 @@ recompiled code's data, the renderer's buffers and the disc cache's working set.
 
 ## Order of work (coordinator, 2026-11-19)
 
-A and C are live (#173; the Firefox tip, #175). Then B (measured, not shipped: see the last section); D waits for a measurement that some players are main-thread bound; F waits (the first-read hash fixes in its row are not scheduled). Then E as a cache that gives the same bits as today (desync matrix 0
-and equal state hashes against the current build), and the native renderer's shadows (H, the main-thread part) as a quality setting.
-Then I (Lane: off-screen civilians and vehicles may be simplified if they switch back to full simulation before any player can see
-them: a margin around every view, deterministic on every PC, checked by a recording of them entering and leaving view). G, J and K are not scheduled.
+A and C are live (#173; the Firefox tip, #175). B, J, E and I were measured next and none is worth building or shipping (the last
+section). D waits for a measurement that some players are main-thread bound (phones); F waits (the first-read hash fixes in its
+row are not scheduled); the native renderer's shadows (H, the main-thread part) can become a quality setting. VU0 rounding to
+nearest (the last section) waits for Lane. G and K are not scheduled.
 
 ## What the next items gave (2026-11-19, later)
 
@@ -106,7 +106,7 @@ each); none of these shipped. Frame shares are derived: VU0's share of the game 
   checked it with the other registers poisoned, and a mask missing one register gave 275 mismatches) moved the wrapper's own share of
   the Chrome game thread from 2.6% to 2.5%. The copies are not where the wrapper's cost is. Not shipped.
 - **E, the world transform cache:** inside `hierTraceCsList`, VU0 programs and their wrapper are ~62% of the time, the assembly walk
-  (`hierTraverseAsm`) 15%, `hierCsUpdateAsm` 3%, VU1 packets 4% (Chrome trace). Every object's walk starts from its position plus the
+  (`hierTraverseAsm`) 15%, `hierCsUpdateAsm` 3%, VU1 packets 4% (`chrome_60hz_1m.json`, self time under `hierTraceCsList`). Every object's walk starts from its position plus the
   world eye offset and the view frustum normals (`hierCsUpdate` in `src/common/hier.cpp`), which change whenever the camera moves (and
   the object's own matrix whenever it moves); by that reasoning, not a measurement, a cache that gives the same bits would only hit
   with a still camera and a still object. Not built.
