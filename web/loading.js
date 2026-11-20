@@ -30,5 +30,37 @@ class LoadingProgress {
   }
 }
 
-if (typeof module !== 'undefined' && module.exports) module.exports = { LoadingProgress };
-else globalThis.LoadingProgress = LoadingProgress;
+// After boot: a stage or monster that isn't in the cache yet streams in while the game waits on it, on a black screen. A burst of
+// chunks that goes on for `showAfterMs` gets a note, until no chunk has arrived for `quietMs` (it spans the game's own work between the
+// files of a load); its MB count goes on through the load's pauses and starts over after `resetMs` without a chunk (a new load)
+class StreamActivity {
+  constructor({ showAfterMs = 1000, quietMs = 3500, resetMs = 10000 } = {}) {
+    this.showAfterMs = showAfterMs;
+    this.quietMs = quietMs;
+    this.resetMs = resetMs;
+    this.burstStart = null;
+    this.lastChunkAt = null;
+    this.bytes = 0;
+  }
+
+  add(bytes, now) {
+    const quiet = this.lastChunkAt === null ? Infinity : now - this.lastChunkAt;
+    if (quiet > this.quietMs) this.burstStart = now;
+    if (quiet > this.resetMs) this.bytes = 0;
+    this.bytes += bytes;
+    this.lastChunkAt = now;
+  }
+
+  // the note at `now`, or null (no burst, a short one, or quiet again)
+  text(now) {
+    if (this.lastChunkAt === null || now - this.lastChunkAt > this.quietMs || now - this.burstStart < this.showAfterMs) return null;
+    const mb = Math.floor(this.bytes / (1 << 20));
+    return mb ? `Loading game data (${mb} MB)` : 'Loading game data';
+  }
+}
+
+if (typeof module !== 'undefined' && module.exports) module.exports = { LoadingProgress, StreamActivity };
+else {
+  globalThis.LoadingProgress = LoadingProgress;
+  globalThis.StreamActivity = StreamActivity;
+}
