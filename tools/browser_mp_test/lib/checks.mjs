@@ -1,9 +1,9 @@
 // ABOUTME: The checks, grouped in sessions that each form a lobby of N browser players: match (lobby, picks, start, inputs, sync, frame
-// ABOUTME: rate, late join, leaving), round (round end, win screen, rematch, quit), stall (frozen player, Away note), creations, single, saves, movies.
+// ABOUTME: rate, late join, leaving), round (round end, win screen, rematch, quit, quick rematch), stall (frozen player, Away note), creations, single, saves, movies.
 import { Player, sleep } from './player.mjs';
 import { Run, formLobby, startMatch, waitAll, hasStart, stopped, MONSTER_IDS } from './session.mjs';
 import { CpuMeter } from './infra.mjs';
-import { hashes, compareHashes, gameFps, lastWaits, desyncs, padButtons, hasLine, roundsEnded, netStart } from './logs.mjs';
+import { hashes, compareHashes, gameFps, lastWaits, desyncs, padButtons, hasLine, roundsEnded, netStart, sinceReload } from './logs.mjs';
 import { makeCreations } from './creations.mjs';
 import { audioProbe, listen } from './audio.mjs';
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -392,7 +392,7 @@ export async function roundSession(run, n) {
     }
     R.add(n, 'quit', front.every(Boolean) ? 'pass' : 'fail',
       front.every(Boolean) ? 'QUIT took every tab back to the front panel' : `still in the game: ${players.filter((_, i) => !front[i]).map((p) => p.name)}`);
-    await rejoinAfterMatch(run, n, players, code);
+    await quickRematch(run, n, players, code);
     void gone;
   } catch (e) {
     R.add(n, 'round_error', 'fail', e.stack?.split('\n').slice(0, 2).join(' ') ?? String(e));
@@ -402,19 +402,28 @@ export async function roundSession(run, n) {
   }
 }
 
-// after the match every tab is back on the front panel; a note naming the old code is a promise, and Join must keep it
-async function rejoinAfterMatch(run, n, players, code) {
+// quick rematch: after QUIT every page loads again and takes its place in the lobby back by itself (web/rematch.js), the owner's
+// button reads Rematch, and it starts the next match on every tab
+async function quickRematch(run, n, players, code) {
+  const R = run.report;
+  const backIn = (p) => p.page.waitForFunction((c) => !document.getElementById('inLobby').hidden && document.getElementById('code').textContent.trim() === c,
+    code, { timeout: 30000 }).then(() => true, () => false);
+  const back = await Promise.all(players.map(backIn));
+  const listed = await Promise.all(players.map((p) => p.waitMembers(n, 15000).then(() => true, () => false)));
+  const label = (await players[0].page.textContent('#start').catch(() => '')).trim();
   const msgs = await Promise.all(players.map((p) => p.frontMsg().catch(() => '')));
-  const promised = msgs.every((m) => m.includes(code));
-  const r = await players[0].join(code).catch(async (e) => {
-    // the panel never settled: say what it shows
-    const state = await players[0].page.evaluate(() => ({ msgs: window.__frontMsgs, hostDisabled: document.getElementById('host').disabled,
-      joinDisabled: document.getElementById('join').disabled, inLobby: !document.getElementById('inLobby').hidden, text: document.getElementById('frontMsg').textContent })).catch(() => ({}));
-    return { joined: false, msg: `${e.name}: the panel did not settle in 15 s; ${JSON.stringify(state)}`, first: '' };
-  });
-  // every player left the lobby when the game quit, so the server closed it: the panel's promise holds only if the lobby survived
-  run.report.add(n, 'rejoin_after_match', !r.joined && (promised || !r.first) ? 'fail' : 'pass',
-    `front panels say ${JSON.stringify(msgs[0])}; Join on the old code: joined=${r.joined} ${JSON.stringify(r.first || r.msg)} (shown after: ${JSON.stringify(r.msg)})`);
+  const owner = (await players[0].members().catch(() => [])).filter((m) => m.endsWith(', owner'));
+  const lobbyOk = back.every(Boolean) && listed.every(Boolean) && label === 'Rematch' && owner.length === 1 && owner[0].startsWith(`${players[0].name} `);
+  R.add(n, 'rematch_lobby', lobbyOk ? 'pass' : 'fail',
+    `back in lobby ${code}: ${players.filter((_, i) => back[i]).length}/${n} tabs, ${listed.filter(Boolean).length}/${n} list ${n} members; owner ${JSON.stringify(owner)}; ` +
+    `button ${JSON.stringify(label)}; panels say ${JSON.stringify([...new Set(msgs)])}`);
+  if (!lobbyOk) return;
+  const again = await startMatch(players);
+  const sides = players.map((p) => netStart(sinceReload(p.logText)));
+  // the seats follow the order the players came back in: each tab has its own, 1 to n
+  const seats = sides.every((s) => s && s.of === n) && new Set(sides.map((s) => s?.player)).size === n;
+  R.add(n, 'rematch_match', again.ok && seats ? 'pass' : 'fail',
+    again.ok ? `Rematch started the next match on all ${n} tabs: ${sides.map((s) => s && `${s.player} of ${s.of}`).join(', ')}` : `no start on ${again.missing.join(',')}`);
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------------

@@ -1,6 +1,7 @@
 // ABOUTME: One simulated player: a browser context of its own (so its own OPFS: saves, mods and creations) on the game's page. Drives
 // ABOUTME: the front panel (host, join, picks, start), keeps the game's page log, plays with the keyboard and can freeze its network.
 import { diagLineOf } from './diaglog.mjs';
+import { RELOADED } from './logs.mjs';
 
 // the game's default keyboard layout (native/wotm_settings.hpp kDefaultKb): arrows d-pad (they pick menu lines), WASD the left stick, Space X, E circle
 export const KEYS = { up: 'ArrowUp', down: 'ArrowDown', left: 'ArrowLeft', right: 'ArrowRight', cross: 'Space', circle: 'e', special: '1', start: 'Enter' };
@@ -138,11 +139,20 @@ export class Player {
 
   // ---- the game ----
 
-  // lines the game has printed since the last call, kept in logText
+  // lines the game has printed since the last call, kept in logText; a page that loaded again (a reload, or the page's own after a
+  // match) starts its log over, and RELOADED marks the place
   async pollLog() {
     if (this.closed) return this.logText;
     try {
-      const fresh = await this.page.evaluate((from) => (window.wotmLog || []).slice(from), this.logLines);
+      const { origin, fresh } = await this.page.evaluate(([from, seen]) => ({
+        origin: performance.timeOrigin,
+        fresh: (window.wotmLog || []).slice(performance.timeOrigin === seen ? from : 0),
+      }), [this.logLines, this.pageOrigin]);
+      if (this.pageOrigin !== undefined && origin !== this.pageOrigin) {
+        this.logText += RELOADED + '\n';
+        this.logLines = 0;
+      }
+      this.pageOrigin = origin;
       if (fresh.length) {
         this.logLines += fresh.length;
         this.logText += fresh.join('\n') + '\n';
@@ -263,8 +273,6 @@ export class Player {
 
   async reload() {
     await this.pollLog();
-    this.logText += '--- page reloaded ---\n';
-    this.logLines = 0;
     await this.page.reload({ waitUntil: 'domcontentloaded' });
     await this.page.waitForFunction(() => document.getElementById('monster')?.options.length > 0);
   }
