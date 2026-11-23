@@ -57,6 +57,9 @@ if [ -n "$ref" ]; then
         git -C "$REPO" show "$ref:native/$f" >"$refsrc/$f" 2>/dev/null || rm -f "$refsrc/$f"
     done
     [ -f "$refsrc/runtime/wotm_vu0_native.cpp" ] || fail "no native/runtime/wotm_vu0_native.cpp at $ref"
+    # and the microprograms from that commit's generator, next to its source (the include finds them before the checkout's)
+    git -C "$REPO" show "$ref:tools/vu0native.py" >"$refsrc/vu0native.py" 2>/dev/null || fail "no tools/vu0native.py at $ref"
+    run_logged "$rt/logs/vu0bench_ref_gen.log" python3 "$refsrc/vu0native.py" "$elf" "$refsrc/runtime/wotm_vu0_native.gen.inc"
 fi
 # compiled like the runtime: no FMA contraction; sse2neon on ARM (the runtime build fetched it), the runtime's x86 flags otherwise
 set -- -std=c++20 -O2 -ffp-contract=off -fno-fast-math
