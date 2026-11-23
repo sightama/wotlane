@@ -146,6 +146,120 @@ for (const [view, viewport, opts] of [['desktop', { width: 1280, height: 800 }, 
   await ctx.close();
 }
 
+// ---- colour contrast, as the browser computes it
+{
+  const { ctx, page } = await openPage({ width: 1280, height: 800 });
+  const ratios = () => page.evaluate(() => {
+    const parse = (c) => c.match(/[\d.]+/g).slice(0, 3).map(Number);
+    const lum = (rgb) => { const [r, g, b] = rgb.map((v) => { const s = v / 255; return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4; }); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+    const ratio = (a, b) => { const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x); return (hi + 0.05) / (lo + 0.05); };
+    const css = (el, prop, pseudo) => getComputedStyle(el, pseudo)[prop];
+    const card = css(document.getElementById('home'), 'backgroundColor');
+    const field = document.getElementById('joinCode');
+    return {
+      'label text on the panel': ratio(parse(css(document.querySelector('#home label'), 'color')), parse(card)),
+      'footer text on the panel': ratio(parse(css(document.getElementById('legal'), 'color')), parse(card)),
+      'code placeholder on its field': ratio(parse(css(field, 'color', '::placeholder')), parse(css(field, 'backgroundColor'))),
+      'white on the Single player button': ratio(parse(css(document.getElementById('single'), 'color')), parse(css(document.getElementById('single'), 'backgroundColor'))),
+    };
+  });
+  await check('label, footer, placeholder and main button text are at least 4.5:1', async () => {
+    const low = Object.entries(await ratios()).filter(([, r]) => r < 4.5).map(([k, r]) => `${k} ${r.toFixed(2)}`);
+    expect(low.length === 0, low.join('; '));
+  });
+  await ctx.close();
+}
+
+// ---- target sizes: a phone (coarse pointer) gets 44px, a mouse at least 24px, on the panel's own views
+const targets = (page, min) => page.evaluate((m) => {
+  const sel = '#front button, #front select, #front input:not([type=checkbox]), #rules label';
+  return [...document.querySelectorAll(sel)].filter((e) => e.offsetParent !== null && !e.disabled && e.type !== 'hidden')
+    .map((e) => [e.id || e.textContent.trim().slice(0, 14) || e.tagName, e.getBoundingClientRect().height, e.tagName === 'BUTTON' ? e.getBoundingClientRect().width : m])
+    .filter(([, h, w]) => h < m - 0.5 || w < m - 0.5).map(([n, h, w]) => `${n} ${Math.round(w)}x${Math.round(h)}px`);
+}, min);
+for (const [view, viewport, opts, min] of [['phone', { width: 390, height: 844 }, { isMobile: true, hasTouch: true }, 44], ['desktop', { width: 1280, height: 800 }, {}, 24]]) {
+  const { ctx, page } = await openPage(viewport, opts);
+  await check(`[${view}] home controls are at least ${min}px`, async () => {
+    const small = await targets(page, min);
+    expect(small.length === 0, small.join(', '));
+  });
+  await page.fill('#name', 'Checker');
+  await page.click('#host');
+  await page.waitForSelector('#inLobby:not([hidden]) #code:not(:empty)', { timeout: 10000 });
+  await check(`[${view}] lobby controls are at least ${min}px`, async () => {
+    const small = await targets(page, min);
+    expect(small.length === 0, small.join(', '));
+  });
+  await page.click('#leave');
+  await page.click('#openSettings');
+  await page.waitForSelector('#settings:not([hidden])');
+  await check(`[${view}] settings controls are at least ${min}px tall`, async () => {
+    const small = await page.evaluate((m) => [...document.querySelectorAll('#settings button, #settings select, #settings input:not([type=checkbox]):not([type=range])')]
+      .filter((e) => e.offsetParent !== null && !e.disabled).map((e) => [e.id || e.textContent.trim().slice(0, 14), e.getBoundingClientRect().height])
+      .filter(([, h]) => h < m - 0.5).map(([n, h]) => `${n} ${Math.round(h)}px`), min);
+    expect(small.length === 0, small.join(', '));
+  });
+  await check(`[${view}] the Controls tab does not overflow the screen`, async () => {
+    await page.click('#tab-controls');
+    const w = await page.evaluate(() => { const f = document.getElementById('front'); return [f.scrollWidth, f.clientWidth]; });
+    expect(w[0] <= w[1], `front panel is ${w[0]}px wide in a ${w[1]}px screen`);
+  });
+  await shot(page, `settings-${view}`);
+  await ctx.close();
+}
+
+// ---- the status bar over the game: not faded, readable, sized
+for (const [view, viewport, opts, min] of [['desktop', { width: 1280, height: 800 }, {}, 24], ['touch', { width: 844, height: 390 }, { hasTouch: true }, 44]]) {
+  const { ctx, page } = await openPage(viewport, opts);
+  await (opts.hasTouch ? page.locator('#single').tap() : page.click('#single'));   // a mouse click would turn the touch controls off (web/touch.js)
+  await page.waitForFunction(() => document.getElementById('front').hidden);
+  await page.evaluate(() => { document.getElementById('bar').hidden = false; });   // the touch controls would hide it; this reads the bar itself
+  await check(`[${view}] status bar is at full opacity`, async () => {
+    const o = await page.evaluate(() => getComputedStyle(document.getElementById('bar')).opacity);
+    expect(o === '1', `opacity ${o}`);
+  });
+  await check(`[${view}] status bar buttons are at least ${min}x${min}px`, async () => {
+    const sizes = await page.evaluate(() => [...document.querySelectorAll('#bar button')].map((b) => { const r = b.getBoundingClientRect(); return [Math.round(r.width), Math.round(r.height)]; }));
+    expect(sizes.length > 0 && sizes.every(([w, h]) => w >= min && h >= min), `sizes ${sizes.map(([w, h]) => `${w}x${h}`)}`);
+  });
+  await check(`[${view}] status bar text is at least 4.5:1 over a white frame`, async () => {
+    const r = await page.evaluate(() => {
+      const bar = document.getElementById('bar');
+      const [fr, fg, fb] = getComputedStyle(bar).color.match(/[\d.]+/g).map(Number);
+      const [br, bg, bb, ba = 1] = getComputedStyle(bar).backgroundColor.match(/[\d.]+/g).map(Number);
+      const mix = [br, bg, bb].map((v) => v * ba + 255 * (1 - ba));
+      const lum = (rgb) => { const [r, g, b] = rgb.map((v) => { const s = v / 255; return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4; }); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+      const [hi, lo] = [lum([fr, fg, fb]), lum(mix)].sort((a, b) => b - a);
+      return (hi + 0.05) / (lo + 0.05);
+    });
+    expect(r >= 4.5, `${r.toFixed(2)}:1`);
+  });
+  await shot(page, `bar-${view}`);
+  await ctx.close();
+}
+
+// ---- the touch layout panel (gear) still fits a phone held sideways and still edits
+{
+  const { ctx, page } = await openPage({ width: 844, height: 390 }, { isMobile: true, hasTouch: true });
+  await page.locator('#single').tap();
+  await page.waitForSelector('#touchpad.on', { timeout: 5000 });
+  await page.locator('#touchpad [data-id=gear]').tap();
+  await page.waitForSelector('#tpPanel:not([hidden])');
+  // the panel's own size is the touch layout's (web/touch.js); the page's target size must not reach it, and its span is reported
+  await check('touch panel keeps its own button sizes', async () => {
+    const mins = await page.evaluate(() => [...document.querySelectorAll('#tpPanel button')].map((b) => getComputedStyle(b).minHeight));
+    expect(mins.length > 0 && mins.every((m) => m === '0px' || m === 'auto'), `min-height of its buttons: ${mins}`);
+    const box = await page.locator('#tpPanel').boundingBox();
+    return `panel spans ${Math.round(box.y)} to ${Math.round(box.y + box.height)} of 390`;
+  });
+  await check('touch panel: Move buttons starts editing', async () => {
+    await page.getByRole('button', { name: 'Move buttons' }).tap();
+    expect(await page.evaluate(() => document.getElementById('touchpad').classList.contains('editing')), 'no editing class');
+  });
+  await shot(page, 'touchpanel');
+  await ctx.close();
+}
+
 await browser.close();
 for (const c of children) c.kill('SIGTERM');
 files.close();
