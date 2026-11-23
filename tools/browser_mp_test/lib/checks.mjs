@@ -663,24 +663,35 @@ export async function remapSession(run) {
     const keyButton = (bind, slot) => p.page.locator(`#controlsTable [data-bind="${bind}"][data-slot="${slot}"]`);
     await p.page.click('#openSettings');
     await p.page.click('#tab-controls');
+    const settled = (bind, slot, label) => p.page.waitForFunction(([b, sl, l]) => document.querySelector(`#controlsTable .key[data-bind="${b}"][data-slot="${sl}"]`)?.textContent.trim() === l, [bind, slot, label], { timeout: 10000 });
     await keyButton('CIRCLE', 0).click();
     await p.page.keyboard.press('KeyJ');
-    await sleep(500);
+    await settled('CIRCLE', 0, 'J');
     await keyButton('SQUARE', 0).click();
     await p.page.keyboard.press('Escape');
     await sleep(300);
     const shown = { circle: (await keyButton('CIRCLE', 0).textContent()).trim(), square: (await keyButton('SQUARE', 0).textContent()).trim() };
     row('remap_card', shown.circle === 'J' && shown.square === 'Left mouse button' && await p.page.isVisible('#settings'),
       `Grab shows ${shown.circle}, Light attack after Esc ${shown.square}, the card ${await p.page.isVisible('#settings') ? 'still open' : 'closed'}`);
+    await keyButton('TRIANGLE', 1).click();
+    await p.page.mouse.click(300, 300, { button: 'middle' });
+    await settled('TRIANGLE', 1, 'Middle mouse button');
+    await sleep(600);   // past the moment the page drops the clicks a mouse press goes on to make
+    await keyButton('CIRCLE', 0).click();
+    const waiting = (await keyButton('CIRCLE', 0).textContent()).trim();
+    await p.page.keyboard.press('Escape');
+    row('remap_mouse', waiting === 'Press a key…', `a middle click was taken as a key, and the next click on a key button waited for a key: ${JSON.stringify(waiting)}`);
     await keyButton('CROSS', 0).click();
     await p.page.keyboard.press('KeyJ');
-    await sleep(500);
+    await p.page.waitForFunction(() => /Grab got Space/.test(document.getElementById('settingsMsg').textContent), null, { timeout: 10000 }).catch(() => {});
     const moved = { cross: (await keyButton('CROSS', 0).textContent()).trim(), circle: (await keyButton('CIRCLE', 0).textContent()).trim(), msg: (await p.page.textContent('#settingsMsg')).trim() };
     row('remap_conflict', moved.cross === 'J' && moved.circle === 'Space' && /Grab got Space/.test(moved.msg), `Jump shows ${moved.cross}, Grab swapped to ${moved.circle}; the card says ${JSON.stringify(moved.msg)}`);
     await keyButton('CROSS', 0).click();   // Space goes back to Jump and Grab gets J again (a swap)
     await p.page.keyboard.press('Space');
-    await sleep(500);
-    const ini = await p.page.evaluate(async () => (await (await (await navigator.storage.getDirectory()).getFileHandle('settings.ini')).getFile()).text());
+    await settled('CROSS', 0, 'Space');
+    const readIni = () => p.page.evaluate(async () => (await (await (await navigator.storage.getDirectory()).getFileHandle('settings.ini')).getFile()).text());
+    let ini = await readIni();
+    for (let i = 0; i < 20 && !/^KB_CIRCLE=J,F$/m.test(ini); i++) { await sleep(250); ini = await readIni(); }   // the page saves after it shows
     row('remap_file', /^KB_LAYOUT=4$/m.test(ini) && /^KB_CIRCLE=J,F$/m.test(ini) && /^KB_CROSS=SPACE$/m.test(ini), `settings.ini: ${ini.split('\n').filter((l) => /^KB_(LAYOUT|CIRCLE|CROSS)=/.test(l)).join(' ')}`);
     await p.page.click('#closeSettings');
     const lobby = await formLobby(players);

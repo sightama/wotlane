@@ -106,9 +106,10 @@ export function initSettings({ remember, recall }) {
   // wheel (Esc cancels) and saves at once, like the options
   const keyLayout = navigator.keyboard?.getLayoutMap?.().catch(() => undefined);   // letters as this keyboard prints them, where the browser has it
   let layoutMap;
-  keyLayout?.then((m) => { layoutMap = m; renderKeys(); });
+  keyLayout?.then((m) => { layoutMap = m; if (!capturing) renderKeys(); });
   let binds = null;
   let stopCapture = () => {};
+  let capturing = false;
 
   const keyWords = (name) => labelOfKey(name, layoutMap, globalThis.keyLabel);
   const nameOf = (bind) => globalThis.CONTROLS.find((c) => c.bind === bind).does;
@@ -127,15 +128,24 @@ export function initSettings({ remember, recall }) {
     }
   }
 
+  // the events a mouse press goes on to make (click, auxclick, context menu) are dropped for a moment
+  function swallowAfterMouse() {
+    const drop = (e) => { e.preventDefault(); e.stopPropagation(); };
+    const types = ['click', 'auxclick', 'contextmenu'];
+    for (const t of types) window.addEventListener(t, drop, true);
+    setTimeout(() => { for (const t of types) window.removeEventListener(t, drop, true); }, 400);
+  }
+
   function chooseKey(bind, slot, button) {
     stopCapture();
     const was = button.textContent;
     button.textContent = 'Press a key…';
-    button.setAttribute('aria-live', 'polite');
+    capturing = true;
     say('Press a key, click a mouse button or turn the wheel. Esc cancels.');
     const finish = () => {
       for (const [type, fn, opts] of listeners) window.removeEventListener(type, fn, opts);
       stopCapture = () => {};
+      capturing = false;
     };
     const cancel = () => { finish(); button.textContent = was; say(SAVED); };
     const take = (name) => {
@@ -146,28 +156,28 @@ export function initSettings({ remember, recall }) {
     };
     const onKey = (e) => {
       e.preventDefault();
+      if (e.repeat) return;   // the Enter or Space that pressed the button is still going down
       e.stopPropagation();   // Esc must not also close the card
       if (e.code === 'Escape') return cancel();
       const name = keyNameOfCode(e.code);
-      if (!name) return say('The game cannot use that key (F1 to F12 belong to the page, the game has no name for it). Press another.');
+      if (!name) return say('The game cannot use that key (F1 to F12 belong to the runtime, and the game has no name for some keys). Press another.');
       take(name);
     };
     const onMouse = (e) => {
-      if (e.button === 0 && e.target === button) return cancel();   // clicking the waiting button again gives up
       e.preventDefault();
-      window.addEventListener('click', (c) => c.stopPropagation(), { capture: true, once: true });   // the click that follows is not for the page
+      swallowAfterMouse();   // the click or context menu that follows is not for the page
+      if (e.button === 0 && e.target === button) return cancel();   // clicking the waiting button again gives up
       take(mouseNameOfButton(e.button));
     };
     const onWheel = (e) => { e.preventDefault(); if (wheelNameOfDelta(e.deltaY)) take(wheelNameOfDelta(e.deltaY)); };
-    const swallowMenu = (e) => e.preventDefault();
-    const listeners = [['keydown', onKey, true], ['mousedown', onMouse, true], ['wheel', onWheel, { capture: true, passive: false }],
-      ['contextmenu', swallowMenu, true]];
+    const listeners = [['keydown', onKey, true], ['mousedown', onMouse, true], ['wheel', onWheel, { capture: true, passive: false }]];
     for (const [type, fn, opts] of listeners) window.addEventListener(type, fn, opts);
     stopCapture = cancel;
   }
 
   function renderKeys() {
     if (!binds) binds = readBinds(text, globalThis.CONTROLS);
+    const focused = card.contains(document.activeElement) ? document.activeElement.dataset : {};   // the table is rebuilt: focus goes back to the same key
     const rows = globalThis.CONTROLS.map((c) => {
       const tr = document.createElement('tr');
       const does = Object.assign(document.createElement('td'), { textContent: c.does });
@@ -177,14 +187,16 @@ export function initSettings({ remember, recall }) {
         for (let slot = 0; slot < Math.min(mine.length + 1, MAX_KEYS); slot++) {
           const b = Object.assign(document.createElement('button'), { className: 'key', textContent: mine[slot] ? keyWords(mine[slot]) : '+' });
           b.type = 'button';
-          b.title = mine[slot] ? `Change ${c.does}` : `Add a second key for ${c.does}`;
+          b.setAttribute('aria-label', mine[slot] ? `${c.does}, key ${slot + 1}: ${keyWords(mine[slot])}. Change` : `${c.does}: add key ${slot + 1}`);
           b.dataset.bind = c.bind;
           b.dataset.slot = String(slot);
           b.disabled = !editable;
           b.addEventListener('click', () => chooseKey(c.bind, slot, b));
           if (mine[slot]) {
-            const x = Object.assign(document.createElement('button'), { className: 'keyclear', textContent: '×', title: `Take ${keyWords(mine[slot])} off ${c.does}` });
+            const x = Object.assign(document.createElement('button'), { className: 'keyclear', textContent: '×' });
             x.type = 'button';
+            x.setAttribute('aria-label', `Take ${keyWords(mine[slot])} off ${c.does}`);
+            x.dataset.clear = `${c.bind}:${slot}`;
             x.disabled = !editable;
             x.addEventListener('click', () => saveKeys(clearKey(binds, c.bind, slot)));
             keys.append(b, x);
@@ -195,6 +207,8 @@ export function initSettings({ remember, recall }) {
       return tr;
     });
     $('controlsTable').replaceChildren(...rows);
+    const back = focused.clear?.split(':') ?? [focused.bind, focused.slot];
+    if (back[0]) $('controlsTable').querySelector(`.key[data-bind="${back[0]}"][data-slot="${back[1]}"]`)?.focus();
     $('keyPreset').disabled = $('keyReset').disabled = !editable;
   }
 

@@ -31,7 +31,7 @@ export const keyNameOfCode = (code) => KEY_NAMES[code] ?? null;
 export const allKeyNames = () => Object.values(KEY_NAMES);
 
 // MouseEvent.button (0 left, 1 middle, 2 right, 3 back, 4 forward) -> native name
-const MOUSE_NAMES = ['MOUSE_LEFT', 'MOUSE_MIDDLE', 'MOUSE_RIGHT', 'MOUSE_SIDE', 'MOUSE_EXTRA'];
+export const MOUSE_NAMES = ['MOUSE_LEFT', 'MOUSE_MIDDLE', 'MOUSE_RIGHT', 'MOUSE_SIDE', 'MOUSE_EXTRA'];
 export const mouseNameOfButton = (button) => MOUSE_NAMES[button] ?? null;
 export const wheelNameOfDelta = (deltaY) => (deltaY < 0 ? 'WHEEL_UP' : deltaY > 0 ? 'WHEEL_DOWN' : null);
 
@@ -43,15 +43,30 @@ export function labelOfKey(name, layoutMap, baseLabel) {
   return baseLabel(name);
 }
 
-// The keys of every row in `controls` (web/controls.js CONTROLS) as a Map of native bind name -> key names, from settings.ini text:
-// the defaults without KB_ lines, and also when the file is of another layout, which the game ignores too
+const VALID_NAMES = new Set([...allKeyNames(), ...MOUSE_NAMES, 'WHEEL_UP', 'WHEEL_DOWN', 'ESC']);
+
+// a KB_ line's value as the game's parseKb reads it: the text before the first comma is one key name, the rest (a comma, a space and a
+// third key included) the other; a name it does not know is nothing
+function parseKeyList(value) {
+  const comma = value.indexOf(',');
+  const a = VALID_NAMES.has(comma < 0 ? value : value.slice(0, comma)) ? (comma < 0 ? value : value.slice(0, comma)) : null;
+  const b = comma >= 0 && VALID_NAMES.has(value.slice(comma + 1)) ? value.slice(comma + 1) : null;
+  return [a, b !== a ? b : null].filter(Boolean);
+}
+
+// The keys of every row in `controls` (web/controls.js CONTROLS) as a Map of native bind name -> key names, from settings.ini text,
+// read as the game reads them: the defaults without KB_ lines; the file of layout 3 (the game moves the two defaults of that layout to
+// the current ones and keeps the rest); any other layout is ignored
 export function readBinds(text, controls) {
   const file = parseIni(text);
-  const used = file.get('KB_LAYOUT') === String(KB_LAYOUT);
+  const layout = parseInt(file.get('KB_LAYOUT') ?? '0', 10);
+  const used = layout === KB_LAYOUT || layout === 3;
   const binds = new Map();
   for (const c of controls.filter((x) => x.bind)) {
     const line = used ? file.get('KB_' + c.bind) : undefined;
-    binds.set(c.bind, line === undefined ? [...c.keys] : line.split(',').map((k) => k.trim()).filter(Boolean).slice(0, MAX_KEYS));
+    let keys = line === undefined ? [...c.keys] : parseKeyList(line);
+    if (layout === 3 && ((c.bind === 'START' && keys.join() === 'ENTER,ESC') || (c.bind === 'TARGET_NEXT' && keys.join() === 'TAB,WHEEL_DOWN'))) keys = [...c.keys];
+    binds.set(c.bind, keys);
   }
   return binds;
 }
@@ -64,15 +79,17 @@ export function writeBinds(text, binds) {
 }
 
 // `key` on `bind` in place `slot` (0 or 1; a slot past the last key adds one). A button that had the key swaps it for the key this slot
-// held (the game's own panel does the same), or loses it when the slot was empty; those buttons are returned as
+// held, or loses it when the slot was empty; those buttons are returned as
 // `swapped`: [{ bind, gets }] so the card can say so. Returns { binds, swapped }
 export function assignKey(binds, bind, slot, key) {
   const given = binds.get(bind)[slot] ?? null;
   const next = new Map([...binds].map(([b, keys]) => [b, [...keys]]));
   const swapped = [];
+  let handedOut = false;
   for (const [other, keys] of next) {
     if (other === bind || !keys.includes(key)) continue;
-    const gets = given && !keys.includes(given) ? given : null;
+    const gets = !handedOut && given && !keys.includes(given) ? given : null;
+    handedOut ||= gets !== null;
     next.set(other, gets ? keys.map((k) => (k === key ? gets : k)) : keys.filter((k) => k !== key));
     swapped.push({ bind: other, gets });
   }

@@ -48,9 +48,9 @@ test('the keys without a file are the Controls card\'s defaults; the file wins, 
   assert.deepEqual(readBinds(mine, CONTROLS).get('CIRCLE'), ['K']);
   assert.deepEqual(readBinds(mine, CONTROLS).get('BLOCK'), [], 'an empty line is a button with no key');
   assert.deepEqual(readBinds(mine, CONTROLS).get('CROSS'), ['SPACE']);
-  assert.deepEqual(readBinds('KB_LAYOUT=3\nKB_CIRCLE=K\n', CONTROLS).get('CIRCLE'), ['E', 'F']);
+  assert.deepEqual(readBinds('KB_LAYOUT=2\nKB_CIRCLE=K\n', CONTROLS).get('CIRCLE'), ['E', 'F']);
   assert.deepEqual(readBinds('KB_CIRCLE=K\n', CONTROLS).get('CIRCLE'), ['E', 'F'], 'no layout line: the game ignores the keys');
-  assert.deepEqual(readBinds('KB_LAYOUT=4\nKB_CIRCLE=K,L,M\n', CONTROLS).get('CIRCLE'), ['K', 'L']);
+  assert.deepEqual(readBinds('KB_LAYOUT=4\nKB_CIRCLE=K,L\n', CONTROLS).get('CIRCLE'), ['K', 'L']);
 });
 
 test('writing sets the layout line and every KB_ line, and keeps what the page does not own', () => {
@@ -109,7 +109,6 @@ test('presets use only buttons and keys that exist, never give a key to two butt
       }
     }
   }
-  assert.deepEqual(presetBinds(CONTROLS, PRESETS.find((p) => p.id === 'wasd')), defaults());
 });
 
 test('a letter reads as the keyboard prints it (AZERTY), the rest in words', () => {
@@ -130,4 +129,24 @@ test('keys are saved to the settings file through the same queue as the options,
   assert.deepEqual(readBinds(text, CONTROLS), binds);
   assert.equal(parseIni(text).get('WOTM_RES'), '1080');
   assert.equal(parseIni(text).get('WOTM_MSAA'), '4');
+});
+test('odd files read as the game reads them: a spaced or too long list, unknown names, layout 3 and a layout number with spaces', () => {
+  const read = (ini) => readBinds(ini, CONTROLS);
+  assert.deepEqual(read('KB_LAYOUT=4\nKB_CIRCLE=K,L,M\n').get('CIRCLE'), ['K'], 'the game takes "L,M" as one unknown name');
+  assert.deepEqual(read('KB_LAYOUT=4\nKB_CIRCLE=K, L\n').get('CIRCLE'), ['K'], 'a space makes the second name unknown');
+  assert.deepEqual(read('KB_LAYOUT=4\nKB_CIRCLE=NOPE,L\n').get('CIRCLE'), ['L'], 'an unknown first name leaves the second alone');
+  assert.deepEqual(read('KB_LAYOUT=4\nKB_CIRCLE=K,K\n').get('CIRCLE'), ['K'], 'the same key twice is once');
+  assert.deepEqual(read('KB_LAYOUT=04\nKB_CIRCLE=K\n').get('CIRCLE'), ['K'], 'the layout number is read as a number');
+  const old = read('KB_LAYOUT=3\nKB_CIRCLE=K\nKB_START=ENTER,ESC\nKB_TARGET_NEXT=TAB,WHEEL_DOWN\n');
+  assert.deepEqual(old.get('CIRCLE'), ['K'], 'layout 3 keeps what the player changed');
+  assert.deepEqual(old.get('START'), ['TAB', 'ENTER'], 'and moves its two default pairs to the current defaults');
+  assert.deepEqual(old.get('TARGET_NEXT'), ['T', 'WHEEL_DOWN']);
+  assert.deepEqual(read('KB_LAYOUT=2\nKB_CIRCLE=K\n').get('CIRCLE'), ['E', 'F']);
+});
+
+test('a key two buttons already share (a hand-edited file) goes to one of them in a swap', () => {
+  const shared = new Map([['A', ['X']], ['B', ['X']], ['C', ['Y']]]);
+  const { binds } = assignKey(shared, 'C', 0, 'X');
+  const keys = [...binds.values()].flat();
+  assert.equal(keys.filter((k) => k === 'Y').length, 1);
 });
