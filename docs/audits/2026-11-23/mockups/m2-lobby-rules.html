@@ -1,0 +1,16 @@
+<!doctype html><meta charset=utf-8><link rel=stylesheet href=_base.css>
+<style>fieldset{border:1px solid var(--line);border-radius:8px;padding:12px;margin:0;display:grid;gap:4px}legend{padding:0 6px;color:var(--dim);font-size:13px}
+.chk{display:flex;align-items:center;gap:12px;min-height:44px}.chk input{min-height:0;width:22px;height:22px;accent-color:var(--accent)}
+.m{display:flex;justify-content:space-between;align-items:center;min-height:44px;border-bottom:1px solid var(--line)}.chip{border:1px solid var(--good);color:var(--good);border-radius:12px;padding:2px 10px;font-size:13px}
+.code{font:700 32px/1 ui-monospace,monospace;letter-spacing:.25em;color:#e0592a}</style>
+<div class=tag>PROPOSED: each rule checkbox has its own label, grouped in a fieldset, members as a list with status chips</div>
+<div class=card>
+<div class=row style="justify-content:space-between"><div><h2>Lobby code</h2><div class=code>K7QD</div></div><button>Copy invite link</button></div>
+<div role=list><div class=m role=listitem><span>Lane (you, host)</span><span class=chip>ready</span></div><div class=m role=listitem><span>Guest2</span><span class=chip>loading</span></div></div>
+<label>Stage<select><option>Tokyo</option></select></label>
+<fieldset><legend>Rules</legend>
+<label class=chk style="display:flex"><input type=checkbox> Jump</label>
+<label class=chk style="display:flex"><input type=checkbox checked> Fast</label>
+<label class=chk style="display:flex"><input type=checkbox> Turbo</label></fieldset>
+<div class=row><button class=main style="flex:1">Start match</button><button>Leave</button></div>
+</div>
