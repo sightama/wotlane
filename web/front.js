@@ -1,6 +1,7 @@
 // ABOUTME: The browser version's front panel: single player, or an online lobby on the game server (Host shows a 4-letter code,
 // ABOUTME: Join takes one). When the owner starts, every member's game loads with the match environment (boot.js wotmStart).
-import { LobbyClient, halfRateDevice, inviteLink, lastLobbyNotice, lobbyRow, lobbySocketUrl, matchEnv } from './lobby.js';
+import { isSubmitEnter } from './enter_key.js';
+import { LobbyClient,halfRateDevice, inviteLink, lastLobbyNotice, lobbyRow, lobbySocketUrl, matchEnv } from './lobby.js';
 import { initCreations, addLobbyChoices } from './creations_ui.js';
 import { initSettings } from './settings_ui.js';
 import { lightMatchDrawing, readSettings, settingsSaved } from './settings.js';
@@ -22,6 +23,12 @@ const MODIFIERS = ['jump', 'fast', 'turbo'];
 
 const $ = (id) => document.getElementById(id);
 const front = $('front');
+
+// The panel covers the game stage until a game starts; the stage (status bar buttons, canvas) is inert meanwhile, so Tab starts in the panel
+function leaveFront() {
+  front.hidden = true;
+  $('stage').inert = false;
+}
 const say = (text) => { $('frontMsg').textContent = text; };
 
 function remember(key, value) { try { localStorage.setItem('wotlane.' + key, value); } catch { /* private window: not kept */ } }
@@ -282,7 +289,7 @@ async function connect(build) {
   client.onClose = () => { if (!front.hidden) say('Lost the connection to the game server. Reload the page to try again.'); };
   client.onMatch = async (match) => {
     try { sessionStorage.setItem('wotlane.lobby', client.code); } catch { /* private window: not kept */ }
-    front.hidden = true;
+    leaveFront();
     await settingsSaved();   // a change made a moment ago is in the file before the game reads it
     startDiag(client, ws, match, build);
     window.wotmStart({ ...matchEnv(match, serverUrl('/match')), ...(await lightDrawing()) }, build);
@@ -520,7 +527,7 @@ function init() {
   initSettings({ remember, recall });
   initReport({ send: sendReport }).available(!!lastDiag());   // after a match the page has reloaded: its numbers are what the report holds
   if (window.wotmDirect) {
-    front.hidden = true;
+    leaveFront();
     buildId().then((b) => window.wotmStart(null, b));
     return;
   }
@@ -552,7 +559,7 @@ function init() {
   }).catch(() => {}).then(() => { if (invited) acceptInvite(invited); });
   $('single').addEventListener('click', async () => {
     stopWatchingLobbies();
-    front.hidden = true;
+    leaveFront();
     await settingsSaved();
     // the boot movies play over the game while it loads (not awaited); in a match they never play
     playStartupMovies({ mode: recall('movies', 'skippable'), overlay: $('movie'), video: $('movieVideo'), hint: $('movieHint'), log: (t) => window.wotmLog?.push(t) });
@@ -560,7 +567,7 @@ function init() {
   });
   $('host').addEventListener('click', () => hostOrJoin(false));
   $('join').addEventListener('click', () => hostOrJoin(true));
-  $('joinCode').addEventListener('keydown', (e) => { if (e.key === 'Enter') hostOrJoin(true); });
+  $('joinCode').addEventListener('keydown', (e) => { if (isSubmitEnter(e)) hostOrJoin(true); });
   for (const id of ['lobbyStage', 'wins', ...MODIFIERS.map((m) => 'mod_' + m)])
     $(id).addEventListener('change', () => lobby && owner && sendSettings());
   $('monster').addEventListener('change', () => {
@@ -574,7 +581,7 @@ function init() {
   });
   $('copyInvite').addEventListener('click', copyInvite);
   $('chatSend').addEventListener('click', sendChat);
-  $('chatText').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendChat(); });
+  $('chatText').addEventListener('keydown', (e) => { if (isSubmitEnter(e)) sendChat(); });
   $('refreshLobbies').addEventListener('click', refreshLobbies);
   if (!place) startWatchingLobbies();   // a rejoin has its own lobby; a refused one starts the watching itself
   $('start').addEventListener('click', () => lobby?.start().catch((e) => say(friendlyError(e.message))));
