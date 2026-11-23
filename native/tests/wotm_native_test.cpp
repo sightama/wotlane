@@ -913,6 +913,36 @@ namespace
         e.setFrameLocked(false);
     }
 
+    // Restoring a snapshot and saving again gives the same bytes at every frame, also while a sound still holds a voice that ended
+    // (a voice saved without samples: its sample count is saved as the 0 it restores with)
+    TEST(sound_engine_snapshot_saves_what_it_restored)
+    {
+        auto &e = wotm::snd::Engine::get();
+        e.setFrameLocked(true);
+        const uint32_t bank = e.loadBankData(testSoundBank());
+        CHECK(bank != 0);
+        rb::State st;
+        st.add(e.rollbackPiece());
+        int mismatches = 0;
+        for (int f = 0; f < 200; ++f)
+        {
+            if (f % 50 == 0)
+                e.play(bank, 0, 0x400, 0, 0, 0);
+            e.advanceFrame(1);
+            std::vector<int16_t> buf(2 * 800);
+            e.mix(buf.data(), 800);
+            rb::Snapshot saved, again;
+            st.save(saved, uint32_t(f));
+            CHECK(st.load(saved));
+            st.save(again, uint32_t(f));
+            mismatches += st.compare(saved, again).equal ? 0 : 1;
+        }
+        CHECK(mismatches == 0);
+        e.stopAll();
+        e.unloadBank(bank);
+        e.setFrameLocked(false);
+    }
+
     // A .VAG stream (mono, big-endian header, ADPCM from 0x30) read through the engine's sector reader: music and voices are streams
     std::vector<uint8_t> testStream()
     {
