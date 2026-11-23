@@ -373,7 +373,7 @@ with a way to see the full one (the validator CI runs on every shipped creation)
 
 ### Draft note to Yan (for Lane to send or discard)
 
-> Hi Yan, we run a fork of War_of_the_Monsters_recomp that plays in the browser (WebAssembly, online lobbies, playwotm.com) and is
+> Hi Yan, we run a fork of War_of_the_Monsters_recomp that plays in the browser (WebAssembly, online lobbies) and is
 > English only. We would like to take your level editor and monster pipeline as the base for our players' creations. Two things to
 > agree on first: we both use `mods/<mod>/stages/<id>/stage.json` for a map with different schemas; could yours carry a `format` key
 > (or move to `custom_stages`) so both tools can tell them apart? And we would like to send the pieces that help you back: a patch
@@ -497,7 +497,13 @@ Only these need a yes; everything else above is the author's call and can be ove
    release. This covers only that converter; no `stage.json` format change starts before Jake answers on #10.
 2. **Contacting Yan** with the draft above, or leaving upstream alone and importing quietly. Recommendation: contact, because the
    schema collision exists either way.
-   **Approved as recommended: contact Yan.** The note is still Lane's to send; nobody posts it to upstream on Lane's behalf.
+   **Approved as recommended: contact Yan.** Lane has since talked to Yan on Discord; the outcome is the next paragraph.
+   **Yan's reply (Discord, relayed by Lane).** Pull requests upstream are welcome. Yan is focusing on characters, so custom levels
+   are "unattended for a while" and we are free to work on them. He agrees on a **single map file format**: we may drive the
+   `stage.json` format, based on Yan's schema and coordinated with Jake on #10, and plan PRs upstream for the shared tools.
+   **Constraint on every upstream PR, issue and comment: no mention of and no link to playwotm.com.** The site serves game files
+   instead of reading the user's own ISO, which is a legal problem for Yan's repo. Upstream-facing text describes the tools only
+   (they read the user's own disc), and the draft note above no longer names the site.
 3. **A hosted gallery** stays out of phases 1 to 3 (B-decision 5); and whether anything derived from disc art may be shared at all
    by lobby transfer: PNG skins, but also `.NGP`, `.PTR`, `.TEX`, `.RTX`, `.BNK` and WAV files made from disc data, which tier 3
    would relay. Rule 1 forbids game bytes in the repo; the site's own position on derived art is Lane's call. Recommendation:
