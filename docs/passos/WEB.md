@@ -128,9 +128,17 @@ For online play start `wotm_server --ws-port <port>`; a page opened from `localh
   need a window or a monitor (display mode, refresh rate, vsync) are not offered. An online match fixes lock-on toggle (off) and the
   close-up camera (on) and takes the modifiers from the lobby, as `native/wotm_settings.hpp` `kNetKeys` says; the Online tab and each
   option's hint say so. `settings.test.mjs` reads `native/wotm_settings.hpp` and fails when an option's key, default or values drift
-  from the game. The Mods tab holds Your creations and the Map editor row; the Controls tab lists the default keyboard layout and the touch controls
-  (`web/controls.js`; `controls.test.mjs` fails when a default key is missing from it). `browser_mp_test`'s `single` session sets two
-  options through the page and checks the game's log for them (`settings_page`).
+  from the game. The Mods tab holds Your creations and the Map editor row. The Controls tab rebinds the keyboard (`web/keybinds.js`,
+  `web/settings_ui.js`): each game button shows its keys (up to two, as the game takes), a click waits for a key, a mouse button or
+  the wheel (Esc cancels; F1 to F12 stay with the page) and saves at once as `KB_<BUTTON>=KEY[,KEY]` lines plus `KB_LAYOUT` (the game
+  reads the keys only for the layout number it knows, `kKbLayout`), through the same queue as the options. A key another button
+  already has swaps, as in the game's own panel; the card says which button got what. Letters show as the keyboard prints them where
+  the browser has the Keyboard Map API (`navigator.keyboard.getLayoutMap()`, not Firefox). Presets (WASD, arrow keys move) and Reset
+  keys rewrite every row. Buttons the card does not list keep their lines (gamepad buttons are changed in the game's panel). The
+  touch controls are listed beside it (`web/controls.js`; `controls.test.mjs` fails when a default key is missing from it, and
+  `keybinds.test.mjs` reads `native/wotm_settings.hpp` for the key names and the layout number). `browser_mp_test`'s `single` session
+  sets two options through the page and checks the game's log for them (`settings_page`); its `remap` session rebinds keys and holds
+  one in a match (`remap_card`, `remap_conflict`, `remap_file`, `remap_game`).
   A tab whose game runs holds a shared Web Lock (`wotlane-game`, taken in `boot.js`, read by `web/gamelock.js`); another tab's Settings
   turns its options off while it is held, because a running game writes `settings.ini` and the saves again from its own memory.
 - **Startup movies:** Single player plays the two boot movies (`INTRO_M`, then `INT_MAIN`) in an overlay over the canvas (`web/movies.js`)

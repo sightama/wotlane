@@ -107,6 +107,10 @@
   #controlsTable { border-collapse: collapse; margin-top: 8px; font-size: 13px; width: 100%; }
   #controlsTable td { padding: 3px 8px 3px 0; vertical-align: top; }
   #controlsTable td + td, #touchTable td + td { color: var(--dim); }
+  #controlsTable td + td { white-space: nowrap; }
+  .keytools { display: flex; gap: 8px; margin-top: 8px; }
+  #controlsTable .key { min-width: 44px; margin-right: 2px; }
+  #controlsTable .keyclear { padding: 0 6px; margin-right: 8px; }
   #touchTable { border-collapse: collapse; font-size: 13px; width: 100%; }
   #touchTable td { padding: 3px 8px 3px 0; vertical-align: top; }
   #creationList { margin: 8px 0; padding: 0; list-style: none; display: grid; gap: 6px; }
@@ -210,10 +214,11 @@
     <section id="panel-controls" role="tabpanel" aria-labelledby="tab-controls" hidden>
       <div class="options"></div>
       <h2>Keyboard</h2>
+      <div class="keytools"><select id="keyPreset" aria-label="Key preset"></select><button id="keyReset" type="button">Reset keys</button></div>
       <table id="controlsTable"></table>
       <h2>Touch screen</h2>
       <table id="touchTable"></table>
-      <p class="note">Keys and gamepad buttons can be changed in the game: main menu, Recompiled options, Controls.</p>
+      <p class="note">Click a key to change it, then press the new key, click a mouse button or turn the wheel (Esc cancels). A key goes to one button: giving it to another takes it off the first. Gamepad buttons are changed in the game: main menu, Recompiled options, Controls.</p>
     </section>
     <p id="settingsMsg" class="note">Saved as you change them. Changes apply the next time you press Play.</p>
   </div>
