@@ -128,9 +128,17 @@ For online play start `wotm_server --ws-port <port>`; a page opened from `localh
   need a window or a monitor (display mode, refresh rate, vsync) are not offered. An online match fixes lock-on toggle (off) and the
   close-up camera (on) and takes the modifiers from the lobby, as `native/wotm_settings.hpp` `kNetKeys` says; the Online tab and each
   option's hint say so. `settings.test.mjs` reads `native/wotm_settings.hpp` and fails when an option's key, default or values drift
-  from the game. The Mods tab holds Your creations and the Map editor row; the Controls tab lists the default keyboard layout and the touch controls
-  (`web/controls.js`; `controls.test.mjs` fails when a default key is missing from it). `browser_mp_test`'s `single` session sets two
-  options through the page and checks the game's log for them (`settings_page`).
+  from the game. The Mods tab holds Your creations and the Map editor row. The Controls tab rebinds the keyboard (`web/keybinds.js`,
+  `web/settings_ui.js`): each game button shows its keys (up to two, as the game takes), a click waits for a key, a mouse button or
+  the wheel (Esc cancels; F1 to F12 stay with the game's runtime) and saves at once as `KB_<BUTTON>=KEY[,KEY]` lines plus `KB_LAYOUT` (the game
+  reads the keys only for the layout number it knows, `kKbLayout`), through the same queue as the options. A key another button
+  already has swaps (the other button gets the key the slot held); the card says which button got what. Letters show as the keyboard prints them where
+  the browser has the Keyboard Map API (`navigator.keyboard.getLayoutMap()`, Chromium browsers only). Presets (WASD, arrow keys move) and Reset
+  keys rewrite every row. Buttons the card does not list keep their lines (gamepad buttons are changed in the game's panel). The
+  touch controls are listed beside it (`web/controls.js`; `controls.test.mjs` fails when a default key is missing from it, and
+  `keybinds.test.mjs` reads `native/wotm_settings.hpp` for the key names and the layout number). `browser_mp_test`'s `single` session
+  sets two options through the page and checks the game's log for them (`settings_page`); its `remap` session rebinds keys and holds
+  one in a match (`remap_card`, `remap_mouse`, `remap_conflict`, `remap_file`, `remap_game`).
   A tab whose game runs holds a shared Web Lock (`wotlane-game`, taken in `boot.js`, read by `web/gamelock.js`); another tab's Settings
   turns its options off while it is held, because a running game writes `settings.ini` and the saves again from its own memory.
 - **Startup movies:** Single player plays the two boot movies (`INTRO_M`, then `INT_MAIN`) in an overlay over the canvas (`web/movies.js`)
@@ -276,8 +284,12 @@ connected pad. Everything that feeds it lives in the page (`web/pads.js`, `web/t
   at the top middle. Several fingers work at once; a press stays down at least 80 ms, so a tap shorter than the game's pad reads is still
   read. A quick tap (under 220 ms, under 12 px) on either zone is also a mouse click on the game: menu lines are picked by pointer, and in a
   fight a click is the light attack. The stick moves the menu selection, Cross chooses and Triangle goes back, as on a pad.
-  Vibration (`navigator.vibrate`) answers a press and the game's own rumble. The gear opens size (0.7 to 1.2), opacity and vibration,
-  kept in `localStorage` (`wotlane.touch`).
+  Vibration (`navigator.vibrate`) answers a press and the game's own rumble. The gear opens size (0.7 to 1.2), opacity, vibration, Left handed
+  and Move buttons, kept in `localStorage` (`wotlane.touch`). Left handed mirrors every control to the other side (the middle ones swap
+  places) and swaps the stick and look zones; the layout is `layoutFor`, the zones `zonesFor`. Move buttons turns the controls into
+  things to drag (a dashed outline, nothing is pressed): a drop puts the button's centre at the finger, whole on screen (a place that no longer fits a smaller screen or a larger size is pulled back in), saved as `place` (units
+  from its anchor); Reset positions clears them, and so does switching hands. The gear itself does not move. `browser_touch_test`'s
+  `touch_layout` scenario drives it.
 - **Steps aside:** a key press, a mouse press or a real pad hides the controls and removes the virtual pad (a real pad would otherwise be player
   2); a touch brings them back unless a real pad is connected. While they are shown the page refuses the game's pointer lock (the mouse
   camera) and leaves any lock, which would zero every touch's coordinates.

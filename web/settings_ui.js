@@ -1,6 +1,9 @@
 // ABOUTME: The front panel's Settings card: tabs of options (web/settings.js) that are saved to settings.ini the moment they change
 // ABOUTME: and apply the next time the game starts, plus the Controls card, your creations and the player's name.
-import { TABS, OPTIONS, optionsOf, choiceFor, readSettings, updateSetting } from './settings.js';
+import { TABS, OPTIONS, optionsOf, choiceFor, readSettings, updateSetting, editSettings } from './settings.js';
+import {
+  MAX_KEYS, PRESETS, assignKey, clearKey, keyNameOfCode, labelOfKey, mouseNameOfButton, presetBinds, readBinds, wheelNameOfDelta, writeBinds,
+} from './keybinds.js';
 import { gameRunningElsewhere } from './gamelock.js';
 import { initSaves } from './saves_ui.js';
 
@@ -95,6 +98,118 @@ export function initSettings({ remember, recall }) {
       holder.replaceChildren(...groupedRows(optionsOf(tab.id).map((o) => optionRow(o, text, save, recall))));
     }
     for (const select of card.querySelectorAll('.options select')) select.disabled = !editable && !select.dataset.page;
+    binds = null;   // read again from the file just read
+    renderKeys();
+  }
+
+  // the Keyboard table of the Controls tab: one button per key a game button takes; pressing it waits for a key, a mouse button or the
+  // wheel (Esc cancels) and saves at once, like the options
+  const keyLayout = navigator.keyboard?.getLayoutMap?.().catch(() => undefined);   // letters as this keyboard prints them, where the browser has it
+  let layoutMap;
+  keyLayout?.then((m) => { layoutMap = m; if (!capturing) renderKeys(); });
+  let binds = null;
+  let stopCapture = () => {};
+  let capturing = false;
+
+  const keyWords = (name) => labelOfKey(name, layoutMap, globalThis.keyLabel);
+  const nameOf = (bind) => globalThis.CONTROLS.find((c) => c.bind === bind).does;
+
+  async function saveKeys(next, notice) {
+    const before = binds;
+    binds = next;
+    renderKeys();
+    try {
+      text = await editSettings(await root(), (t) => writeBinds(t, next));
+      say(notice ?? SAVED);
+    } catch (e) {
+      binds = before;
+      renderKeys();
+      say(`Could not save the keys: ${e.message}`);
+    }
+  }
+
+  // the events a mouse press goes on to make (click, auxclick, context menu) are dropped for a moment
+  function swallowAfterMouse() {
+    const drop = (e) => { e.preventDefault(); e.stopPropagation(); };
+    const types = ['click', 'auxclick', 'contextmenu'];
+    for (const t of types) window.addEventListener(t, drop, true);
+    setTimeout(() => { for (const t of types) window.removeEventListener(t, drop, true); }, 400);
+  }
+
+  function chooseKey(bind, slot, button) {
+    stopCapture();
+    const was = button.textContent;
+    button.textContent = 'Press a key…';
+    capturing = true;
+    say('Press a key, click a mouse button or turn the wheel. Esc cancels.');
+    const finish = () => {
+      for (const [type, fn, opts] of listeners) window.removeEventListener(type, fn, opts);
+      stopCapture = () => {};
+      capturing = false;
+    };
+    const cancel = () => { finish(); button.textContent = was; say(SAVED); };
+    const take = (name) => {
+      finish();
+      const { binds: next, swapped } = assignKey(binds, bind, slot, name);
+      const others = swapped.map((s) => `${nameOf(s.bind)} ${s.gets ? 'got ' + keyWords(s.gets) : 'lost it'}`);
+      saveKeys(next, swapped.length ? `${keyWords(name)} now does ${nameOf(bind)}; ${others.join(' and ')}.` : SAVED);
+    };
+    const onKey = (e) => {
+      e.preventDefault();
+      if (e.repeat) return;   // the Enter or Space that pressed the button is still going down
+      e.stopPropagation();   // Esc must not also close the card
+      if (e.code === 'Escape') return cancel();
+      const name = keyNameOfCode(e.code);
+      if (!name) return say('The game cannot use that key (F1 to F12 belong to the runtime, and the game has no name for some keys). Press another.');
+      take(name);
+    };
+    const onMouse = (e) => {
+      e.preventDefault();
+      swallowAfterMouse();   // the click or context menu that follows is not for the page
+      if (e.button === 0 && e.target === button) return cancel();   // clicking the waiting button again gives up
+      take(mouseNameOfButton(e.button));
+    };
+    const onWheel = (e) => { e.preventDefault(); if (wheelNameOfDelta(e.deltaY)) take(wheelNameOfDelta(e.deltaY)); };
+    const listeners = [['keydown', onKey, true], ['mousedown', onMouse, true], ['wheel', onWheel, { capture: true, passive: false }]];
+    for (const [type, fn, opts] of listeners) window.addEventListener(type, fn, opts);
+    stopCapture = cancel;
+  }
+
+  function renderKeys() {
+    if (!binds) binds = readBinds(text, globalThis.CONTROLS);
+    const focused = card.contains(document.activeElement) ? document.activeElement.dataset : {};   // the table is rebuilt: focus goes back to the same key
+    const rows = globalThis.CONTROLS.map((c) => {
+      const tr = document.createElement('tr');
+      const does = Object.assign(document.createElement('td'), { textContent: c.does });
+      const keys = document.createElement('td');
+      if (c.bind) {
+        const mine = binds.get(c.bind);
+        for (let slot = 0; slot < Math.min(mine.length + 1, MAX_KEYS); slot++) {
+          const b = Object.assign(document.createElement('button'), { className: 'key', textContent: mine[slot] ? keyWords(mine[slot]) : '+' });
+          b.type = 'button';
+          b.setAttribute('aria-label', mine[slot] ? `${c.does}, key ${slot + 1}: ${keyWords(mine[slot])}. Change` : `${c.does}: add key ${slot + 1}`);
+          b.dataset.bind = c.bind;
+          b.dataset.slot = String(slot);
+          b.disabled = !editable;
+          b.addEventListener('click', () => chooseKey(c.bind, slot, b));
+          if (mine[slot]) {
+            const x = Object.assign(document.createElement('button'), { className: 'keyclear', textContent: '×' });
+            x.type = 'button';
+            x.setAttribute('aria-label', `Take ${keyWords(mine[slot])} off ${c.does}`);
+            x.dataset.clear = `${c.bind}:${slot}`;
+            x.disabled = !editable;
+            x.addEventListener('click', () => saveKeys(clearKey(binds, c.bind, slot)));
+            keys.append(b, x);
+          } else keys.append(b);
+        }
+      } else keys.textContent = c.keys.map(keyWords).join(', ');
+      tr.append(does, keys);
+      return tr;
+    });
+    $('controlsTable').replaceChildren(...rows);
+    const back = focused.clear?.split(':') ?? [focused.bind, focused.slot];
+    if (back[0]) $('controlsTable').querySelector(`.key[data-bind="${back[0]}"][data-slot="${back[1]}"]`)?.focus();
+    $('keyPreset').disabled = $('keyReset').disabled = !editable;
   }
 
   async function open() {
@@ -150,7 +265,13 @@ export function initSettings({ remember, recall }) {
     tr.replaceChildren(...cells.map((t) => Object.assign(document.createElement('td'), { textContent: t })));
     return tr;
   });
-  $('controlsTable').replaceChildren(...tableRows(globalThis.controlRows()));
+  $('keyPreset').replaceChildren(new Option('Use a preset…', ''), ...PRESETS.map((p) => new Option(p.label, p.id)));
+  $('keyPreset').addEventListener('change', () => {
+    const preset = PRESETS.find((p) => p.id === $('keyPreset').value);
+    $('keyPreset').value = '';
+    if (preset) saveKeys(presetBinds(globalThis.CONTROLS, preset), `Keys set to: ${preset.label}.`);
+  });
+  $('keyReset').addEventListener('click', () => saveKeys(presetBinds(globalThis.CONTROLS, PRESETS[0]), 'Keys back to the defaults.'));
   $('touchTable').replaceChildren(...tableRows(globalThis.wotTouchRows()));
   // the name is the front panel's own field, remembered by the same key the lobby buttons use
   $('settingsName').addEventListener('input', () => {
