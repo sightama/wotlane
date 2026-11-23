@@ -60,6 +60,7 @@ test('controls are 24px tall at least, and 44px on a touch screen', () => {
   assert.match(css, /:root\s*\{[^}]*--target:\s*24px/);
   assert.match(css, /@media \(pointer: coarse\)\s*\{\s*:root\s*\{\s*--target:\s*44px/);
   assert.match(css, /min-height:\s*var\(--target\)/);
+  assert.match(css, /min-width:\s*var\(--target\)/, 'a one-letter button such as L needs the width too');
 });
 
 test('the target size reaches the front panel, the status bar and the stall prompt but not the touch controls panel', () => {
