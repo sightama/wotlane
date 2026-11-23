@@ -3,6 +3,15 @@
 
 const NUMBER = (s) => Number(s);
 
+// the line Player.pollLog puts in a player's log where its page loaded again (a reload, or the page's own after a match)
+export const RELOADED = '--- page reloaded ---';
+
+// the log since the page last loaded: the readers below then see this page's match, not an earlier one
+export function sinceReload(log) {
+  const at = log.lastIndexOf(RELOADED + '\n');
+  return at < 0 ? log : log.slice(at + RELOADED.length + 1);
+}
+
 // {player, of, delay} from "[net] start: player 2 of 4, delay 2 frames", or null before the match starts
 export function netStart(log) {
   const m = /\[net\] start: player (\d+) of (\d+), delay (\d+) frames/.exec(log);

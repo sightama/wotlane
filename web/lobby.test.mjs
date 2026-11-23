@@ -61,7 +61,7 @@ async function connected(build = 'wl-1') {
   const client = new LobbyClient(ws, build);
   const ready = client.ready;
   ws.open();
-  assert.equal(ws.sent[0], `HELLO ${PROTOCOL} wl-1`);
+  assert.equal(ws.sent[0], `HELLO ${PROTOCOL} wl-1 rejoin=1`);   // the page asks for a rejoin token (quick rematch)
   ws.reply('WELCOME 3');
   await ready;
   return { ws, client };
@@ -192,7 +192,7 @@ test('LobbyClient on a device that cannot compute 60 game frames a second says s
   const client = new LobbyClient(ws, 'wl-1', { halfRate: true });
   const ready = client.ready;
   ws.open();
-  assert.equal(ws.sent[0], `HELLO ${PROTOCOL} wl-1 hz=30`);
+  assert.equal(ws.sent[0], `HELLO ${PROTOCOL} wl-1 hz=30 rejoin=1`);
   ws.reply('WELCOME 0');
   await ready;
 });
@@ -407,4 +407,37 @@ test('LobbyClient hands KICKED to onKicked with the ban in seconds, and forgets 
   ws.reply('KICKED QZXW 60');
   assert.deepEqual(seen, [{ code: 'QZXW', seconds: 60 }]);
   assert.equal(client.code, '');
+});
+
+// quick rematch: the server gives a token after a join; after the page reloads, REJOIN with it lands in the same lobby
+test('LobbyClient hands the TOKEN line to onToken with the lobby code', async () => {
+  const { ws, client } = await connected();
+  const tokens = [];
+  client.onToken = (t) => tokens.push(t);
+  const code = client.join('QZXW', 'Bia', 1);
+  ws.reply('JOINED QZXW');
+  ws.reply('SETTINGS QZXW stage=1 wins=0 mods=');
+  await code;
+  ws.reply('TOKEN 0123456789abcdef0123456789abcdef');
+  assert.deepEqual(tokens, [{ code: 'QZXW', token: '0123456789abcdef0123456789abcdef' }]);
+});
+
+test('LobbyClient rejoin sends REJOIN and resolves with the code once the members are in, or rejects with the server reason', async () => {
+  const { ws, client } = await connected();
+  let members = null;
+  client.onMembers = (m) => { members = m; };
+  const back = client.rejoin('QZXW', 'aa'.repeat(16));
+  assert.equal(ws.sent[1], `REJOIN QZXW ${'aa'.repeat(16)}`);
+  ws.reply('JOINED QZXW');
+  ws.reply('SETTINGS QZXW stage=9 wins=2 mods=');
+  let resolved = false;
+  back.then(() => { resolved = true; });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(resolved, false);   // the page needs the members (who owns the lobby) before it shows the lobby again
+  ws.reply('MEMBERS QZXW Ana Ana:5,Bia:1');
+  assert.equal(await back, 'QZXW');
+  assert.equal(members.owner, 'Ana');
+  const refused = client.rejoin('QZXW', 'bb'.repeat(16));
+  ws.reply("ERROR can't rejoin (that place is gone or was already used); join again with the code");
+  await assert.rejects(refused, /can't rejoin/);
 });
