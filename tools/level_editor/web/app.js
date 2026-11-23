@@ -1512,7 +1512,7 @@ function refreshList() {
   const nRecs = recs.filter(changed).length + propRecs.length;
   document.querySelector('.kinds .n[data-n="changed"]').textContent = nRecs;
   const bp = buildPatch(), nChanged = bp.objects.length + (bp.props || []).length;
-  document.title = `WotM Level Editor — ${stageName}${isDirty() ? ' *' : ''}`;
+  document.title = `WotM Level Editor - ${stageName}${isDirty() ? ' *' : ''}`;
   $('save').classList.toggle('dirty', isDirty());
   showStatus(nChanged);
   showSummary(nChanged);
@@ -4424,7 +4424,7 @@ function markerEdit(label, fn) {
 function layerChanged(kind) {
   updateLayerView(kind);
   syncRailDots();
-  document.title = `WotM Level Editor — ${stageName}${isDirty() ? ' *' : ''}`;
+  document.title = `WotM Level Editor - ${stageName}${isDirty() ? ' *' : ''}`;
   $('save').classList.toggle('dirty', isDirty());
   showStatus();
   showUndoButtons();
@@ -5443,7 +5443,7 @@ function palRender(follow = false) {
       b.onclick = () => origGo(d);
       return b;
     };
-    group(`Models from the game's stages · ${origPage * ORIG_ROWS + 1}–${origPage * ORIG_ROWS + origs.length} of ${origTotal}`,
+    group(`Models from the game's stages · ${origPage * ORIG_ROWS + 1}-${origPage * ORIG_ROWS + origs.length} of ${origTotal}`,
           pages > 1 ? [pg('‹', -1, origPage === 0), pg('›', 1, origPage >= pages - 1)] : null);
     origs.forEach(add);
   }
