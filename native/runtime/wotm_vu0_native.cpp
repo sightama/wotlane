@@ -261,13 +261,22 @@ namespace
     template <int D>
     WOTM_VU0_FI __m128 MUL4(__m128 a, __m128 b, Fm &f) { return fin4<D>(_mm_mul_ps(a, b), dMul(W(a), W(b)), f); }
 
+    // an infinity becomes the largest float of its sign (the VU has no infinity). Rounding to nearest can carry the float product
+    // of a madd, or its sum, past the largest float while the exact value classified by fin4 stays below it
+    WOTM_VU0_FI __m128 saturate(__m128 v)
+    {
+        const __m128i b = _mm_castps_si128(v);
+        const __m128i inf = _mm_cmpeq_epi32(_mm_and_si128(b, _mm_set1_epi32(0x7FFFFFFF)), _mm_set1_epi32(0x7F800000));
+        return _mm_castsi128_ps(_mm_sub_epi32(b, _mm_and_si128(inf, _mm_set1_epi32(1))));   // inf - 1 ulp = the largest float
+    }
+
     // madd/msub: acc +- a*b (two roundings in float), plus the product's sticky flags (calculateFmacProductSticky)
     template <int D>
     WOTM_VU0_FI __m128 MADD4(__m128 c, __m128 a, __m128 b, Fm &f, bool sub)
     {
         const D4 p = dMul(W(a), W(b));
-        const __m128 pf = _mm_mul_ps(a, b);
-        const __m128 r = sub ? _mm_sub_ps(c, pf) : _mm_add_ps(c, pf);
+        const __m128 pf = saturate(_mm_mul_ps(a, b));
+        const __m128 r = saturate(sub ? _mm_sub_ps(c, pf) : _mm_add_ps(c, pf));
         const D4 e = sub ? dSub(W(c), p) : dAdd(W(c), p);
         f.ext |= flagsOf(classify4<D>(p));
         return fin4<D>(r, e, f);

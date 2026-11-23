@@ -1,12 +1,15 @@
 #!/bin/sh
+# ABOUTME: Checks that the native VU0 microprograms give bit-identical results in this machine's native build and in the wasm build,
+# ABOUTME: on edge cases and on calls recorded in a fight; with --time (and --ref) it also times them.
 # Checks that the native VU0 microprograms (tools/vu0native.py -> wotm_vu0_native.gen.inc) give bit-identical results in the native
 # build of this machine (macOS/Linux) and in the WebAssembly build: every PC in a match must compute the same thing. Use it after
 # changing wotm_vu0_native.cpp or vu0native.py, and on any new compiler or CPU (arm64 goes through sse2neon). It plays an AI-vs-AI
 # fight in the ps2EntryRunner test build with PS2X_DUMP_VU0=1 (the interpreter records up to 60 samples per microprogram once 300k
 # calls have run), replays every sample through the native code with tools/vu0bench.cpp, native then wasm (under node), compares the
 # two, and deletes the dumps (they contain game state). How many results differ from the interpreter (round toward zero, the PS2's) is
-# printed for information. With --time it also times the native code on those samples, and with --ref the same code from another
-# commit (e.g. before a change to wotm_vu0_native.cpp), on the same samples.
+# printed for information. First it runs the arithmetic's edge cases (tools/vu0edges.cpp) in both builds. With --time it also times
+# the native code on those samples, and with --ref the same code from another commit (e.g. before a change to wotm_vu0_native.cpp),
+# on the same samples.
 set -eu
 . "$(dirname "$0")/posix_env.sh"
 
@@ -36,7 +39,7 @@ done
 [ -z "$ref" ] || [ -n "$repeats" ] || fail "--ref needs --time"
 rt=$(runtime_dir)
 sse2neon=$rt/$build/_deps/sse2neon-src
-need c++ python3 caffeinate
+need c++ python3
 
 # the microprograms from this checkout's tools/vu0native.py (the build's copy may come from an older one); game code, outside the repo
 step 'generate the VU0 microprograms'
@@ -53,6 +56,7 @@ bench=$rt/logs/vu0bench
 if [ -n "$ref" ]; then
     refsrc=$rt/logs/vu0bench_ref
     rm -rf "$refsrc" && mkdir -p "$refsrc/runtime"
+    # the two wotm_rtz headers exist only in commits that still rounded toward zero in software; a missing file is skipped
     for f in runtime/wotm_vu0_native.cpp runtime/wotm_vu0_native.h wotm_rtz.hpp wotm_rtz_lanes.hpp; do
         git -C "$REPO" show "$ref:native/$f" >"$refsrc/$f" 2>/dev/null || rm -f "$refsrc/$f"
     done
@@ -72,7 +76,15 @@ build_bench() {
     run_logged "$log" "$cc" "$@" -I"$src" -I"$src/runtime" -I"$REPO/native" -I"$REPO/native/runtime" \
         -I"$rt/PS2Recomp/ps2xRuntime/include" -I"$gen" "$REPO/tools/vu0bench.cpp" "$src/runtime/wotm_vu0_native.cpp" -o "$out"
 }
+# build_edges <compiler> <log> <output> [flags]: tools/vu0edges.cpp, the arithmetic's edge cases, with the same flags
+build_edges() {
+    cc=$1 log=$2 out=$3
+    shift 3
+    run_logged "$log" "$cc" "$@" -I"$REPO/native" -I"$REPO/native/runtime" -I"$rt/PS2Recomp/ps2xRuntime/include" \
+        "$REPO/tools/vu0edges.cpp" -o "$out"
+}
 build_bench c++ "$rt/logs/vu0bench_build.log" "$REPO/native" "$bench" "$@"
+build_edges c++ "$rt/logs/vu0edges_build.log" "$bench.edges" "$@"
 [ -z "$ref" ] || build_bench c++ "$rt/logs/vu0bench_ref_build.log" "$refsrc" "$bench.ref" "$@"
 step 'build vu0bench (wasm)'
 use_emsdk "${EMSDK:-$HOME/emsdk}" || fail "no Emscripten (set EMSDK)"
@@ -81,6 +93,11 @@ need em++ node
 set -- -std=c++20 -O2 -ffp-contract=off -fno-fast-math -msimd128 -msse4.1 -sNODERAWFS=1 -sEXIT_RUNTIME=1 -sALLOW_MEMORY_GROWTH=1
 build_bench em++ "$rt/logs/vu0bench_wasm_build.log" "$REPO/native" "$bench.js" "$@"
 [ -z "$ref" ] || build_bench em++ "$rt/logs/vu0bench_ref_wasm_build.log" "$refsrc" "$bench.ref.js" "$@"
+build_edges em++ "$rt/logs/vu0edges_wasm_build.log" "$bench.edges.js" "$@"
+
+step 'edge cases (native, then wasm)'
+"$bench.edges" || fail "the native VU0 arithmetic fails an edge case"
+node "$bench.edges.js" || fail "the wasm VU0 arithmetic fails an edge case"
 
 step "record samples (${secs}s AI fight in ps2EntryRunner)"
 disc=$rt/discroot
@@ -96,8 +113,10 @@ results=$rt/logs/vu0bench_native.results   # the native build's results, which t
 trap 'stop_game; rm -f "$disc/vu0_samples.bin" "$disc/vu0_code.bin" "$results"' EXIT
 trap 'exit 130' INT TERM
 rm -f "$disc/vu0_samples.bin" "$disc/vu0_code.bin"
-# under caffeinate: a native game window stops making progress once the display sleeps
-WOTM_MATCH=3,1,1 WOTM_AIVSAI=1 WOTM_MUTE=1 PS2X_DUMP_VU0=1 caffeinate -d -u sh "$rt/run_live.sh" --auto 0 --exe test --build "$build" >/dev/null 2>&1 &
+# under caffeinate where there is one (macOS): a native game window stops making progress once the display sleeps
+keepawake=
+if command -v caffeinate >/dev/null 2>&1; then keepawake="caffeinate -d -u"; fi
+WOTM_MATCH=3,1,1 WOTM_AIVSAI=1 WOTM_MUTE=1 PS2X_DUMP_VU0=1 $keepawake sh "$rt/run_live.sh" --auto 0 --exe test --build "$build" >/dev/null 2>&1 &
 game=$!
 sleep "$secs"
 stop_game

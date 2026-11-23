@@ -58,7 +58,7 @@ A native build for the machine's own CPU (Apple Silicon included, through sse2ne
 2. Put your ISO in `ISO/` and run `sh tools/setup_runtime.sh`. It extracts the disc, sets up PS2Recomp in `runtime/`, generates the
    recompiled code and runs the first build.
 3. `sh tools/build_runtime.sh` rebuilds after changes; `sh runtime/run_live.sh --auto 0` runs the game (log in `runtime/live.err.log`).
-4. `sh tools/vu0bench.sh` checks that the native VU0 code gives bit-identical results to the interpreter on this machine.
+4. `sh tools/vu0bench.sh` checks that the native and the browser (wasm) builds of the VU0 code give identical results on calls recorded in a fight.
 
 Not available yet outside Windows: rumble, the launcher and a packaged release.
 
