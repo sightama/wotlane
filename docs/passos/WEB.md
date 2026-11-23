@@ -287,7 +287,7 @@ connected pad. Everything that feeds it lives in the page (`web/pads.js`, `web/t
   Vibration (`navigator.vibrate`) answers a press and the game's own rumble. The gear opens size (0.7 to 1.2), opacity, vibration, Left handed
   and Move buttons, kept in `localStorage` (`wotlane.touch`). Left handed mirrors every control to the other side (the middle ones swap
   places) and swaps the stick and look zones; the layout is `layoutFor`, the zones `zonesFor`. Move buttons turns the controls into
-  things to drag (a dashed outline, nothing is pressed): a drop keeps the button's centre where it is, whole on screen, as `place` (units
+  things to drag (a dashed outline, nothing is pressed): a drop puts the button's centre at the finger, whole on screen (a place that no longer fits a smaller screen or a larger size is pulled back in), saved as `place` (units
   from its anchor); Reset positions clears them, and so does switching hands. The gear itself does not move. `browser_touch_test`'s
   `touch_layout` scenario drives it.
 - **Steps aside:** a key press, a mouse press or a real pad hides the controls and removes the virtual pad (a real pad would otherwise be player

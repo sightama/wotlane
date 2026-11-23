@@ -192,3 +192,22 @@ test('left handed swaps the stick and look zones; the screen is covered once eit
   for (const z of [right, left]) assert.ok(Math.abs(z.stick.width + z.look.width - w) < 1e-6);
   assert.equal(right.stick.top, ZONE.top * h);
 });
+
+const { fitOnScreen } = require('./touch.js');
+
+test('a place far from its anchor survives the settings (a wide screen) and one too far for any screen does not', () => {
+  assert.deepEqual(clampSettings({ place: { cross: { x: 20, y: 3 } } }).place, { cross: { x: 20, y: 3 } });
+  assert.deepEqual(clampSettings({ place: { cross: { x: 500, y: 3 } } }).place, {});
+});
+
+test('a placed control comes back on screen when the screen or the size shrinks; one already on screen is not moved', () => {
+  const placed = { ...LAYOUT.find((b) => b.id === 'cross'), x: 3, y: 12 };
+  const big = unitFor(448, SCALE_RANGE.max), small = unitFor(360, SCALE_RANGE.min);
+  const before = rectOf(placed, 998, 448, big);
+  const fit = fitOnScreen(placed, 800, 360, small * 1.7);   // a smaller screen at a larger size than the place was made for
+  const r = rectOf(fit, 800, 360, small * 1.7);
+  assert.ok(r.left >= -0.05 * small && r.top >= -0.05 * small && r.right <= 800 + 0.05 * small && r.bottom <= 360 + 0.05 * small);
+  assert.ok(before.bottom <= 448);
+  const fine = { ...placed, y: 2 };
+  assert.deepEqual(fitOnScreen(fine, 998, 448, unitFor(448, 1)), fine);
+});

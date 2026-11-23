@@ -34,7 +34,7 @@ const ICONS = {
 const ZONE = { split: 0.46, top: 0.18 };   // the left stick takes the screen left of `split` (a fraction of the width), the look zone the right; both start `top` down
 const SCALE_RANGE = { min: 0.7, max: 1.2 };
 const DEFAULTS = { scale: 1, opacity: 0.6, haptics: true, mirror: false, place: {} };
-const PLACE_LIMIT = 14;   // how far from its anchor a placed control may be, in units
+const PLACE_LIMIT = 40;   // how far from its anchor a placed control may be, in units
 const STORAGE_KEY = 'wotlane.touch';
 const STICK_RADIUS = 1.5, LOOK_RADIUS = 2.0, STICK_DEAD = 0.1, LOOK_DEAD = 0.08;   // in units, and fractions of the radius
 const TAP = { ms: 220, distance: 12 };   // a touch this quick that moved this little (pixels) is a tap
@@ -68,6 +68,13 @@ function placeFromPoint(item, vw, vh, u, cx, cy) {
   const dx = { br: vw - x, tr: vw - x, bl: x, tl: x, tc: x - vw / 2 }[item.anchor];
   const dy = item.anchor[0] === 'b' ? vh - y : y;
   return { x: Math.round(dx / u / 0.05) * 0.05, y: Math.round(dy / u / 0.05) * 0.05 };
+}
+
+// `item` (placed or not) moved the least that keeps it whole on screen: a place made on a bigger screen or at a smaller size may not fit now
+function fitOnScreen(item, vw, vh, u) {
+  const r = rectOf(item, vw, vh, u);
+  if (r.left >= 0 && r.top >= 0 && r.right <= vw && r.bottom <= vh) return item;
+  return { ...item, ...placeFromPoint(item, vw, vh, u, (r.left + r.right) / 2, (r.top + r.bottom) / 2) };
 }
 
 // where the movement stick and the camera look zone are: the left and the right of the screen, swapped for a left handed player
@@ -239,7 +246,11 @@ class TouchOverlay {
     el.setAttribute('aria-label', item.does);
     const control = { item, el };
     if (item.id === 'gear') {
-      el.addEventListener('pointerdown', (e) => { e.preventDefault(); this.panel.hidden = !this.panel.hidden; });
+      el.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        this.panel.hidden = !this.panel.hidden;
+        if (this.panel.hidden) this.setEditing(false);
+      });
       return control;
     }
     const lift = (e) => {
@@ -366,7 +377,8 @@ class TouchOverlay {
     const ml = d.createElement('label');
     ml.append('Left handed', mirror);
     const move = Object.assign(d.createElement('button'), { textContent: 'Move buttons' });
-    move.addEventListener('click', () => this.setEditing(!this.editing, move));
+    this.moveButton = move;
+    move.addEventListener('click', () => this.setEditing(!this.editing));
     const reset = Object.assign(d.createElement('button'), { textContent: 'Reset positions' });
     reset.addEventListener('click', () => {
       this.settings = clampSettings({ ...this.settings, place: {} });
@@ -376,18 +388,19 @@ class TouchOverlay {
     const fullscreen = Object.assign(d.createElement('button'), { textContent: 'Fullscreen' });
     fullscreen.addEventListener('click', () => this.enterFullscreen());
     const close = Object.assign(d.createElement('button'), { textContent: 'Close' });
-    close.addEventListener('click', () => { panel.hidden = true; this.setEditing(false, move); });
+    close.addEventListener('click', () => { panel.hidden = true; this.setEditing(false); });
     panel.append(range('Size', 'scale', SCALE_RANGE.min, SCALE_RANGE.max, 0.05), range('Opacity', 'opacity', 0.2, 1, 0.05), hl, ml, move, reset, fullscreen, close);
     return panel;
   }
 
   // while editing, a touch on a control drags it instead of pressing it
-  setEditing(on, button) {
+  setEditing(on) {
+    if (this.drag) saveSettings(this.storage, this.settings);   // a drag cut short keeps where it got to
     this.editing = on;
     this.drag = null;
     this.releaseAll();
     this.root.classList.toggle('editing', on);
-    button.textContent = on ? 'Done moving' : 'Move buttons';
+    this.moveButton.textContent = on ? 'Done moving' : 'Move buttons';
   }
 
   // the controls follow the settings and the screen
@@ -402,7 +415,8 @@ class TouchOverlay {
     const items = layoutFor(this.settings);
     for (const control of this.controls) {
       const { el } = control;
-      const item = control.item = items.find((b) => b.id === control.item.id);
+      const found = items.find((b) => b.id === control.item.id);
+      const item = control.item = this.settings.place[found.id] ? fitOnScreen(found, vw, vh, this.u) : found;
       const r = rectOf(item, vw, vh, this.u);
       Object.assign(el.style, { left: `${r.left}px`, top: `${r.top}px`, width: `${r.right - r.left}px`, height: `${r.bottom - r.top}px` });
     }
@@ -424,7 +438,10 @@ class TouchOverlay {
     if (show) {
       this.apply();
       this.document.exitPointerLock?.();   // a locked pointer would zero every touch's coordinates
-    } else this.releaseAll();
+    } else {
+      this.setEditing(false);
+      this.releaseAll();
+    }
   }
 
   releaseAll() {
@@ -511,7 +528,7 @@ function start() {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { layoutFor, placeFromPoint, zonesFor, LAYOUT, ZONE, SCALE_RANGE, unitFor, rectOf, clampSettings, loadSettings, saveSettings, touchRows, isTap, ICONS, TouchOverlay };
+  module.exports = { fitOnScreen, layoutFor, placeFromPoint, zonesFor, LAYOUT, ZONE, SCALE_RANGE, unitFor, rectOf, clampSettings, loadSettings, saveSettings, touchRows, isTap, ICONS, TouchOverlay };
 } else {
   Object.assign(globalThis, { wotTouchRows: touchRows });
   start();
