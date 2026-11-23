@@ -254,10 +254,7 @@ def expand(disc, pats):
             pats2 = [pat]
         for p in pats2:
             d, base = os.path.split(p)
-            dd = disc_file(disc, d) if d else disc
-            if not dd:
-                continue
-            for n in sorted(os.listdir(dd)):
+            for n in sorted(disc_listdir(disc, d)):
                 if fnmatch.fnmatch(n.upper(), base.upper()):
                     out.append((d + "/" if d else "") + n)
     if not out:
