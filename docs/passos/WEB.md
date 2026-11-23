@@ -115,7 +115,7 @@ For online play start `wotm_server --ws-port <port>`; a page opened from `localh
 - **Main thread profile:** `node tools/web_profile.mjs <chrome|brave> <page url> [secs]` opens a direct AI fight, prints the presented frames
   per second, the page's work per present, what the page sees (cores, WebGL renderer, timer resolution) and the functions with the most
   self time in a CPU profile. `WOTM_BRAVE` names Brave's binary, `WOTM_BROWSER_ARGS` adds browser flags (`--disable-gpu`: software WebGL).
-- **Address switches** (`web/pageenv.js`, tested in `pageenv.test.mjs`): only `WOTM_MATCH`, `WOTM_AIVSAI`, `PS2X_STATS`, `WOTM_MAPEDIT` (the Settings page's Mods tab, Your creations, has a Map editor row that opens the page with it, on a stock stage) and `WOTM_VBLANK_SPIN` (`0`: the vblank clock without its spin, for A/B runs) are read from the page address; the disc, save and renderer
+- **Address switches** (`web/pageenv.js`, tested in `pageenv.test.mjs`): only `WOTM_MATCH`, `WOTM_AIVSAI`, `PS2X_STATS`, `WOTM_MAPEDIT` (the Settings page's Mods tab, Your creations, has a Map editor row that opens the page with it, on a stock stage) and `WOTM_VBLANK_SPIN` (a lone `0`: the vblank clock without its spin, for A/B runs; any other value keeps the spin) are read from the page address; the disc, save and renderer
   settings always win.
 - **Browser check:** `web/support.js` gives Safari, browsers without JSPI and iPhones and iPads (every browser there is WebKit) a plain message and disables the play buttons; the front panel says Chrome, Firefox and Edge on a computer or an Android phone work.
 - **Settings page:** the front panel's Settings button swaps the panel for a card of tabs (Online, Game, Display, Mods, Controls;
