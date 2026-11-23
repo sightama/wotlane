@@ -26,6 +26,12 @@ jobs:
       # after the netcode: test_net_lobby.py starts the wotm_server just built
       - name: tools (Python unit tests)
         run: python3 -m unittest discover -s tools -p 'test_*.py'
+      # The level editor's tests that need no game files. The ones that read the disc (test_lvl*.py, the other tests in
+      # tools/level_editor, test_ui.mjs, test_sky.mjs) run on a machine that has the user's own disc.
+      - name: level editor (tests that need no game files)
+        run: |
+          for t in test_local_guard test_pack test_prefabs test_testopts; do python3 tools/level_editor/$t.py; done
+          for t in test_arrange test_contrast test_marker_math test_markers test_prefab test_tilt test_tools_view; do node tools/level_editor/$t.mjs; done
       - name: launcher (lobby logic against wotm_server, WinForms compile check)
         run: sh tools/test_launcher.sh
 

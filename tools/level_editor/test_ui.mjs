@@ -51,10 +51,10 @@ const serverOut = fs.openSync(serverLog, 'w');
 const server = spawn(process.platform === 'win32' ? 'python' : 'python3', [path.join(HERE, 'editor.py'), '--serve', '--port', String(PORT)],
   { cwd: REPO, stdio: ['ignore', serverOut, serverOut], env: { ...process.env, WOTM_LEVEL_EDITOR_CONFIG: cfgFile, WOTM_LEVEL_EDITOR_NAMES: path.join(tmp, 'names.json') } });
 const edgePaths = ['C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe', 'C:/Program Files/Microsoft/Edge/Application/msedge.exe',
-  'C:/Program Files/Google/Chrome/Application/chrome.exe', '/usr/bin/microsoft-edge', '/usr/bin/google-chrome', '/usr/bin/chromium'];
+  'C:/Program Files/Google/Chrome/Application/chrome.exe', '/usr/bin/microsoft-edge', '/usr/bin/google-chrome', '/usr/bin/chromium', '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'];
 const browser = edgePaths.find((p) => fs.existsSync(p));
 if (!browser) { console.error('no Edge or Chrome found'); killTree(server); process.exit(2); }
-const edge = spawn(browser, ['--headless=new', `--remote-debugging-port=${DBG}`, '--use-angle=swiftshader', '--enable-unsafe-swiftshader',
+const edge = spawn(browser, ['--headless=new', '--mute-audio', `--remote-debugging-port=${DBG}`, '--use-angle=swiftshader', '--enable-unsafe-swiftshader',
   '--disable-gpu-sandbox', `--user-data-dir=${path.join(tmp, 'profile')}`, '--window-size=1600,900', 'about:blank'], { stdio: 'ignore' });
 let failures = 0;
 const done = (code) => {
