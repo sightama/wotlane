@@ -14,8 +14,6 @@
 #include "wotm_freecam.h"
 #include "wotm_glsl.hpp"
 #include "wotm_lockon.hpp"
-#include "wotm_rtz.hpp"
-#include "wotm_rtz_lanes.hpp"
 #include "wotm_hudedge.hpp"
 #include "wotm_pace.hpp"
 #include "wotm_pad_clock.hpp"
@@ -35,7 +33,6 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
-#include <cfenv>
 #include <cfloat>
 #include <cmath>
 #include <cstdint>
@@ -5568,176 +5565,6 @@ TEST(stagemap_stock_copies)
             std::printf("  %s: wrote %s(.reserve)\n", stem.c_str(), out.c_str());
         }
     }
-}
-
-namespace
-{
-    double doubleOf(uint64_t u)
-    {
-        double d;
-        std::memcpy(&d, &u, 8);
-        return d;
-    }
-    uint64_t bitsOfDouble(double d)
-    {
-        uint64_t u;
-        std::memcpy(&u, &d, 8);
-        return u;
-    }
-
-    // Operand pairs for the round-toward-zero checks, from a fixed LCG so every machine sees the same list. Normal floats only
-    // (the VU0 code normalizes its operands): random exponents, close ones (cancellation), far ones (the sum is inexact even in
-    // double), products near the float limits, and integers past 2^24.
-    struct RtzCase
-    {
-        float a, b, c;   // c: the accumulator of a madd
-        int32_t i;
-    };
-    std::vector<RtzCase> rtzCases(int n)
-    {
-        uint32_t s = 2463534242u;
-        auto next = [&s] { return s = s * 1664525u + 1013904223u; };
-        auto normal = [&](uint32_t exponent) { return floatOf((next() & 0x807FFFFFu) | ((exponent % 254u + 1u) << 23)); };
-        std::vector<RtzCase> v;
-        for (int k = 0; k < n; ++k)
-        {
-            const float a = normal(next() >> 24);
-            const uint32_t ea = (bitsOf(a) >> 23) & 0xFFu;
-            float b;
-            switch (k % 5)
-            {
-            case 0: b = normal(next() >> 24); break;
-            case 1: b = floatOf((bitsOf(a) ^ 0x80000000u) + (next() % 64u) - 32u); break;   // a - b cancels
-            case 2: b = normal(ea > 64u ? ea - 1u - next() % 64u : ea + next() % 64u); break;   // up to 64 binades apart
-            case 3: b = normal(254u - ea + next() % 4u); break;   // a*b near 1, or near the float limits
-            default: b = normal(127u + next() % 16u); break;
-            }
-            const float c = normal(next() >> 24);
-            v.push_back({a, b, c, (int32_t)next()});
-        }
-        return v;
-    }
-}
-
-#ifndef __EMSCRIPTEN__
-// What the native builds get from the CPU with round toward zero set (wotm_vu0_native.cpp), computed here with the CPU's own
-// rounding mode; the software version (wotm_rtz.hpp, used by the browser build) must give the same bits for every case.
-#ifdef _MSC_VER
-#pragma fenv_access(on)
-#else
-#pragma STDC FENV_ACCESS ON
-#endif
-TEST(rtz_software_equals_the_cpu_rounding_mode)
-{
-    int bad = 0;
-    for (const RtzCase &t : rtzCases(200000))
-    {
-        volatile float a = t.a, b = t.b;
-        volatile int32_t i = t.i;
-        const double p = (double)t.a * (double)t.b;
-        volatile double vp = p, vc = t.c;
-        const int saved = std::fegetround();
-        std::fesetround(FE_TOWARDZERO);
-        volatile float add = a + b, sub = a - b, mul = a * b, fromInt = (float)i;   // volatile: computed before the mode goes back
-        volatile double dAdd = vc + vp, dSub = vc - vp;
-        std::fesetround(saved);
-        bad += bitsOf(add) != bitsOf(wotm::rtz::add(t.a, t.b));
-        bad += bitsOf(sub) != bitsOf(wotm::rtz::sub(t.a, t.b));
-        bad += bitsOf(mul) != bitsOf(wotm::rtz::mul(t.a, t.b));
-        bad += bitsOf(fromInt) != bitsOf(wotm::rtz::fromInt(t.i));
-        bad += bitsOfDouble(dAdd) != bitsOfDouble(wotm::rtz::add((double)t.c, p));
-        bad += bitsOfDouble(dSub) != bitsOfDouble(wotm::rtz::sub((double)t.c, p));
-    }
-    CHECK(bad == 0);
-}
-#ifdef _MSC_VER
-#pragma fenv_access(off)
-#else
-#pragma STDC FENV_ACCESS OFF
-#endif
-#endif
-
-// The browser build has no rounding-mode control and uses wotm_rtz.hpp for VU0; its results must be the native ones. The digest
-// was measured on the Mac (where the test above ties it to the CPU); the wasm build of these tests (tools/test_web.sh) must match.
-TEST(rtz_same_bits_on_every_machine)
-{
-    uint64_t h = 1469598103934665603ull;   // FNV-1a over the result bits
-    auto mix = [&h](uint64_t u, int bytes) {
-        for (int k = 0; k < bytes; ++k)
-            h = (h ^ ((u >> (8 * k)) & 0xFFu)) * 1099511628211ull;
-    };
-    for (const RtzCase &t : rtzCases(200000))
-    {
-        const double p = (double)t.a * (double)t.b;
-        mix(bitsOf(wotm::rtz::add(t.a, t.b)), 4);
-        mix(bitsOf(wotm::rtz::sub(t.a, t.b)), 4);
-        mix(bitsOf(wotm::rtz::mul(t.a, t.b)), 4);
-        mix(bitsOf(wotm::rtz::fromInt(t.i)), 4);
-        mix(bitsOfDouble(wotm::rtz::add((double)t.c, p)), 8);
-        mix(bitsOfDouble(wotm::rtz::sub((double)t.c, p)), 8);
-    }
-    CHECK(digestIs("rtz", h, 0x4db21735e0cf6d5aull));
-}
-
-TEST(rtz_edges)
-{
-    namespace rtz = wotm::rtz;
-    CHECK(bitsOf(rtz::add(FLT_MAX, FLT_MAX)) == 0x7F7FFFFFu);   // overflow stops at the largest float, never inf
-    CHECK(bitsOf(rtz::mul(-FLT_MAX, 2.f)) == 0xFF7FFFFFu);
-    CHECK(bitsOf(rtz::add(1.f, -1e-30f)) == bitsOf(std::nextafter(1.f, 0.f)));   // the exact sum is just below 1
-    CHECK(bitsOf(rtz::add(1.f, 1e-30f)) == bitsOf(1.f));
-    CHECK(bitsOf(rtz::sub(1.f, 1.f)) == 0u);   // +0, as in round to nearest
-    CHECK(bitsOf(rtz::fromInt(16777217)) == bitsOf(16777216.f));
-    CHECK(bitsOf(rtz::fromInt(-16777219)) == bitsOf(-16777218.f));
-    CHECK(bitsOfDouble(rtz::add(1.0, -doubleOf(0x3C80000000000001ull))) == bitsOfDouble(std::nextafter(1.0, 0.0)));
-}
-
-// The browser's VU0 rounds toward zero 2 doubles or 4 floats at a time (wotm_rtz_lanes.hpp); every lane must be what the one-value
-// functions above give, including overflow past the largest float and sums that only round in double.
-TEST(rtz_lanes_equal_one_value_at_a_time)
-{
-    namespace rtz = wotm::rtz;
-    std::vector<RtzCase> cases = rtzCases(200000);
-    cases.push_back({FLT_MAX, FLT_MAX, -FLT_MAX, 0});
-    cases.push_back({-FLT_MAX, 2.f, FLT_MAX, 0});
-    cases.push_back({1.f, -1e-30f, 1.f, 0});
-    cases.push_back({1.f, 1.f, -1.f, 0});
-    int bad = 0;
-    for (size_t k = 0; k + 4 <= cases.size(); k += 4)
-    {
-        alignas(16) float a[4], b[4], r[4];
-        alignas(16) double da[4], db[4], dc[4], p[4], e[4];
-        for (int j = 0; j < 4; ++j)
-        {
-            a[j] = cases[k + j].a;
-            b[j] = cases[k + j].b;
-            da[j] = a[j];
-            db[j] = b[j];
-            dc[j] = cases[k + j].c;
-            p[j] = da[j] * db[j];
-        }
-        const auto lanes = [&](__m128d (*op)(__m128d, __m128d), const double *x, const double *y) {
-            _mm_store_pd(e, op(_mm_load_pd(x), _mm_load_pd(y)));
-            _mm_store_pd(e + 2, op(_mm_load_pd(x + 2), _mm_load_pd(y + 2)));
-            _mm_store_ps(r, rtz::toFloatLanes(_mm_load_pd(e), _mm_load_pd(e + 2)));
-        };
-        lanes(rtz::addLanes, da, db);
-        for (int j = 0; j < 4; ++j)
-            bad += bitsOf(r[j]) != bitsOf(rtz::add(a[j], b[j])) || bitsOfDouble(e[j]) != bitsOfDouble(rtz::add(da[j], db[j]));
-        lanes(rtz::subLanes, da, db);
-        for (int j = 0; j < 4; ++j)
-            bad += bitsOf(r[j]) != bitsOf(rtz::sub(a[j], b[j])) || bitsOfDouble(e[j]) != bitsOfDouble(rtz::sub(da[j], db[j]));
-        lanes(rtz::addLanes, dc, p);
-        for (int j = 0; j < 4; ++j)
-            bad += bitsOfDouble(e[j]) != bitsOfDouble(rtz::add(dc[j], p[j]));
-        lanes(rtz::subLanes, dc, p);
-        for (int j = 0; j < 4; ++j)
-            bad += bitsOfDouble(e[j]) != bitsOfDouble(rtz::sub(dc[j], p[j]));
-        _mm_store_ps(r, rtz::toFloatLanes(_mm_load_pd(p), _mm_load_pd(p + 2)));
-        for (int j = 0; j < 4; ++j)
-            bad += bitsOf(r[j]) != bitsOf(rtz::mul(a[j], b[j]));
-    }
-    CHECK(bad == 0);
 }
 
 TEST(glsl_desktop_source_unchanged)

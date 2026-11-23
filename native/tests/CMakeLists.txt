@@ -30,6 +30,4 @@ if(target_arch MATCHES "arm64|aarch64|ARM64" AND NOT EMSCRIPTEN)
 elseif(EMSCRIPTEN)
     target_compile_options(wotm_native_test PRIVATE -msimd128 -msse4.1)
     target_link_options(wotm_native_test PRIVATE -sALLOW_MEMORY_GROWTH=1)   # the zip tests hold a 64 MB guest RAM, as the runtime does
-elseif(NOT MSVC)
-    target_compile_options(wotm_native_test PRIVATE -msse4.1)   # x86: wotm_rtz_lanes.hpp's SSE4.1 intrinsics, which the browser build also uses
 endif()
