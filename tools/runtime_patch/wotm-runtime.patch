@@ -1208,10 +1208,10 @@ index f247ff9..5568b05 100644
      EeKernelSnapshot m_snapshot;
 diff --git a/ps2xRuntime/include/runtime/ee_vblank_clock.h b/ps2xRuntime/include/runtime/ee_vblank_clock.h
 new file mode 100644
-index 0000000..9a1045f
+index 0000000..9c16a84
 --- /dev/null
 +++ b/ps2xRuntime/include/runtime/ee_vblank_clock.h
-@@ -0,0 +1,79 @@
+@@ -0,0 +1,89 @@
 +#pragma once
 +// WoTM: the vblank clock of the game executable's scheduler (EeSchedulerGame.cpp): a fixed 16.667 ms grid on the host, kept by a
 +// host thread that counts the vblanks that fell due for the EE to apply. Header-only so ps2xTest can test it without the game
@@ -1236,6 +1236,13 @@ index 0000000..9a1045f
 +    Clock::time_point next{};               // when the next vblank falls due
 +    uint32_t due = 0;                       // vblanks that fell due and the EE has not applied yet
 +    std::chrono::microseconds oversleep{};  // the worst oversleep seen lately (a peak that decays by 1/32 a sleep)
++    bool spin = true;                       // false (WOTM_VBLANK_SPIN=0): sleep in slices up to the vblank and never spin
++
++    // WOTM_VBLANK_SPIN: only "0" turns the spin off; unset or anything else keeps it
++    static bool spinFromEnv(const char *value)
++    {
++        return !(value && value[0] == '0' && value[1] == '\0');
++    }
 +
 +    void start(Clock::time_point now)
 +    {
@@ -1243,9 +1250,12 @@ index 0000000..9a1045f
 +        next = now + kPeriod;
 +    }
 +
-+    // How long before the vblank the timer thread spins instead of sleeping
++    // How long before the vblank the timer thread spins instead of sleeping (none with the spin off: wakeAt then sleeps in slices up
++    // to the vblank itself)
 +    std::chrono::microseconds spinLead() const
 +    {
++        if (!spin)
++            return std::chrono::microseconds{};
 +        const auto lead = oversleep + kSpinMargin;
 +        return lead < kMaxSpinLead ? lead : kMaxSpinLead;
 +    }
@@ -1919,10 +1929,10 @@ index c5e31c4..4aa9f53 100644
  bool EeScheduler::hasReadyAtOrAbovePriority(int priority) const
 diff --git a/ps2xRuntime/src/lib/Kernel/EeSchedulerGame.cpp b/ps2xRuntime/src/lib/Kernel/EeSchedulerGame.cpp
 new file mode 100644
-index 0000000..6d13517
+index 0000000..062a672
 --- /dev/null
 +++ b/ps2xRuntime/src/lib/Kernel/EeSchedulerGame.cpp
-@@ -0,0 +1,1363 @@
+@@ -0,0 +1,1367 @@
 +// WoTM (step 10 of docs/passos/FRONTEIRA.md in the WoTM repo): EeScheduler for the game executable (wotm), replacing EeScheduler.cpp.
 +// Measured in step 8: WotM uses a single thread (the main one), no INTC handler, one DMAC handler (hierSetDmaIntHandler,
 +// channel 1) and the vblank (sceGsSyncV); no semaphore, event flag, sleep or alarm in use. So there is no ready queue, time
@@ -1949,6 +1959,7 @@ index 0000000..6d13517
 +#include <chrono>
 +#include <condition_variable>
 +#include <cstdio>
++#include <cstdlib>
 +#include <cstring>
 +#include <limits>
 +#include <stdexcept>
@@ -2151,6 +2162,9 @@ index 0000000..6d13517
 +    m_running.store(true, std::memory_order_release);
 +    {
 +        std::lock_guard lock(m_eventMutex);
++        G.vblank.spin = EeVBlankClock::spinFromEnv(std::getenv("WOTM_VBLANK_SPIN"));
++        if (!G.vblank.spin)
++            std::fprintf(stderr, "[vblank] the timer thread sleeps in slices up to each vblank, no spin (WOTM_VBLANK_SPIN=0)\n");
 +        G.vblank.start(Clock::now());
 +    }
 +    // Vblank clock: a fixed grid on the host. After a stall of more than 4 vblanks the grid restarts from now, and the EE applies
@@ -6662,7 +6676,7 @@ index 4f979be..03042b7 100644
 +    });
  }
 diff --git a/ps2xTest/src/ps2_runtime_kernel_tests.cpp b/ps2xTest/src/ps2_runtime_kernel_tests.cpp
-index 63b12d9..18b823d 100644
+index 63b12d9..0c18767 100644
 --- a/ps2xTest/src/ps2_runtime_kernel_tests.cpp
 +++ b/ps2xTest/src/ps2_runtime_kernel_tests.cpp
 @@ -4,6 +4,7 @@
@@ -6673,7 +6687,7 @@ index 63b12d9..18b823d 100644
  
  #include <array>
  #include <atomic>
-@@ -1564,4 +1565,88 @@ void register_ps2_runtime_kernel_tests()
+@@ -1564,4 +1565,106 @@ void register_ps2_runtime_kernel_tests()
                       "GetEntryAddress should read and return the handler address from the table");
          });
      });
@@ -6749,6 +6763,24 @@ index 63b12d9..18b823d 100644
 +            for (int i = 0; i < 150; ++i)   // about one sleep a period while the lead is capped: 2.5 s
 +                vb.slept(t0, t0);
 +            t.IsTrue(vb.spinLead() < std::chrono::milliseconds(1), "the lead is back under a ms");
++        });
++
++        tc.Run("WOTM_VBLANK_SPIN=0: slices up to the vblank itself, never a spin, whatever the oversleep", [&](TestCase &t)
++        {
++            t.IsTrue(C::spinFromEnv(nullptr), "unset: spin");
++            t.IsTrue(C::spinFromEnv("1"), "1: spin");
++            t.IsTrue(C::spinFromEnv(""), "empty: spin");
++            t.IsTrue(!C::spinFromEnv("0"), "0: no spin");
++            t.IsTrue(C::spinFromEnv("00"), "only a lone 0 turns it off");
++            C vb;
++            vb.spin = false;
++            vb.start(t0);
++            vb.slept(t0, t0 + std::chrono::milliseconds(12));   // a coarse Windows timer
++            t.IsTrue(vb.spinLead() == std::chrono::microseconds{}, "no spin lead, even after a 12 ms oversleep");
++            t.IsTrue(vb.wakeAt(t0) == t0 + C::kWaitSlice, "far from the vblank: one slice");
++            const auto close = vb.next - C::kWaitSlice / 2;
++            t.IsTrue(vb.wakeAt(close) == vb.next, "within a slice of the vblank: wake at the vblank itself");
++            t.IsTrue(vb.wakeAt(vb.next) <= vb.next, "at the vblank: no sleep, and the spin loop's target is already reached");
 +        });
 +
 +        tc.Run("a coarse timer spins most of the period but still sleeps once a period", [&](TestCase &t)
