@@ -41,6 +41,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import tex      # noqa: E402
 import snd989   # noqa: E402
+import iso9660  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TEX_DIRS = ("LVL", "MON", "SHELL")
@@ -153,8 +154,73 @@ def work_dir(mods, mod):
     return os.path.join(mods, WORK, validate_mod_name(mod))
 
 
+# ---------------------------------------------------------------- the disc: an extracted folder or a .iso image
+# With an ISO, each requested file is copied once into a cache (disc_cache) and the rest of the kit reads from there as from a folder.
+
+_isos = {}
+
+
+def disc_iso(disc):
+    """The ISO reader if the disc is an image; None if it is a folder (or does not exist)."""
+    if not disc or not os.path.isfile(disc):
+        return None
+    key = os.path.abspath(disc)
+    if key not in _isos:
+        _isos[key] = iso9660.Iso(key)
+    return _isos[key]
+
+
+def disc_cache(disc):
+    """Folder where the ISO's files are copied (one per image: path, size and date)."""
+    st = os.stat(disc)
+    key = hashlib.sha1(("%s|%d|%d" % (os.path.abspath(disc).lower(), st.st_size, int(st.st_mtime))).encode()).hexdigest()[:12]
+    base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+    return os.path.join(base, "WotM", "modkit_disc", key)
+
+
+def disc_listdir(disc, rel=""):
+    """Names in a folder of the disc ([] if it does not exist)."""
+    iso = disc_iso(disc)
+    if iso:
+        return iso.listdir(rel)
+    d = disc_file(disc, rel) if rel else disc
+    return os.listdir(d) if d and os.path.isdir(d) else []
+
+
+def _iso_file(iso, disc, rel):
+    rel = rel.replace("\\", "/").strip("/")
+    if not rel:
+        os.makedirs(disc_cache(disc), exist_ok=True)
+        return disc_cache(disc)
+    parts, cur, names = rel.split("/"), "", []
+    for p in parts:
+        e = iso.find(cur + p)
+        if not e:
+            return None
+        names.append(e[3])
+        cur += e[3] + "/"
+    out = os.path.join(disc_cache(disc), *names)
+    if e[2]:
+        os.makedirs(out, exist_ok=True)
+        return out
+    rel = "/".join(names)
+    # .TEX/.RTX/.NGP: the siblings too (tex.py looks for the .RTX and the .NGP next to it)
+    stem, ext = os.path.splitext(rel)
+    sibs = [rel] + ([stem + x for x in (".TEX", ".RTX", ".NGP") if x != ext.upper()] if ext.upper() in (".TEX", ".RTX", ".NGP") else [])
+    with iso.lock:   # a GUI reads portraits on one thread and extracts on another: the same copy must not run twice
+        for r in sibs:
+            f = iso.find(r)
+            q = os.path.join(disc_cache(disc), *r.split("/"))
+            if f and not f[2] and not (os.path.isfile(q) and os.path.getsize(q) == f[1]):
+                iso.extract(r, q)
+    return out
+
+
 def disc_file(disc, rel):
-    """Path on the disc, case-insensitive (the disc extracted on Windows does not care about case, WSL does)."""
+    """Path on the disc, case-insensitive (the disc extracted on Windows does not care about case, WSL does). With an ISO, the copy in the cache."""
+    iso = disc_iso(disc)
+    if iso:
+        return _iso_file(iso, disc, rel)
     p = os.path.join(disc, *rel.split("/"))
     if os.path.exists(p):
         return p
