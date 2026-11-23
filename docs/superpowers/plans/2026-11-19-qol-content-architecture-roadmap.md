@@ -488,23 +488,32 @@ PR count if everything ships: about 47 PRs (the digest by use is counted once, i
 ## Decisions for Lane
 
 Only these need a yes; everything else above is the author's call and can be overridden in review.
+
+**Status: Lane approved all six as recommended on 2026-11-23.** Each item below ends with what that approval means in practice.
 1. **Backward compatibility of existing `stage.json` and skin folders.** `CLAUDE.md` requires explicit approval for it. Default
    recommendation: yes for one release, as a one way converter at load, because Jake's and Lane's test maps would otherwise
    break; remove it after the next deploy.
+   **Approved as recommended.** Existing `stage.json` and skin folders keep loading through a one way converter at load for one
+   release. This covers only that converter; no `stage.json` format change starts before Jake answers on #10.
 2. **Contacting Yan** with the draft above, or leaving upstream alone and importing quietly. Recommendation: contact, because the
    schema collision exists either way.
+   **Approved as recommended: contact Yan.** The note is still Lane's to send; nobody posts it to upstream on Lane's behalf.
 3. **A hosted gallery** stays out of phases 1 to 3 (B-decision 5); and whether anything derived from disc art may be shared at all
    by lobby transfer: PNG skins, but also `.NGP`, `.PTR`, `.TEX`, `.RTX`, `.BNK` and WAV files made from disc data, which tier 3
    would relay. Rule 1 forbids game bytes in the repo; the site's own position on derived art is Lane's call. Recommendation:
    recipes and original art travel freely; derived files travel only between lobby members, only with consent, and are never
    published or stored by us. The tooling imported from upstream (B0) brings no `mods/` content.
+   **Approved as recommended:** no hosted gallery in phases 1 to 3, and the travel rule above.
 4. **`TODO.md` item 8** (mods that add monsters) rewritten from "write the `.NGP` writer" to "adopt upstream's pipeline". Lane edits
    the list; this document only recommends it.
+   **Approved as recommended.** The `TODO.md` rewrite itself is still Lane's edit to make.
 5. **Versioned builds on the VM and 10 retained builds** (about 40 MB brotli on disk, more raw), with the simulation id of C3.
    Recommendation: yes.
+   **Approved as recommended.** Server and deploy work for the deploy owner; tracked in #187.
 6. **Backward compatibility of the wire** (C3): retained builds talking to a newer `wotm_server` means every wire change is
    additive and negotiated by version. `CLAUDE.md` makes that a decision for Lane. Recommendation: yes, additive only, and the
    protocol number moves only when a message's format changes.
+   **Approved as recommended.** Server and deploy work for the deploy owner; tracked in #188.
 
 ## Review focus
 
