@@ -27,6 +27,8 @@ struct Writer {
     }
     template <class T> void pod(const T &v) {
         static_assert(std::is_trivially_copyable_v<T>);
+        // padding bytes are indeterminate and a copy need not keep them, so equal states could save different bytes
+        static_assert(std::is_scalar_v<T> || std::has_unique_object_representations_v<T>, "a saved struct must have no padding");
         bytes(&v, sizeof v);
     }
     void blob(const Blob &b) {

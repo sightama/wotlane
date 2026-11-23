@@ -342,7 +342,7 @@ struct Lfo {
     enum Type { Off, Sine, Square, Triangle, Saw, Rand };
     enum Target { None, Volume, Pan, PMod, PBend };
     int type = Off, target = None;
-    u8 setupFlags = 0;
+    u16 setupFlags = 0;   // the grain's low byte; 16 bits leave no padding before depth (rollback snapshots save the struct whole)
     s16 depth = 0;
     s32 nextStep = 0, stepSize = 0, hold1 = 0, hold2 = 0, range = 0;
     u32 tick = 0;
@@ -1036,7 +1036,8 @@ inline void Engine::saveState(rollback::Writer &w) const {
         if (kind == 1) w.pod(bankHandle);
         if (kind == 2) w.blob(blob);
         const AdpcmReader &a = v.src;
-        w.pod(a.size), w.pod(a.pos), w.pod(a.loop), w.pod(a.h1), w.pod(a.h2), w.pod(a.ended), w.pod(a.honorFlags);
+        // a voice saved without samples restores with none to read (loadState), so its size is saved as 0 too
+        w.pod(kind ? a.size : size_t(0)), w.pod(a.pos), w.pod(a.loop), w.pod(a.h1), w.pod(a.h2), w.pod(a.ended), w.pod(a.honorFlags);
         w.pod(v.adsr);
         w.pod(v.fifo);
         w.pod(v.head), w.pod(v.count), w.pod(v.counter), w.pod(v.pitch), w.pod(v.volL), w.pod(v.volR);
