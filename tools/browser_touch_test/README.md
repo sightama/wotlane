@@ -24,6 +24,7 @@ node tools/browser_touch_test/run.mjs --only gamepads,fight_control
 | `multitouch` | stick and Cross held together, a three-finger chord, release of everything, the game's pad log sees the stick, a 20 ms tap is still held as the finger lifts, the look zone is the right stick, the game's pointer request is refused |
 | `fight_control` | in a fight against the AI the player's monster stands still, moves and turns when the touch stick is held, and stops when it is released |
 | `overlay_behaviour` | a key press hides the controls and frees the pad slot, a touch brings them back, the gear panel resizes them and the choice is remembered |
+| `touch_layout` | Left handed mirrors the buttons and is remembered, Move buttons drags one without pressing anything, Reset positions puts it back |
 | `gamepads` | a standard pad (toast, player 1, the game reads its stick), a connect event of the browser's own never reaches the game, a second non-standard pad (player 2, its layout mapped, its hat as the d-pad), unplugging (toast), the touch controls return |
 | `desktop` | a computer with a mouse, keyboard and pad: no touch controls, no virtual pad, the pad is player 1 with a toast, the keyboard leaves it alone |
 

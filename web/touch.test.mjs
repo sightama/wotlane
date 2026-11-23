@@ -63,21 +63,21 @@ test('the stick zone is the left of the screen and the look zone the right, both
 });
 
 test('settings are clamped to what the overlay can show, and a broken record falls back to the defaults', () => {
-  assert.deepEqual(clampSettings({ scale: 9, opacity: -1, haptics: 'yes' }), { scale: SCALE_RANGE.max, opacity: 0.2, haptics: true });
-  assert.deepEqual(clampSettings({ scale: 0.1, opacity: 5 }), { scale: SCALE_RANGE.min, opacity: 1, haptics: true });
-  assert.deepEqual(clampSettings(null), { scale: 1, opacity: 0.6, haptics: true });
-  assert.deepEqual(clampSettings({ scale: 'big' }), { scale: 1, opacity: 0.6, haptics: true });
+  assert.deepEqual(clampSettings({ scale: 9, opacity: -1, haptics: 'yes' }), { scale: SCALE_RANGE.max, opacity: 0.2, haptics: true, mirror: false, place: {} });
+  assert.deepEqual(clampSettings({ scale: 0.1, opacity: 5 }), { scale: SCALE_RANGE.min, opacity: 1, haptics: true, mirror: false, place: {} });
+  assert.deepEqual(clampSettings(null), { scale: 1, opacity: 0.6, haptics: true, mirror: false, place: {} });
+  assert.deepEqual(clampSettings({ scale: 'big' }), { scale: 1, opacity: 0.6, haptics: true, mirror: false, place: {} });
 });
 
 test('settings are remembered in the browser\'s storage; storage that throws or holds rubbish leaves the defaults', () => {
   const store = new Map();
   const storage = { getItem: (k) => store.get(k) ?? null, setItem: (k, v) => store.set(k, v) };
   saveSettings(storage, { scale: 1.2, opacity: 0.4, haptics: false });
-  assert.deepEqual(loadSettings(storage), { scale: 1.2, opacity: 0.4, haptics: false });
+  assert.deepEqual(loadSettings(storage), { scale: 1.2, opacity: 0.4, haptics: false, mirror: false, place: {} });
   store.set('wotlane.touch', '{not json');
-  assert.deepEqual(loadSettings(storage), { scale: 1, opacity: 0.6, haptics: true });
+  assert.deepEqual(loadSettings(storage), { scale: 1, opacity: 0.6, haptics: true, mirror: false, place: {} });
   const broken = { getItem() { throw new Error('blocked'); }, setItem() { throw new Error('blocked'); } };
-  assert.deepEqual(loadSettings(broken), { scale: 1, opacity: 0.6, haptics: true });
+  assert.deepEqual(loadSettings(broken), { scale: 1, opacity: 0.6, haptics: true, mirror: false, place: {} });
   assert.doesNotThrow(() => saveSettings(broken, { scale: 1, opacity: 0.6, haptics: true }));
 });
 
@@ -114,4 +114,81 @@ test('the face buttons are a little smaller than a thumb pad of 1.6 units, and g
     assert.ok(w >= 1.1 && w <= 1.4, `${id} is ${w}`);
   }
   assert.ok(LAYOUT.find((b) => b.id === 'circle').w < LAYOUT.find((b) => b.id === 'cross').w);
+});
+
+const { layoutFor, placeFromPoint, zonesFor } = require('./touch.js');
+const plain = { scale: 1, opacity: 0.6, haptics: true, mirror: false, place: {} };
+
+test('settings keep a left handed switch and placed controls, and drop what is not a placeable control or a number', () => {
+  assert.deepEqual(clampSettings(null).place, {});
+  assert.equal(clampSettings(null).mirror, false);
+  assert.equal(clampSettings({ mirror: true }).mirror, true);
+  assert.equal(clampSettings({ mirror: 'yes' }).mirror, false);
+  const s = clampSettings({ place: { cross: { x: 3, y: 2 }, gear: { x: 1, y: 1 }, nope: { x: 1, y: 1 }, circle: { x: 'a', y: 1 }, l1: { x: 99, y: 2 } } });
+  assert.deepEqual(s.place, { cross: { x: 3, y: 2 } }, 'the gear stays put, unknown ids and non-numbers and far-off places are dropped');
+});
+
+test('left handed mirrors every control to the other side and keeps its height; the middle controls swap sides', () => {
+  const left = layoutFor({ ...plain, mirror: true });
+  for (const [i, b] of LAYOUT.entries()) {
+    assert.equal(left[i].id, b.id);
+    assert.equal(left[i].y, b.y);
+    if (b.anchor === 'tc') assert.equal(left[i].x, -b.x);
+    else assert.equal(left[i].anchor, { br: 'bl', bl: 'br', tr: 'tl', tl: 'tr' }[b.anchor]);
+  }
+  assert.deepEqual(layoutFor(plain), LAYOUT);
+  const [w, h] = [915, 412], u = unitFor(h, 1);
+  const cross = rectOf(left.find((b) => b.id === 'cross'), w, h, u), right = rectOf(LAYOUT.find((b) => b.id === 'cross'), w, h, u);
+  assert.ok(Math.abs(cross.left - (w - right.right)) < 1e-6, 'the mirror image');
+});
+
+for (const [w, h] of SCREENS) {
+  test(`${w}x${h}: left handed controls stay on screen and never overlap`, () => {
+    const u = unitFor(h, 1);
+    const shapes = layoutFor({ ...plain, mirror: true }).map((b) => ({ id: b.id, round: ['cross', 'square', 'triangle', 'circle', 'chord'].includes(b.cls), ...rectOf(b, w, h, u) }));
+    for (const r of shapes) assert.ok(r.left >= 0 && r.top >= 0 && r.right <= w && r.bottom <= h, `${r.id} is on screen`);
+    for (let i = 0; i < shapes.length; i++)
+      for (let j = i + 1; j < shapes.length; j++) assert.ok(!touching(shapes[i], shapes[j]), `${shapes[i].id} and ${shapes[j].id} overlap`);
+  });
+}
+
+test('a placed control uses its own place, in either hand', () => {
+  for (const mirror of [false, true]) {
+    const one = layoutFor({ ...plain, mirror, place: { circle: { x: 5, y: 6 } } }).find((b) => b.id === 'circle');
+    assert.equal(one.x, 5);
+    assert.equal(one.y, 6);
+    assert.equal(one.anchor, mirror ? 'bl' : 'br');
+  }
+});
+
+test('dragging a control to a point puts its centre there: the place read back gives the same rectangle', () => {
+  const [w, h] = [915, 412], u = unitFor(h, 1);
+  for (const item of LAYOUT.filter((b) => b.id !== 'gear')) {
+    for (const mirrored of [item, ...layoutFor({ ...plain, mirror: true }).filter((b) => b.id === item.id)]) {
+      const cx = 300, cy = 200;
+      const place = placeFromPoint(mirrored, w, h, u, cx, cy);
+      const r = rectOf({ ...mirrored, ...place }, w, h, u);
+      assert.ok(Math.abs((r.left + r.right) / 2 - cx) <= 0.05 * u && Math.abs((r.top + r.bottom) / 2 - cy) <= 0.05 * u, `${item.id} ${mirrored.anchor}`);
+    }
+  }
+});
+
+test('a control dragged past an edge stays whole on screen', () => {
+  const [w, h] = [915, 412], u = unitFor(h, 1);
+  for (const [cx, cy] of [[-50, -50], [w + 50, h + 50], [0, h], [w, 0]]) {
+    for (const item of LAYOUT.filter((b) => b.id !== 'gear')) {
+      const r = rectOf({ ...item, ...placeFromPoint(item, w, h, u, cx, cy) }, w, h, u);
+      assert.ok(r.left >= -0.05 * u && r.top >= -0.05 * u && r.right <= w + 0.05 * u && r.bottom <= h + 0.05 * u, `${item.id} at ${cx},${cy}`);
+    }
+  }
+});
+
+test('left handed swaps the stick and look zones; the screen is covered once either way', () => {
+  const [w, h] = [915, 412];
+  const right = zonesFor(false, w, h), left = zonesFor(true, w, h);
+  assert.equal(right.stick.left, 0);
+  assert.equal(left.look.left, 0);
+  assert.equal(left.stick.left, left.look.width);
+  for (const z of [right, left]) assert.ok(Math.abs(z.stick.width + z.look.width - w) < 1e-6);
+  assert.equal(right.stick.top, ZONE.top * h);
 });

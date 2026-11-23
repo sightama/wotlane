@@ -284,8 +284,12 @@ connected pad. Everything that feeds it lives in the page (`web/pads.js`, `web/t
   at the top middle. Several fingers work at once; a press stays down at least 80 ms, so a tap shorter than the game's pad reads is still
   read. A quick tap (under 220 ms, under 12 px) on either zone is also a mouse click on the game: menu lines are picked by pointer, and in a
   fight a click is the light attack. The stick moves the menu selection, Cross chooses and Triangle goes back, as on a pad.
-  Vibration (`navigator.vibrate`) answers a press and the game's own rumble. The gear opens size (0.7 to 1.2), opacity and vibration,
-  kept in `localStorage` (`wotlane.touch`).
+  Vibration (`navigator.vibrate`) answers a press and the game's own rumble. The gear opens size (0.7 to 1.2), opacity, vibration, Left handed
+  and Move buttons, kept in `localStorage` (`wotlane.touch`). Left handed mirrors every control to the other side (the middle ones swap
+  places) and swaps the stick and look zones; the layout is `layoutFor`, the zones `zonesFor`. Move buttons turns the controls into
+  things to drag (a dashed outline, nothing is pressed): a drop keeps the button's centre where it is, whole on screen, as `place` (units
+  from its anchor); Reset positions clears them, and so does switching hands. The gear itself does not move. `browser_touch_test`'s
+  `touch_layout` scenario drives it.
 - **Steps aside:** a key press, a mouse press or a real pad hides the controls and removes the virtual pad (a real pad would otherwise be player
   2); a touch brings them back unless a real pad is connected. While they are shown the page refuses the game's pointer lock (the mouse
   camera) and leaves any lock, which would zero every touch's coordinates.
