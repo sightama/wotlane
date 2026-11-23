@@ -430,13 +430,13 @@ def decode_mesh(img, node):
     return md
 
 
-# ---------------------------------------------------------------- estado do GS herdado (tools/pose.py, tools/lvlglb.py)
+# ---------------------------------------------------------------- inherited GS state (tools/pose.py, tools/lvlglb.py)
 
-GS_DEFAULT = (0x44, -1, False, 2)   # ctxDef do jogo: ALPHA_1 0x44, sem teste de alfa, grava Z, teste de Z normal
+GS_DEFAULT = (0x44, -1, False, 2)   # the game's ctxDef: ALPHA_1 0x44, no alpha test, writes Z, normal Z test
 
 
 def gs_apply(img, gs, ctxp):
-    """Estado do GS depois do pacote A+D do ctx de um no (Scene::groupState; GsState::apply do nativo)."""
+    """GS state after a node's ctx A+D packet (Scene::groupState; the native GsState::apply)."""
     ctxp &= 0x0FFFFFFF
     if not ctxp or not img.ok(ctxp, 0x20) or img.u32(ctxp + 0x14) != 0x10000000 or img.u32(ctxp + 0x18) != 0xE:
         return gs
@@ -457,7 +457,7 @@ def gs_apply(img, gs, ctxp):
     return (blend, aref, zmsk, ztst)
 
 
-# ---------------------------------------------------------------- hierarquia
+# ---------------------------------------------------------------- hierarchy
 
 def ident():
     return [[1.0 if r == c else 0.0 for c in range(4)] for r in range(4)]

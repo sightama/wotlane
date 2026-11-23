@@ -246,8 +246,8 @@ def _paeth(a, b, c):
 
 
 def read_png(path):
-    """PNG de 8 bits sem entrelacamento: tons de cinza, RGB, paleta, cinza+alfa e RGBA. Devolve (w, h, [(r,g,b,a)]).
-    `path` tambem pode ser o conteudo do arquivo (bytes)."""
+    """Non-interlaced 8-bit PNG: grayscale, RGB, palette, gray+alpha and RGBA. Returns (w, h, [(r,g,b,a)]).
+    `path` can also be the file's contents (bytes)."""
     if isinstance(path, (bytes, bytearray)):
         d, path = bytes(path), "PNG"
     else:
@@ -496,16 +496,16 @@ class Library:
         self.cache = {}
 
     def alpha_max(self, tex_id, tex0):
-        """Maior alfa cru do GS da textura (0x80 = 1,0; ate 0xFF), ou 0x80 sem textura ou com TCC = 0. O jogo multiplica o
-        alfa do vertice por ele (As = Av * At / 0x80): nas fases, vertice em ~0x42 com textura em 0xFF da opaco."""
+        """The texture's highest raw GS alpha (0x80 = 1.0; up to 0xFF), or 0x80 with no texture or with TCC = 0. The game
+        multiplies the vertex alpha by it (As = Av * At / 0x80): in stages, a vertex at ~0x42 with a texture at 0xFF comes out opaque."""
         img = self.image(tex_id, tex0, hi=True)
         if img is None or not tex0_fields(tex0)["tcc"]:
             return 0x80
         return max(a for (_r, _g, _b, a) in img[2]) if img[2] else 0x80
 
     def image(self, tex_id, tex0, hi=False):
-        """(w, h, [(r,g,b,a)]) da textura que o objeto usa, ou None. TCC = 0 (so RGB) sai com alfa 255, como no jogo.
-        hi: alfa cru do GS (0x80 = 1,0) em vez do alfa do PNG."""
+        """(w, h, [(r,g,b,a)]) of the texture the object uses, or None. TCC = 0 (RGB only) comes out with alpha 255, as in the game.
+        hi: the raw GS alpha (0x80 = 1.0) instead of the PNG's alpha."""
         key = (tex_id, tex0, hi)
         if key in self.cache:
             return self.cache[key]

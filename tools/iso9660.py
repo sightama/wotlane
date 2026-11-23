@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Leitura de uma imagem ISO9660 (o disco do jogo como .iso), so o necessario para o kit de mods: listar pastas e copiar arquivos.
+"""Reads an ISO9660 image (the game's disc as an .iso), only what the mod kit needs: list folders and copy files out.
 
-  python tools/iso9660.py <iso> [pasta]      lista a pasta (padrao: a raiz)
+  python tools/iso9660.py <iso> [folder]     lists the folder (default: the root)
 
-Nomes sem diferenciar maiusculas e sem a versao ";1", como o native/wotm_disc.hpp.
+Names are case-insensitive and drop the ";1" version, like native/wotm_disc.hpp.
 """
 import os
 import struct
@@ -17,13 +17,13 @@ class Iso:
     def __init__(self, path):
         self.path = path
         self.f = open(path, "rb")
-        self.lock = threading.RLock()   # a interface le retratos numa thread enquanto extrai em outra
+        self.lock = threading.RLock()   # a GUI reads portraits on one thread while extracting on another
         pvd = self._read(16 * SECTOR, SECTOR)
         if pvd[0] != 1 or pvd[1:6] != b"CD001":
             self.f.close()
             raise ValueError("%s is not an ISO9660 image" % path)
         self.root = self._entry(pvd[156:156 + 34])
-        self._dirs = {}   # "MON" -> {"LIZARD0.TEX": (lba, tamanho, e_pasta, nome)}
+        self._dirs = {}   # "MON" -> {"LIZARD0.TEX": (lba, size, is_dir, name)}
 
     def close(self):
         self.f.close()
@@ -61,11 +61,11 @@ class Iso:
         out, o = {}, 0
         while o < len(data):
             n = data[o]
-            if n == 0:   # registros nao cruzam setores
+            if n == 0:   # records do not cross sectors
                 o = (o // SECTOR + 1) * SECTOR
                 continue
             ent = self._entry(data[o:o + n])
-            if data[o + 32] == 1 and data[o + 33] in (0, 1):   # "." e ".."
+            if data[o + 32] == 1 and data[o + 33] in (0, 1):   # "." and ".."
                 o += n
                 continue
             out[ent[3].upper()] = ent
@@ -74,7 +74,7 @@ class Iso:
         return out
 
     def find(self, rel):
-        """(lba, tamanho, e_pasta, nome) de um caminho ("MON/LIZARD0.TEX"), ou None."""
+        """(lba, size, is_dir, name) of a path ("MON/LIZARD0.TEX"), or None."""
         rel = rel.replace("\\", "/").strip("/")
         if not rel:
             return self.root
@@ -83,7 +83,7 @@ class Iso:
         return d.get(base.upper()) if d else None
 
     def listdir(self, rel=""):
-        """Nomes da pasta como estao no disco; [] se ela nao existe."""
+        """Names in the folder as they are on the disc; [] if it does not exist."""
         d = self._dir(rel.replace("\\", "/"))
         return [e[3] for e in d.values()] if d else []
 

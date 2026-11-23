@@ -98,16 +98,16 @@ class Materials:
     """One material per (section slot's texture, TEX0, blend), with the tex.Library image embedded in the .glb."""
 
     def __init__(self, g, img, lib, unlit, stats, raw=False):
-        """raw: a textura com o alfa cru do GS (0x80 = 1,0, ate 0xFF; tex.Library.image hi=True), para quem faz a modulacao
-        do GS no shader (tools/lvlglb.py); o padrao e o alfa do PNG (0x80 ou mais = 255)."""
+        """raw: the texture with the raw GS alpha (0x80 = 1.0, up to 0xFF; tex.Library.image hi=True), for a caller that does the
+        GS modulation in the shader (tools/lvlglb.py); the default is the PNG's alpha (0x80 or more = 255)."""
         self.g, self.img, self.lib, self.unlit, self.stats, self.raw = g, img, lib, unlit, stats, raw
         self.cache = {}
 
     def get(self, node, slot, blend, gs=None, extras=None):
-        """blend: PRIM.ABE da malha. gs: estado do GS herdado (pose.Item.gs: ALPHA_1, aref, zmsk, ztst) ou None (o padrao
-        antigo: recorte de alfa em ~6%). Com gs, o material leva em extras.gs o modo de mistura (com ABE), o limiar do
-        teste de alfa e o ZMSK; o viewer monta a mistura do GS com eles (o glTF so tem OPAQUE/MASK/BLEND).
-        extras: campos a mais nos extras do material (entram na chave), ex. a nevoa e o alphaSort do tools/lvlglb.py."""
+        """blend: the mesh's PRIM.ABE. gs: inherited GS state (pose.Item.gs: ALPHA_1, aref, zmsk, ztst) or None (the old
+        default: alpha cutoff at ~6%). With gs, the material carries in extras.gs the blend mode (with ABE), the alpha test
+        threshold and ZMSK; the viewer rebuilds the GS blending from them (glTF only has OPAQUE/MASK/BLEND).
+        extras: extra fields for the material's extras (part of the cache key), e.g. the fog and alphaSort of tools/lvlglb.py."""
         img, lib, g, stats = self.img, self.lib, self.g, self.stats
         gk = None
         if gs is not None:
@@ -134,7 +134,7 @@ class Materials:
         if key[0] == "tex":
             im = lib.image(key[1], key[2], hi=self.raw)
             if im is not None and self.raw and not tex.tex0_fields(key[2])["tcc"]:
-                im = (im[0], im[1], [(r, gg, b, 0x80) for (r, gg, b, _a) in im[2]])   # TCC = 0: At = 1,0
+                im = (im[0], im[1], [(r, gg, b, 0x80) for (r, gg, b, _a) in im[2]])   # TCC = 0: At = 1.0
             if im is None:
                 stats["sem_textura"] += 1
                 m["name"] = "tex%d_nao_achada" % key[1]
