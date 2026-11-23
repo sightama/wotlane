@@ -45,11 +45,11 @@ async function run(name) {
     // the game runs: the panel is gone and Tab is the game's
     await page.evaluate(() => {
       document.getElementById('front').hidden = true;
+      document.getElementById('stage').inert = false;   // what front.js leaveFront() does with the panel
       const canvas = document.getElementById('canvas');
       window.tabEvents = [];
       window.addEventListener('keydown', (e) => { if (e.key === 'Tab') window.tabEvents.push(e.defaultPrevented); });   // after gameinput's capture listener
       window.wotmStart(null, 'test');   // the page's own start (boot.js); the game's files are not there, which does not matter here
-      canvas.tabIndex = 0;
       canvas.focus();
     });
     await page.keyboard.press('Tab');

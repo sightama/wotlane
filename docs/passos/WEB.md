@@ -333,6 +333,10 @@ OpenGraph and Twitter tags and JSON-LD (`web/index.html`, tested by `web/legal.t
   (`tools/browser_mp_test/README.md`; its log readers: `node --test tools/browser_mp_test/test/`).
 - `node tools/browser_input_test/run.mjs --browser all`: a real Chromium and Firefox on the page with no game: Tab does not move focus once the game
   runs, and the cursor over the game hides after 2 s idle and shows on a move.
+- `node tools/page_check.mjs --browser chrome|brave|firefox`: the front panel's accessibility and layout in a real, muted browser against a
+  local `wotm_server` (no game is loaded): every rule checkbox has its own label, the first Tab stop is in the panel and the canvas is not a tab
+  stop, an Enter that confirms an IME conversion does not send chat. `--site <folder>` checks a copy of an older `web/`. Needs
+  `sh tools/test_net.sh notest` first and Playwright.
 - `node tools/browser_diag_test/run.mjs`: a real Chromium against a local `wotm_server --diag-dir` (no game is loaded): the join,
   periodic and last reports and a Send report from the front page reach the server's files, with no chat text and no user agent string in
   them. Needs `sh tools/test_net.sh notest` first and Playwright (see `tools/browser_mp_test/README.md`).
