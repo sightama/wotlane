@@ -156,11 +156,11 @@ export async function readSettings(root) {
 
 let queue = Promise.resolve();
 
-// One change, saved at once: the file is read, the option set and the whole file written back (a change made while another is still
-// being saved waits its turn). Resolves to the new text
-export function updateSetting(root, key, value) {
+// One change, saved at once: the file is read, `change` (text in, text out) applied and the whole file written back (a change made while
+// another is still being saved waits its turn). Resolves to the new text
+export function editSettings(root, change) {
   const run = async () => {
-    const next = setOption(await readSettings(root), key, value);
+    const next = change(await readSettings(root));
     const writable = await (await root.getFileHandle(FILE, { create: true })).createWritable();
     await writable.write(next);
     await writable.close();
@@ -170,6 +170,9 @@ export function updateSetting(root, key, value) {
   queue = result.catch(() => {});
   return result;
 }
+
+// One option changed: see editSettings
+export const updateSetting = (root, key, value) => editSettings(root, (text) => setOption(text, key, value));
 
 // Resolves once every change made so far is in the file (the game must not start before that)
 export const settingsSaved = () => queue;

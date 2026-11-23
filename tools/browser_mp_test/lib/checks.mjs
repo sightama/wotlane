@@ -650,6 +650,67 @@ export async function singleSession(run) {
   }
 }
 
+// Keys remapped on the Settings page's Controls tab: the card changes and cancels as asked, the keys are in settings.ini, and the game
+// reads them: a key no default uses (J) held in a match is the button it was given to (circle)
+export async function remapSession(run) {
+  const R = run.report;
+  const check = 'remap';
+  const players = [];
+  const row = (name, ok, detail) => R.add(1, name, ok ? 'pass' : 'fail', detail);
+  try {
+    players.push(...await run.openPlayers(1, check, { env: { WOTM_PADLOG: String(run.opts.padlogFrames) } }));
+    const p = players[0];
+    const keyButton = (bind, slot) => p.page.locator(`#controlsTable [data-bind="${bind}"][data-slot="${slot}"]`);
+    await p.page.click('#openSettings');
+    await p.page.click('#tab-controls');
+    const settled = (bind, slot, label) => p.page.waitForFunction(([b, sl, l]) => document.querySelector(`#controlsTable .key[data-bind="${b}"][data-slot="${sl}"]`)?.textContent.trim() === l, [bind, slot, label], { timeout: 10000 });
+    await keyButton('CIRCLE', 0).click();
+    await p.page.keyboard.press('KeyJ');
+    await settled('CIRCLE', 0, 'J');
+    await keyButton('SQUARE', 0).click();
+    await p.page.keyboard.press('Escape');
+    await sleep(300);
+    const shown = { circle: (await keyButton('CIRCLE', 0).textContent()).trim(), square: (await keyButton('SQUARE', 0).textContent()).trim() };
+    row('remap_card', shown.circle === 'J' && shown.square === 'Left mouse button' && await p.page.isVisible('#settings'),
+      `Grab shows ${shown.circle}, Light attack after Esc ${shown.square}, the card ${await p.page.isVisible('#settings') ? 'still open' : 'closed'}`);
+    await keyButton('TRIANGLE', 1).click();
+    await p.page.mouse.click(300, 300, { button: 'middle' });
+    await settled('TRIANGLE', 1, 'Middle mouse button');
+    await sleep(600);   // past the moment the page drops the clicks a mouse press goes on to make
+    await keyButton('CIRCLE', 0).click();
+    const waiting = (await keyButton('CIRCLE', 0).textContent()).trim();
+    await p.page.keyboard.press('Escape');
+    row('remap_mouse', waiting === 'Press a key…', `a middle click was taken as a key, and the next click on a key button waited for a key: ${JSON.stringify(waiting)}`);
+    await keyButton('CROSS', 0).click();
+    await p.page.keyboard.press('KeyJ');
+    await p.page.waitForFunction(() => /Grab got Space/.test(document.getElementById('settingsMsg').textContent), null, { timeout: 10000 }).catch(() => {});
+    const moved = { cross: (await keyButton('CROSS', 0).textContent()).trim(), circle: (await keyButton('CIRCLE', 0).textContent()).trim(), msg: (await p.page.textContent('#settingsMsg')).trim() };
+    row('remap_conflict', moved.cross === 'J' && moved.circle === 'Space' && /Grab got Space/.test(moved.msg), `Jump shows ${moved.cross}, Grab swapped to ${moved.circle}; the card says ${JSON.stringify(moved.msg)}`);
+    await keyButton('CROSS', 0).click();   // Space goes back to Jump and Grab gets J again (a swap)
+    await p.page.keyboard.press('Space');
+    await settled('CROSS', 0, 'Space');
+    const readIni = () => p.page.evaluate(async () => (await (await (await navigator.storage.getDirectory()).getFileHandle('settings.ini')).getFile()).text());
+    let ini = await readIni();
+    for (let i = 0; i < 20 && !/^KB_CIRCLE=J,F$/m.test(ini); i++) { await sleep(250); ini = await readIni(); }   // the page saves after it shows
+    row('remap_file', /^KB_LAYOUT=4$/m.test(ini) && /^KB_CIRCLE=J,F$/m.test(ini) && /^KB_CROSS=SPACE$/m.test(ini), `settings.ini: ${ini.split('\n').filter((l) => /^KB_(LAYOUT|CIRCLE|CROSS)=/.test(l)).join(' ')}`);
+    await p.page.click('#closeSettings');
+    const lobby = await formLobby(players);
+    const started = lobby.ok && (await startMatch(players)).ok;
+    if (!started) return row('remap_game', false, 'the match did not start');
+    await p.focusGame();
+    await p.hold('j', 10000);
+    await sleep(3000);
+    await p.pollLog();
+    const seen = padButtons(p.logText).get(0) ?? 0;
+    row('remap_game', (seen & 0x2000) === 0x2000, `with J on Grab the game read pad 1 buttons 0x${seen.toString(16)} (circle is 0x2000)`);
+  } catch (e) {
+    R.add(1, 'remap_error', 'fail', e.stack?.split('\n').slice(0, 2).join(' ') ?? String(e));
+  } finally {
+    await run.saveEvidence(1, check, players, '').catch(() => {});
+    await run.closeAll(players);
+  }
+}
+
 // The Settings card's Saves tab on seeded memory-card saves: the list, a backup download, delete with its automatic backup, restore from the
 // backup and a zip that is refused. No game boots, so it takes seconds.
 export async function savesSession(run) {
