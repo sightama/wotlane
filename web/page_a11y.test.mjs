@@ -26,5 +26,5 @@ test('the stage starts inert, so Tab starts in the front panel that covers it', 
 });
 
 test('the canvas can be focused by script but is not in the tab order', () => {
-  assert.match(html, /<canvas id="canvas" tabindex="-1"/);
+  assert.match(html, /<canvas id="canvas" tabindex="-1" oncontextmenu=/);
 });
