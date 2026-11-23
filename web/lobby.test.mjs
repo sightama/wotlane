@@ -438,6 +438,6 @@ test('LobbyClient rejoin sends REJOIN and resolves with the code once the member
   assert.equal(await back, 'QZXW');
   assert.equal(members.owner, 'Ana');
   const refused = client.rejoin('QZXW', 'bb'.repeat(16));
-  ws.reply("ERROR can't rejoin (the place in the lobby expired); join again with the code");
+  ws.reply("ERROR can't rejoin (that place is gone or was already used); join again with the code");
   await assert.rejects(refused, /can't rejoin/);
 });

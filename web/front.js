@@ -269,7 +269,7 @@ async function connect(build) {
   client.onChat = showChat;
   client.onPings = (p) => { pings = p; showMemberStatus(); };
   client.onHealth = (h) => { healths = h; showMemberStatus(); };
-  client.onToken = ({ code, token }) => storeRejoin(tabStorage(), code, token, Date.now());
+  client.onToken = ({ code, token }) => storeRejoin(tabStorage(), code, token, Date.now(), { name: myName, monster: myMonster });
   client.onKicked = ({ seconds }) => backToChoice(`The owner removed you from the lobby. You can join it again in ${seconds} seconds.`);
   client.onSettings = (s) => {
     // a saved map shows by its name when this browser has it (Your creations), else by its id
@@ -414,11 +414,10 @@ function tabStorage() {
 // rematch, web/rematch.js, takeRejoin); without a place, or when the server no longer has it, the lobby's code is offered as before
 async function rejoinLastLobby(place) {
   if (!place) return offerLastLobby();
-  myName = cleanName(recall('name', ''));   // the server gives back the name and monster this player had; the page remembers both
-  myMonster = recall('monster', 5);
+  myName = place.name;   // the server gives back the name and monster this player had; this tab kept both with its token
+  myMonster = place.monster;
   say('Going back to your lobby');
-  const back = await enterLobby(async (l) => ({ code: await l.rejoin(place.code, place.token), isOwner: members.owner === myName }), true);
-  if (!back) offerLastLobby();
+  await enterLobby(async (l) => ({ code: await l.rejoin(place.code, place.token), isOwner: members.owner === myName }), true);
 }
 
 async function sendSettings() {
@@ -532,7 +531,7 @@ function init() {
   showFirefoxTip();
   const invited = window.inviteCode(new URLSearchParams(location.search));
   // the server keeps a place from the moment this page's lobby connection drops: that is when the rejoin's clock starts too
-  window.addEventListener('pagehide', () => leavingPage(tabStorage(), Date.now()));
+  window.addEventListener('pagehide', () => leavingPage(tabStorage(), Date.now(), { name: myName, monster: myMonster }));
   const place = invited ? null : takeRejoin(tabStorage(), Date.now());
   if (invited) {   // a reload doesn't join again; the address keeps its other parts
     const rest = new URLSearchParams(location.search);
@@ -545,7 +544,7 @@ function init() {
   fill($('lobbyStage'), STAGES, recall('stage', 1));
   fill($('wins'), [[0, 'Endless'], ...[1, 2, 3, 4, 5].map((n) => [n, String(n)])], recall('wins', 2));
   addLobbyChoices($('monster'), $('lobbyStage')).then(() => {   // a remembered skin or map is picked again once it is listed
-    $('monster').value = recall('monster', 5);
+    $('monster').value = myMonster || recall('monster', 5);   // a rejoined player's pick is this tab's, not the browser's last
     if (!$('monster').value) $('monster').value = '5';
     $('lobbyStage').value = recall('stage', 1);
     if (!$('lobbyStage').value) $('lobbyStage').value = '1';

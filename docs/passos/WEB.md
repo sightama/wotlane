@@ -217,13 +217,14 @@ A refusal from the server (name taken, no such lobby, lobby full, lobby in a mat
 `LobbyClient.close()` silences `onClose`, which only reports a connection that dropped. The panel is a flex column that scrolls
 (`#front` has `overflow-y: auto`, its card `margin: auto`), so a card taller than the window (8 members, a zoomed page) keeps Start
 reachable. After a match (or Leave the match, which reloads the page) the page goes back to its lobby by itself (quick rematch,
-`web/rematch.js`): every lobby connection says `rejoin=1`, the page keeps the `TOKEN` and lobby code in the tab's `sessionStorage`
-(so two tabs keep their own places), and on load it sends `REJOIN` with them, once and only within the server's 120 s, counted
+`web/rematch.js`): every lobby connection says `rejoin=1`, the page keeps the `TOKEN`, the lobby code and this player's name and monster pick in the tab's `sessionStorage`
+(so two tabs keep their own places; a duplicated tab copies them and takes the original's), and on load it sends `REJOIN` with them, once and only within the server's 120 s, counted
 like the server's from the moment the page went away (`pagehide`). It waits for the members list to know whether it owns the lobby
 again, then shows the lobby with the owner's Start button reading Rematch and the owner's controls showing the lobby's stage, wins
-and modifiers. Leave, a removal by the owner and an invite link drop the token. Without a token, or when the rejoin is refused (the lobby is gone, the place expired, a
-match is on), the panel asks the server for its lobbies (`LIST`, over a short-lived `LobbyClient`) and offers the last lobby's code
-only while that lobby is listed. A lobby still in a match is named as such; one that is gone gets no note and no prefilled code.
+and modifiers. Leave, a removal by the owner and an invite link drop the token. When the rejoin is refused (the lobby is gone, the place
+expired, a match is on), the panel shows the server's reason and the Host/Join choice. Without a token the panel asks the server for its
+lobbies (`LIST`, over a short-lived `LobbyClient`) and offers the last lobby's code only while that lobby is listed. A lobby still in a
+match is named as such; one that is gone gets no note and no prefilled code.
 
 `wotm_server --ws-port <port> [--ws-bind <address>]` (default bind `127.0.0.1`, behind a web server that terminates HTTPS) takes these
 connections: `/lobby` behaves as a TCP lobby connection, `/match` carries binary frames of one channel byte and the same datagram as
