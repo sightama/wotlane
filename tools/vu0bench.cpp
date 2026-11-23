@@ -1,7 +1,11 @@
-// Replays the VU0 interpreter samples written by PS2X_DUMP_VU0 (vu0_samples.bin + vu0_code.bin, from the ps2EntryRunner) through the
-// native VU0 microprograms (native/runtime/wotm_vu0_native.cpp + the generated .inc) and compares the result with the interpreter's,
-// field by field (as the runtime's PS2X_VU0_VERIFY does). Proves the native VU0 is bit-exact on a new compiler/CPU (e.g. arm64 through
-// sse2neon). Built and run by tools/vu0bench.sh. Usage: vu0bench <vu0_code.bin> <vu0_samples.bin> [repeats]
+// ABOUTME: Replays recorded VU0 microprogram calls through the native VU0 code and checks that every build (native, wasm) gives the
+// ABOUTME: same bits on them; with repeats it also times each microprogram. Built and run by tools/vu0bench.sh.
+// The samples come from PS2X_DUMP_VU0 (vu0_samples.bin + vu0_code.bin, written by the VU0 interpreter in the ps2EntryRunner): each
+// is a call's input state and the interpreter's result. The native microprograms (native/runtime/wotm_vu0_native.cpp + the generated
+// .inc) round to nearest and the interpreter rounds toward zero like the PS2, so the two differ in the last bit of many results; that
+// count is printed for information only. What must hold is that every build of the native code gives the same result as every other:
+// --save writes this build's results, --expect compares this build's results with a file another build saved, field by field.
+// Usage: vu0bench <vu0_code.bin> <vu0_samples.bin> [repeats] [--save <file> | --expect <file>]
 // With repeats, every sample then runs that many more times and the mean time per call of each microprogram is printed (to compare
 // two versions of the native code on the same machine).
 #include "wotm_vu0_native.h"
@@ -10,12 +14,63 @@
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include <string>
 #include <vector>
+
+namespace
+{
+    // The parts of a call's result the check compares (registers, flags, cycles and VU0 data), as bytes: equal bytes are equal bits
+    std::vector<uint8_t> resultBytes(const VU1State &s, const std::vector<uint8_t> &data)
+    {
+        std::vector<uint8_t> out;
+        auto put = [&out](const void *p, size_t n) {
+            const auto *b = static_cast<const uint8_t *>(p);
+            out.insert(out.end(), b, b + n);
+        };
+        put(s.vf, sizeof s.vf), put(s.vi, sizeof s.vi), put(s.acc, sizeof s.acc), put(&s.q, 4), put(&s.p, 4), put(&s.i, 4);
+        put(&s.r, 4), put(&s.pc, 4), put(&s.mac, 4), put(&s.clip, 4), put(&s.status, 4), put(&s.cycles, 8);
+        const uint32_t n = static_cast<uint32_t>(data.size());
+        put(&n, 4), put(data.data(), data.size());
+        return out;
+    }
+
+    void printDifference(const char *what, uint32_t pc, long sample, const std::vector<uint8_t> &a, const std::vector<uint8_t> &b)
+    {
+        std::printf("pc=0x%x sample %ld differs from %s", pc, sample, what);
+        if (a.size() != b.size())
+            return (void)std::printf(": result size %zu/%zu\n", a.size(), b.size());
+        std::printf("\n");
+        for (size_t r = 0; r < 32; ++r)
+        {
+            float x[4], y[4];
+            std::memcpy(x, a.data() + 16 * r, 16);
+            std::memcpy(y, b.data() + 16 * r, 16);
+            if (std::memcmp(x, y, 16))
+                std::printf("   vf%02zu this %a %a %a %a | %s %a %a %a %a\n", r, x[0], x[1], x[2], x[3], what, y[0], y[1], y[2], y[3]);
+        }
+        for (size_t k = 512; k < a.size(); ++k)
+            if (a[k] != b[k])
+                return (void)std::printf("   first other difference at result byte %zu (past the vf registers)\n", k);
+    }
+}
 
 int main(int argc, char **argv)
 {
-    if (argc != 3 && argc != 4) { std::fprintf(stderr, "usage: vu0bench <vu0_code.bin> <vu0_samples.bin> [repeats]\n"); return 2; }
-    const long repeats = argc == 4 ? std::atol(argv[3]) : 0;
+    const char *usage = "usage: vu0bench <vu0_code.bin> <vu0_samples.bin> [repeats] [--save <file> | --expect <file>]\n";
+    if (argc < 3) { std::fprintf(stderr, "%s", usage); return 2; }
+    long repeats = 0;
+    std::string savePath, expectPath;
+    for (int k = 3; k < argc; ++k)
+    {
+        if (!std::strcmp(argv[k], "--save") && k + 1 < argc)
+            savePath = argv[++k];
+        else if (!std::strcmp(argv[k], "--expect") && k + 1 < argc)
+            expectPath = argv[++k];
+        else if (argv[k][0] != '-')
+            repeats = std::atol(argv[k]);
+        else { std::fprintf(stderr, "%s", usage); return 2; }
+    }
+    if (!savePath.empty() && !expectPath.empty()) { std::fprintf(stderr, "%s", usage); return 2; }
     struct Sample { uint32_t pc; WotmVu0Fn fn; VU1State in; std::vector<uint8_t> data; };
     std::vector<Sample> kept;
     std::vector<uint8_t> code(4096);
@@ -24,9 +79,13 @@ int main(int argc, char **argv)
     std::fclose(cf);
     FILE *sf = std::fopen(argv[2], "rb");
     if (!sf) { std::fprintf(stderr, "bad samples file\n"); return 2; }
+    FILE *save = savePath.empty() ? nullptr : std::fopen(savePath.c_str(), "wb");
+    FILE *expect = expectPath.empty() ? nullptr : std::fopen(expectPath.c_str(), "rb");
+    if ((!savePath.empty() && !save) || (!expectPath.empty() && !expect)) { std::fprintf(stderr, "can't open the results file\n"); return 2; }
     uint32_t hdr[3];
-    long n = 0, bad = 0, noNative = 0;
-    std::map<uint32_t, std::pair<long, long>> perPc;   // pc -> (samples, mismatches)
+    long n = 0, noNative = 0, offInterp = 0, offExpected = 0, missing = 0;
+    struct Count { long samples = 0, offInterp = 0, offExpected = 0; };
+    std::map<uint32_t, Count> perPc;
     while (std::fread(hdr, sizeof hdr, 1, sf) == 1)
     {
         if (hdr[1] != sizeof(VU1State)) { std::fprintf(stderr, "VU1State size %u in file, %zu here\n", hdr[1], sizeof(VU1State)); return 2; }
@@ -42,29 +101,42 @@ int main(int argc, char **argv)
             kept.push_back({hdr[0], fn, in, din});
         VU1State s = in;
         wotmVu0NativeRun(fn, s, din.data());
-        const VU1State &a = s, &b = out;
-        const bool same = std::memcmp(a.vf, b.vf, sizeof(a.vf)) == 0 && std::memcmp(a.vi, b.vi, sizeof(a.vi)) == 0 &&
-                          std::memcmp(a.acc, b.acc, sizeof(a.acc)) == 0 && std::memcmp(&a.q, &b.q, 4) == 0 && std::memcmp(&a.p, &b.p, 4) == 0 &&
-                          std::memcmp(&a.i, &b.i, 4) == 0 && a.r == b.r && a.pc == b.pc && a.mac == b.mac && a.clip == b.clip &&
-                          a.status == b.status && a.cycles == b.cycles && din == dout;
-        auto &pc = perPc[hdr[0]];
-        ++pc.first;
-        if (!same)
+        const std::vector<uint8_t> mine = resultBytes(s, din);
+        Count &pc = perPc[hdr[0]];
+        ++pc.samples;
+        if (mine != resultBytes(out, dout))
+            ++pc.offInterp, ++offInterp;
+        if (save)
         {
-            ++pc.second;
-            if (++bad <= 8)
+            const uint32_t size = static_cast<uint32_t>(mine.size());
+            std::fwrite(&size, 4, 1, save);
+            std::fwrite(mine.data(), 1, mine.size(), save);
+        }
+        if (expect)
+        {
+            uint32_t size = 0;
+            std::vector<uint8_t> theirs;
+            if (std::fread(&size, 4, 1, expect) == 1 && size <= (1u << 20))
             {
-                std::printf("pc=0x%x sample %ld differs: mac %x/%x clip %x/%x status %x/%x cycles %llu/%llu data %s\n", hdr[0], n, a.mac, b.mac,
-                            a.clip, b.clip, a.status, b.status, (unsigned long long)a.cycles, (unsigned long long)b.cycles, din == dout ? "same" : "DIFF");
-                for (int r = 0; r < 32; ++r)
-                    if (std::memcmp(a.vf[r], b.vf[r], 16))
-                        std::printf("   vf%02d native %a %a %a %a | interp %a %a %a %a\n", r, a.vf[r][0], a.vf[r][1], a.vf[r][2], a.vf[r][3], b.vf[r][0],
-                                    b.vf[r][1], b.vf[r][2], b.vf[r][3]);
+                theirs.resize(size);
+                if (std::fread(theirs.data(), 1, size, expect) != size)
+                    theirs.clear();
+            }
+            if (theirs.empty())
+                ++missing;
+            else if (mine != theirs)
+            {
+                ++pc.offExpected;
+                if (++offExpected <= 8)
+                    printDifference("the expected build", hdr[0], n, mine, theirs);
             }
         }
     }
+    if (save)
+        std::fclose(save);
     for (auto &[pc, c] : perPc)
-        std::printf("pc 0x%03x: %ld samples, %ld mismatches\n", pc, c.first, c.second);
+        std::printf("pc 0x%03x: %ld samples, %ld differ from the interpreter%s\n", pc, c.samples, c.offInterp,
+                    expect ? (", " + std::to_string(c.offExpected) + " from the expected build").c_str() : "");
     if (repeats > 0)
     {
         std::map<uint32_t, std::pair<double, long>> timed;   // pc -> (seconds, calls)
@@ -101,6 +173,17 @@ int main(int argc, char **argv)
         }
         std::printf("time: %.1f ns per call over %ld calls (the copies of each sample's state and data taken off)\n", 1e9 * all / calls, calls);
     }
-    std::printf("total: %ld samples, %ld without a native program, %ld mismatches\n", n, noNative, bad);
-    return bad ? 1 : 0;
+    std::printf("total: %ld samples, %ld without a native program, %ld differ from the interpreter (it rounds toward zero, like the PS2)",
+                n, noNative, offInterp);
+    if (expect)
+    {
+        uint32_t extra;
+        const bool longer = std::fread(&extra, 4, 1, expect) == 1;
+        std::printf(", %ld differ from the expected build%s%s", offExpected, missing ? " (its file ended early)" : "",
+                    longer ? " (its file has more samples)" : "");
+        std::printf("\n");
+        return offExpected || missing || longer ? 1 : 0;
+    }
+    std::printf("\n");
+    return 0;
 }

@@ -65,7 +65,7 @@ class BuildIdTest(unittest.TestCase):
             self.assertEqual(msvc, self.compute(*make_clang_tree(Path(c), '17.0.0.17000013', 'arm64')))
 
     def test_the_browser_build_plays_with_the_native_dev_build(self):
-        # build_web (Emscripten) is build_dev's code with VU0 rounding toward zero in software (wotm_rtz.hpp): the same states, so
+        # build_web (Emscripten) is build_dev's code, VU0 microprograms included (every build rounds to nearest): the same states, so
         # browser and native players can share a lobby; the LTCG build stays apart
         with tempfile.TemporaryDirectory() as a:
             repo, runtime = make_tree(Path(a))

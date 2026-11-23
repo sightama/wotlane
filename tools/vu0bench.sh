@@ -1,33 +1,33 @@
 #!/bin/sh
-# Checks that the native VU0 microprograms (tools/vu0native.py -> wotm_vu0_native.gen.inc) give bit-identical results to the VU0
-# interpreter on this machine (macOS/Linux). Use it after changing wotm_vu0_native.cpp or vu0native.py, and on any new compiler or
-# CPU (arm64 goes through sse2neon). It plays an AI-vs-AI fight in the ps2EntryRunner test build with PS2X_DUMP_VU0=1 (the interpreter
-# records up to 60 samples per microprogram once 300k calls have run), replays every sample through the native code with
-# tools/vu0bench.cpp, and deletes the dumps (they contain game state). With --time it also times the native code on those samples, and
-# with --ref the same code from another commit (e.g. before a change to wotm_vu0_native.cpp), on the same samples.
+# Checks that the native VU0 microprograms (tools/vu0native.py -> wotm_vu0_native.gen.inc) give bit-identical results in the native
+# build of this machine (macOS/Linux) and in the WebAssembly build: every PC in a match must compute the same thing. Use it after
+# changing wotm_vu0_native.cpp or vu0native.py, and on any new compiler or CPU (arm64 goes through sse2neon). It plays an AI-vs-AI
+# fight in the ps2EntryRunner test build with PS2X_DUMP_VU0=1 (the interpreter records up to 60 samples per microprogram once 300k
+# calls have run), replays every sample through the native code with tools/vu0bench.cpp, native then wasm (under node), compares the
+# two, and deletes the dumps (they contain game state). How many results differ from the interpreter (round toward zero, the PS2's) is
+# printed for information. With --time it also times the native code on those samples, and with --ref the same code from another
+# commit (e.g. before a change to wotm_vu0_native.cpp), on the same samples.
 set -eu
 . "$(dirname "$0")/posix_env.sh"
 
 usage() {
     cat <<EOF
-usage: sh tools/vu0bench.sh [--secs N] [--build <dir>] [--wasm] [--time N] [--ref <commit>]
+usage: sh tools/vu0bench.sh [--secs N] [--build <dir>] [--time N] [--ref <commit>]
   --secs   how long the fight records samples (default 150; fewer than ~120 s may not reach 300k VU0 calls)
   --build  build folder in the runtime folder (default build_dev; sh tools/build_runtime.sh first)
-  --wasm   also replay the samples through the WebAssembly build of the native VU0 (Emscripten in EMSDK or ~/emsdk, run
-           under node), which has no rounding-mode control and must still give the interpreter's bits
   --time   after the check, run every sample N more times and print the time per call of each microprogram
   --ref    with --time: also build that commit's native VU0 code (wotm_vu0_native.cpp and its headers) and time it on the
-           same samples, native and (with --wasm) wasm; prints both, so a change's speedup is measured on one machine
-Prints one line per microprogram and a total; exits 1 on any mismatch. Game log: <runtime>/live.err.log.
+           same samples, native and wasm; prints both, so a change's speedup is measured on one machine
+Needs Emscripten (EMSDK, or ~/emsdk) and node for the wasm build. Prints one line per microprogram and a total for each build;
+exits 1 when the wasm build's results differ from the native build's on any sample. Game log: <runtime>/live.err.log.
 EOF
 }
-secs=150 build=build_dev wasm= repeats= ref=
+secs=150 build=build_dev repeats= ref=
 while [ $# -gt 0 ]; do
     case $1 in
         -h|--help) usage; exit 0 ;;
         --secs) secs=$2; shift 2 ;;
         --build) build=$2; shift 2 ;;
-        --wasm) wasm=1; shift ;;
         --time) repeats=$2; shift 2 ;;
         --ref) ref=$2; shift 2 ;;
         *) usage >&2; exit 2 ;;
@@ -36,7 +36,7 @@ done
 [ -z "$ref" ] || [ -n "$repeats" ] || fail "--ref needs --time"
 rt=$(runtime_dir)
 sse2neon=$rt/$build/_deps/sse2neon-src
-need c++ python3
+need c++ python3 caffeinate
 
 # the microprograms from this checkout's tools/vu0native.py (the build's copy may come from an older one); game code, outside the repo
 step 'generate the VU0 microprograms'
@@ -74,15 +74,13 @@ build_bench() {
 }
 build_bench c++ "$rt/logs/vu0bench_build.log" "$REPO/native" "$bench" "$@"
 [ -z "$ref" ] || build_bench c++ "$rt/logs/vu0bench_ref_build.log" "$refsrc" "$bench.ref" "$@"
-if [ -n "$wasm" ]; then
-    step 'build vu0bench (wasm)'
-    use_emsdk "${EMSDK:-$HOME/emsdk}" || fail "no Emscripten (set EMSDK)"
-    need em++ node
-    # the browser build's flags for this file (tools/build_web.sh), and node reading the dumps straight from disk
-    set -- -std=c++20 -O2 -ffp-contract=off -fno-fast-math -msimd128 -msse4.1 -sNODERAWFS=1 -sEXIT_RUNTIME=1 -sALLOW_MEMORY_GROWTH=1
-    build_bench em++ "$rt/logs/vu0bench_wasm_build.log" "$REPO/native" "$bench.js" "$@"
-    [ -z "$ref" ] || build_bench em++ "$rt/logs/vu0bench_ref_wasm_build.log" "$refsrc" "$bench.ref.js" "$@"
-fi
+step 'build vu0bench (wasm)'
+use_emsdk "${EMSDK:-$HOME/emsdk}" || fail "no Emscripten (set EMSDK)"
+need em++ node
+# the browser build's flags for this file (tools/build_web.sh), and node reading the dumps straight from disk
+set -- -std=c++20 -O2 -ffp-contract=off -fno-fast-math -msimd128 -msse4.1 -sNODERAWFS=1 -sEXIT_RUNTIME=1 -sALLOW_MEMORY_GROWTH=1
+build_bench em++ "$rt/logs/vu0bench_wasm_build.log" "$REPO/native" "$bench.js" "$@"
+[ -z "$ref" ] || build_bench em++ "$rt/logs/vu0bench_ref_wasm_build.log" "$refsrc" "$bench.ref.js" "$@"
 
 step "record samples (${secs}s AI fight in ps2EntryRunner)"
 disc=$rt/discroot
@@ -94,10 +92,12 @@ stop_game() {   # every step may find nothing to stop (|| true: set -e would abo
     [ -z "$game" ] || wait "$game" 2>/dev/null || true
     game=
 }
-trap 'stop_game; rm -f "$disc/vu0_samples.bin" "$disc/vu0_code.bin"' EXIT
+results=$rt/logs/vu0bench_native.results   # the native build's results, which the wasm build must give too
+trap 'stop_game; rm -f "$disc/vu0_samples.bin" "$disc/vu0_code.bin" "$results"' EXIT
 trap 'exit 130' INT TERM
 rm -f "$disc/vu0_samples.bin" "$disc/vu0_code.bin"
-WOTM_MATCH=3,1,1 WOTM_AIVSAI=1 WOTM_MUTE=1 PS2X_DUMP_VU0=1 sh "$rt/run_live.sh" --auto 0 --exe test --build "$build" >/dev/null 2>&1 &
+# under caffeinate: a native game window stops making progress once the display sleeps
+WOTM_MATCH=3,1,1 WOTM_AIVSAI=1 WOTM_MUTE=1 PS2X_DUMP_VU0=1 caffeinate -d -u sh "$rt/run_live.sh" --auto 0 --exe test --build "$build" >/dev/null 2>&1 &
 game=$!
 sleep "$secs"
 stop_game
@@ -110,19 +110,23 @@ replay() {
     label=$1
     shift
     step "$label"
-    "$@" "$disc/vu0_code.bin" "$disc/vu0_samples.bin" $repeats || status=$?
+    "$@" || status=$?
 }
-# with --ref the two versions alternate over 3 rounds, so a change in the machine's load hits both alike
+samples="$disc/vu0_code.bin $disc/vu0_samples.bin"
+# with --ref the two versions alternate over 3 rounds, so a change in the machine's load hits both alike; the first round saves the
+# native results and checks the wasm build's against them
 rounds=1
 [ -z "$ref" ] || rounds=3
 round=0
 while [ $round -lt $rounds ]; do
     round=$((round + 1))
-    replay "replay (round $round)" "$bench"
-    [ -z "$ref" ] || replay "replay at $ref (round $round)" "$bench.ref"
-    if [ -n "$wasm" ]; then
-        replay "replay, wasm (round $round)" node "$bench.js"
-        [ -z "$ref" ] || replay "replay at $ref, wasm (round $round)" node "$bench.ref.js"
+    check_save= check_expect=
+    if [ $round -eq 1 ]; then
+        check_save="--save $results" check_expect="--expect $results"
     fi
+    replay "replay (round $round)" "$bench" $samples $repeats $check_save
+    [ -z "$ref" ] || replay "replay at $ref (round $round)" "$bench.ref" $samples $repeats
+    replay "replay, wasm (round $round)" node "$bench.js" $samples $repeats $check_expect
+    [ -z "$ref" ] || replay "replay at $ref, wasm (round $round)" node "$bench.ref.js" $samples $repeats
 done
 exit $status   # the EXIT trap deletes the dumps
