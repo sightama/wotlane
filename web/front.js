@@ -351,20 +351,24 @@ async function refreshLobbies() {
 }
 
 function startWatchingLobbies() {
-  stopWatchingLobbies();
+  cancelWatching();
   watching++;
   const tick = () => { if (!document.hidden) refreshLobbies(); };
   tick();
   watchTimer = setInterval(tick, LIST_EVERY_MS);
 }
 
-function stopWatchingLobbies() {
+function cancelWatching() {
   watching++;
-  $('lobbyList').hidden = true;   // no Join while a join is under way
   clearInterval(watchTimer);
   watchTimer = 0;
   watcher?.close();
   watcher = null;
+}
+
+function stopWatchingLobbies() {
+  cancelWatching();
+  $('lobbyList').hidden = true;   // no Join while a join is under way
 }
 
 async function hostOrJoin(join) {
@@ -521,8 +525,10 @@ function init() {
   if (problem) {
     say(problem);
     for (const id of ['single', 'host', 'join', 'openSettings']) $(id).disabled = true;
+    $('lobbyList').hidden = true;
     return;
   }
+  for (const id of ['single', 'host', 'join']) $(id).disabled = false;
   initCreations(STAGES);
   initSettings({ remember, recall });
   initReport({ send: sendReport }).available(!!lastDiag());   // after a match the page has reloaded: its numbers are what the report holds
