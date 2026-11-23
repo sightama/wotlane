@@ -246,8 +246,12 @@ def _paeth(a, b, c):
 
 
 def read_png(path):
-    """Non-interlaced 8-bit PNG: grayscale, RGB, palette, gray+alpha and RGBA. Returns (w, h, [(r,g,b,a)])."""
-    d = open(path, "rb").read()
+    """Non-interlaced 8-bit PNG: grayscale, RGB, palette, gray+alpha and RGBA. Returns (w, h, [(r,g,b,a)]).
+    `path` can also be the file's contents (bytes)."""
+    if isinstance(path, (bytes, bytearray)):
+        d, path = bytes(path), "PNG"
+    else:
+        d = open(path, "rb").read()
     if d[:8] != b"\x89PNG\r\n\x1a\n":
         raise ValueError("%s: not a PNG" % path)
     o, idat, plte, trns = 8, b"", None, None
@@ -491,9 +495,18 @@ class Library:
             self.by_id.setdefault(p.texId, p)
         self.cache = {}
 
-    def image(self, tex_id, tex0):
-        """(w, h, [(r,g,b,a)]) of the texture the object uses, or None. TCC = 0 (RGB only) comes out with alpha 255, as in the game."""
-        key = (tex_id, tex0)
+    def alpha_max(self, tex_id, tex0):
+        """The texture's highest raw GS alpha (0x80 = 1.0; up to 0xFF), or 0x80 with no texture or with TCC = 0. The game
+        multiplies the vertex alpha by it (As = Av * At / 0x80): in stages, a vertex at ~0x42 with a texture at 0xFF comes out opaque."""
+        img = self.image(tex_id, tex0, hi=True)
+        if img is None or not tex0_fields(tex0)["tcc"]:
+            return 0x80
+        return max(a for (_r, _g, _b, a) in img[2]) if img[2] else 0x80
+
+    def image(self, tex_id, tex0, hi=False):
+        """(w, h, [(r,g,b,a)]) of the texture the object uses, or None. TCC = 0 (RGB only) comes out with alpha 255, as in the game.
+        hi: the raw GS alpha (0x80 = 1.0) instead of the PNG's alpha."""
+        key = (tex_id, tex0, hi)
         if key in self.cache:
             return self.cache[key]
         res = None
@@ -506,12 +519,12 @@ class Library:
                 if psm in (T8, T4, T8H, T4HL, T4HH):
                     e = self.pair.pals.get(f["cbp"] - self.pair.dcbp)
                     if e is not None:
-                        pal = palette_from_entry(self.pair.rtx_data, e, swap=psm in (T8, T8H))
+                        pal = palette_from_entry(self.pair.rtx_data, e, swap=psm in (T8, T8H), hi=hi)
                         csa = f["csa"] if len(pal) >= 256 else 0
                         px = decode(data, p.data_off(is_rtx), T8 if psm in (T8, T8H) else T4, p.w, p.h, pal, csa)
                         res = (p.w, p.h, px)
                 elif psm in (CT32, CT24, CT16, CT16S):
-                    res = (p.w, p.h, decode(data, p.data_off(is_rtx), psm, p.w, p.h))
+                    res = (p.w, p.h, decode(data, p.data_off(is_rtx), psm, p.w, p.h, hi=hi))
             except (struct.error, IndexError):
                 res = None
             if res and not f["tcc"]:

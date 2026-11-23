@@ -97,25 +97,29 @@ def to_y_up(p):
 class Materials:
     """One material per (section slot's texture, TEX0, blend), with the tex.Library image embedded in the .glb."""
 
-    def __init__(self, g, img, lib, unlit, stats):
-        self.g, self.img, self.lib, self.unlit, self.stats = g, img, lib, unlit, stats
+    def __init__(self, g, img, lib, unlit, stats, raw=False):
+        """raw: the texture with the raw GS alpha (0x80 = 1.0, up to 0xFF; tex.Library.image hi=True), for a caller that does the
+        GS modulation in the shader (tools/lvlglb.py); the default is the PNG's alpha (0x80 or more = 255)."""
+        self.g, self.img, self.lib, self.unlit, self.stats, self.raw = g, img, lib, unlit, stats, raw
         self.cache = {}
 
-    def get(self, node, slot, blend, gs=None):
+    def get(self, node, slot, blend, gs=None, extras=None):
         """blend: the mesh's PRIM.ABE. gs: inherited GS state (pose.Item.gs: ALPHA_1, aref, zmsk, ztst) or None (the old
         default: alpha cutoff at ~6%). With gs, the material carries in extras.gs the blend mode (with ABE), the alpha test
-        threshold and ZMSK; the viewer rebuilds the GS blending from them (glTF only has OPAQUE/MASK/BLEND)."""
+        threshold and ZMSK; the viewer rebuilds the GS blending from them (glTF only has OPAQUE/MASK/BLEND).
+        extras: extra fields for the material's extras (part of the cache key), e.g. the fog and alphaSort of tools/lvlglb.py."""
         img, lib, g, stats = self.img, self.lib, self.g, self.stats
         gk = None
         if gs is not None:
             gk = (gs[0] if blend else None, gs[1], bool(gs[2]) if blend else False)
+        ek = tuple(sorted(extras.items())) if extras else None
         if slot == ngp.SLOT_NOTEX or lib is None:
-            key = ("cor", blend, gk)
+            key = ("cor", blend, gk, ek)
         else:
             s = slot if slot < min(img.u16(node + 0x5A), 5) else 0
             tid = img.u16(node + 0x50 + 2 * s)
             t0 = img.u32(node + 0x70 + 0x30 * s) | (img.u32(node + 0x74 + 0x30 * s) << 32)
-            key = ("tex", tid, t0, blend, gk)
+            key = ("tex", tid, t0, blend, gk, ek)
         if key in self.cache:
             return self.cache[key]
         m = {"pbrMetallicRoughness": {"metallicFactor": 0.0, "roughnessFactor": 1.0}, "doubleSided": True}
@@ -125,8 +129,12 @@ class Materials:
             m["alphaMode"] = "BLEND"
         if gk is not None:
             m["extras"] = {"gs": {"blend": gk[0], "aref": gk[1], "zmsk": gk[2]}}
+        if extras:
+            m.setdefault("extras", {}).update(extras)
         if key[0] == "tex":
-            im = lib.image(key[1], key[2])
+            im = lib.image(key[1], key[2], hi=self.raw)
+            if im is not None and self.raw and not tex.tex0_fields(key[2])["tcc"]:
+                im = (im[0], im[1], [(r, gg, b, 0x80) for (r, gg, b, _a) in im[2]])   # TCC = 0: At = 1.0
             if im is None:
                 stats["sem_textura"] += 1
                 m["name"] = "tex%d_nao_achada" % key[1]
