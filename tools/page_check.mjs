@@ -163,7 +163,7 @@ for (const [view, viewport, opts] of [['desktop', { width: 1280, height: 800 }, 
       'white on the Single player button': ratio(parse(css(document.getElementById('single'), 'color')), parse(css(document.getElementById('single'), 'backgroundColor'))),
     };
   });
-  await check('text contrast is at least 4.5:1 in the panel', async () => {
+  await check('label, footer, placeholder and main button text are at least 4.5:1', async () => {
     const low = Object.entries(await ratios()).filter(([, r]) => r < 4.5).map(([k, r]) => `${k} ${r.toFixed(2)}`);
     expect(low.length === 0, low.join('; '));
   });
@@ -198,6 +198,11 @@ for (const [view, viewport, opts, min] of [['phone', { width: 390, height: 844 }
       .filter((e) => e.offsetParent !== null && !e.disabled).map((e) => [e.id || e.textContent.trim().slice(0, 14), e.getBoundingClientRect().height])
       .filter(([, h]) => h < m - 0.5).map(([n, h]) => `${n} ${Math.round(h)}px`), min);
     expect(small.length === 0, small.join(', '));
+  });
+  await check(`[${view}] the Controls tab does not overflow the screen`, async () => {
+    await page.click('#tab-controls');
+    const w = await page.evaluate(() => { const f = document.getElementById('front'); return [f.scrollWidth, f.clientWidth]; });
+    expect(w[0] <= w[1], `front panel is ${w[0]}px wide in a ${w[1]}px screen`);
   });
   await shot(page, `settings-${view}`);
   await ctx.close();

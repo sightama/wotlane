@@ -64,8 +64,9 @@ test('controls are 24px tall at least, and 44px on a touch screen', () => {
 });
 
 test('the target size reaches the front panel, the status bar and the stall prompt but not the touch controls panel', () => {
-  const lists = [...css.matchAll(/([^{}]*)\{[^}]*min-height:\s*var\(--target\)/g)].map((m) => m[1].split(',').map((x) => x.trim()));
+  const lists = [...css.matchAll(/([^{}]*)\{[^}]*min-height:\s*var\(--target\)/g)].map((m) => m[1].split(/,(?![^(]*\))/).map((x) => x.trim()));
   const selectors = lists.flat();
-  for (const part of ['#front button', '#front select', '#bar button', '#stall button']) assert.ok(selectors.includes(part), `${part} is not sized`);
+  for (const part of ['#front button:not(.key, .keyclear)', '#front select', '#bar button', '#stall button']) assert.ok(selectors.includes(part), `${part} is not sized`);
+  assert.ok(selectors.every((x) => !x.startsWith('#front button') || x.includes(':not(.key, .keyclear)')), 'the key remap buttons stay compact: 24 rows of them would overflow a phone');
   assert.ok(!selectors.includes('button'), 'a bare button rule would resize the touch layout panel (web/touch.js)');
 });
