@@ -5,6 +5,11 @@ the code it asks for and judge every suggestion against the code and `../2026-11
 sent, what came back, a verdict on each suggestion and the new ideas worth measuring. Nothing here was built or measured on the
 game; the checks below are reads of the code and of the saved profiles.
 
+**In short:** most of Gemini's list is untested hypotheses about code generation (aliasing, per-instruction work, label-per-instruction
+switches) that cost little to A/B. Do first: (1) Firefox tiering warm-up, (2) `__restrict__` and macro A/Bs, (3) the big-switch functions.
+Its biggest numbers are optimistic. Counts below come from scripts and generated code that are not in the repo, so they cannot be rerun
+from a clone.
+
 Verdict words: **valid** (holds up against the code), **invalid** (contradicted by the code or the audit), **already tried** (measured and
 dropped, or already on the audit's list), **needs measurement** (plausible, untested; the first cheap test is named).
 
@@ -65,7 +70,7 @@ under the $20 limit. Treat that figure as an upper-bound guess, not a bill.
 |---|---|---|
 | No profile from the platform that fails (everything on an M1 Max, the problem is Windows x86-64: register count, 32 KB L1i, memory bandwidth) | valid | the audit says the shares carry over and takes Windows numbers only from `ee_busy_ms`; the hardware argument is generic and unmeasured. Needs a Gecko or Chrome profile from a Windows machine with the same tools |
 | The 41 MB wasm was never broken down | valid | measured below ("Facts found while checking"): all code, 957 functions over 10 KB, largest 533 KB |
-| Firefox is 2.3x slower than Chrome in `vu0bench` even on plain IEEE arithmetic and nothing explains it | valid, needs measurement | the audit's numbers (Firefox 912 vs Chrome 366 ns RTZ; 520 vs 228 ns timing variant) do show it. First test: run the page bench in Firefox with `javascript.options.wasm_lazy_tiering=false` to see whether lazy tiering still matters in a 3 s bench |
+| Firefox is 2.3x slower than Chrome in `vu0bench` even on plain IEEE arithmetic and nothing explains it | valid, needs measurement | the audit's numbers (Firefox 912 vs Chrome 366 ns RTZ; 520 vs 228 ns timing variant) do show it. First test: run the page bench in Firefox with `javascript.options.wasm_lazy_tiering=false` to see whether lazy tiering still matters in a 3 s bench. Gemini's code-based explanation (per-operation widening to doubles, classification and commit even in the timing variant) is the second thing to check |
 | Inclusive-only shares hide self time and emulation cost | partly invalid | the tools print both; the self-time rows were sent in round 2. What is missing is a per-function split of emulation cost (register file, `ctx->pc`, address checks) from game logic, which no profile gives |
 | Per-frame counts of calls (VU0, indirect calls, checkpoints) are not known | partly invalid | the runtime comments give 27 to 47 thousand `checkpointDue` calls and about 12 thousand VU0 calls per frame in split screen; 1 vs 1 counts are not recorded |
 | Firefox Baseline vs Ion split of the hot functions was not recorded | valid | the eager-tiering run (19% less game thread) is the aggregate; a per-function view is not in the profiles |
@@ -76,7 +81,7 @@ under the $20 limit. Treat that figure as an upper-bound guess, not a bill.
 
 | idea | verdict | notes |
 |---|---|---|
-| VU0 in 4-lane IEEE `f32x4` (the top 6 programs, or all) | already tried | this is the audit's "VU0 rounding to nearest", measured at -37% / -41% per call and waiting for Lane. Gemini's frame-share estimate is about double the audit's |
+| VU0 in 4-lane IEEE `f32x4` (the top 6 programs, or all) | already measured, partly | the audit measured a timing variant of "rounding to nearest" at -37% Chrome and -41% Firefox per call and left it waiting for Lane. Gemini says that variant still widened to doubles and classified every operation, so a real `f32x4` version could go further; the docs do not say what the variant removed, so that is unchecked. Its frame-share estimate (15 to 25%) is about double what the audit derives (8 to 10%) from the measured per-call change. First test: hand-write `vu0_01a8` in `f32x4` in the page bench |
 | Drop VU0 flag work for programs that never read flags, no matter what the interpreter would have left in the registers | needs measurement | the audit's item B measured the upper bound (-22% Chrome, -15% Firefox per call, results kept) and then shipped only the MAC drop, which was noise, because the rest "can't go without changing the VU state". Round 2 adds a fact that changes that: see "Facts", the EE never reads VU0 status, MAC or clip, so the exit flag state is dead for programs with no in-program flag read |
 | `__restrict__` on the VU0 functions (`VU1State &s, uint8_t *d`: a `uint8_t` store through `d` may alias `s.vf`, so the compiler reloads registers after each `sq`), 16-byte loads and stores instead of four 4-byte copies | needs measurement | zero determinism risk, a few lines in `tools/vu0native.py`, testable in the existing page bench in minutes. Not in the audit |
 | `__restrict__` on the recompiled functions' `rdram` and `ctx`, and the same aliasing argument for every guest store (a `uint8_t` store may alias `ctx->r[]`, so GPRs are spilled around it) | needs measurement | plausible by the C++ rules; bit-identical output. A/B on two or three generated files (a sed on the signature) before touching the recompiler. Not in the audit |
@@ -90,8 +95,8 @@ under the $20 limit. Treat that figure as an upper-bound guess, not a bill.
 | Direct `JAL` fast path instead of `dispatchGuestBranch` + `hasFunction` + `lookupFunction` + `pushDispatchPc`; fuse the two range checks | valid | the code does two range checks and two table loads per call plus the ring-buffer write. The seam rows add up to 3.7% (Chrome) and 3.8% (Firefox) self time, so the ceiling is a couple of percent. Hookability (`replaceFunction`, the call trace, the coverage counter, the unwind sequence) must stay |
 | Inline fast path for `checkpointDue` | valid, small | the function is already free of clocks and queues; what remains is the cycle adds, the free-spin check, the profile check and the atomic load, 1.3% self in Chrome. A poll stride is not safe to assume: it can move when interrupts reach the guest |
 | Re-open J (hash map, out-of-line checkpoint, vector under a lock in `writeIORegister`, register copies) | partly invalid, partly valid | there is no hash map (see above), `writeIORegister` is 0.3 to 0.5% self, and the register-copy part was measured (wrapper 2.6% to 2.5%, no gain). The call and checkpoint part was never tried, which is the valid row above |
-| Zero-copy VU0 state, direct call per `vcallms`, drop the per-call static guards and timer | already tried, partly | the copy trim was measured and dropped. The wrapper is still 2.1% self in Chrome, so something else in it costs; the static guards, `Vu0Timer` and the lookup are candidates, nothing is measured |
-| Skip `pktAddVu1ObjAsm` and `psObjectCull` on every build, not only in hidden redos | already tried | audit item G, unscheduled ("small to skip, medium to prove"); `firefox-cost.md` measured that the state spread stays in a few buffer blocks. Valid, worth about 3.5% |
+| Zero-copy VU0 state, direct call per `vcallms`, drop the per-call static guards and timer | needs measurement | the copy trim (a register mask) was measured and dropped; `R5900Context` already holds the VU0 registers, so skipping the copy entirely is untested. The wrapper is still 2.1% self in Chrome, so something else in it costs; the static guards, `Vu0Timer` and the lookup are candidates, nothing is measured |
+| Skip `pktAddVu1ObjAsm` and `psObjectCull` on every build, not only in hidden redos | already on the audit list | audit item G, unscheduled ("small to skip, medium to prove"); `firefox-cost.md` measured that the state spread stays in a few buffer blocks. Valid, worth about 3.5% |
 | Find why skipping `hierShadow` spreads to 21 blocks with 8 monsters (trace the first divergence) | needs measurement | audit item H stops at "the pass writes state the game reads". `WOTM_SYNCTEST_TRACE` on that run names the first write; Gemini's guess about the cause is unsupported. Up to 10% with 8 monsters if the side effect is small |
 | In-app Firefox tiering warm-up: call the hot functions many times at boot with an early return so SpiderMonkey tiers them up before frame 0 | needs measurement | not in the audit (row C ends at "a tip or a Mozilla bug"). Zero determinism risk. See the top ideas |
 | Shrink the wasm: `-Os` or `-O2` for cold code, ThinLTO, `-mnontrapping-fptoint`, `wasm-opt` | needs measurement | the build is `-O3` with no LTO and the link line carries `-O3` too (see "Facts"), so wasm-opt does run. Whether non-trapping float conversions are on was not checked. Cold-code `-Os` only pays if it shrinks the 957 big functions |
@@ -102,7 +107,7 @@ under the $20 limit. Treat that figure as an upper-bound guess, not a bill.
 | Move the sound mix to the audio thread | already tried | audit item K, unscheduled |
 | Off-screen civilians, world transform cache, GPU renderer | already tried | Gemini agrees with the audit's rulings on E, I and D (on E it disagrees with the reasoning but agrees to leave it) |
 | Page-diff or dirty-page rollback snapshot | needs measurement | `firefox-cost.md` already lists it. First count how many 16 KB pages change per frame and per fight from the synctest's slots. Rollback is paused, so this waits |
-| The unnamed 10% Firefox self row (`0x1967f350c` in `tier_default`) | already known | its callers are unsymbolicated native frames, and its share matches the "10 to 12%" of Firefox wake-ups from the vsync wait that `firefox-cost.md` counts as busy and the audit leaves out. It is not game work. Symbolicating it would settle it |
+| The unnamed 10% Firefox self row (`0x1967f350c` in `tier_default`) | needs measurement, probably known | its callers are unsymbolicated native frames, and its share matches the "10 to 12%" of Firefox wake-ups from the vsync wait that `firefox-cost.md` counts as busy and the audit leaves out. Gemini noted the address sits in the macOS shared library range, which fits a native wait, but that is inference. Symbolicating it would settle it |
 | `_emscripten_get_now` 0.5% self in Chrome: find the caller | needs measurement | trivial to look up in the trace; the host profiler and the runtime's timers are the first suspects |
 | `EeVBlankClock::spinLead` may burn a core on a small Windows machine | needs measurement | the spin exists (`WOTM_VBLANK_SPIN=0` turns it off, confirmed in the header); the claim that it is 15.6 ms of every frame is an overreading. A/B `ee_busy_ms` and frame rate with the spin off on a 2 to 4 core Windows machine |
 | Check whether `PS2X_FAST_LINK` weakens the link | invalid | no match for it in the CMake files of the patched runtime, and the Release link line passes `-O3` (below) |
@@ -152,11 +157,25 @@ Each is new relative to the audit and cheap to test first. None changes what the
    (hand-edit the two generated files). It targets Firefox's lazy tiering and the Windows instruction cache together. Risk: a missed resume
    point breaks the scheduler's resume by pc, so it needs the synctest, the desync matrix and a long fight.
 
-Also worth a quick look, smaller or less certain: the EE never reading VU0 flags (reopens item B's upper bound of up to about 5% of a
-Chrome frame, 4% of a Firefox one, bit-exact on everything the game reads once `vu0bench` stops comparing flag registers for those
-programs); the vblank spin on small Windows machines (`WOTM_VBLANK_SPIN=0` A/B); the call-path seams (a single table lookup in
-`dispatchGuestBranch`, no ring-buffer write, an inlined `checkpointDue`), a couple of percent; the 8-monster `hierShadow` trace; and a Windows
-profile with the same tools, which would settle how much of the Mac's shares carry over.
+Expected gains are guesses until measured: idea 1 up to the 19% eager tiering gave on Firefox only; idea 2 unknown (zero if LLVM already
+does it); idea 3 unknown, mostly Firefox and Windows.
+
+Also worth a quick look, smaller or less certain:
+
+- Hand-written `f32x4` `vu0_01a8` in the page bench (Gemini's 2 hour test), which also checks the Firefox gap.
+- The EE never reading VU0 flags: reopens item B's upper bound (about 5% of a Chrome frame, 4% of a Firefox one) for programs with no
+  in-program flag read, once `vu0bench` stops comparing flag registers for them. Search `native/` for readers first.
+- The vblank spin on small Windows machines (`WOTM_VBLANK_SPIN=0` A/B on `ee_busy_ms`).
+- Call-path seams: one table lookup in `dispatchGuestBranch`, no ring-buffer write, an inlined `checkpointDue`; a couple of percent.
+- The 8-monster `hierShadow` first-divergence trace.
+- A Windows profile with the same tools, to see how much of the Mac's shares carry over.
+
+Gemini suggestions not given their own row, all small or conditional on the ideas above: padding `rdram` to drop the contiguous-range
+helpers, a release no-op for `ps2TraceGuestWrite`, dropping the `in_delay_slot` and `branch_pc` stores and the `add` overflow traps, caching
+GPRs in locals, the per-call `g_wotmLiveCtx` store, a direct flag classifier for the few flag-live VU0 operations, a prebuilt VU0 table in place
+of `wotmVu0NativeLookup`, `Writer::bytes` as a plain copy, why Firefox's snapshot copy is 2.2x slower than Chrome's, per-monster skeleton
+workers, slimmer `wotmCaptureScene` and particle copies, whether the second `hier` pass is needed in one view, and the 4 player online workload
+shape. None was checked.
 
 ## Corrections this suggests for the audit
 
