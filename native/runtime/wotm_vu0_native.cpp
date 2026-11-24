@@ -69,44 +69,6 @@ namespace
         uint32_t mac = 0, cur = 0, ext = 0;
     };
 
-    // Z=1 S=2 U=4 O=8 of the exact value; result as in VU1Interpreter::normalizeFmacExactResult
-    WOTM_VU0_FI uint32_t classify(double exact, uint32_t &bits)
-    {
-        uint32_t flags = std::signbit(exact) ? 2u : 0u;
-        const double magnitude = std::fabs(exact);
-        bits = flags ? 0x80000000u : 0u;
-        if (magnitude == 0.0)
-            return flags | 1u;
-        if (magnitude > (double)FLT_MAX)
-        {
-            bits |= 0x7F7FFFFFu;
-            return flags | 8u;
-        }
-        if (magnitude < (double)FLT_MIN)
-            return flags | 5u;
-        return flags | 0x10u;   // normal: the float result stands
-    }
-
-    // lane = 8 (x), 4 (y), 2 (z), 1 (w)
-    WOTM_VU0_FI float L(float result, double exact, uint32_t lane, Fm &f)
-    {
-        uint32_t bits;
-        uint32_t flags = classify(exact, bits);
-        if (!(flags & 0x10u))
-            std::memcpy(&result, &bits, 4);
-        flags &= 0xFu;
-        f.cur |= flags;
-        f.mac |= (flags & 1u ? lane : 0u) | (flags & 2u ? lane << 4 : 0u) | (flags & 4u ? lane << 8 : 0u) | (flags & 8u ? lane << 12 : 0u);
-        return result;
-    }
-
-    // sticky flags of the product (calculateFmacProductSticky)
-    WOTM_VU0_FI void P(float a, float b, Fm &f)
-    {
-        uint32_t bits;
-        f.ext |= classify((double)a * (double)b, bits) & 0xFu;
-    }
-
     WOTM_VU0_FI void commit(VU1State &s, const Fm &f)
     {
         s.mac = f.mac;

@@ -176,7 +176,7 @@ int main()
     {
         const uint64_t digest = sweepDigest();
         const bool ok = digest == kSweepDigest;
-        std::printf("%s every helper on the edge-value grid gives the same bits as on every other build (digest %016llx, want "
+        std::printf("%s the arithmetic helpers on the edge-value grid give the same bits as on every other build (digest %016llx, want "
                     "%016llx)\n", ok ? "ok  " : "FAIL", static_cast<unsigned long long>(digest),
                     static_cast<unsigned long long>(kSweepDigest));
         bad += !ok;

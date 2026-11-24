@@ -264,15 +264,6 @@ def flt(bits):
     return f'B({bits:#010x}u)'
 
 
-def operand_b(u, c):
-    b = u['b']
-    if b[0] == 'bc':
-        return f's.vf[{b[1]}][{b[2]}]'
-    if b[0] == 'vec':
-        return f's.vf[{b[1]}][{c}]'
-    return 's.q' if b[0] == 'q' else 's.i'
-
-
 def operand_b4(u):
     b = u['b']
     if b[0] == 'bc':
@@ -308,20 +299,6 @@ def emit_upper(u, slot, out):
         if form == 'ftoi0':
             out.append(f'        const int32_t i{c} = F2I(N(s.vf[{u["fs"]}][{c}]));')
             out.append(f'        float u{c}; std::memcpy(&u{c}, &i{c}, 4);')
-            continue
-        a, b = f'N(s.vf[{u["fs"]}][{c}])', f'N({operand_b(u, c)})'
-        out.append(f'        const float a{c} = {a}, b{c} = {b};')
-        if form in ('max', 'mini'):
-            cmp = '>' if form == 'max' else '<'
-            out.append(f'        const float u{c} = a{c} {cmp} b{c} ? a{c} : b{c};')
-        elif form in ('madd', 'msub'):
-            sign = '+' if form == 'madd' else '-'
-            out.append(f'        const float c{c} = N(s.acc[{c}]);')
-            out.append(f'        const float u{c} = L(c{c} {sign} a{c} * b{c}, (double)c{c} {sign} (double)a{c} * (double)b{c}, {LANES[c]}u, F[{slot}]);')
-            out.append(f'        P(a{c}, b{c}, F[{slot}]);')
-        else:
-            sym = {'add': '+', 'sub': '-', 'mul': '*'}[form]
-            out.append(f'        const float u{c} = L(a{c} {sym} b{c}, (double)a{c} {sym} (double)b{c}, {LANES[c]}u, F[{slot}]);')
     dst = 's.acc' if u['dst'][0] == 'acc' else (None if u['dst'][1] == 0 else f's.vf[{u["dst"][1]}]')
     if not dst:
         return []
