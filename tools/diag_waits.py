@@ -5,7 +5,7 @@
 For each run and each player, over the steady windows (the page's 5 s diag windows from seq N+1 on, default N=2, whose game rate is
 at least --min-gfps, default 75% of the match rate): windows used, median and mean waits per window, wait share of the time, median gfps and fps, mean
 ee_busy_ms, the fr_len buckets summed, raf_p95_ms median, lat_ms median, and the server's behind_avg mean for that player.
---windows also prints every window's line. Exit status 1 when no match.log is found, 2 on a bad option."""
+--windows also prints every window's line. Exit status 1 when no match.log is found or one can't be read, 2 on a bad option."""
 import glob
 import os
 import statistics
@@ -35,14 +35,19 @@ def match_logs(arg):
 
 
 def summarize(path, skip, min_gfps, show):
+    """Prints one log's summary; False when the log can't be read."""
     clients, behind = {}, {}
-    with open(path, encoding='utf-8', errors='replace') as f:
-        for line in f:
-            d = fields(line)
-            if d.get('src') == 'client' and d.get('why') == 'periodic':
-                clients.setdefault(d.get('player', '?'), []).append(d)
-            elif d.get('src') == 'server' and 'behind_avg' in d:
-                behind.setdefault(d.get('player', '?'), []).append(num(d, 'behind_avg'))
+    try:
+        with open(path, encoding='utf-8', errors='replace') as f:
+            for line in f:
+                d = fields(line)
+                if d.get('src') == 'client' and d.get('why') == 'periodic':
+                    clients.setdefault(d.get('player', '?'), []).append(d)
+                elif d.get('src') == 'server' and 'behind_avg' in d:
+                    behind.setdefault(d.get('player', '?'), []).append(num(d, 'behind_avg'))
+    except OSError as e:
+        print('cannot read %s: %s' % (path, e.strerror or e), file=sys.stderr)
+        return False
     print(path)
     for player in sorted(clients):
         floor = lambda d: min_gfps if min_gfps is not None else 0.75 * (num(d, 'hz') or 60)
@@ -68,6 +73,7 @@ def summarize(path, skip, min_gfps, show):
                   player, len(rows), statistics.median(waits), statistics.mean(waits), 100.0 * wait_ms / (5000.0 * len(rows)),
                   med('gfps'), med('fps'), mean('ee_busy_ms'), ','.join(map(str, fr)), med('raf_p95_ms'), med('lat_ms'),
                   '%.2f' % statistics.mean(b) if b else '-'))
+    return True
 
 
 def main(argv):
@@ -105,9 +111,8 @@ def main(argv):
     if not logs:
         print('no *-match.log under %s\n%s' % (' '.join(paths) or '(nothing given)', __doc__), file=sys.stderr)
         return 1
-    for p in logs:
-        summarize(p, skip, min_gfps, show)
-    return 0
+    read = [summarize(p, skip, min_gfps, show) for p in logs]
+    return 0 if all(read) else 1
 
 
 if __name__ == '__main__':

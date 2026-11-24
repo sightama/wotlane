@@ -61,6 +61,15 @@ class DiagWaitsTest(unittest.TestCase):
         self.assertEqual(status, 1)
         self.assertIn('no *-match.log', err)
 
+    def test_an_unreadable_log_is_reported_not_raised(self):
+        d = self.write_run([client(3, 'P1', 58.0, 40, 500)])
+        path = os.path.join(d, 'diag', '20261124-100000-TEST-match.log')
+        os.remove(path)
+        os.mkdir(path)   # a directory where the log should be: open() fails on every system, even as root
+        status, _, err = self.run_tool(path + '/..')
+        self.assertEqual(status, 1)
+        self.assertIn('cannot read', err)
+
     def test_bad_options_are_refused_with_the_usage(self):
         for args, why in ((['--skip'], '--skip needs a value'), (['--min-gfps', 'fast'], '--min-gfps: not a number'),
                           (['--frobnicate'], 'unknown option --frobnicate')):
