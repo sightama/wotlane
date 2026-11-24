@@ -92,7 +92,7 @@ test('hover is drawn only where a pointer can hover, so a tap leaves nothing stu
   assert.doesNotMatch(css.replace(/@media \(hover: hover\)\s*\{[^@]*?\n  \}/, ''), /button(\.main)?:hover/);
 });
 
-test('the status line starts as Loading and keeps room for two lines', () => {
+test('the status line starts as Loading and keeps room for a line', () => {
   assert.match(rule('#frontMsg'), /min-height:\s*1\.4em/);
   assert.match(read('front.js'), /function init\(\) \{\n  \$\('frontMsg'\)\.removeAttribute\('data-pending'\);\n  say\(''\);   \/\/ the page said Loading until now/);
 });

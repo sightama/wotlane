@@ -25,7 +25,7 @@ Phone is 390x844 at 2x; desktop is 1280x800; the touch layout is a phone held si
 
 | | BEFORE | AFTER | What changed |
 |---|---|---|---|
-| Phone, Firefox, Saves | <img src="before-after/before-firefox-phone-settings.png" width="240"> | <img src="before-after/after-firefox-phone-settings.png" width="240"> | Content is unchanged. Tabs and buttons are 44px, rounded, with visible field borders; the card sits at the top of the screen instead of the middle. |
+| Phone, Firefox, Saves | <img src="before-after/before-firefox-phone-settings.png" width="240"> | <img src="before-after/after-firefox-phone-settings.png" width="240"> | Content is unchanged. Tabs and buttons are 44px on touch, rounded, with visible field borders (the card has sat at the top of the screen, not the middle, since #194). |
 | Desktop, Firefox, Saves | <img src="before-after/before-firefox-desktop-settings.png" width="420"> | <img src="before-after/after-firefox-desktop-settings.png" width="420"> | Same, with desktop-sized controls. |
 | Phone, Firefox, Controls | <img src="before-after/before-firefox-phone-controls.png" width="240"> | <img src="before-after/after-firefox-phone-controls.png" width="240"> | Selects have 3:1 borders and a dark scheme; the key remap buttons keep their compact size, so the table does not run off a phone. |
 | Desktop, Firefox, Controls | <img src="before-after/before-firefox-desktop-controls.png" width="420"> | <img src="before-after/after-firefox-desktop-controls.png" width="420"> | Same. |
