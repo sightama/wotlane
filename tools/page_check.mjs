@@ -213,6 +213,7 @@ for (const [view, viewport, opts, url, net] of [['desktop', { width: 1280, heigh
   await sleep(3800);
   const r = await page.evaluate(() => ({ moves: [...new Set(window.__moves)], readyAt: window.__readyAt, firstDisabled: window.__first && true }));
   await check(`[${view}${net}] no control moves after first paint`, async () => {
+    expect(r.firstDisabled, 'the whole panel never appeared, so nothing was compared');
     expect(r.moves.length === 0, r.moves.slice(0, 3).join('; '));
     return `Single player usable at ${r.readyAt}ms`;
   });
@@ -240,15 +241,44 @@ await check('field borders are at least 3:1 against the panel', async () => {
   expect(r.length === 0, r.join(', '));
 });
 // ---- a page whose scripts do not load says so
-await check('a page whose front.js fails to load says so and offers nothing', async () => {
+for (const [what, serve] of [['cannot be fetched', (route) => route.abort()], ['has a syntax error', (route) => route.fulfill({ contentType: 'text/javascript', body: 'export {{{ not javascript' })]]) {
+  await check(`a page whose front.js ${what} says so and offers nothing`, async () => {
+    const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+    const page = await ctx.newPage();
+    await page.route('**/front.js', serve);
+    await page.goto(pageUrl, { waitUntil: 'load' });
+    await page.waitForFunction(() => /could not load/i.test(document.getElementById('frontMsg').textContent), null, { timeout: 5000 });
+    const on = await page.evaluate(() => ['single', 'host', 'join', 'refreshLobbies'].filter((id) => !document.getElementById(id).disabled));
+    await ctx.close();
+    expect(on.length === 0, `enabled: ${on}`);
+  });
+}
+
+// ---- nothing can be pressed until front.js has run, then everything can
+await check('Single player, Host, Join and Refresh are off until front.js runs, then on', async () => {
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const page = await ctx.newPage();
-  await page.route('**/front.js', (route) => route.abort());
-  await page.goto(pageUrl, { waitUntil: 'load' });
-  await page.waitForFunction(() => /could not load/i.test(document.getElementById('frontMsg').textContent), null, { timeout: 5000 });
-  const on = await page.evaluate(() => ['single', 'host', 'join'].filter((id) => !document.getElementById(id).disabled));
+  await page.route('**/front.js', async (route) => { await sleep(1500); await route.continue(); });
+  await page.goto(pageUrl, { waitUntil: 'commit' });
+  await page.waitForSelector('#refreshLobbies', { state: 'attached' });
+  const ids = ['single', 'host', 'join', 'refreshLobbies'];
+  const early = await page.evaluate((list) => list.filter((id) => !document.getElementById(id).disabled), ids);
+  await page.waitForFunction((list) => list.every((id) => !document.getElementById(id).disabled), ids, { timeout: 10000 });
   await ctx.close();
-  expect(on.length === 0, `enabled: ${on}`);
+  expect(early.length === 0, `pressable before front.js ran: ${early}`);
+});
+
+// ---- back from a lobby the list works at once
+await check('after Leave the open lobbies list is not greyed', async () => {
+  const { ctx, page } = await openPage({ width: 1280, height: 800 });
+  await page.fill('#name', 'Leaver');
+  await page.click('#host');
+  await page.waitForSelector('#inLobby:not([hidden]) #code:not(:empty)', { timeout: 10000 });
+  await page.click('#leave');
+  await page.waitForSelector('#choose:not([hidden])');
+  const inert = await page.evaluate(() => document.getElementById('lobbyList').inert);
+  await ctx.close();
+  expect(!inert, 'the list is inert after leaving a lobby');
 });
 
 // ---- Enter in the join code, pressed twice, joins once

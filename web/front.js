@@ -375,7 +375,6 @@ function stopWatchingLobbies() {
 }
 
 async function hostOrJoin(join) {
-  if (entering) return;
   const name = cleanName($('name').value);
   if (!name) return say('Type a name first (letters, digits, - and _).');
   const monster = $('monster').value;   // "<monster>" or "<monster>:<skin id>"

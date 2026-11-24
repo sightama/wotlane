@@ -28,6 +28,13 @@
  "image": "https://playwotm.com/og.png", "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"}}
 </script>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%23e0592a'/%3E%3Ctext x='8' y='12' font-size='10' font-family='sans-serif' font-weight='700' text-anchor='middle' fill='%23fff'%3EW%3C/text%3E%3C/svg%3E">
+<script>
+// While the status line still says Loading, any script that fails (fetch, syntax or an error thrown as the modules run) replaces it
+window.addEventListener('error', () => {
+  const m = document.getElementById('frontMsg');
+  if (m && m.textContent === 'Loading…') { m.textContent = 'The page could not load. Reload it to try again.'; m.className = 'problem'; }
+}, true);
+</script>
 <link rel="modulepreload" href="front.js">
 <link rel="modulepreload" href="enter_key.js">
 <link rel="modulepreload" href="lobby.js">
@@ -289,6 +296,6 @@
 <script src="gameinput.js"></script>
 <script src="log_status.js"></script>
 <script src="boot.js"></script>
-<script type="module" src="front.js" onerror="const m = document.getElementById('frontMsg'); m.textContent = 'The page could not load. Reload it to try again.'; m.className = 'problem'"></script>
+<script type="module" src="front.js"></script>
 </body>
 </html>

@@ -131,13 +131,17 @@ test('the touch layout panel scrolls inside the screen instead of running past i
 // ---- follow-ups from a fresh review of the first round
 
 test('a page whose scripts fail to load says so instead of staying on Loading', () => {
-  assert.match(html, /<script type="module" src="front\.js" onerror="[^"]*frontMsg[^"]*"><\/script>/);
+  // a capturing listener sees a script that cannot be fetched, a syntax error and an error thrown while the modules run
+  const head = html.slice(0, html.indexOf('</head>'));
+  assert.match(head, /<script>[^<]*window\.addEventListener\('error', [^<]*, true\)[^<]*<\/script>/);
+  assert.match(head, /textContent === 'Loading…'/);
+  assert.match(head, /The page could not load\. Reload it to try again\./);
+  assert.doesNotMatch(html, /onerror=/);
 });
 
 test('Enter in the join code cannot start a second connection while one is under way or the buttons are off', () => {
   const front = read('front.js');
   assert.match(front, /\$\('joinCode'\)\.addEventListener\('keydown', \(e\) => \{ if \(isSubmitEnter\(e\) && !\$\('join'\)\.disabled\) hostOrJoin\(true\); \}\);/);
-  assert.match(front, /async function hostOrJoin\(join\) \{\n  if \(entering\) return;/);
 });
 
 test('watching the lobbies again makes the list usable at once, even in a hidden tab', () => {
