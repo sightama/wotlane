@@ -2,7 +2,7 @@
 // ABOUTME: given back only while the server would still hold the place, and cleared on leaving. Run: node --test web/
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { storeRejoin, takeRejoin, clearRejoin, leavingPage, LINGER_MS } from './rematch.js';
+import { storeRejoin, takeRejoin, peekRejoin, clearRejoin, leavingPage, isInMatchError, isRejoinTokenError, retryRejoin, LINGER_MS } from './rematch.js';
 
 function storage({ broken = false } = {}) {
   const data = new Map();
@@ -67,3 +67,83 @@ test('the name and monster come from this tab, not from what another tab of the 
     assert.equal(takeRejoin(s, 1), null, JSON.stringify(who));
   }
 });
+
+test('peekRejoin reads a valid token without removing it, and returns null when expired', () => {
+  const s = storage();
+  storeRejoin(s, 'QZXW', 'ab'.repeat(16), 1000, { name: 'Ana', monster: '7:green' });
+  const expected = { code: 'QZXW', token: 'ab'.repeat(16), name: 'Ana', monster: '7:green' };
+  assert.deepEqual(peekRejoin(s, 2000), expected);
+  assert.deepEqual(peekRejoin(s, 3000), expected, 'peek keeps the token for a later manual Join or reload');
+  assert.equal(peekRejoin(s, 1000 + LINGER_MS + 1), null, 'expired token is ignored');
+});
+
+test('isInMatchError matches only the transient match-still-ending refusal', () => {
+  assert.equal(isInMatchError('lobby is in a match; wait for it to end'), true);
+  assert.equal(isInMatchError('ERROR lobby is in a match; wait for it to end'), true);
+  assert.equal(isInMatchError("can't rejoin (that place is gone or was already used); join again with the code"), false);
+  assert.equal(isInMatchError('the lobby is gone; host or join a new one'), false);
+  assert.equal(isInMatchError(null), false);
+});
+
+test('isRejoinTokenError matches only expired/used/kicked token refusals', () => {
+  assert.equal(isRejoinTokenError("can't rejoin (that place is gone or was already used); join again with the code"), true);
+  assert.equal(isRejoinTokenError('lobby is in a match; wait for it to end'), false);
+  assert.equal(isRejoinTokenError('lost the connection to the game server'), false);
+  assert.equal(isRejoinTokenError(null), false);
+});
+
+test('retryRejoin retries while the match is finishing and succeeds once it ends', async () => {
+  let clock = 0;
+  let tries = 0;
+  let waited = 0;
+  const sleeps = [];
+  const res = await retryRejoin(async () => {
+    tries++;
+    if (tries < 3) throw new Error('lobby is in a match; wait for it to end');
+    return 'QZXW';
+  }, {
+    waitMs: 2000,
+    stepMs: 350,
+    now: () => clock,
+    sleep: async (ms) => { sleeps.push(ms); clock += ms; },
+    onWait: () => { waited++; },
+  });
+  assert.equal(res, 'QZXW');
+  assert.equal(tries, 3);
+  assert.equal(waited, 1, 'onWait fires once when entering the wait');
+  assert.deepEqual(sleeps, [350, 350]);
+});
+
+test('retryRejoin stops immediately on a terminal error without waiting', async () => {
+  let tries = 0;
+  let waited = 0;
+  await assert.rejects(() => retryRejoin(async () => {
+    tries++;
+    throw new Error("can't rejoin (that place is gone or was already used); join again with the code");
+  }, {
+    waitMs: 2000,
+    stepMs: 350,
+    now: () => 0,
+    sleep: async () => { throw new Error('must not sleep on terminal error'); },
+    onWait: () => { waited++; },
+  }), /can't rejoin/);
+  assert.equal(tries, 1);
+  assert.equal(waited, 0);
+});
+
+test('retryRejoin gives up after waitMs when the match is still running', async () => {
+  let clock = 0;
+  let tries = 0;
+  await assert.rejects(() => retryRejoin(async () => {
+    tries++;
+    throw new Error('lobby is in a match; wait for it to end');
+  }, {
+    waitMs: 1000,
+    stepMs: 400,
+    now: () => clock,
+    sleep: async (ms) => { clock += ms; },
+  }), /lobby is in a match/);
+  assert.equal(clock, 1000);
+  assert.equal(tries, 4);   // t=0, 400, 800, 1000
+});
+

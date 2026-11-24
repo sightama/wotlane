@@ -12,7 +12,7 @@ import { RateMemory, healthLine, rememberedHealth } from './rate.js';
 import { lobbyWarnings, memberStatus } from './lobby_status.js';
 import { frontNotice } from './device_notice.js';
 import { dismissFirefoxTip, firefoxTip } from './firefox_tip.js';
-import { clearRejoin, leavingPage, storeRejoin, takeRejoin } from './rematch.js';
+import { clearRejoin, isInMatchError, isRejoinTokenError, leavingPage, peekRejoin, retryRejoin, storeRejoin } from './rematch.js';
 
 const MONSTERS = [[1, 'Congar'], [2, 'Robo-47'], [3, 'Togera'], [4, 'Ultra V'], [5, 'Preytor'], [7, 'Kineticlops'], [8, 'Magmo'],
   [9, 'Raptros'], [10, 'Agamo'], [11, 'Zorgulon']];
@@ -374,6 +374,7 @@ function stopWatchingLobbies() {
 }
 
 async function hostOrJoin(join) {
+  if (entering) return;
   const name = cleanName($('name').value);
   if (!name) return say('Type a name first (letters, digits, - and _).');
   const monster = $('monster').value;   // "<monster>" or "<monster>:<skin id>"
@@ -384,8 +385,33 @@ async function hostOrJoin(join) {
   const code = $('joinCode').value.trim().toUpperCase();
   if (join && !/^[A-Z2-9]{4}$/.test(code)) return say('The code has 4 characters (letters and digits).');
   say(join ? 'Joining' : 'Creating a lobby');
-  const entered = await enterLobby(async (l) => ({ code: join ? await l.join(code, name, monster) : await l.create(name, monster), isOwner: !join }));
+  const saved = join ? peekRejoin(tabStorage(), Date.now()) : null;
+  const useSaved = !!(saved && saved.code === code && saved.name === name);
+  let rejoined = false;
+  const entered = await enterLobby(async (l) => {
+    if (!join) return { code: await l.create(name, monster), isOwner: true };
+    if (useSaved) {
+      myMonster = saved.monster;   // server restores the ghost's pick; onToken records it until a change succeeds
+      try {
+        const backCode = await l.rejoin(saved.code, saved.token);
+        rejoined = true;
+        if (monster !== saved.monster) {
+          await l.monster(monster).then(() => { myMonster = monster; }, () => { $('monster').value = String(saved.monster); });
+        }
+        return { code: backCode, isOwner: members.owner === myName };
+      } catch (e) {
+        if (!isRejoinTokenError(e?.message)) {
+          if (/the lobby is gone/i.test(e?.message ?? '')) clearRejoin(tabStorage());
+          throw e;
+        }
+        clearRejoin(tabStorage());   // expired, kicked, or already used: fall back to a plain JOIN
+        myMonster = monster;
+      }
+    }
+    return { code: await l.join(code, name, monster), isOwner: false };
+  });
   if (entered && !join) await sendSettings();
+  if (entered && rejoined && owner) showLobbySettings(lobby.settings);
 }
 
 // connects and runs `enter` (create, join or rejoin, resolving with the lobby's code and whether this player owns it), then shows
@@ -427,13 +453,30 @@ function tabStorage() {
 }
 
 // back from a match (the page reloads after it): this tab takes its `place` in the lobby back while the server keeps it (quick
-// rematch, web/rematch.js, takeRejoin); without a place, or when the server no longer has it, the lobby's code is offered as before
+// rematch, web/rematch.js, peekRejoin); without a place, or when the server no longer has it, the lobby's code is offered as before
 async function rejoinLastLobby(place) {
   if (!place) return offerLastLobby();
   myName = place.name;   // the server gives back the name and monster this player had; this tab kept both with its token
   myMonster = place.monster;
   say('Going back to your lobby');
-  await enterLobby(async (l) => ({ code: await l.rejoin(place.code, place.token), isOwner: members.owner === myName }), true);
+  let errMsg = '';
+  const entered = await enterLobby(async (l) => {
+    try {
+      const code = await retryRejoin(() => l.rejoin(place.code, place.token), {
+        onWait: () => say('Waiting for the match to finish'),
+      });
+      return { code, isOwner: members.owner === myName };
+    } catch (e) {
+      errMsg = e?.message ?? '';
+      throw e;
+    }
+  }, true);
+  if (entered) return;
+  if (isInMatchError(errMsg)) {
+    if (!$('joinCode').value.trim()) $('joinCode').value = place.code;
+  } else if (errMsg && !/lost the connection/i.test(errMsg)) {
+    clearRejoin(tabStorage());   // terminal refusal (gone, expired, kicked, full, build mismatch): do not retry this token
+  }
 }
 
 async function sendSettings() {
@@ -549,8 +592,8 @@ function init() {
   showFirefoxTip();
   const invited = window.inviteCode(new URLSearchParams(location.search));
   // the server keeps a place from the moment this page's lobby connection drops: that is when the rejoin's clock starts too
-  window.addEventListener('pagehide', () => leavingPage(tabStorage(), Date.now(), { name: myName, monster: myMonster }));
-  const place = invited ? null : takeRejoin(tabStorage(), Date.now());
+  window.addEventListener('pagehide', () => { if (lobby && !entering) leavingPage(tabStorage(), Date.now(), { name: myName, monster: myMonster }); });
+  const place = invited ? null : peekRejoin(tabStorage(), Date.now());
   if (invited) {   // a reload doesn't join again; the address keeps its other parts
     const rest = new URLSearchParams(location.search);
     rest.delete('join');
@@ -569,6 +612,7 @@ function init() {
     if (lobby && owner) showLobbySettings(lobby.settings);   // a rejoined owner's lobby may play a saved map, listed only now
   }).catch(() => {}).then(() => { if (invited) acceptInvite(invited); });
   $('single').addEventListener('click', async () => {
+    clearRejoin(tabStorage());   // leaving the online flow: do not auto-rejoin an old lobby after Single player
     stopWatchingLobbies();
     leaveFront();
     await settingsSaved();

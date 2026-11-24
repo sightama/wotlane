@@ -251,6 +251,8 @@ namespace wotm_net
         void refuse(PeerRef peer, const std::string &why);   // sends Reject{why} and closes the connection
         void onJoin(PeerRef peer, const proto::Join &j);
         void dropSlot(Match &m, int slot);
+        // ends the lobby's match if every slot has left, returning true when the match closed
+        bool finishMatchIfEveryoneGone(int lobby);
         void tickMatches();
         void sendInputs(Match &m, int slot);
         void checkHashes(Match &m);

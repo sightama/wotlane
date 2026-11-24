@@ -143,6 +143,7 @@ export class LobbyClient {
     // requests waiting for their replies, oldest first: {replies (commands still expected, in order), got (the first reply),
     // resolve, reject}. An ERROR refuses the oldest one
     this.waiting = [];
+    this.isClosed = false;
     socket.onmessage = (e) => this.receive(String(e.data));
     socket.onclose = () => this.closed();
     socket.onerror = () => {};
@@ -208,12 +209,14 @@ export class LobbyClient {
   }
 
   closed() {
+    this.isClosed = true;
     for (const w of this.waiting.splice(0)) w.reject(new Error('lost the connection to the game server'));
     this.onClose?.();
   }
 
   // sends a line and resolves with the first of `replies` once all of them arrived, in order
   request(line, replies) {
+    if (this.isClosed || this.socket.readyState > 1) return Promise.reject(new Error('lost the connection to the game server'));
     const done = this.expect(replies);
     this.socket.send(line);
     return done;
@@ -300,6 +303,7 @@ export class LobbyClient {
 
   // the page's own close: it is not a lost connection, so onClose stays quiet
   close() {
+    this.isClosed = true;
     this.onClose = null;
     this.socket.close();
   }
