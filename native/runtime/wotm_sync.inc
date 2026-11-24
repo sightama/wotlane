@@ -576,7 +576,7 @@ namespace wotm_sync
     // frames), and the game scheduler's vblank grid, which kept running, gives the next one on time.
     // the waits of the current pace window (netPace); the whole match's are g_netStalls and g_netStallMs (above, with latencyProbe)
     uint32_t g_paceStalls = 0;
-    double g_paceStallMs = 0.0;
+    double g_paceStallMs = 0.0, g_paceStretchMs = 0.0;   // g_paceStretchMs: slept by netStretchPace in the window
     wotm_net::timesync::Stretcher g_stretcher;   // netStretchPace
 
     // browser: tells the others when this tab is hidden or back, so their "Waiting for" message says why (the game keeps running in a
@@ -647,6 +647,7 @@ namespace wotm_sync
             return;
         std::this_thread::sleep_for(std::chrono::duration<double, std::milli>(sleepMs));
         const auto us = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - now).count();
+        g_paceStretchMs += us / 1000.0;
         if (us > 0)
             ::g_wotmIdleUs.fetch_add(static_cast<unsigned long long>(us), std::memory_order_relaxed);
     }
@@ -686,10 +687,10 @@ namespace wotm_sync
         }
         if (frame == 0u || frame % kPaceFrames != 0u)
             return;
-        std::fprintf(stderr, "[net] pace: frame %u, delay %u, ping %u ms, %u stalls (%.1f ms) in the last %u frames\n", frame,
-                     g_net->delay(), g_net->rttMs(), g_paceStalls, g_paceStallMs, kPaceFrames);
+        std::fprintf(stderr, "[net] pace: frame %u, delay %u, ping %u ms, %u stalls (%.1f ms), %.1f ms of stretch (ahead %.2f frames) in the last %u frames\n", frame,
+                     g_net->delay(), g_net->rttMs(), g_paceStalls, g_paceStallMs, g_paceStretchMs, g_net->aheadFrames(), kPaceFrames);
         g_paceStalls = 0;
-        g_paceStallMs = 0.0;
+        g_paceStallMs = g_paceStretchMs = 0.0;
     }
 
     // Hash of the game's RAM for the server to compare between PCs: 1 MB per frame (its 8 blocks of 128 KB, the same blocks as
