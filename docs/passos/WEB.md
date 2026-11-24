@@ -77,10 +77,8 @@ For online play start `wotm_server --ws-port <port>`; a page opened from `localh
   match starts (the bandwidth is the match's), does nothing with Save-Data on or without a version (ETag) for a disc file, asks
   before every pass for room under 90% of the quota (the HTTP cache's copies of the chunk files count there too), and ends when a
   pass that asked for chunks left as many missing (the network keeps failing them, or the cache keeps nothing). In a fight it runs
-  once the disc is quiet; its cost is the SHA-256 and the store of each chunk on the page's thread: in Chrome at 20 Mbit/s the
-  seconds with background downloads present frames as the seconds without (median 8.3 ms, 1.7% over 25 ms against 1.9%); in
-  Firefox on a local server, one chunk at a time, about 200 MiB in 3 to 5 s, 0 and 1.4% of those seconds' frames went over 25 ms
-  (3.1% and 0.7% without); a real line spreads the same work over a minute or more. It never calls `navigator.storage.persist()`: Chrome and Brave answer false to
+  once the disc is quiet; its cost is the SHA-256 and the store of each chunk on the page's thread, which `prefetch_probe.mjs
+  --flow fps` measures (frames of the seconds with background downloads against those without). It never calls `navigator.storage.persist()`: Chrome and Brave answer false to
   a new visitor and Firefox would ask with a prompt; the quota (2 GiB in Brave, 10 GiB in Chrome and Firefox on a desktop) holds the
   set. `node tools/browser_mp_test/prefetch_probe.mjs` measures it. In Firefox
   the game's own reads from worker threads are synchronous XHR (below), which the Cache API can't serve, so the page starts a helper

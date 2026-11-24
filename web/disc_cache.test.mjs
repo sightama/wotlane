@@ -209,6 +209,16 @@ test('a game\'s disc read is announced as it starts and again as it ends, a back
   assert.equal(starts.length, 4);
 });
 
+test('a game read that fails is announced as ended too', async () => {
+  const starts = [];
+  const net = fakeNetwork();
+  const failing = async (url, init) => { if (init.headers?.Range) throw new TypeError('network'); return net(url, init); };
+  const f = make(failing, fakeCaches(), { onRead: () => starts.push('read') });
+  await f('data/game.iso', { method: 'HEAD' });
+  await assert.rejects(f('data/game.iso', range(0, 7)), TypeError);
+  assert.deepEqual(starts, ['read', 'read']);
+});
+
 test('a synchronous disc read is announced before it is answered and again after, from the cache or the network', () => {
   const heard = [];
   const X = syncDiscXHR(FakeXHR, { ask: () => (heard.push('ask'), null), remember: () => {} }, null, { onRead: () => heard.push('read') });
