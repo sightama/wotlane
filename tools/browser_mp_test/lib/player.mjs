@@ -133,7 +133,10 @@ export class Player {
   // window and the game its own size once the match starts
   async start() { await this.page.click('#start'); }
 
-  async toGameViewport() { await this.page.setViewportSize(this.gameViewport).catch(() => {}); }
+  async toGameViewport() {
+    const { width, height } = this.gameViewport;
+    await this.page.setViewportSize(this.gameViewport).catch((e) => { throw new Error(`${this.name}: could not resize the window to ${width}x${height}: ${e.message}`); });
+  }
 
   async importZip(file) { await this.page.setInputFiles('#importFile', file); }
 

@@ -230,6 +230,7 @@ function startDiag(client, socket, match, build) {
     isHidden: () => document.hidden,
     hasFocus: () => document.hasFocus(),
     lag: new TaskLagWatch({ now: () => performance.now(), post: postTask }),
+    timerLag: new TaskLagWatch({ now: () => performance.now(), post: (fn) => setTimeout(fn, 0) }),
     latency: latencySource(window),
     disc: new DiscWatch(typeof BroadcastChannel === 'function' ? new BroadcastChannel('wotlane-disc') : null),
   });

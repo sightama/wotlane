@@ -400,3 +400,15 @@ test('software drawing is read from a context that refuses a major performance c
   const f = Object.fromEntries(deviceFields({ navigator: {}, matchMedia: () => ({ matches: false }), wotmGpu: 'Brave', wotmSoftwareGl: 1 }));
   assert.equal(f.gl_sw, 1);
 });
+
+test('a window carries how late a timer fired, apart from the task lag, so a timer-starved page shows in the report', () => {
+  const r = reporterFor({ extra: {
+    timerLag: { probe() {}, take: () => ({ n: 10, avg: 41.26, max: 1900 }) },
+  } });
+  r.reporter.begin();
+  for (let i = 0; i < 10; ++i) { r.advance(500); r.t.tick(); }
+  const f = fieldsOf(r.sent[0]);
+  assert.equal(f.tmr_ms, '41.3');
+  assert.equal(f.tmr_max_ms, '1900');
+  assert.equal(f.lag_ms, undefined);
+});

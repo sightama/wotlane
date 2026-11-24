@@ -95,7 +95,7 @@
   // after the save folder's last changes reach the browser's storage (a save folder in memory: wotm_websave.cpp)
   window.wotmQuit = () => {
     syncSaves();
-    Promise.all([globalThis.wotmSaveQueue, finishDiag()]).finally(() => location.reload());
+    window.wotmReloadWhenDone(Promise.all([globalThis.wotmSaveQueue, finishDiag()]));
   };
 
   // an online match's last diagnostics report goes out before the page reloads (web/front.js sets wotmDiagFinish for a match)
@@ -124,7 +124,7 @@
       el.hidden = true;
       canvas.focus();
     });
-    document.getElementById('leaveMatch').addEventListener('click', () => finishDiag().finally(() => location.reload()));
+    document.getElementById('leaveMatch').addEventListener('click', () => window.wotmReloadWhenDone(finishDiag()));
     setInterval(() => {
       const wait = waitMs();
       const show = prompt.show(wait);

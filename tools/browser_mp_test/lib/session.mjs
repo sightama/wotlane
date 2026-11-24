@@ -5,7 +5,7 @@ import { join, relative } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { Player, sleep } from './player.mjs';
 import { diagRecord } from './diaglog.mjs';
-import { netStart, netStopped, serverLobbyLines, sinceReload } from './logs.mjs';
+import { netStart, netStopped, reloaded, serverLobbyLines, sinceReload } from './logs.mjs';
 
 // the stock monsters in the front panel's order (web/front.js MONSTERS): one each for up to 8 players
 export const MONSTER_IDS = [3, 1, 2, 5, 4, 7, 8, 9];
@@ -97,7 +97,13 @@ export async function waitAll(players, test, { timeoutMs = 120000, everyMs = 150
 }
 
 // this page's match: a page that loaded again (quick rematch) plays a new one
-export const hasStart = (p) => netStart(sinceReload(p.logText)) !== null;
+// `afterReload`: only a start line of a page that loaded again counts (a rematch after QUIT: the old match's line is still in the log)
+export const hasStart = (p, { afterReload = false } = {}) => (!afterReload || reloaded(p.logText)) && netStart(sinceReload(p.logText)) !== null;
+
+// run in the page (Playwright's waitForFunction): the front panel shows the lobby `code`. #inLobby sits inside #front, so a game
+// still covering a hidden front panel must not pass for it. `doc` is the page's document; a test passes its own
+export const backInLobbyScript = (code, doc = document) =>
+  !doc.getElementById('front').hidden && !doc.getElementById('inLobby').hidden && doc.getElementById('code').textContent.trim() === code;
 export const stopped = (p) => netStopped(sinceReload(p.logText));
 
 // Host and join: P1 hosts, the others join one by one. Returns {code, ok, detail}; every tab must list every member
@@ -122,8 +128,9 @@ export async function formLobby(players) {
 }
 
 // the owner starts the match and every tab must report its start line; returns the same shape as waitAll
-export async function startMatch(players, { timeoutMs = 180000 } = {}) {
+// `afterReload`: a rematch, where the start line must come from the page that loaded again
+export async function startMatch(players, { timeoutMs = 180000, afterReload = false } = {}) {
   await players[0].start();
   await Promise.all(players.map((p) => p.toGameViewport()));
-  return waitAll(players, (p) => hasStart(p) || stopped(p), { timeoutMs });
+  return waitAll(players, (p) => hasStart(p, { afterReload }) || stopped(p), { timeoutMs });
 }

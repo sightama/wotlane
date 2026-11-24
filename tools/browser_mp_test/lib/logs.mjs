@@ -12,6 +12,9 @@ export function sinceReload(log) {
   return at < 0 ? log : log.slice(at + RELOADED.length + 1);
 }
 
+// whether the page has loaded again since its log began (a QUIT or Leave the match reloads it; no marker means it never did)
+export const reloaded = (log) => log.includes(RELOADED + '\n');
+
 // {player, of, delay} from "[net] start: player 2 of 4, delay 2 frames", or null before the match starts
 export function netStart(log) {
   const m = /\[net\] start: player (\d+) of (\d+), delay (\d+) frames/.exec(log);
