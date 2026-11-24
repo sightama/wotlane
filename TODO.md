@@ -60,3 +60,4 @@ How it works today: `docs/passos/MODS.md` ("Skins", "Custom monsters").
 - Entering training mode from the launcher (the menu's TRAINING line and `WOTM_TRAINING=1` are enough).
 - Our own netcode (rollback): it would require proving that the logic always gives the same result from the same inputs.
 - Making Goliath Prime or other bosses work in full (CPU, collision, animations that ASSBOSS does not have): custom monsters are mods/experimental.
+- Online time sync (a leading player stretches its frames instead of waiting): it can't remove the lockstep waits (`docs/investigacoes/2026-11-24/time-sync/README.md`).

@@ -3,6 +3,9 @@
 # ABOUTME: system C++ compiler; every argument goes to the simulation (--help lists them; no arguments prints the scenario table).
 set -eu
 here=$(cd "$(dirname "$0")" && pwd)
-out=${TMPDIR:-/tmp}/timesync_sim
-${CXX:-c++} -std=c++17 -O2 -Wall -Wextra -o "$out" "$here/timesync_sim.cpp" || { echo "timesync_sim: build failed" >&2; exit 1; }
-exec "$out" "$@"
+dir=$(mktemp -d "${TMPDIR:-/tmp}/timesync_sim.XXXXXX")   # one build per run, so runs side by side don't overwrite each other's
+trap 'rm -rf "$dir"' EXIT
+${CXX:-c++} -std=c++17 -O2 -Wall -Wextra -o "$dir/timesync_sim" "$here/timesync_sim.cpp" || { echo "timesync_sim: build failed" >&2; exit 1; }
+status=0
+"$dir/timesync_sim" "$@" || status=$?
+exit "$status"

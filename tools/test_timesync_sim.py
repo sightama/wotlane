@@ -40,7 +40,8 @@ class TimesyncSimTest(unittest.TestCase):
         self.assertIn('--sync: off, p or pi', r.stderr)
 
     def test_out_of_range_values_are_refused(self):
-        for args in (['--secs', '0'], ['--delay', '-1'], ['--jitter', '-5'], ['--secs', 'abc']):
+        for args in (['--secs', '0'], ['--secs', '1e12'], ['--delay', '-1'], ['--delay', '1e10'], ['--seed', '1e20'], ['--jitter', '-5'],
+                     ['--secs', 'abc']):
             r = subprocess.run(['sh', RUN] + args, capture_output=True, text=True)
             self.assertEqual(r.returncode, 2, args)
             self.assertIn(args[0], r.stderr)

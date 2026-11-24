@@ -259,20 +259,20 @@ int main(int argc, char **argv)
             std::fprintf(stderr, "%s: expected %s (got %s)\n%s", a.c_str(), expected, v, kUsage);
             std::exit(2);
         };
-        // a number at least `low` (above it when `above`); `expected` names the range in the error
-        auto number = [&](double low, bool above, const char *expected) {
+        // a number from `low` to `high`; `expected` names the range in the error
+        auto number = [&](double low, double high, const char *expected) {
             const char *v = value();
             char *end = nullptr;
             const double x = std::strtod(v, &end);
-            if (end == v || *end != '\0' || !std::isfinite(x) || x < low || (above && x == low))
+            if (end == v || *end != '\0' || !std::isfinite(x) || x < low || x > high)
                 refuse(v, expected);
             return x;
         };
         auto pair = [&](double *out) {
             const char *v = value();
             char tail = 0;
-            if (std::sscanf(v, "%lf,%lf%c", &out[0], &out[1], &tail) != 2 || out[0] < 0 || out[1] < 0)
-                refuse(v, "A,B, two numbers not below 0");
+            if (std::sscanf(v, "%lf,%lf%c", &out[0], &out[1], &tail) != 2 || out[0] < 0 || out[1] < 0 || out[0] > 10000 || out[1] > 10000)
+                refuse(v, "A,B, two numbers from 0 to 10000");
         };
         if (a == "-h" || a == "--help")
             return std::printf("%s", kUsage), 0;
@@ -286,15 +286,15 @@ int main(int argc, char **argv)
                 return std::fprintf(stderr, "--sync: off, p or pi\n"), 2;
             one = true;
         }
-        else if (a == "--secs") o.secs = number(0, true, "a number above 0"), one = true;
-        else if (a == "--delay") o.delay = std::floor(number(0, false, "a whole number, 0 or more")), one = true;
+        else if (a == "--secs") o.secs = number(1, 3600, "a number of seconds from 1 to 3600"), one = true;
+        else if (a == "--delay") o.delay = std::floor(number(0, 60, "a whole number from 0 to 60")), one = true;
         else if (a == "--rtt") pair(o.rtt), one = true;
-        else if (a == "--jitter") o.jitter = number(0, false, "a number, 0 or more"), one = true;
+        else if (a == "--jitter") o.jitter = number(0, 1000, "a number from 0 to 1000"), one = true;
         else if (a == "--work") pair(o.work), one = true;
-        else if (a == "--spike") o.spikeP[1] = std::min(1.0, number(0, false, "a chance from 0 to 1")), one = true;
-        else if (a == "--pi-target") o.piTarget = number(-1e9, false, "a number"), one = true;
-        else if (a == "--pi-gain") o.piGain = number(0, false, "a number, 0 or more"), one = true;
-        else if (a == "--seed") o.seed = static_cast<unsigned>(number(0, false, "a whole number, 0 or more")), one = true;
+        else if (a == "--spike") o.spikeP[1] = number(0, 1, "a chance from 0 to 1"), one = true;
+        else if (a == "--pi-target") o.piTarget = number(-100, 100, "a number from -100 to 100"), one = true;
+        else if (a == "--pi-gain") o.piGain = number(0, 10, "a number from 0 to 10"), one = true;
+        else if (a == "--seed") o.seed = static_cast<unsigned>(number(0, 4e9, "a whole number from 0 to 4000000000")), one = true;
         else
             return std::fprintf(stderr, "unknown option %s\n%s", a.c_str(), kUsage), 2;
     }
