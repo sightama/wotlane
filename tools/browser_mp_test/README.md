@@ -86,6 +86,18 @@ the time the system and the browser take to deliver a real key is not in the num
 `--http-mbps 20 --lobby-secs 30` models a slow line and a lobby that waits: each Chromium tab's downloads are limited once its page
 has loaded, so a match start that waits on its disc download shows in the first windows' `disc_net_mb` and the server's `in_gap_max_ms`.
 
+## Disc prefetch
+
+`node tools/browser_mp_test/prefetch_probe.mjs --flow page --browser chrome --mbps 20 [--live https://playwotm.com] [--timeline]`
+measures the whole-game prefetch (`web/game_prefetch.js`) in fresh browser profiles of their own (a disk HTTP cache like a real one):
+a fight opened straight away (the prefetch must not slow the first load: compare with a dist without it), then a profile left on
+the front panel until the page logs how its prefetch ended, and a fight after it (0 MiB from the network once it is done). `--mbps`
+throttles a Chromium page's network (DevTools emulation), `--timeline` prints the disc channel per 5 s (game downloads, cache hits,
+game reads started, background downloads), and each fight line counts the chunk file requests seen. `--flow fps --secs 60 --headed`
+opens a fight and compares the frame times of the seconds with background downloads against those without. `--flow probe` fetches the
+whole set from the script instead, and reports the storage quota and what `persist()` answers. The local server sends the page with
+`no-store`, so locally every visit downloads the wasm again; `--live` gives the real caching. Muted like every check here.
+
 ## Rollback synctest
 
 `node tools/browser_mp_test/synctest.mjs --browser chrome|firefox --back 2 [--step 2 --match 3,1,2,4,5,7,8,9,1] --minutes 30` serves a
