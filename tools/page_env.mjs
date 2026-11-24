@@ -1,5 +1,5 @@
 // ABOUTME: Shared setup for the page tools (page_check.mjs, page_shots.mjs): serves a web/ folder with the isolation headers the live
-// ABOUTME: site sends, runs a local wotm_server for real lobbies, and launches a muted Chrome, Brave, Firefox or WebKit.
+// ABOUTME: site sends, runs a local wotm_server for real lobbies, and launches a muted Chrome, Brave or Firefox, or WebKit (which has no mute switch).
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { existsSync, mkdirSync, openSync, readFileSync } from 'node:fs';

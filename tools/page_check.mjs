@@ -183,7 +183,9 @@ for (const [view, viewport, opts, min] of [['phone', { width: 390, height: 844 }
 }
 
 // ---- loading: nothing moves after first paint, nothing is pressable before it works, a press shows at once
-for (const [view, viewport, opts] of [['desktop', { width: 1280, height: 800 }, {}], ['phone', { width: 390, height: 844 }, { isMobile: true, hasTouch: true }]]) {
+const unreachable = pageUrl.replace(/server=.*$/, 'server=ws://127.0.0.1:9');   // nothing listens there: the list of lobbies fails
+for (const [view, viewport, opts, url, net] of [['desktop', { width: 1280, height: 800 }, {}, pageUrl, ''], ['phone', { width: 390, height: 844 }, { isMobile: true, hasTouch: true }, pageUrl, ''],
+  ['desktop', { width: 1280, height: 800 }, {}, unreachable, ', lobby server unreachable'], ['phone', { width: 390, height: 844 }, { isMobile: true, hasTouch: true }, unreachable, ', lobby server unreachable']]) {
   const ctx = await browser.newContext({ viewport, ...opts });
   const page = await ctx.newPage();
   await page.addInitScript(() => {
@@ -203,15 +205,15 @@ for (const [view, viewport, opts] of [['desktop', { width: 1280, height: 800 }, 
     };
     requestAnimationFrame(tick);
   });
-  await page.goto(pageUrl, { waitUntil: 'commit' });
+  await page.goto(url, { waitUntil: 'commit' });
   await page.waitForSelector('#home:not([hidden])');
   await sleep(3800);
   const r = await page.evaluate(() => ({ moves: [...new Set(window.__moves)], readyAt: window.__readyAt, firstDisabled: window.__first && true }));
-  await check(`[${view}] no control moves after first paint`, async () => {
+  await check(`[${view}${net}] no control moves after first paint`, async () => {
     expect(r.moves.length === 0, r.moves.slice(0, 3).join('; '));
     return `Single player usable at ${r.readyAt}ms`;
   });
-  await check(`[${view}] a press shows at once (pressed state)`, async () => {
+  if (!net) await check(`[${view}] a press shows at once (pressed state)`, async () => {
     const box = await page.locator('#single').boundingBox();
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     await page.mouse.down();

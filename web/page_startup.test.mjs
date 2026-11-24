@@ -37,7 +37,7 @@ test('every module front.js loads, directly or not, is preloaded', () => {
   const walk = (file) => {
     if (seen.has(file)) return;
     seen.add(file);
-    for (const m of read(file).matchAll(/^\s*(?:import|export)\b[^'"\n]*?(?:from\s*)?['"]\.\/([\w.-]+\.js)['"]/gm)) walk(m[1]);
+    for (const m of read(file).matchAll(/\bfrom\s*['"]\.\/([\w.-]+\.js)['"]|\bimport\s*['"]\.\/([\w.-]+\.js)['"]/g)) walk(m[1] ?? m[2]);   // imports may span lines
   };
   walk('front.js');
   const preloaded = new Set([...html.matchAll(/<link rel="modulepreload" href="([\w.-]+\.js)">/g)].map((m) => m[1]));
@@ -48,7 +48,8 @@ test('every module front.js loads, directly or not, is preloaded', () => {
 
 test('Single player, Host and Join start disabled and front.js enables them once its handlers are attached', () => {
   for (const id of ['single', 'host', 'join']) assert.match(html, new RegExp(`<button id="${id}"[^>]*\\bdisabled\\b`), `#${id} must not be pressable before front.js runs`);
-  assert.match(read('front.js'), /for \(const id of \['single', 'host', 'join'\]\) \$\(id\)\.disabled = false;\s*\n\s*initCreations/);
+  // after the last handler, and not while a rejoin has them off for itself
+  assert.match(read('front.js'), /\$\('leave'\)\.addEventListener\('click'[\s\S]*?\n  \}\);\n[^\n]*\n  if \(!entering\) for \(const id of \['single', 'host', 'join'\]\) \$\(id\)\.disabled = false;\n\}/);
 });
 
 // ---- nothing moves
@@ -63,6 +64,17 @@ test('the device note and the Firefox tip sit below the actions, so they push do
   assert.ok(indexOf('deviceNote') < indexOf('legal') && indexOf('firefoxTip') < indexOf('legal'));
 });
 
+test('the open lobbies area never leaves the page once shown: a join under way greys it, a failed list says so inside it', () => {
+  const front = read('front.js');
+  assert.match(front, /function stopWatchingLobbies\(\) \{\n  cancelWatching\(\);\n  \$\('lobbyList'\)\.inert = true;/);
+  assert.match(front, /\$\('lobbies'\)\.replaceChildren\(Object\.assign\(document\.createElement\('li'\), \{ textContent: 'The list of open lobbies is not available right now\.'/);
+  assert.doesNotMatch(front.slice(front.indexOf('async function refreshLobbies'), front.indexOf('function startWatchingLobbies')), /lobbyList'\)\.hidden = true/);
+});
+
+test('a failed start of the page says so', () => {
+  assert.match(read('front.js'), /catch \(e\) \{\n  say\('The page did not start properly\. Reload it to try again\.'\);\n  \$\('frontMsg'\)\.className = 'problem';\n  throw e;/);
+});
+
 test('the open lobbies area is there from the start, with a line saying it is looking', () => {
   assert.doesNotMatch(body, /<div id="lobbyList" hidden/);
   assert.match(body, /<ul id="lobbies"><li>Looking for open lobbies/);
@@ -72,6 +84,17 @@ test('the open lobbies area is there from the start, with a line saying it is lo
 
 test('the lobbies list keeps room for the two-line empty message, so the answer from the server moves nothing', () => {
   assert.match(rule('#lobbies'), /min-height:\s*2\.8em/);
+});
+
+test('hover is drawn only where a pointer can hover, so a tap leaves nothing stuck', () => {
+  assert.match(css, /@media \(hover: hover\)\s*\{[^@]*button:hover:not\(:disabled\)/);
+  assert.doesNotMatch(css.replace(/@media \(hover: hover\)\s*\{[^@]*?\n  \}/, ''), /button(\.main)?:hover/);
+});
+
+test('the status line starts as Loading and keeps room for two lines', () => {
+  assert.match(html, /<p id="frontMsg" role="status">Loading…<\/p>/);
+  assert.match(rule('#frontMsg'), /min-height:\s*2\.8em/);
+  assert.match(read('front.js'), /function init\(\) \{\n  say\(''\);/);
 });
 
 test('buttons answer a press at once: no double-tap delay, a pressed state, a focus ring', () => {
