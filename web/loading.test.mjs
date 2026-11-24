@@ -114,6 +114,8 @@ test('BootStatus advances through online match phases monotonically until frame 
   assert.equal(s.text, 'Starting match...');
   assert.equal(s.setEmscriptenStatus('Downloading...'), 'Downloading...');
   assert.equal(s.setEmscriptenStatus(''), 'Connecting to match...');
+  // a late non-empty Emscripten status must not overwrite Connecting to match
+  assert.equal(s.setEmscriptenStatus('Preparing...'), null);
   assert.equal(s.onLog('[net] connecting to wss://host/match as Ana (build x, config y)', null), 'Waiting for Bob...');
   // a late Emscripten setStatus('') must not regress back to Connecting
   assert.equal(s.setEmscriptenStatus(''), null);

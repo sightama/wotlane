@@ -72,7 +72,7 @@ class StreamActivity {
 }
 
 // Monotonic status-bar state for game boot and online match startup.
-// Phases: 0 starting, 1 emscripten/connecting, 2 waiting for peers, 3 loading stage, 4 running, 5 terminal error/abort.
+// Phases: 0 starting, 1 emscripten text, 2 connecting, 3 waiting for peers, 4 loading stage, 5 running, 6 terminal error/abort.
 class BootStatus {
   constructor({ online = false, otherNames = [] } = {}) {
     this.online = online;
@@ -82,7 +82,7 @@ class BootStatus {
   }
 
   setEmscriptenStatus(text) {
-    if (this.phase >= 4) return null;
+    if (this.phase >= 5) return null;
     if (text) {
       if (this.phase > 1) return null;
       this.phase = 1;
@@ -90,12 +90,12 @@ class BootStatus {
       return this.text;
     }
     if (!this.online) {
-      this.phase = 4;
+      this.phase = 5;
       this.text = 'Running';
       return this.text;
     }
-    if (this.phase <= 1) {
-      this.phase = 1;
+    if (this.phase < 2) {
+      this.phase = 2;
       this.text = 'Connecting to match...';
       return this.text;
     }
@@ -104,18 +104,18 @@ class BootStatus {
 
   onLog(line, errorStatus) {
     if (errorStatus) {
-      this.phase = 5;
+      this.phase = 6;
       this.text = errorStatus;
       return this.text;
     }
-    if (!this.online || this.phase >= 4) return null;
-    if (this.phase < 2 && /^\[net\] connecting to /.test(line)) {
-      this.phase = 2;
+    if (!this.online || this.phase >= 5) return null;
+    if (this.phase < 3 && /^\[net\] connecting to /.test(line)) {
+      this.phase = 3;
       this.text = this.otherNames.length ? `Waiting for ${this.otherNames.join(', ')}...` : 'Waiting for other players...';
       return this.text;
     }
-    if (this.phase < 3 && /^\[net\] start: /.test(line)) {
-      this.phase = 3;
+    if (this.phase < 4 && /^\[net\] start: /.test(line)) {
+      this.phase = 4;
       this.text = 'Loading stage...';
       return this.text;
     }
@@ -123,14 +123,14 @@ class BootStatus {
   }
 
   onFrame(frame) {
-    if (this.phase >= 4 || !(frame > 0)) return null;
-    this.phase = 4;
+    if (this.phase >= 5 || !(frame > 0)) return null;
+    this.phase = 5;
     this.text = 'Running';
     return this.text;
   }
 
   onAbort(what) {
-    this.phase = 5;
+    this.phase = 6;
     this.text = 'Stopped: ' + what;
     return this.text;
   }

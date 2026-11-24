@@ -17,14 +17,16 @@ function refreshFromTimes(times) {
 }
 
 // the rate over the next `frames` animation frames (the page must be idle meanwhile: a busy page's late frames read as a slower display)
-function measureRefresh(frames = 60) {
+function measureRefresh(frames = 60, { cancelled } = {}) {
   return new Promise((resolve) => {
     const times = [];
     const step = (now) => {
+      if (cancelled?.()) return resolve({ hz: 0, raw: 0 });
       times.push(now);
       if (times.length <= frames) requestAnimationFrame(step);
       else resolve(refreshFromTimes(times));
     };
+    if (cancelled?.()) return resolve({ hz: 0, raw: 0 });
     requestAnimationFrame(step);
   });
 }

@@ -142,19 +142,20 @@
 
   // the display's refresh rate, measured while the front panel is idle and cached in sessionStorage: above 60 Hz single player draws
   // in-between frames (WOTM_DISPLAY_HZ, native/runtime/wotm_live.inc). A hidden tab gets no animation frames, so after 2 s the rate is
-  // unknown and the game draws at 60. Online matches disable frame interpolation, so they do not wait for this measurement.
+  // unknown and the game draws at 60. Online matches disable frame interpolation, so they cancel and skip this measurement rather than
+  // letting a busy boot poison the tab's cached refresh rate.
+  let skipRefresh = false;
   const cachedHz = window.wotmReadCachedRefresh?.(tabStorage()) || 0;
   const displayRate = cachedHz
     ? (env.WOTM_DISPLAY_HZ = String(cachedHz), out(`[web] display ${cachedHz} Hz (cached)`), Promise.resolve())
     : Promise.race([
-        wotmMeasureRefresh(60),
+        wotmMeasureRefresh(60, { cancelled: () => skipRefresh }),
         new Promise((resolve) => setTimeout(() => resolve({ hz: 0, raw: 0 }), 2000)),
       ]).then((r) => {
-        if (r.hz) {
-          env.WOTM_DISPLAY_HZ = String(r.hz);
-          window.wotmWriteCachedRefresh?.(tabStorage(), r.hz);
-          out(`[web] display ${r.raw.toFixed(1)} Hz, read as ${r.hz}`);
-        }
+        if (skipRefresh || !r.hz) return;
+        env.WOTM_DISPLAY_HZ = String(r.hz);
+        window.wotmWriteCachedRefresh?.(tabStorage(), r.hz);
+        out(`[web] display ${r.raw.toFixed(1)} Hz, read as ${r.hz}`);
       });
 
   // also from the page's load: the game's wasm into the browser's HTTP cache, so that wotm.js's own request is only a revalidation
@@ -189,6 +190,7 @@
     navigator.locks?.request('wotlane-game', { mode: 'shared' }, () => new Promise(() => {}));
     Object.assign(env, pageEnv(params, fixed, matchEnv, build));
     const isOnline = !!(matchEnv || env.WOTM_NET);
+    if (isOnline) skipRefresh = true;
     bootStatus = new BootStatus({ online: isOnline, otherNames });
     statusEl.textContent = bootStatus.text;
     window.Module = {

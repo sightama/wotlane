@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
-const { refreshFromTimes, devicePixels, readCachedRefresh, writeCachedRefresh } = createRequire(import.meta.url)('./display.js');
+const { refreshFromTimes, measureRefresh, devicePixels, readCachedRefresh, writeCachedRefresh } = createRequire(import.meta.url)('./display.js');
 
 const frames = (n, periodMs, start = 1000) => Array.from({ length: n }, (_, i) => start + i * periodMs);
 
@@ -71,4 +71,23 @@ test('cached refresh rate round-trips valid integer rates and ignores invalid or
   const b = memStorage({ broken: true });
   assert.doesNotThrow(() => writeCachedRefresh(b, 60));
   assert.equal(readCachedRefresh(b), 0);
+});
+
+test('measureRefresh stops early and returns unknown when cancelled', async () => {
+  let cancel = false;
+  let scheduled = 0;
+  const origRaf = globalThis.requestAnimationFrame;
+  globalThis.requestAnimationFrame = (cb) => {
+    scheduled++;
+    if (scheduled === 3) cancel = true;
+    setImmediate(() => cb(scheduled * 16.67));
+  };
+  try {
+    const r = await measureRefresh(60, { cancelled: () => cancel });
+    assert.deepEqual(r, { hz: 0, raw: 0 });
+    assert.equal(scheduled, 3, 'stops scheduling rAF once cancelled');
+  } finally {
+    if (origRaf === undefined) delete globalThis.requestAnimationFrame;
+    else globalThis.requestAnimationFrame = origRaf;
+  }
 });
