@@ -91,7 +91,7 @@ recompiled code's data, the renderer's buffers and the disc cache's working set.
 A and C are live (#173; the Firefox tip, #175). B, J, E and I were measured next and none is worth building or shipping (the last
 section). D waits for a measurement that some players are main-thread bound (phones); F waits (the first-read hash fixes in its
 row are not scheduled); the native renderer's shadows (H, the main-thread part) can become a quality setting. VU0 rounding to
-nearest (the last section) waits for Lane. G and K are not scheduled.
+nearest (the last section) is built (Lane's go, 2026-11-23; results in its own section below). G and K are not scheduled.
 
 ## What the next items gave (2026-11-19, later)
 
@@ -120,4 +120,30 @@ each); none of these shipped. Frame shares are derived: VU0's share of the game 
   8% of a Chrome frame, 10% of a Firefox 1 vs 1 and up to 17% with 8 monsters. It makes the game's VU0 math differ from the PS2's in
   the last bit (transforms, physics, collision) and old input recordings replay differently; the check becomes native equal to wasm
   instead of equal to the PS2 interpreter (`vu0bench` would compare native with wasm; the VU0 part of the PS2-reference checks is
-  lost), the unit-test digests are measured again, and the desync matrix and a gameplay check go with it. Waiting for Lane.
+  lost), the unit-test digests are measured again, and the desync matrix and a gameplay check go with it. Lane approved it on 2026-11-23 (below).
+
+## VU0 round to nearest (2026-11-23)
+
+Built on Lane's go: the VU0 microprograms round to nearest on every build (`wotmVu0NativeRun` sets no rounding mode; the browser
+uses the same SSE code as the native builds). The software round toward zero (`native/wotm_rtz.hpp`, `native/wotm_rtz_lanes.hpp`)
+and its four `rtz_*` unit tests are removed (Lane's call: nothing uses them; git history keeps them).
+
+- **Same bits everywhere:** `sh tools/vu0bench.sh` now replays the recorded calls through the native and the wasm build and fails
+  when they differ. On 840 recorded calls (M1 Max): 0 differ; 755 differ from the PS2 interpreter (686 on another recording), which
+  is the rounding. On that second recording the round-toward-zero build checked against the new results also gives 686 (it equals
+  the interpreter), so the check sees a change. `native/tests/wotm_vu0_test.cpp` (unit tests, run by CI on Linux, Windows and wasm) covers what recordings
+  rarely reach: a madd whose float product or sum rounds past the largest float saturates instead of leaving an infinity.
+- **Per VU0 call** (`vu0bench --time 50 --ref origin/wip/browser`, 3 alternating rounds): native 186/235/217 -> 180/148/205 ns
+  (noise), wasm under node 516/505/515 -> 393/330/337 ns (-24 to -35%).
+- **Game thread in real browsers** (`latency.mjs --players 2 --rtt 40 --secs 90 --browser chrome --firefox 1`, muted, median of
+  the diag windows' `ee_busy_ms`, first two windows left out, two alternating rounds against the live build `wl-49d9dd9d3239c091`):
+  Chrome 158 7.10 / 6.70 -> 6.20 / 6.00 ms per frame (-10 to -13%); Firefox 157 11.25 / 10.40 -> 9.70 / 9.15 ms (-12 to -14%).
+  The page bench's estimate was ~8% (Chrome) and ~10% (Firefox).
+- **Determinism:** desync matrix (`desync.mjs --cases 2,3,4 --scenarios baseline,pause,stall --firefox 1`) 9 trials, 0 desync
+  (one 4-player pause trial OVERLOAD at host load 30 to 75, its 4 frames compared equal). Native synctest 2 frames back: 1 vs 1
+  8 400 frames and 8 monsters 3 000 frames, 0 mismatches.
+- **Gameplay:** a native AI vs AI fight plays to a round win; Chrome draws the fight normally (`tools/web_fps.mjs`, 116 fps
+  presented at 120 Hz).
+- **What changes for players:** VU0 results differ from the PS2's in the last bit (transforms, physics, collision); an input
+  recording replays the same fight only on a build with the same VU0 code (`docs/ONLINE.md`). Native players need a build with
+  this change to share a lobby with browsers (the build id changes).

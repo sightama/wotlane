@@ -16,4 +16,7 @@ cmake --build "$build" >"$build/build.log" 2>&1 || {
     grep -E 'error' "$build/build.log" | head -10 >&2
     fail "build failed; full log: $build/build.log"
 }
-"$build/wotm_native_test"
+status=0
+"$build/wotm_native_test" || status=$?
+"$build/wotm_vu0_test" || status=$?   # the native VU0 arithmetic's edge cases and its floating-point mode guard
+exit "$status"

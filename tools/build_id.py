@@ -69,8 +69,8 @@ def compute(repo, runtime, build, ps2recomp_commit=None):
         'patches': tree_digest(repo / 'tools' / 'runtime_patch'),
         'ps2recomp': ps2recomp_commit or ps2recomp_head(runtime),
         'recomp': recomp_digest(repo / 'recomp' / 'retail', runtime),
-        # build_dev (no LTCG) and build (LTCG) generate different code; build_web is build_dev's code for the browser, with VU0 rounding
-        # toward zero in software (native/wotm_rtz.hpp) so the states are the same, and its players share lobbies with build_dev's
+        # build_dev (no LTCG) and build (LTCG) generate different code; build_web is build_dev's code for the browser (VU0 rounds to
+        # nearest in both) so the states are the same, and its players share lobbies with build_dev's
         'build': 'build_dev' if build == 'build_web' else build,
     }
     return 'wl-' + hashlib.sha256(json.dumps(parts, sort_keys=True).encode()).hexdigest()[:16]

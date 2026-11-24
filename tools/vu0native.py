@@ -1,11 +1,13 @@
+# ABOUTME: Generates native C++ for the VU0 microprograms in the game's ELF (wotm_vu0_native.gen.inc, game code: kept outside
+# ABOUTME: the repo); run by the runtime and web builds and by tools/vu0bench.sh.
 """Generates native C++ for WotM's VU0 microprograms (wotm_vu0_native.gen.inc, included by
 ps2xRuntime/src/lib/vu/wotm_vu0_native.cpp in the PS2Recomp runtime).
 
 The microcode comes from the ELF (the VIF packet with MPG that the game sends to VU0) or from a vu0_code.bin (PS2X_DUMP_VU0).
-The generated C++ reproduces the runtime's VU1Interpreter bit for bit: normalized operands, float math with round-toward-zero
-and the result classified by its double value, MAC/status flags published 4 cycles after issue (fmand/fsand only see the
-ones that have already arrived), stores and VI/VF writes in program order (the VU stalls on VF/VI/ACC dependencies, so
-sequential semantics hold), the pair split as on hardware (the lower reads registers before the upper of the same pair
+The generated C++ follows the runtime's VU1Interpreter except for the rounding: normalized operands, float math rounded to
+nearest (the interpreter, like the PS2, rounds toward zero; wotm_vu0_native.cpp) and the result classified by its double value,
+MAC/status flags published 4 cycles after issue (fmand/fsand only see the ones that have already arrived), stores and VI/VF
+writes in program order (the VU stalls on VF/VI/ACC dependencies, so sequential semantics hold), the pair split as on hardware (the lower reads registers before the upper of the same pair
 writes) and a branch that reads a VI written by the previous pair seeing the old value (readBranchVi).
 
 Compiled as blocks specialized by pipeline state: each node is (pc, state), with the state relative to the current cycle
@@ -262,15 +264,6 @@ def flt(bits):
     return f'B({bits:#010x}u)'
 
 
-def operand_b(u, c):
-    b = u['b']
-    if b[0] == 'bc':
-        return f's.vf[{b[1]}][{b[2]}]'
-    if b[0] == 'vec':
-        return f's.vf[{b[1]}][{c}]'
-    return 's.q' if b[0] == 'q' else 's.i'
-
-
 def operand_b4(u):
     b = u['b']
     if b[0] == 'bc':
@@ -306,20 +299,6 @@ def emit_upper(u, slot, out):
         if form == 'ftoi0':
             out.append(f'        const int32_t i{c} = F2I(N(s.vf[{u["fs"]}][{c}]));')
             out.append(f'        float u{c}; std::memcpy(&u{c}, &i{c}, 4);')
-            continue
-        a, b = f'N(s.vf[{u["fs"]}][{c}])', f'N({operand_b(u, c)})'
-        out.append(f'        const float a{c} = {a}, b{c} = {b};')
-        if form in ('max', 'mini'):
-            cmp = '>' if form == 'max' else '<'
-            out.append(f'        const float u{c} = a{c} {cmp} b{c} ? a{c} : b{c};')
-        elif form in ('madd', 'msub'):
-            sign = '+' if form == 'madd' else '-'
-            out.append(f'        const float c{c} = N(s.acc[{c}]);')
-            out.append(f'        const float u{c} = L(c{c} {sign} a{c} * b{c}, (double)c{c} {sign} (double)a{c} * (double)b{c}, {LANES[c]}u, F[{slot}]);')
-            out.append(f'        P(a{c}, b{c}, F[{slot}]);')
-        else:
-            sym = {'add': '+', 'sub': '-', 'mul': '*'}[form]
-            out.append(f'        const float u{c} = L(a{c} {sym} b{c}, (double)a{c} {sym} (double)b{c}, {LANES[c]}u, F[{slot}]);')
     dst = 's.acc' if u['dst'][0] == 'acc' else (None if u['dst'][1] == 0 else f's.vf[{u["dst"][1]}]')
     if not dst:
         return []

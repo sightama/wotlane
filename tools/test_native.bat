@@ -19,3 +19,7 @@ if not exist "%BUILD%\build.ninja" (
 )
 cmake --build "%BUILD%" || exit /b 1
 "%BUILD%\wotm_native_test.exe"
+set "NATIVE_RC=%ERRORLEVEL%"
+rem the native VU0 arithmetic's edge cases and its floating-point mode guard
+"%BUILD%\wotm_vu0_test.exe" || exit /b 1
+exit /b %NATIVE_RC%

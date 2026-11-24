@@ -27,6 +27,8 @@ run_logged "$build/build.log" cmake --build "$build"
 status=0
 node "$build/wotm_native_test.js" >"$build/test.log" 2>&1 || status=$?
 grep -v '^ok ' "$build/test.log" || true   # failures and the totals line; the full list is in test.log
+node "$build/wotm_vu0_test.js" >"$build/vu0_test.log" 2>&1 || status=$?
+grep -v "^ok " "$build/vu0_test.log" || true
 [ "$status" -eq 0 ] || fail "native tests failed under wasm"
 
 step 'browser-only sources compile'
