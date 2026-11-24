@@ -18,7 +18,7 @@ Phone is 390x844 at 2x; desktop is 1280x800; the touch layout is a phone held si
 
 | | BEFORE | AFTER | What changed |
 |---|---|---|---|
-| Phone, Firefox | <img src="before-after/before-firefox-phone-lobby.png" width="240"> | <img src="before-after/after-firefox-phone-lobby.png" width="240"> | The lobby code is large with a label, next to Copy invite link; members are rows with their chips; Stage and Wins sit side by side; Rules is a labelled box with 20px checkboxes; Start (wide) is beside Leave, the status line is right under them, and the chat comes last. |
+| Phone, Firefox | <img src="before-after/before-firefox-phone-lobby.png" width="240"> | <img src="before-after/after-firefox-phone-lobby.png" width="240"> | The lobby code is large with a label, next to Copy invite link; members are rows with their chips; Stage and Wins sit side by side (one column below about 330px); Rules is a labelled box with 20px checkboxes; Start (wide) is beside Leave, the status line is right under them, and the chat comes last. |
 | Desktop, Firefox | <img src="before-after/before-firefox-desktop-lobby.png" width="420"> | <img src="before-after/after-firefox-desktop-lobby.png" width="420"> | Same layout on the wider card; Start is the one filled button of the lobby. |
 
 ## Settings
@@ -36,7 +36,7 @@ The Mods tab (your creations, map editor) is not redesigned; it only picks up th
 
 | | BEFORE | AFTER | What changed |
 |---|---|---|---|
-| Layout panel, Chrome | <img src="before-after/before-chrome-phone-touch-layout.png" width="420"> | <img src="before-after/after-chrome-phone-touch-layout.png" width="420"> | The panel's buttons are larger (8px corners, more padding), its checkboxes follow the dark scheme, and on a phone shorter than the panel it scrolls inside the screen instead of running past the bottom. The on-screen controls themselves are unchanged. The "Downloading game data" text behind the panel is the game's load overlay on the test page, in both pictures. |
+| Layout panel, Chrome | <img src="before-after/before-chrome-phone-touch-layout.png" width="420"> | <img src="before-after/after-chrome-phone-touch-layout.png" width="420"> | The panel's buttons keep their size, its checkboxes follow the dark scheme, and on a phone shorter than the panel it scrolls inside the screen instead of running past the bottom (568x320 in the checks; the pictures are 844x390). The on-screen controls themselves are unchanged. The "Downloading game data" text behind the panel is the game's load overlay on the test page, in both pictures. |
 | Move buttons, Chrome | <img src="before-after/before-chrome-phone-touch-layout-moving.png" width="420"> | <img src="before-after/after-chrome-phone-touch-layout-moving.png" width="420"> | Same panel in Move buttons mode (dashed outlines on the controls). |
 
 ## Safari (cannot run the game)
@@ -57,11 +57,11 @@ This pass is three PRs: #194 (loading without movement, instant presses, field b
 | Dead presses | Single player, Host and Join were clickable from first paint, before their handlers attached (~100 to 800ms) | disabled until the handlers are attached | same |
 | Field borders against the panel | 1.27:1 | 3.4:1 | same |
 | Controls on a touch device | 24 to 38px | 44px | same |
-| Landmark, grouped online choices, Start beside Leave, can't-run page, status bar not under the panel, 32px desktop controls | no | no | yes |
-| axe-core (4.10.2), home, lobby and six settings tabs, Firefox and Chrome | `region` (no landmark) on every view | same | no violations |
+| Landmark, grouped online choices, Start beside Leave, can't-run page, status bar not under the panel, desktop controls of at least 32px (about 34px) | no | no | yes |
+| axe-core (4.10.2), home, lobby and six settings tabs, Firefox and Chrome | `region` (no landmark) on every view | not measured | no violations |
 | `tools/page_check.mjs` (59 checks, 8 in WebKit) | 40 in Firefox, 40 in Chrome, 4 in WebKit | 55 in Firefox, 55 in Chrome, 4 in WebKit | 59 in Firefox, Chrome and Brave; 8 in WebKit |
 
-The four checks that separate the middle and last columns were added by this PR together with the changes they test.
+The checks that separate the middle and last columns (landmark and Play online region, status bar not drawn under the panel, 32px desktop controls, Start beside Leave, and in WebKit the can't-run page) were added by this PR together with the changes they test.
 
 ## What was not tested
 

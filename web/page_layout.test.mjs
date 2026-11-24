@@ -99,3 +99,15 @@ test('the status line and the lobbies list keep one line of room, two on a narro
   assert.match(css, /#lobbies \{[^}]*min-height:\s*1\.4em/);
   assert.match(css, /@media \(max-width: 480px\)\s*\{\s*#frontMsg, #lobbies \{ min-height: 2\.8em; \}\s*\}/);
 });
+
+test('the roomy button look belongs to the front panel; the game bar, the stall prompt and the touch panel keep the compact buttons', () => {
+  assert.match(css, /\n  button \{[^}]*border-radius: 4px; padding: 2px 8px;/);
+  assert.match(css, /\n  button\.main \{[^}]*padding: 8px 16px;/);
+  assert.match(css, /\n  #front button \{[^}]*border-radius: 8px; padding: 6px 14px;/);
+  assert.match(css, /\n  #front button\.main \{[^}]*padding: 10px 18px; font-size: 16px;/);
+  assert.match(css, /\n  #controlsTable \.key \{[^}]*padding: 2px 8px;/);
+});
+
+test('the lobby keeps two lines for its status line from the moment it opens, so a longer notice moves nothing', () => {
+  assert.match(css, /#inLobby:not\(\[hidden\]\) ~ #frontMsg \{ min-height: 2\.8em; \}/);
+});
