@@ -179,6 +179,8 @@
       out('[web] disc prefetch skipped: ' + e.message);
     }
   })();
+  // then the rest of the game, in the background (web/game_prefetch.js)
+  Promise.all([discWarm, wasmWarm]).then(() => window.wotmGamePrefetch?.start(out));
 
   // loads the game once (front.js calls it for single player, or with a lobby's match environment); `build` is version.json's
   // build id, which the server compares with the lobby's
@@ -205,11 +207,18 @@
       },
       preRun: [() => Object.assign(window.Module.ENV, env)],
       onAbort: (what) => { statusEl.textContent = bootStatus.onAbort(what); logEl.classList.add('open'); },
-      onRuntimeInitialized: tellHidden,
+      onRuntimeInitialized: () => {
+        tellHidden();
+        // the game's code is down and running: from here its disc reads are what the background prefetch makes way for
+        window.wotmGamePrefetch?.release();
+      },
     };
     const finishLoading = showLoading(isOnline ? 57 << 20 : 27 << 20, bootStatus.text);   // a first visit's download to a fight, or to the title
     // a match's stage and monsters: what the lobby has not fetched yet comes down while the game boots (web/match_prefetch.js)
     const match = matchEnv && window.wotmMatchPrefetch?.matchOfEnv(matchEnv.WOTM_MATCH);
+    // an online match's bandwidth is the match's: the whole-game prefetch ends here; otherwise it waits while the game's wasm comes down
+    if (isOnline) window.wotmGamePrefetch?.stop();
+    else window.wotmGamePrefetch?.hold();
     if (match) window.wotmMatchPrefetch.warmer.want(match.stage, match.members, 0);
     if (isOnline) {
       // once frame 1 is reached, the fight is on screen: stop match prefetch, clear the loading overlay, and mark Running

@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
-const { cachingFetch, evictOld, prefetch, syncReadHelper, syncReadClient, syncDiscXHR } = createRequire(import.meta.url)('./disc_cache.js');
+const { cachingFetch, evictOld, prefetch, cachedChunks, syncReadHelper, syncReadClient, syncDiscXHR } = createRequire(import.meta.url)('./disc_cache.js');
 
 const CHUNK = 8;   // bytes per chunk in these tests
 const SIZE = 20;   // the fake file: bytes 0..19 (chunks 0, 1 and a short 2)
@@ -38,6 +38,7 @@ function fakeCaches({ putFails = false } = {}) {
       return {
         async match(key) { const r = m.get(String(key)); return r ? r.clone() : undefined; },
         async put(key, r) { if (putFails) throw new DOMException('full', 'QuotaExceededError'); m.set(String(key), r.clone()); },
+        async keys() { return [...m.keys()].map((url) => ({ url })); },   // Request objects: only their url is read
       };
     },
     async keys() { return [...store.keys()]; },
@@ -167,6 +168,66 @@ test('prefetch asks for nothing more once stop() says so', async () => {
   const runs = await prefetch(counting, 'data/game.iso', [0, 2, 4, 6], { chunkBytes: CHUNK, maxRun: 1, concurrency: 1, stop: () => stopped });
   assert.deepEqual(net.gets().map((c) => c.range), ['bytes=0-7']);
   assert.equal(runs, 1);   // the runs asked for
+});
+
+test('a background prefetch says so to the fetch it goes through, and a plain one does not', async () => {
+  const seen = [];
+  const net = fakeNetwork();
+  const watching = (url, init) => { seen.push(init.background === true); return net(url, init); };
+  await prefetch(watching, 'data/game.iso', [0], { chunkBytes: CHUNK, background: true });
+  await prefetch(watching, 'data/game.iso', [1], { chunkBytes: CHUNK });
+  assert.deepEqual(seen, [true, false]);
+});
+
+test('the caching fetch hands a range request\'s options to the network it falls back to', async () => {
+  const net = fakeNetwork();
+  const seen = [];
+  const f = make((url, init) => { if (init.headers?.Range) seen.push(init.background); return net(url, init); }, fakeCaches());
+  await f('data/game.iso', { method: 'HEAD' });
+  await f('data/game.iso', { ...range(0, 7), background: true });
+  assert.deepEqual(seen, [true]);
+});
+
+test('a game\'s disc read is announced as it starts, a background prefetch\'s and a HEAD are not', async () => {
+  const starts = [];
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const net = fakeNetwork();
+  const slow = async (url, init) => { if (init.headers?.Range) await gate; return net(url, init); };
+  const f = make(slow, fakeCaches(), { onRead: () => starts.push('read') });
+  await f('data/game.iso', { method: 'HEAD' });
+  const pending = f('data/game.iso', range(0, 7));
+  await Promise.resolve();
+  assert.deepEqual(starts, ['read'], 'heard before the network answers');
+  release();
+  await pending;
+  await f('data/game.iso', { ...range(8, 15), background: true });
+  await f('page.html', {});
+  assert.deepEqual(starts, ['read']);
+});
+
+test('a synchronous disc read is announced before it is answered, from the cache or the network', () => {
+  const heard = [];
+  const X = syncDiscXHR(FakeXHR, { ask: () => (heard.push('ask'), null), remember: () => {} }, null, { onRead: () => heard.push('read') });
+  const x = new X();
+  x.open('GET', 'http://x/data/game.iso', false);
+  x.setRequestHeader('Range', 'bytes=0-7');
+  x.send();
+  assert.deepEqual(heard, ['read', 'ask']);
+});
+
+test('cachedChunks lists the chunks kept for one version of a file, and nothing of other versions or files', async () => {
+  const caches = fakeCaches();
+  const v1 = make(fakeNetwork('"v1"'), caches);
+  await v1('data/game.iso', { method: 'HEAD' });
+  await v1('data/game.iso', range(0, 7));
+  await v1('data/game.iso', range(16, 19));
+  const v2 = make(fakeNetwork('"v2"'), caches);
+  await v2('data/game.iso', { method: 'HEAD' });
+  await v2('data/game.iso', range(8, 15));
+  assert.deepEqual([...await cachedChunks(caches, 'game.iso', '"v1"')].sort(), [0, 2]);
+  assert.deepEqual([...await cachedChunks(caches, 'game.iso', '"v2"')], [1]);
+  assert.deepEqual([...await cachedChunks(caches, 'SCUS_971.97', '"v1"')], []);
 });
 
 test('the fetch backend\'s double slash (data//game.iso) names the same file and cache', async () => {

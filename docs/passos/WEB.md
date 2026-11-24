@@ -66,7 +66,17 @@ For online play start `wotm_server --ws-port <port>`; a page opened from `localh
   in both seats on stage 1, one per stage) then `python3 tools/web_match_chunks.py <data>/game.iso runtime/match_logs`: a file read in
   every monster's fight is the stage's, the rest of a monster's fight is the monster's, and its costumes follow the disc's file names
   (`MON/<NAME><costume>.*`, `RST/<NAME><costume>.AIC`). A map of the player's own (a map id as the stage) prefetches its monsters
-  only. In Firefox
+  only. Once the boot's chunks and the wasm are in, `web/game_prefetch.js` fetches the rest of the game in the background: every chunk
+  of `match_chunks.json` (every stage, every monster with all its costumes) and the boot's, about 270 MiB, two 2 MiB runs at a time,
+  skipping what the cache holds (`cachedChunks` reads the cache's keys only), so no later fight or menu waits on the network. It
+  makes way for the game: from the game's start it holds until the runtime is up (the wasm download is no disc read), and any game
+  read pauses it until the disc has been quiet for 5 s; a read says so as it starts (`{want}` on the `wotlane-disc` channel, from
+  `cachingFetch`'s `onRead` and the Firefox XHR path), a download as it ends (a number) and a cache hit as `{hit}`; its own
+  downloads go as `{prefetch: bytes}`, which the loading text, the streaming note and the diag leave out. It stops for good when an
+  online match starts (the bandwidth is the match's), does nothing with Save-Data on or without room under 90% of the quota, and gives
+  up on chunks two uninterrupted passes could not fetch. It never calls `navigator.storage.persist()`: Chrome and Brave answer false to
+  a new visitor and Firefox would ask with a prompt; the quota (2 GiB in Brave, 10 GiB in Chrome and Firefox on a desktop) holds the
+  set. `node tools/browser_mp_test/prefetch_probe.mjs` measures it. In Firefox
   the game's own reads from worker threads are synchronous XHR (below), which the Cache API can't serve, so the page starts a helper
   worker (`disc_cache.js` itself, named `wotlane-disc-cache`) that owns the cache for them: a game worker (its `XMLHttpRequest` is wrapped
   by `data_retry.js`'s `importScripts` of `disc_cache.js`) asks it over a BroadcastChannel, blocks on a SharedArrayBuffer until it

@@ -218,6 +218,14 @@ test('no more than maxInflight chunk files are in flight at once, and the bytes 
   assert.equal(reported.reduce((a, b) => a + b, 0), SIZE);
 });
 
+test('a chunk a background read fetched is reported as background, a game read\'s chunk is not', async () => {
+  const reported = [];
+  const f = make(fakeServer(), { onBytes: (n, how) => reported.push([n, how.background]) });
+  await f('http://x/data/game.iso', range(0, 7));
+  await f('http://x/data/game.iso', { ...range(8, 15), background: true });
+  assert.deepEqual(reported, [[8, false], [8, true]]);
+});
+
 // ---- with the browser cache on top ----
 
 function fakeCaches() {

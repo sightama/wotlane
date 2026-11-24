@@ -110,7 +110,8 @@
   // version), a range GET from the chunk files that cover it, each fetched whole, checked against its manifest hash (another URL is tried
   // when it fails) and cut to size. With no index (a 404, the server is not split) and for anything the index does not list, `baseFetch`
   // answers as it is. An index that fails another way is an error: falling back to the whole file would hide a broken server. At most
-  // `maxInflight` chunk files are in flight at once. `onBytes` hears the size of each chunk that arrived.
+  // `maxInflight` chunk files are in flight at once. `onBytes(size, {background})` hears each chunk that arrived, `background` true when
+  // the read that fetched it said nothing waits for it (disc_cache.js prefetch).
   function chunkedFetch(baseFetch, { subtle = null, maxInflight = 12, tries = 3, retryDelayMs = 300, onBytes = null, nonce = randomNonce, log = console.error } = {}) {
     const indexes = new Map();     // base -> Promise of the index, or null when the server has none
     const manifests = new Map();   // base + digest -> Promise of the manifest
@@ -153,7 +154,7 @@
       }
     }
 
-    async function getChunk(base, name, entry, manifest, n) {
+    async function getChunk(base, name, entry, manifest, n, background) {
       for (let attempt = 0; ; attempt++) {
         const bytes = await limited(async () => {
           const r = await baseFetch(chunkUrl(base, entry, n, attempt && nonce()));
@@ -162,7 +163,7 @@
         });
         const hash = bytes.length === chunkLength(manifest, n) ? await (subtle ? sha256Hex(subtle, bytes) : sha256Sync(bytes)) : null;
         if (hash === manifest.sha256[n]) {
-          onBytes?.(bytes.length);
+          onBytes?.(bytes.length, { background });
           return bytes;
         }
         if (attempt + 1 >= tries) throw new Error(`disc chunk ${n} of ${name} failed its SHA-256 check`);
@@ -188,7 +189,7 @@
 
       const manifest = await getManifest(path.base, path.file, entry);
       const parts = await Promise.all(chunkSpan(start, end, manifest.chunkBytes, entry.size).map(async ({ n, from, to }) =>
-        (await getChunk(path.base, path.file, entry, manifest, n)).subarray(from, to)));
+        (await getChunk(path.base, path.file, entry, manifest, n, init.background === true)).subarray(from, to)));
       const body = new Uint8Array(end - start + 1);
       let at = 0;
       for (const p of parts) {

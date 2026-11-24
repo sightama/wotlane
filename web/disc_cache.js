@@ -15,8 +15,9 @@ function sha256Hex(subtle, bytes) { return discChunks.sha256Hex(subtle, bytes); 
 
 // Wraps `baseFetch`: a HEAD of a disc file records its version and size; a GET of a chunk-aligned range of a known version is served
 // from the cache when every chunk in it is there and matches its hash, else from the network, whose chunks are then stored. Anything
-// the cache can't do (no Cache API, storage nearly full, a failing call) leaves the network's answer as it is.
-function cachingFetch(baseFetch, { caches, subtle, estimate, chunkBytes = 1 << 20, onBytes = null, fullAt = 0.9 } = {}) {
+// the cache can't do (no Cache API, storage nearly full, a failing call) leaves the network's answer as it is. `onRead()` hears each
+// range GET of a disc file as it starts, except a background prefetch's: the game is waiting on it (game_prefetch.js yields to it).
+function cachingFetch(baseFetch, { caches, subtle, estimate, chunkBytes = 1 << 20, onBytes = null, onRead = null, fullAt = 0.9 } = {}) {
   const versions = new Map();   // file -> { etag, size }
 
   async function fromCache(cache, file, first, last) {
@@ -55,6 +56,7 @@ function cachingFetch(baseFetch, { caches, subtle, estimate, chunkBytes = 1 << 2
       return r;
     }
     const m = /^bytes=(\d+)-(\d+)$/.exec(init.headers?.Range ?? init.headers?.range ?? '');
+    if (m && !init.background) onRead?.();
     const v = versions.get(file);
     if (!m || !v || !caches || !subtle) return baseFetch(url, init);
     const start = Number(m[1]), end = Math.min(Number(m[2]), v.size - 1);
@@ -102,10 +104,18 @@ async function evictOld(caches, current) {
   }
 }
 
+// The chunk numbers kept for version `etag` of disc file `file` (a Set), read from the cache's keys without opening any chunk
+async function cachedChunks(caches, file, etag) {
+  const cache = await caches.open(cacheName(file, etag));
+  const prefix = chunkKey(file, '');
+  return new Set((await cache.keys()).map((r) => r.url).filter((u) => u.startsWith(prefix)).map((u) => Number(u.slice(prefix.length))));
+}
+
 // Fetches the listed chunks of `url` (runs of neighbours as one range, at most `maxRun` chunks each, `concurrency` at a time) and
 // reads them to the end, so that a caching fetch stores them; a failure just leaves that run to the game's own reads. `stop()` true: no
-// further run is asked for (the runs in flight finish). Returns how many runs were asked for
-async function prefetch(fetchFn, url, chunks, { chunkBytes = 1 << 20, maxRun = 8, concurrency = 4, stop = () => false } = {}) {
+// further run is asked for (the runs in flight finish). `background`: nothing waits for these chunks, so their downloads are reported
+// apart from the game's (see onBytes below). Returns how many runs were asked for
+async function prefetch(fetchFn, url, chunks, { chunkBytes = 1 << 20, maxRun = 8, concurrency = 4, stop = () => false, background = false } = {}) {
   const sorted = [...new Set(chunks)].sort((a, b) => a - b);
   const runs = [];
   for (const i of sorted) {
@@ -118,7 +128,7 @@ async function prefetch(fetchFn, url, chunks, { chunkBytes = 1 << 20, maxRun = 8
     while (next < runs.length && !stop()) {
       const [a, b] = runs[next++];
       try {
-        const r = await fetchFn(url, { headers: { Range: `bytes=${a * chunkBytes}-${(b + 1) * chunkBytes - 1}` } });
+        const r = await fetchFn(url, { headers: { Range: `bytes=${a * chunkBytes}-${(b + 1) * chunkBytes - 1}` }, ...(background ? { background } : {}) });
         await r.arrayBuffer();
       } catch (e) {
         // the game reads it itself later
@@ -240,8 +250,8 @@ function syncReadClient(post, { waitMs = 5000, pingMs = 300, pauseMs = 2000, now
 // A XMLHttpRequest whose synchronous disc range GETs are answered by `client` when it has the bytes; what it lacks is read from the
 // server's chunk files by `chunks` (disc_chunks.js syncChunkReader) when the server has them, else with `Base` from the whole file;
 // everything else is `Base`'s. Cache hits report via `onHit` and both cache hits and chunk-reader reads set `wotmReported = true` so
-// native/wotm_webdisc.cpp does not post them again as network downloads.
-function syncDiscXHR(Base, client, chunks = null, { onHit = null } = {}) {
+// native/wotm_webdisc.cpp does not post them again as network downloads. `onRead()` hears each such read as it starts
+function syncDiscXHR(Base, client, chunks = null, { onHit = null, onRead = null } = {}) {
   return class extends Base {
     open(method, url, async, ...rest) {
       this.wotm = { method, url: String(url), sync: async === false, range: null };
@@ -259,6 +269,7 @@ function syncDiscXHR(Base, client, chunks = null, { onHit = null } = {}) {
       if (!m) return super.send(body);
       const url = new URL(w.url, globalThis.location?.href).href;
       const start = Number(m[1]), end = Number(m[2]) + 1;
+      onRead?.();
       const hit = client.ask(url, start, end);
       if (hit) {
         Object.defineProperty(this, 'status', { value: 206 });
@@ -282,7 +293,7 @@ function syncDiscXHR(Base, client, chunks = null, { onHit = null } = {}) {
   };
 }
 
-if (typeof module !== 'undefined' && module.exports) module.exports = { cachingFetch, evictOld, prefetch, syncReadHelper, syncReadClient, syncDiscXHR };
+if (typeof module !== 'undefined' && module.exports) module.exports = { cachingFetch, evictOld, prefetch, cachedChunks, syncReadHelper, syncReadClient, syncDiscXHR };
 else if (typeof document === 'undefined' && globalThis.name === HELPER_NAME) {
   // this is the helper worker (a page of Firefox starts it below)
   const subtle = globalThis.crypto?.subtle;
@@ -293,15 +304,19 @@ else if (typeof document === 'undefined' && globalThis.name === HELPER_NAME) {
   const progress = typeof BroadcastChannel === 'function' ? new BroadcastChannel('wotlane-disc') : null;
   const storage = globalThis.navigator?.storage;
   // the cache sits over the chunk files: what it lacks is read from data/<digest>/<n>.bin when the server has them (disc_chunks.js)
-  const onBytes = (n) => progress?.postMessage(n);
+  // a background prefetch's chunk is {prefetch: bytes}: nobody waits for it, so the loading text and the diag leave it out
+  const onBytes = (n, how) => progress?.postMessage(how?.background ? { prefetch: n } : n);
   const onHit = (n) => progress?.postMessage({ hit: n });   // a read the cache served: the loading counter and the diag (web/diag.js DiscWatch)
+  // a game read as it starts, before any byte arrives: the whole-game prefetch (game_prefetch.js) makes way for it
+  const onRead = () => progress?.postMessage({ want: true });
   globalThis.fetch = cachingFetch(discChunks.chunkedFetch(globalThis.fetch, { subtle: globalThis.crypto?.subtle, onBytes }), {
     caches: globalThis.caches,
     subtle: globalThis.crypto?.subtle,
     estimate: storage?.estimate ? () => storage.estimate() : null,
     onBytes: onHit,
+    onRead,
   });
-  globalThis.wotmDiscCache = { evictOld, prefetch };
+  globalThis.wotmDiscCache = { evictOld, prefetch, cachedChunks };
   const canBlock = typeof SharedArrayBuffer === 'function' && typeof BroadcastChannel === 'function';
   if (typeof document !== 'undefined' && document.currentScript?.src && canBlock && typeof Worker === 'function' && globalThis.wotmMainThreadFiles?.()) {
     globalThis.wotmDiscSyncHelper = new Worker(document.currentScript.src, { name: HELPER_NAME });
@@ -309,6 +324,6 @@ else if (typeof document === 'undefined' && globalThis.name === HELPER_NAME) {
     const channel = new BroadcastChannel(HELPER_CHANNEL);
     // the chunks this worker fetches itself go on the page's disc channel, like the fetch path's (the loading note and the diag count them)
     const reader = discChunks.syncChunkReader(XMLHttpRequest, { onBytes });
-    globalThis.XMLHttpRequest = syncDiscXHR(XMLHttpRequest, syncReadClient((m) => channel.postMessage(m)), reader, { onHit });
+    globalThis.XMLHttpRequest = syncDiscXHR(XMLHttpRequest, syncReadClient((m) => channel.postMessage(m)), reader, { onHit, onRead });
   }
 }
