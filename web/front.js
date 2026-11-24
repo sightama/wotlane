@@ -81,6 +81,7 @@ function showLobby(code, isOwner, rematch = false) {
   setOwner(isOwner);
   $('choose').hidden = true;
   $('inLobby').hidden = false;
+  $('chat').hidden = false;
   $('code').textContent = code;
   $('start').textContent = rematch ? 'Rematch' : 'Start';
   if (rematch) say(isOwner ? 'Back in the lobby. Press Rematch when everyone is back.' : 'Back in the lobby. Waiting for the owner to start the rematch.');
@@ -502,6 +503,7 @@ function backToChoice(text) {
   members = { owner: '', members: [] };   // the next lobby's settings must not warm this one's monsters
   window.wotmMatchPrefetch?.warmer.cancel();
   $('inLobby').hidden = true;
+  $('chat').hidden = true;
   $('inviteLink').hidden = true;
   $('choose').hidden = false;
   for (const id of ['single', 'host', 'join']) $(id).disabled = false;

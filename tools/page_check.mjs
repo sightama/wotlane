@@ -397,6 +397,18 @@ await check('Enter pressed twice in the join code opens one connection', async (
   expect(opened === 1, `${opened} connections opened`);
 });
 
+// ---- the Settings tab keeps its own look (it builds elements with the classes .online and .hint)
+await check('Settings Online tab notes carry no border or extra spacing from the home panel', async () => {
+  const { ctx, page } = await openPage({ width: 1280, height: 800 });
+  await page.click('#openSettings');
+  await page.click('#tab-online');
+  const r = await page.evaluate(() => [...document.querySelectorAll('#settings .online')].map((e) => [getComputedStyle(e).borderTopWidth, getComputedStyle(e).paddingTop]));
+  const h = await page.evaluate(() => [...document.querySelectorAll('#settings .hint')].map((e) => getComputedStyle(e).marginTop));
+  await ctx.close();
+  expect(r.length > 0 && r.every(([b, p]) => b === '0px' && p === '0px'), `.online: ${JSON.stringify(r)}`);
+  expect(h.every((m) => m === '0px'), `.hint margins: ${h}`);
+});
+
 // ---- structure: landmarks, the online group, Start beside Leave, what a guest sees
 {
   const { ctx, page } = await openPage({ width: 1280, height: 800 });

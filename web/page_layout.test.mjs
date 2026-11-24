@@ -76,3 +76,26 @@ test('a browser that cannot run the game sees the reason as a note, with nothing
   for (const part of [`say(problem)`, `$('frontMsg').className = 'problem'`, `$('profile').hidden = true`, `$('choose').hidden = true`, `$('openSettings').hidden = true`])
     assert.ok(init.includes(part), `init does not ${part}`);
 });
+
+test('the home panel\'s class names are scoped, so the Settings tab that builds .online and .hint elements keeps its look', () => {
+  assert.match(css, /\n  #choose \.online \{/);
+  assert.match(css, /\n  \.online > \.hint \{/);
+  assert.doesNotMatch(css, /\n  \.online \{/);
+  assert.doesNotMatch(css, /\n  \.hint \{/);
+});
+
+test('the status line sits between Start and Leave and the chat, where a press shows its answer', () => {
+  const lobby = section('<div id="inLobby"', '<p id="frontMsg"');
+  assert.ok(!lobby.includes('id="chat"'), 'the chat is inside the lobby block, above the status line');
+  assert.ok(at('start') < at('frontMsg') && at('frontMsg') < at('chat'));
+  const front = read('front.js');
+  assert.match(front, /\$\('inLobby'\)\.hidden = false;\n  \$\('chat'\)\.hidden = false;/);
+  assert.match(front, /\$\('inLobby'\)\.hidden = true;\n  \$\('chat'\)\.hidden = true;/);
+  assert.match(html, /<div id="chat" class="stack" hidden>/);
+});
+
+test('the status line and the lobbies list keep one line of room, two on a narrow screen', () => {
+  assert.match(css, /#frontMsg \{[^}]*min-height:\s*1\.4em/);
+  assert.match(css, /#lobbies \{[^}]*min-height:\s*1\.4em/);
+  assert.match(css, /@media \(max-width: 480px\)\s*\{\s*#frontMsg, #lobbies \{ min-height: 2\.8em; \}\s*\}/);
+});
