@@ -13,7 +13,7 @@ In live smoke BJJU the Firefox player's (P2) page stayed in the game after QUIT.
 - `toGameViewport` swallowed `setViewportSize` failures. It now throws, naming the player and the size.
 
 ## Fix
-`web/reload.js` (`wotmReloadWhenDone`): reload when the work settles or after 2 s, the deadline checked from MessageChannel
+`web/reload.js` (`wotmReloadWhenDone`, `wotmWithin`): reload when the work settles or at its limit (the diag report 2 s, the saves 10 s), checked from MessageChannel
 tasks. Used by `wotmQuit` and Leave the match. `tools/browser_mp_test/quit_starved.mjs` proves it in Firefox, Chromium and Chrome
 with `setTimeout`, `setInterval` and `requestAnimationFrame` disabled (reload after about 2 s each, also with a second tab in front).
 

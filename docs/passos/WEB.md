@@ -219,7 +219,7 @@ from `version.json` in `WOTM_BUILDID`.
 "Diagnostics"). It sends `DIAG` lines over the lobby connection, which stays open during the match: one on joining a lobby, one every 5
 s of the match and a last one when it ends (`wotmDiagFinish`, called by `wotmQuit` and Leave the match in `boot.js` before the page
 reloads, with a 300 ms wait for the socket to empty; `pagehide` also sends it). The reload itself (`web/reload.js`) happens when the saves and
-that report are done or 2 s have passed, whichever is first, and the deadline is checked from MessageChannel tasks, never a timer, so a
+that report are done or the report has had 2 s (the saves get 10 s), and the deadline is checked from MessageChannel tasks, never a timer, so a
 page whose timers are starved still returns to the front panel. `DiagReporter` samples every 500 ms (the ping, for its
 jitter) and builds each report from the difference of two samples. Its sources only read: the game loop's presented-frame counter
 (`globalThis.wotmFrames`), the match counters the game publishes (`wotmWebNetStats` in `native/wotm_web.h`, set every game frame in

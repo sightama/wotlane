@@ -95,7 +95,8 @@
   // after the save folder's last changes reach the browser's storage (a save folder in memory: wotm_websave.cpp)
   window.wotmQuit = () => {
     syncSaves();
-    window.wotmReloadWhenDone(Promise.all([globalThis.wotmSaveQueue, finishDiag()]));
+    // the report gets 2 s (it waits on timers); the saves get 10 s, since a reload with a write pending loses it
+    window.wotmReloadWhenDone(Promise.all([globalThis.wotmSaveQueue, window.wotmWithin(finishDiag(), 2000)]), { ms: 10000 });
   };
 
   // an online match's last diagnostics report goes out before the page reloads (web/front.js sets wotmDiagFinish for a match)

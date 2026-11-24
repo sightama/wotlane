@@ -33,9 +33,9 @@ try {
   await page.goto('http://quit.test/');
   if (hidden) await (await context.newPage()).goto('http://quit.test/');
   await page.addScriptTag({ content: readFileSync(join(REPO, 'web/reload.js'), 'utf8') });
-  const starved = await page.evaluate(() => new Promise((resolve) => { const t = performance.now(); setTimeout(() => resolve(false), 50); queueMicrotask(() => resolve(performance.now() - t < 1000)); }));
+  const disabled = await page.evaluate(() => window.setTimeout(() => {}, 0) === 0 && window.requestAnimationFrame(() => {}) === 0);
   const loadsBefore = Number(await page.evaluate(() => sessionStorage.loads));
-  await page.evaluate(() => window.wotmReloadWhenDone(new Promise(() => {})));
+  await page.evaluate(() => { window.wotmReloadWhenDone(new Promise(() => {})); });
   const start = Date.now();
   let loads = loadsBefore;
   while (Date.now() - start < 5000 && loads === loadsBefore) {
@@ -43,7 +43,7 @@ try {
     loads = Number(await page.evaluate(() => sessionStorage.loads).catch(() => loadsBefore));
   }
   ok = loads > loadsBefore;
-  console.log(`${ok ? 'PASS' : 'FAIL'}  ${browserName}${hidden ? ' (tab behind another)' : ''}: timers ${starved ? 'starved' : 'NOT starved'}, ` +
+  console.log(`${ok ? 'PASS' : 'FAIL'}  ${browserName}${hidden ? ' (tab behind another)' : ''}: timers ${disabled ? 'disabled' : 'NOT disabled'}, ` +
     `${ok ? `reloaded after ${Date.now() - start} ms` : 'no reload within 5 s'}`);
 } finally {
   await browser.close();

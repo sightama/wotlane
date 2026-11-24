@@ -38,6 +38,7 @@ test('work that never ends reloads once the deadline passes, driven by posted ta
   loop.step(1999);
   assert.equal(loop.reloads, 0);
   loop.step(1);
+  await flush();
   assert.equal(loop.reloads, 1);
   loop.step(5000);
   assert.equal(loop.reloads, 1);
@@ -64,4 +65,36 @@ test('boot.js reloads through reloadWhenDone for QUIT and for Leave the match, a
   assert.equal((boot.match(/wotmReloadWhenDone\(/g) ?? []).length, 2);
   const page = readFileSync(new URL('./index.html', import.meta.url), 'utf8');
   assert.ok(page.indexOf('<script src="reload.js">') >= 0 && page.indexOf('<script src="reload.js">') < page.indexOf('<script src="boot.js">'));
+});
+
+test('within gives work its own limit: it settles when the work does or when the limit passes, whichever is first', async () => {
+  const { within } = createRequire(import.meta.url)('./reload.js');
+  const loop = fakeLoop();
+  let done = false;
+  within(new Promise(() => {}), 300, loop).then(() => { done = true; });
+  loop.step(299);
+  await flush();
+  assert.equal(done, false);
+  loop.step(1);
+  await flush();
+  assert.equal(done, true);
+});
+
+test('the save queue gets longer than the diagnostics report: QUIT reloads at the diag limit only when the saves are done', async () => {
+  const { reloadWhenDone, within } = createRequire(import.meta.url)('./reload.js');
+  const loop = fakeLoop();
+  let saved;
+  const saves = new Promise((resolve) => { saved = resolve; });
+  reloadWhenDone(Promise.all([saves, within(new Promise(() => {}), 2000, loop)]), { ...loop, ms: 10000 });
+  loop.step(2500);
+  await flush();
+  assert.equal(loop.reloads, 0, 'the saves are still being written');
+  saved();
+  await flush();
+  assert.equal(loop.reloads, 1);
+});
+
+test('boot.js limits only the diagnostics report to 2 s and gives the saves 10 s', () => {
+  const boot = readFileSync(new URL('./boot.js', import.meta.url), 'utf8');
+  assert.match(boot, /wotmReloadWhenDone\(Promise\.all\(\[globalThis\.wotmSaveQueue, window\.wotmWithin\(finishDiag\(\), 2000\)\]\), \{ ms: 10000 \}\)/);
 });
