@@ -660,14 +660,16 @@ namespace
         CHECK(p::startDelay({0, 0}, f60) == 2u);   // at least 2: a browser ping may not be measured yet (0), the advice lowers it later
     }
 
-    // the advice rises as soon as the path needs another frame, but only falls with half a frame to spare, so a ping sitting on a
-    // frame boundary does not move the delay back and forth
-    TEST(proto_advice_rises_at_once_and_falls_with_half_a_frame_to_spare)
+    // the advice rises as soon as the path needs another frame, and falls once the path leaves kDelayFallMarginFrames to spare at the
+    // lower delay, so a ping sitting on a frame boundary does not move the delay back and forth while regional pings recover promptly
+    TEST(proto_advice_rises_at_once_and_falls_with_margin_to_spare)
     {
         const double f60 = 1000.0 / 60.0;
-        CHECK(p::adviseDelay(2, {32, 32}, 0, f60) == 3u);   // 35 ms = 2.1 frames: rises
-        CHECK(p::adviseDelay(3, {29, 29}, 0, f60) == 3u);   // 32 ms = 1.9 frames: 2 would fit, but not with half a frame spare
-        CHECK(p::adviseDelay(3, {20, 20}, 0, f60) == 2u);   // 23 ms = 1.4 frames: falls
+        CHECK(p::adviseDelay(2, {32, 32}, 0, f60) == 3u);   // 35 ms = 2.10 frames: rises
+        CHECK(p::adviseDelay(3, {29, 29}, 0, f60) == 3u);   // 32 ms = 1.92 frames: within 0.2-frame margin of boundary, holds
+        CHECK(p::adviseDelay(3, {20, 20}, 0, f60) == 2u);   // 23 ms = 1.38 frames: falls
+        CHECK(p::adviseDelay(4, {45, 45}, 0, f60) == 4u);   // 48 ms = 2.88 frames: within 0.2-frame margin of 3/4 boundary, holds
+        CHECK(p::adviseDelay(4, {42, 42}, 0, f60) == 3u);   // 45 ms = 2.70 frames: 0.30 frames spare, drops from 4 to 3
         CHECK(p::adviseDelay(9, {20, 20}, 0, f60) == 2u);   // a large fall goes straight to the target
         CHECK(p::adviseDelay(3, {40}, 0, f60) == 1u);       // nobody else to reach
     }
@@ -706,7 +708,8 @@ namespace
         const double f30 = 1000.0 / 30.0;
         CHECK(p::adviseDelay(2, {230, 60}, {230, 60}, 1, f30) == 5u);   // (60 + 230) / 2 + 3 = 148 ms
         CHECK(p::adviseDelay(5, {60, 60}, {230, 60}, 1, f30) == 5u);    // the spikes keep coming: it stays
-        CHECK(p::adviseDelay(5, {60, 60}, {60, 60}, 1, f30) == 3u);     // they stopped: 63 ms is 1.9 frames, 3 with half a frame spare
+        CHECK(p::adviseDelay(5, {60, 60}, {60, 60}, 1, f30) == 3u);     // they stopped: 63 ms is 1.89 frames, within margin of 2/3 boundary
+        CHECK(p::adviseDelay(5, {55, 55}, {55, 55}, 1, f30) == 2u);     // 58 ms is 1.74 frames: 0.26 frames spare, drops to 2
     }
 
     TEST(proto_pace_roundtrip)
