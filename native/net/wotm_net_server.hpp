@@ -131,6 +131,7 @@ namespace wotm_net
             uint32_t lastAckOwn = 0;
             proto::RttWindow rtt;            // recent round trips (sampled every paceMs)
             uint32_t advised = 0;            // the delay last sent to this player (Start or Pace)
+            uint16_t lastAheadSent = 0;      // last frame advantage (hundredths) sent via proto::Ahead
             Clock::time_point lastSend{};
             bool dirty = false;
             // how this player's input packets arrived since the last diagnostics line (Server::diagTick)
@@ -157,7 +158,7 @@ namespace wotm_net
             InputTimeline inputs{0, 0};
             struct SlotHash { uint64_t hash = 0; std::vector<uint64_t> blocks; };   // blocks: the 256 block hashes, when sent
             std::map<uint32_t, std::vector<std::optional<SlotHash>>> hashes;
-            Clock::time_point created{}, allJoined{}, lastPace{}, lastDiag{}, lastBehind{}, lastHoldback{};
+            Clock::time_point created{}, allJoined{}, lastPace{}, lastTimeSync{}, lastDiag{}, lastBehind{}, lastHoldback{};
             Holdback holdback;             // takes out a member who holds the started match back (away, or the one everyone waits on)
             bool allJoinedSet = false;
         };
@@ -234,6 +235,7 @@ namespace wotm_net
         // the server's view of every player of a started match: transport, Hz, delay, round trip, how input packets arrived
         void diagTick(Match &m, const Lobby &l);
         void sampleBehind(Match &m);
+        void timeSync(Match &m);
         void holdbackTick(Match &m, const Lobby &l);
         std::string newCode();
         int lobbyByCode(const std::string &code) const;
@@ -264,6 +266,7 @@ namespace wotm_net
         uint32_t rttOf(PeerRef peer) const;   // the plain round trip (what a player is told: proto::Rtt)
         std::vector<uint32_t> rttLevels(Match &m, bool fall = false);
         void pace(Match &m, const Lobby &l);
+        bool ensureWarmedUp(Match &m);
 
         ServerConfig cfg_;
         Listener listener_, wsListener_;

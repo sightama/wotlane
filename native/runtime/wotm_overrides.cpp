@@ -38,6 +38,7 @@
 #include "net/wotm_camsettings.hpp"  // each player's camera settings in their input (wotm_sync.inc packs, wotm_orbit.inc applies)
 #include "net/wotm_monsters.hpp"     // monsters and costumes present on the disc (WOTM_MATCH)
 #include "net/wotm_net_client.hpp"   // network match client (wotm_sync.inc)
+#include "net/wotm_net_timesync.hpp" // frame-advantage time sync pacer (wotm_sync.inc)
 #include "wotm_netstatus.h"          // on-screen network message and disabled debug keys (wotm_live.inc)
 #include "wotm_latency.hpp"          // input latency probes for the page's diagnostics report (wotm_sync.inc, wotm_live.inc)
 #include "wotm_rollback.hpp"         // snapshots of the game state and the synctest schedule (wotm_rollback.inc)
@@ -1097,6 +1098,7 @@ namespace
                 const uint64_t until = g_frameStartVsync + static_cast<uint64_t>(frameVsyncs);
                 while (ee.currentVSyncTick() < until && !runtime->isStopRequested())
                     ee.waitVSyncHere(ee.currentVSyncTick(), 0);
+                wotm_sync::netStretchPace(frameVsyncs);
             }
             wotm_rollback::g_paceWaitMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - paceFrom).count();
 #endif

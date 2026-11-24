@@ -53,6 +53,8 @@ namespace wotm_net::proto
                       // Start delay, which stays in sync either way
         Rtt,          // server -> client: this player's round trip as the server measures it (a browser can't time the WebSocket
                       // pings itself), sent with every pace check. Older peers ignore it
+        Ahead,        // server -> client: how many frames (in hundredths) this player is ahead of the slowest active player, for
+                      // smooth period stretching (wotm_net_timesync.hpp). Older peers ignore it
     };
 
     struct Join
@@ -118,6 +120,10 @@ namespace wotm_net::proto
     struct Rtt
     {
         uint32_t ms = 0;
+    };
+    struct Ahead
+    {
+        uint16_t hundredths = 0;   // frame advantage in 1/100th of a frame (0 = not ahead; 250 = 2.50 frames)
     };
 
     class Writer
@@ -416,6 +422,19 @@ namespace wotm_net::proto
     {
         Reader r(b, Type::Rtt);
         m.ms = r.u32();
+        return r.done();
+    }
+
+    inline std::vector<uint8_t> encode(const Ahead &m)
+    {
+        Writer w(Type::Ahead);
+        w.u16(m.hundredths);
+        return w.take();
+    }
+    inline bool decode(const std::vector<uint8_t> &b, Ahead &m)
+    {
+        Reader r(b, Type::Ahead);
+        m.hundredths = r.u16();
         return r.done();
     }
 

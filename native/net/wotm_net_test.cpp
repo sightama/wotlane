@@ -11,6 +11,7 @@
 #include "wotm_net_proto.hpp"
 #include "wotm_net_server.hpp"
 #include "wotm_net_socket.hpp"
+#include "wotm_net_timesync.hpp"
 #include "wotm_net_ws.hpp"
 #include "wotm_net_wslink.hpp"
 
@@ -3311,6 +3312,161 @@ namespace
         for (const auto &e : fs::directory_iterator(dir))
             files += e.path().filename().string().find("-match.log") != std::string::npos ? 1 : 0;
         CHECK(files == 1u);
+    }
+
+    TEST(timesync_advantage_math)
+    {
+        namespace ts = wotm_net::timesync;
+        constexpr double kFrame = 1000.0 / 60.0;
+        // Equal sim frames, equal RTT and delay -> zero advantage for everyone
+        {
+            const auto adv = ts::computeAdvantages({{104, 4, 40, true}, {104, 4, 40, true}}, kFrame);
+            CHECK(adv.size() == 2u);
+            CHECK(std::fabs(adv[0]) < 0.01 && std::fabs(adv[1]) < 0.01);
+        }
+        // Equal sim frames (100) with asymmetric RTT (20 ms vs 120 ms) and different delays (3 vs 5):
+        // nextMissing ~= simFrame + delay - (rtt / 2) / frameMs
+        // P0: 100 + 3 - 0.6 = 102.4 -> 102; P1: 100 + 5 - 3.6 = 101.4 -> 101
+        {
+            const auto adv = ts::computeAdvantages({{102, 3, 20, true}, {101, 5, 120, true}}, kFrame);
+            CHECK(std::fabs(adv[0]) < 0.05 && std::fabs(adv[1]) < 0.05);
+        }
+        // P0 is 3 frames ahead of P1
+        {
+            const auto adv = ts::computeAdvantages({{107, 4, 40, true}, {104, 4, 40, true}}, kFrame);
+            CHECK(std::fabs(adv[0] - 3.0) < 0.01 && std::fabs(adv[1]) < 0.01);
+        }
+        // 3 active players at sim frames 105, 104, 102
+        {
+            const auto adv = ts::computeAdvantages({{109, 4, 40, true}, {108, 4, 40, true}, {106, 4, 40, true}}, kFrame);
+            CHECK(std::fabs(adv[0] - 3.0) < 0.01);
+            CHECK(std::fabs(adv[1] - 2.0) < 0.01);
+            CHECK(std::fabs(adv[2]) < 0.01);
+        }
+        // Inactive (dropped/away) peer leaves only 1 active player -> zero advantage
+        {
+            const auto adv = ts::computeAdvantages({{110, 4, 40, true}, {100, 4, 40, false}}, kFrame);
+            CHECK(std::fabs(adv[0]) < 0.01 && std::fabs(adv[1]) < 0.01);
+        }
+    }
+
+    TEST(timesync_stretch_and_smoother)
+    {
+        namespace ts = wotm_net::timesync;
+        CHECK(ts::stretchFraction(0.0) == 0.0);
+        CHECK(ts::stretchFraction(0.5) == 0.0);
+        CHECK(std::fabs(ts::stretchFraction(1.5) - 0.05) < 1e-6);
+        CHECK(std::fabs(ts::stretchFraction(3.0) - 0.10) < 1e-6);
+        CHECK(std::fabs(ts::stretchFraction(10.0) - 0.10) < 1e-6);
+
+        ts::AdvantageSmoother sm;
+        CHECK(sm.value() == 0.0);
+        for (int i = 0; i < 30; ++i)
+            sm.update(3.0, 1.0 / 60.0);
+        CHECK(sm.value() > 2.5 && sm.value() <= 3.0);
+        for (int i = 0; i < 60; ++i)
+            sm.update(0.0, 1.0 / 60.0);
+        CHECK(sm.value() < 0.25);
+        sm.update(3.0, 0.5);
+        sm.reset();
+        CHECK(sm.value() == 0.0);
+    }
+
+    TEST(timesync_stretch_pacer)
+    {
+        namespace ts = wotm_net::timesync;
+        constexpr double kPeriod = 1000.0 / 60.0;
+        ts::StretchPacer p;
+        // Zero stretch does nothing
+        CHECK(p.extraSleepMs(100.0, kPeriod, 0.0) == 0.0);
+
+        // Simulate 12 frames with 10% stretch on a fixed 60 Hz vblank grid (8 ms work per frame):
+        // every single frame must last 1.10 * kPeriod (~18.333 ms), including across phase wrap
+        double now = 0.0;
+        uint64_t startVblank = 0;
+        for (int f = 0; f < 12; ++f)
+        {
+            const double frameStart = now;
+            now += 8.0;   // frame work
+            const uint64_t curVblank = static_cast<uint64_t>(now / kPeriod);
+            if (curVblank < startVblank + 1u)
+                now = static_cast<double>(startVblank + 1u) * kPeriod;   // waitVSyncHere
+            const double extra = p.extraSleepMs(now, kPeriod, 0.10);
+            now += extra;
+            const double frameLen = now - frameStart;
+            CHECK(std::fabs(frameLen - kPeriod * 1.10) < 0.05);
+            startVblank = static_cast<uint64_t>(now / kPeriod);
+        }
+
+        // Return to 0% stretch: smoothly lands back on vblank grid with no short (<0.9x) or long (>1.1x) frames
+        bool deactivated = false;
+        for (int f = 0; f < 25; ++f)
+        {
+            const double frameStart = now;
+            now += 8.0;
+            const uint64_t curVblank = static_cast<uint64_t>(now / kPeriod);
+            if (curVblank < startVblank + 1u)
+                now = static_cast<double>(startVblank + 1u) * kPeriod;
+            const double extra = p.extraSleepMs(now, kPeriod, 0.0);
+            now += extra;
+            const double frameLen = now - frameStart;
+            CHECK(frameLen >= kPeriod * 0.90 && frameLen <= kPeriod * 1.10);
+            startVblank = static_cast<uint64_t>(now / kPeriod);
+            if (extra == 0.0)
+            {
+                deactivated = true;
+                break;
+            }
+        }
+        CHECK(deactivated);
+
+        // Overrun (work took 25 ms) sleeps 0 and does not burst; reset clears state
+        CHECK(p.extraSleepMs(1000.0, kPeriod, 0.10) > 1.0);
+        CHECK(p.extraSleepMs(1025.0, kPeriod, 0.10) == 0.0);
+        p.reset();
+        CHECK(p.extraSleepMs(1041.67, kPeriod, 0.0) == 0.0);
+    }
+
+    TEST(proto_ahead_roundtrip)
+    {
+        namespace pr = wotm_net::proto;
+        const auto bytes = pr::encode(pr::Ahead{275u});
+        CHECK(pr::typeOf(bytes) == pr::Type::Ahead);
+        pr::Ahead out;
+        CHECK(pr::decode(bytes, out));
+        CHECK(out.hundredths == 275u);
+    }
+
+    TEST(server_sends_ahead_to_leader_and_clears_when_caught_up)
+    {
+        ServerConfig cfg = testConfig();
+        RunningServer rs(cfg);
+        auto ms = formMatch(cfg.port, {"Ana", "Bia"}, {3, 1});
+        MatchClient a, b;
+        std::string err;
+        CHECK(a.start(clientFor(cfg.port, *ms[0]), err) && b.start(clientFor(cfg.port, *ms[1]), err));
+        CHECK(a.waitStarted(5000) && b.waitStarted(5000));
+        // Warm up past the 1 s pace warmup gate
+        const uint32_t d = a.delay();
+        exchange(a, b, 70);
+        std::this_thread::sleep_for(std::chrono::milliseconds(150));
+
+        // Player A runs 4 frames ahead of Player B
+        for (uint32_t i = 0; i < 4; ++i)
+            a.pushLocal(70u + d + i, PadState{});
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(1000);
+        while (a.aheadFrames() < 2.0 && std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        CHECK(a.aheadFrames() >= 2.0);
+        CHECK(b.aheadFrames() == 0.0);
+
+        // Player B catches up -> server clears Player A's ahead back to 0
+        for (uint32_t i = 0; i < 4; ++i)
+            b.pushLocal(70u + d + i, PadState{});
+        const auto clearDeadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(1000);
+        while (a.aheadFrames() > 0.0 && std::chrono::steady_clock::now() < clearDeadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        CHECK(a.aheadFrames() == 0.0);
     }
 }
 

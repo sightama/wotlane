@@ -4,6 +4,7 @@
 #include "wotm_confighash.hpp"
 #include "wotm_modifiers.hpp"
 #include "wotm_monsters.hpp"
+#include "wotm_net_timesync.hpp"
 
 #include <enet/enet.h>
 
@@ -1148,6 +1149,26 @@ namespace wotm_net
         return out;
     }
 
+    bool Server::ensureWarmedUp(Match &m)
+    {
+        if (m.paceWarmedUp)
+            return true;
+        const uint32_t readyFrame = m.delay + static_cast<uint32_t>(60 / std::max(1, m.step));
+        bool anyActive = false;
+        for (size_t i = 0; i < m.slots.size(); ++i)
+        {
+            if (!m.slots[i].peer || m.slots[i].gone)
+                continue;
+            anyActive = true;
+            if (m.inputs.nextMissing(static_cast<int>(i)) < readyFrame)
+                return false;
+        }
+        if (!anyActive)
+            return false;
+        m.paceWarmedUp = true;
+        return true;
+    }
+
     // During the match, every paceMs: tells each player their current round trip (Rtt), and once every active player has played
     // through the 1-second warmup window past stage load, samples each player's round trip into RttWindow and sends a player whose
     // delay should change its new one (Pace). Holding RttWindow until warmup finishes keeps boot/shader-compile main-thread stalls
@@ -1161,26 +1182,8 @@ namespace wotm_net
         for (Slot &s : m.slots)
             if (s.peer && !s.gone)
                 send(s.peer, proto::kControl, proto::encode(proto::Rtt{rttOf(s.peer)}), true);
-        if (!m.paceWarmedUp)
-        {
-            const uint32_t warmupFrames = static_cast<uint32_t>(60 / std::max(1, m.step));
-            const uint32_t readyFrame = m.delay + warmupFrames;
-            bool anyActive = false, allReady = true;
-            for (size_t i = 0; i < m.slots.size(); ++i)
-            {
-                if (!m.slots[i].peer || m.slots[i].gone)
-                    continue;
-                anyActive = true;
-                if (m.inputs.nextMissing(static_cast<int>(i)) < readyFrame)
-                {
-                    allReady = false;
-                    break;
-                }
-            }
-            if (!anyActive || !allReady)
-                return;
-            m.paceWarmedUp = true;
-        }
+        if (!ensureWarmedUp(m))
+            return;
         for (Slot &s : m.slots)
             if (s.peer && !s.gone)
                 s.rtt.add(rttHighOf(s.peer));
@@ -1197,6 +1200,41 @@ namespace wotm_net
                              " rtt_level_ms=" + std::to_string(levels[i]));
             s.advised = d;
             send(s.peer, proto::kControl, proto::encode(proto::Pace{d}), true);
+        }
+    }
+
+    // Every 100 ms once the match has warmed up: estimates each active player's frame advantage over the slowest active peer and
+    // sends proto::Ahead so the leader stretches its frame period smoothly instead of stalling.
+    void Server::timeSync(Match &m)
+    {
+        const Clock::time_point now = Clock::now();
+        if (now - m.lastTimeSync < std::chrono::milliseconds(100))
+            return;
+        m.lastTimeSync = now;
+        if (!ensureWarmedUp(m))
+            return;
+        std::vector<timesync::PlayerProgress> progress;
+        progress.reserve(m.slots.size());
+        for (size_t i = 0; i < m.slots.size(); ++i)
+        {
+            const Slot &s = m.slots[i];
+            const bool active = s.peer && !s.gone && !s.away;
+            progress.push_back({m.inputs.nextMissing(static_cast<int>(i)), s.advised, active ? rttOf(s.peer) : 0u, active});
+        }
+        const std::vector<double> adv = timesync::computeAdvantages(progress, proto::frameMs(m.step));
+        for (size_t i = 0; i < m.slots.size(); ++i)
+        {
+            Slot &s = m.slots[i];
+            if (!s.peer || s.gone)
+                continue;
+            const double scaled = std::round(adv[i] * 100.0);
+            const uint16_t hundredths = scaled <= 0.0 ? 0u : static_cast<uint16_t>(std::min(scaled, 65535.0));
+            if (hundredths == 0u && s.lastAheadSent == 0u)
+                continue;
+            // Clearing back to 0 goes on kControl (reliable) so a dropped UDP packet never leaves a client stretching.
+            const bool reliable = hundredths == 0u;
+            send(s.peer, reliable ? proto::kControl : proto::kInputs, proto::encode(proto::Ahead{hundredths}), reliable);
+            s.lastAheadSent = hundredths;
         }
     }
 
@@ -1556,6 +1594,7 @@ namespace wotm_net
             else if (!m->desynced)
             {
                 pace(*m, l);
+                timeSync(*m);
                 diagTick(*m, l);
                 holdbackTick(*m, l);
                 for (size_t i = 0; i < m->slots.size(); ++i)

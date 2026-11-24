@@ -192,6 +192,13 @@ namespace wotm_net
                 serverRtt_ = r.ms, haveServerRtt_ = true;
             break;
         }
+        case proto::Type::Ahead:
+        {
+            proto::Ahead a;
+            if (proto::decode(data, a))
+                aheadHundredths_.store(a.hundredths, std::memory_order_relaxed);
+            break;
+        }
         case proto::Type::Desync:
         {
             proto::Desync d;
