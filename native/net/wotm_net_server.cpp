@@ -1168,7 +1168,7 @@ namespace wotm_net
             bool anyActive = false, allReady = true;
             for (size_t i = 0; i < m.slots.size(); ++i)
             {
-                if (m.slots[i].gone)
+                if (!m.slots[i].peer || m.slots[i].gone)
                     continue;
                 anyActive = true;
                 if (m.inputs.nextMissing(static_cast<int>(i)) < readyFrame)
