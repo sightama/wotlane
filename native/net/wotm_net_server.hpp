@@ -151,7 +151,7 @@ namespace wotm_net
             std::vector<Slot> slots;
             std::string config;            // config of the first to join: everyone must match it
             std::string refusal;           // the first seat refused (other build or settings): the match never starts
-            bool started = false, desynced = false;
+            bool started = false, desynced = false, paceWarmedUp = false;
             uint32_t delay = 0;
             int step = 1;                  // fields per game frame (proto::matchStep): a frame lasts proto::frameMs(step)
             InputTimeline inputs{0, 0};
