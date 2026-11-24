@@ -24,38 +24,37 @@ namespace
         return bad;
     }
 
-    // the probes the runtime's guard uses, here from the test's side
-    bool roundsToNearest()
+#if !defined(__EMSCRIPTEN__)
+    // a thread left in `mode` (and flushing subnormals when asked): the guard of the next code generation's lookup puts it back
+    int modeIsRestored(int mode, bool flush, const char *what, uint64_t generation)
     {
-        volatile float one = 1.0f, step = 0x1.8p-24f;
-        return one + step == 0x1.000002p+0f;
+        std::fesetround(mode);
+        if (flush)
+            _MM_SET_FLUSH_ZERO_MODE(_MM_FLUSH_ZERO_ON);
+        const bool changed = !ieeeDefaultsHold();
+        static const uint8_t code[4096] = {};
+        wotmVu0NativeLookup(code, sizeof code, generation, 0);
+        const bool ok = changed && ieeeDefaultsHold();
+        std::printf("%s a thread left %s is set back to round to nearest with subnormals\n", ok ? "ok  " : "FAIL", what);
+        return !ok;
     }
-    bool keepsSubnormals()
-    {
-        volatile float tiny = FLT_MIN, sub = 0x1p-140f;
-        return tiny * 0.5f != 0.0f && sub * 2.0f != 0.0f;
-    }
+#endif
 }
 
 int main()
 {
     int bad = 0;
-    // a madd's float product, or its sum, rounding past the largest float: the largest float of its sign, never an infinity
+    // a madd's float product, or its sum, rounding past the largest float: the largest float of its sign, never an infinity. With the
+    // product saturated first, -MAX + 2*MAX gives 0 while the flags (from the exact value) say a normal result, as round toward zero did
     bad += check(-FLT_MAX, FLT_MAX, 2.0f, false, 0.0f, "product past the largest float, accumulator of the other sign");
     bad += check(FLT_MAX, -FLT_MAX, 2.0f, false, 0.0f, "negative product past the largest float");
     bad += check(FLT_MAX, std::nextafter(FLT_MAX, 0.f), 1.0f + 0x1p-23f, false, FLT_MAX, "sum rounds up past the largest float");
     bad += check(-FLT_MAX, std::nextafter(FLT_MAX, 0.f), 1.0f + 0x1p-23f, true, -FLT_MAX, "msub: sum rounds down past -largest");
     bad += check(FLT_MAX, FLT_MAX, 2.0f, true, 0.0f, "msub: product past the largest float");
 #if !defined(__EMSCRIPTEN__)
-    // a thread left rounding toward zero and flushing subnormals: the next lookup of a new code generation puts it back
-    std::fesetround(FE_TOWARDZERO);
-    _MM_SET_FLUSH_ZERO_MODE(_MM_FLUSH_ZERO_ON);
-    const bool changed = !roundsToNearest() && !keepsSubnormals();
-    static const uint8_t code[4096] = {};
-    wotmVu0NativeLookup(code, sizeof code, 0x5eed, 0);
-    const bool restored = roundsToNearest() && keepsSubnormals();
-    std::printf("%s a thread left in another mode is set back to round to nearest with subnormals\n", changed && restored ? "ok  " : "FAIL");
-    bad += !(changed && restored);
+    bad += modeIsRestored(FE_TOWARDZERO, true, "rounding toward zero and flushing subnormals", 0x5eed1);
+    bad += modeIsRestored(FE_UPWARD, false, "rounding upward", 0x5eed2);
+    bad += modeIsRestored(FE_DOWNWARD, false, "rounding downward", 0x5eed3);
 #endif
     std::printf("%d failure(s)\n", bad);
     return bad ? 1 : 0;

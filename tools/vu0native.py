@@ -2,9 +2,9 @@
 ps2xRuntime/src/lib/vu/wotm_vu0_native.cpp in the PS2Recomp runtime).
 
 The microcode comes from the ELF (the VIF packet with MPG that the game sends to VU0) or from a vu0_code.bin (PS2X_DUMP_VU0).
-The generated C++ follows the runtime's VU1Interpreter except for the rounding: normalized operands, float math rounded to nearest
-(the interpreter, like the PS2, rounds toward zero; wotm_vu0_native.cpp) and the result classified by its double value, MAC/status flags published 4 cycles after issue (fmand/fsand only see the
-ones that have already arrived), stores and VI/VF writes in program order (the VU stalls on VF/VI/ACC dependencies, so
+The generated C++ follows the runtime's VU1Interpreter except for the rounding: normalized operands, float math rounded to
+nearest (the interpreter, like the PS2, rounds toward zero; wotm_vu0_native.cpp) and the result classified by its double value,
+MAC/status flags published 4 cycles after issue (fmand/fsand only see the ones that have already arrived), stores and VI/VF writes in program order (the VU stalls on VF/VI/ACC dependencies, so
 sequential semantics hold), the pair split as on hardware (the lower reads registers before the upper of the same pair
 writes) and a branch that reads a VI written by the previous pair seeing the old value (readBranchVi).
 

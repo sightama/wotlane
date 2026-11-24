@@ -345,22 +345,32 @@ namespace
 namespace
 {
     // The microprograms need the thread's floating point as WebAssembly always has it: round to nearest, subnormals kept (no
-    // flush to zero, no denormals-are-zero). Nothing in the runtime changes that; if something on the thread did, this sets it back
-    // and says so, since a PC that rounds otherwise desyncs from the others without any other sign
-    void ensureIeeeDefaults()
+    // flush to zero, no denormals-are-zero). Probes: 1 + 0.75 ulp and its negative (any directed rounding misses one of them), a
+    // result below FLT_MIN (flush to zero) and an operand below it (denormals are zero); volatile, so they run in the thread's mode
+    bool ieeeDefaultsHold()
     {
         volatile float one = 1.0f, step = 0x1.8p-24f, tiny = FLT_MIN, sub = 0x1p-140f;
-        const bool nearest = one + step == 0x1.000002p+0f;
+        const bool nearest = one + step == 0x1.000002p+0f && -one - step == -0x1.000002p+0f;
         const bool subnormals = tiny * 0.5f != 0.0f && sub * 2.0f != 0.0f;
-        if (nearest && subnormals)
+        return nearest && subnormals;
+    }
+
+    // Nothing in the runtime changes the mode; if something on the thread did, this sets it back and says so, since a PC that rounds
+    // otherwise desyncs from the others without any other sign
+    void ensureIeeeDefaults()
+    {
+        if (ieeeDefaultsHold())
             return;
-        std::fprintf(stderr, "[vu0] this thread's floating point %s%s%s: set back to round to nearest with subnormals\n",
-                     nearest ? "" : "does not round to nearest", nearest || subnormals ? "" : " and ", subnormals ? "" : "flushes subnormals");
         std::fesetround(FE_TONEAREST);
 #if !defined(__EMSCRIPTEN__)
         _MM_SET_FLUSH_ZERO_MODE(_MM_FLUSH_ZERO_OFF);
         _MM_SET_DENORMALS_ZERO_MODE(_MM_DENORMALS_ZERO_OFF);
 #endif
+        if (ieeeDefaultsHold())
+            std::fprintf(stderr, "[vu0] this thread's floating point was not round to nearest with subnormals: set back\n");
+        else
+            std::fprintf(stderr, "[vu0] ERROR: this thread's floating point is not round to nearest with subnormals and can't be set "
+                                 "back: its VU0 results will differ from other PCs'\n");
     }
 }
 
@@ -369,12 +379,15 @@ WotmVu0Fn wotmVu0NativeLookup(const uint8_t *vu0Code, uint32_t codeSize, uint64_
     static WotmVu0Fn s_byPc[512];
     static uint64_t s_generation = ~0ull;
     static const bool s_disabled = std::getenv("WOTM_VU0_INTERP") != nullptr;
+    static uint32_t s_lookups = 0;
     if (s_disabled || pc >= codeSize)
         return nullptr;
+    if ((++s_lookups & 4095u) == 0)   // the mode, also between code generations (which change at a stage load)
+        ensureIeeeDefaults();
     if (generation != s_generation)
     {
         s_generation = generation;
-        ensureIeeeDefaults();   // once per code generation, not per call
+        ensureIeeeDefaults();
         std::memset(s_byPc, 0, sizeof(s_byPc));
         for (size_t k = 0; k < kProgramCount; ++k)
         {

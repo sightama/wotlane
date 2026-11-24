@@ -17,10 +17,11 @@ and can be shared freely.
 4. Compare build ids in your chat: `python tools\build_id.py`. Everyone must print the same `wl-...` id. The server refuses players with
    a different build (different commit or runtime patch), because the simulation would drift apart.
 
-What makes the PCs agree: the game's floating point gives the same bits on Windows, the Mac and the browser. Its VU0 microprograms
-round to nearest on every build (the PS2 rounds toward zero; `docs/passos/NATIVO.md`, "Native VU0"), so a fight can differ from the
-PS2's in the last bit of a transform while every PC in a match computes the same thing. For the same reason an input recording
-(`WOTM_INPUTREC`) replays the same fight only on a build with the same VU0 code.
+What makes the PCs agree: the game's floating point is meant to give the same bits on Windows, the Mac and the browser, and the
+server compares the PCs' state hashes every 32 frames and stops the match when two differ. Its VU0 microprograms round to nearest on every build (the PS2
+rounds toward zero; `docs/passos/NATIVO.md`, "Native VU0", says which builds are checked against each other), so a fight can differ
+from the PS2's in the last bit of a transform while every PC in a match computes the same thing. For the same reason an input
+recording (`WOTM_INPUTREC`) replays the same fight only on a build with the same VU0 code.
 
 Friends who don't build get a package instead: on Windows `tools\package_friends.ps1` (checked by `tools\package_check.ps1`), on a Mac
 with Apple Silicon `sh tools/package_friends_mac.sh` (checked by `sh tools/package_check_mac.sh`). The Mac package is
