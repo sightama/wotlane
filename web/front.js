@@ -59,6 +59,7 @@ async function buildId() {
 const cleanName = (s) => s.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 16);
 
 let lobby = null;
+let entering = false;   // a connection to a lobby is being made: Single player, Host and Join stay off until it ends
 let owner = false;
 let myName = '';
 let members = { owner: '', members: [] };
@@ -307,7 +308,7 @@ let watching = 0;
 let refreshingFor = 0;
 
 function showLobbyList(lobbies) {
-  $('lobbyList').hidden = false;
+  $('lobbyList').inert = false;
   const rows = lobbies.map((l) => {
     const { text, joinable } = lobbyRow(l);
     const li = document.createElement('li');
@@ -340,31 +341,36 @@ async function refreshLobbies() {
     }
     const lobbies = await watcher.list();
     if (mine === watching) showLobbyList(lobbies);
-  } catch {   // the server is out of reach or refused this build: the list stays hidden, Host and Join still show why
+  } catch {   // the server is out of reach or refused this build: the list says so in the room it had, Host and Join still show why
     if (mine !== watching) return;
     (client ?? watcher)?.close();
     watcher = null;
-    $('lobbyList').hidden = true;
+    $('lobbies').replaceChildren(Object.assign(document.createElement('li'), { textContent: 'The list of open lobbies is not available right now.' }));
+    $('lobbyList').inert = false;   // Refresh works again
   } finally {
     if (refreshingFor === mine) refreshingFor = 0;
   }
 }
 
 function startWatchingLobbies() {
-  stopWatchingLobbies();
+  cancelWatching();
   watching++;
   const tick = () => { if (!document.hidden) refreshLobbies(); };
   tick();
   watchTimer = setInterval(tick, LIST_EVERY_MS);
 }
 
-function stopWatchingLobbies() {
+function cancelWatching() {
   watching++;
-  $('lobbyList').hidden = true;   // no Join while a join is under way
   clearInterval(watchTimer);
   watchTimer = 0;
   watcher?.close();
   watcher = null;
+}
+
+function stopWatchingLobbies() {
+  cancelWatching();
+  $('lobbyList').inert = true;   // no Join while a join is under way; the list keeps its room
 }
 
 async function hostOrJoin(join) {
@@ -391,6 +397,7 @@ async function enterLobby(enter, rematch = false) {
   stopWatchingLobbies();
   const buttons = ['single', 'host', 'join'].map($);
   for (const b of buttons) b.disabled = true;   // one connection per click
+  entering = true;
   try {
     const build = await buildId();
     lobby = await connect(build);
@@ -409,6 +416,8 @@ async function enterLobby(enter, rematch = false) {
     for (const b of buttons) b.disabled = false;
     startWatchingLobbies();
     return false;
+  } finally {
+    entering = false;
   }
 }
 
@@ -516,11 +525,13 @@ function showFirefoxTip() {
 }
 
 function init() {
+  say('');   // the page said Loading until now
   // a browser that can't run the game gets a plain message instead of a page that freezes
   const problem = window.wotmSupportProblem();
   if (problem) {
     say(problem);
     for (const id of ['single', 'host', 'join', 'openSettings']) $(id).disabled = true;
+    $('lobbyList').hidden = true;
     return;
   }
   initCreations(STAGES);
@@ -593,6 +604,14 @@ function init() {
     leaving?.close();
     backToChoice('');
   });
+  // the buttons work now: their handlers are attached (a rejoin under way has switched them off for itself)
+  if (!entering) for (const id of ['single', 'host', 'join']) $(id).disabled = false;
 }
 
-init();
+try {
+  init();
+} catch (e) {
+  say('The page did not start properly. Reload it to try again.');
+  $('frontMsg').className = 'problem';
+  throw e;
+}

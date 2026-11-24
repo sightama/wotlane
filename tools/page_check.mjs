@@ -1,51 +1,25 @@
 // ABOUTME: Checks the front panel's accessibility and layout in a real browser (Chrome, Brave or Firefox, muted): serves a web/ folder,
 // ABOUTME: runs a local wotm_server for a real lobby, prints a table of checks and saves screenshots. Exit 1 when a check fails.
-import { spawn } from 'node:child_process';
-import { createServer } from 'node:http';
-import { existsSync, mkdirSync, openSync, readFileSync } from 'node:fs';
-import { extname, join, resolve } from 'node:path';
-import { REPO, loadPlaywright, freePort, chromiumOptions, firefoxOptions } from './browser_mp_test/lib/infra.mjs';
+import { join } from 'node:path';
+import { REPO } from './browser_mp_test/lib/infra.mjs';
+import { BROWSERS, argv, launchBrowser, sleep, startPageEnv } from './page_env.mjs';
 
-const USAGE = `usage: node tools/page_check.mjs [--browser chrome|brave|firefox|chromium] [--site <web folder>] [--out <folder>] [--label <name>]
+const USAGE = `usage: node tools/page_check.mjs [--browser chrome|brave|chromium|firefox|webkit] [--site <web folder>] [--out <folder>] [--label <name>]
   --site   the page to check (default: web/ in this repo); point it at a copy of an older web/ to see what the checks say before a fix
   --out    where screenshots go (default: a new folder under the OS temp dir); files are <label>-<browser>-<view>.png
   --label  prefix of the screenshot names (default: after)
   Needs wotm_server (sh tools/test_net.sh notest) and playwright (tools/browser_mp_test/node_modules or the global npm root).
-  Every browser starts muted (no sound from a test run); the game itself is never started.`;
+  Chrome, Brave and Firefox start muted; WebKit has no mute switch, and nothing here makes a sound: the game is never started.`;
 
-const arg = (name, fallback) => {
-  const i = process.argv.indexOf(`--${name}`);
-  return i < 0 ? fallback : process.argv[i + 1];
-};
-if (process.argv.includes('--help') || process.argv.includes('-h')) { console.log(USAGE); process.exit(0); }
-
+const arg = argv(USAGE);
 const browserName = arg('browser', 'chrome');
-const site = resolve(arg('site', join(REPO, 'web')));
+if (!BROWSERS.includes(browserName)) { console.error(`unknown browser ${browserName}\n${USAGE}`); process.exit(2); }
 const label = arg('label', 'after');
 const out = arg('out', join(process.env.TMPDIR || '/tmp', `page_check_${Date.now()}`));
-const server = join(REPO, 'native/net/build/wotm_server');
-for (const [what, p] of [['site', join(site, 'index.html')], ['wotm_server', server]])
-  if (!existsSync(p)) { console.error(`${what} not found at ${p}\n${USAGE}`); process.exit(2); }
-mkdirSync(out, { recursive: true });
-
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-const children = [];
-const [wsPort, tcpPort, webPort] = [await freePort(), await freePort(), await freePort()];
-const log = openSync(join(out, 'server.log'), 'w');
-children.push(spawn(server, ['--port', String(tcpPort), '--ws-port', String(wsPort), '--lobbies', '8'], { stdio: ['ignore', log, log] }));
-// the page refuses to start without cross-origin isolation (web/support.js), so the files go out with the two headers the live site sends
-const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript', '.json': 'application/json', '.png': 'image/png', '.webmanifest': 'application/manifest+json' };
-const files = createServer((req, res) => {
-  const path = join(site, new URL(req.url, 'http://x').pathname.replace(/\/$/, '/index.html'));
-  if (!path.startsWith(site) || !existsSync(path)) { res.writeHead(404).end(); return; }
-  res.writeHead(200, { 'Content-Type': TYPES[extname(path)] ?? 'application/octet-stream', 'Cross-Origin-Opener-Policy': 'same-origin', 'Cross-Origin-Embedder-Policy': 'require-corp' });
-  res.end(readFileSync(path));
-}).listen(webPort, '127.0.0.1');
-const pageUrl = `http://127.0.0.1:${webPort}/?server=ws://127.0.0.1:${wsPort}`;
-
-const pw = await loadPlaywright();
-const browser = await (browserName === 'firefox' ? pw.firefox.launch(firefoxOptions({}))
-  : pw.chromium.launch(chromiumOptions({ browser: browserName })));
+const env = await startPageEnv({ site: arg('site', join(REPO, 'web')), out }).catch((e) => { console.error(`${e.message}\n${USAGE}`); process.exit(2); });
+const { pageUrl } = env;
+const site = arg('site', join(REPO, 'web'));
+const browser = await launchBrowser(browserName);
 
 const rows = [];
 const check = async (name, fn) => {
@@ -208,6 +182,59 @@ for (const [view, viewport, opts, min] of [['phone', { width: 390, height: 844 }
   await ctx.close();
 }
 
+// ---- loading: nothing moves after first paint, nothing is pressable before it works, a press shows at once
+const unreachable = pageUrl.replace(/server=.*$/, 'server=ws://127.0.0.1:9');   // nothing listens there: the list of lobbies fails
+for (const [view, viewport, opts, url, net] of [['desktop', { width: 1280, height: 800 }, {}, pageUrl, ''], ['phone', { width: 390, height: 844 }, { isMobile: true, hasTouch: true }, pageUrl, ''],
+  ['desktop', { width: 1280, height: 800 }, {}, unreachable, ', lobby server unreachable'], ['phone', { width: 390, height: 844 }, { isMobile: true, hasTouch: true }, unreachable, ', lobby server unreachable']]) {
+  const ctx = await browser.newContext({ viewport, ...opts });
+  const page = await ctx.newPage();
+  await page.addInitScript(() => {
+    window.__first = null;
+    window.__moves = [];
+    window.__readyAt = null;
+    const t0 = performance.now();
+    const ids = ['name', 'monster', 'single', 'host', 'join', 'openSettings'];
+    const tick = () => {
+      const r = Object.fromEntries(ids.map((id) => { const e = document.getElementById(id); const b = e?.getBoundingClientRect(); return [id, b ? [Math.round(b.x), Math.round(b.y), Math.round(b.width), Math.round(b.height)] : null]; }));
+      const here = JSON.stringify(r);
+      if (window.__first === null && r.single) window.__first = r;
+      else if (window.__first) for (const id of ids) if (r[id] && JSON.stringify(r[id]) !== JSON.stringify(window.__first[id])) window.__moves.push(`${id} ${window.__first[id]} to ${r[id]} at ${Math.round(performance.now() - t0)}ms`);
+      const s = document.getElementById('single');
+      if (window.__readyAt === null && s && !s.disabled) window.__readyAt = Math.round(performance.now() - t0);
+      if (performance.now() - t0 < 3500) requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+  await page.goto(url, { waitUntil: 'commit' });
+  await page.waitForSelector('#home:not([hidden])');
+  await sleep(3800);
+  const r = await page.evaluate(() => ({ moves: [...new Set(window.__moves)], readyAt: window.__readyAt, firstDisabled: window.__first && true }));
+  await check(`[${view}${net}] no control moves after first paint`, async () => {
+    expect(r.moves.length === 0, r.moves.slice(0, 3).join('; '));
+    return `Single player usable at ${r.readyAt}ms`;
+  });
+  if (!net) await check(`[${view}] a press shows at once (pressed state)`, async () => {
+    const box = await page.locator('#single').boundingBox();
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    const t = await page.evaluate(() => getComputedStyle(document.getElementById('single')).transform);
+    await page.mouse.up({ button: 'left' }).catch(() => {});
+    expect(t !== 'none', 'no transform while pressed');
+  });
+  await ctx.close();
+}
+await check('field borders are at least 3:1 against the panel', async () => {
+  const { ctx, page } = await openPage({ width: 1280, height: 800 });
+  const r = await page.evaluate(() => {
+    const parse = (c) => c.match(/[\d.]+/g).slice(0, 3).map(Number);
+    const lum = (rgb) => { const [r, g, b] = rgb.map((v) => { const s = v / 255; return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4; }); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+    const ratio = (a, b) => { const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x); return (hi + 0.05) / (lo + 0.05); };
+    const panel = parse(getComputedStyle(document.getElementById('home')).backgroundColor);
+    return ['name', 'monster', 'joinCode'].map((id) => [id, ratio(parse(getComputedStyle(document.getElementById(id)).borderTopColor), panel)]).filter(([, x]) => x < 3).map(([id, x]) => `${id} ${x.toFixed(2)}:1`);
+  });
+  await ctx.close();
+  expect(r.length === 0, r.join(', '));
+});
 // ---- the status bar over the game: not faded, readable, sized
 for (const [view, viewport, opts, min] of [['desktop', { width: 1280, height: 800 }, {}, 24], ['touch', { width: 844, height: 390 }, { hasTouch: true }, 44]]) {
   const { ctx, page } = await openPage(viewport, opts);
@@ -239,30 +266,35 @@ for (const [view, viewport, opts, min] of [['desktop', { width: 1280, height: 80
 }
 
 // ---- the touch layout panel (gear) still fits a phone held sideways and still edits
-{
-  const { ctx, page } = await openPage({ width: 844, height: 390 }, { isMobile: true, hasTouch: true });
+for (const [w, h] of [[844, 390], [568, 320]]) {
+  const { ctx, page } = await openPage({ width: w, height: h }, { isMobile: true, hasTouch: true });
   await page.locator('#single').tap();
   await page.waitForSelector('#touchpad.on', { timeout: 5000 });
   await page.locator('#touchpad [data-id=gear]').tap();
   await page.waitForSelector('#tpPanel:not([hidden])');
+  // against the viewport as it is now: the first tap on a button asks for fullscreen, which makes Firefox's window as tall as the screen
+  await check(`touch panel fits the screen (${w}x${h} phone)`, async () => {
+    const box = await page.locator('#tpPanel').boundingBox();
+    const h = await page.evaluate(() => innerHeight);
+    expect(box.y >= 0 && box.y + box.height <= h, `panel spans ${Math.round(box.y)} to ${Math.round(box.y + box.height)} of ${h}`);
+  });
   // the panel's own size is the touch layout's (web/touch.js); the page's target size must not reach it, and its span is reported
-  await check('touch panel keeps its own button sizes', async () => {
+  await check(`touch panel keeps its own button sizes (${w}x${h})`, async () => {
     const mins = await page.evaluate(() => [...document.querySelectorAll('#tpPanel button')].map((b) => getComputedStyle(b).minHeight));
     expect(mins.length > 0 && mins.every((m) => m === '0px' || m === 'auto'), `min-height of its buttons: ${mins}`);
     const box = await page.locator('#tpPanel').boundingBox();
-    return `panel spans ${Math.round(box.y)} to ${Math.round(box.y + box.height)} of 390`;
+    return `panel spans ${Math.round(box.y)} to ${Math.round(box.y + box.height)} of ${await page.evaluate(() => innerHeight)}`;
   });
-  await check('touch panel: Move buttons starts editing', async () => {
+  await check(`touch panel: Move buttons starts editing (${w}x${h})`, async () => {
     await page.getByRole('button', { name: 'Move buttons' }).tap();
     expect(await page.evaluate(() => document.getElementById('touchpad').classList.contains('editing')), 'no editing class');
   });
-  await shot(page, 'touchpanel');
+  await shot(page, `touchpanel-${w}x${h}`);
   await ctx.close();
 }
 
 await browser.close();
-for (const c of children) c.kill('SIGTERM');
-files.close();
+env.stop();
 
 const bad = rows.filter((r) => !r.ok);
 console.log(`\n${browserName}  (${site})`);

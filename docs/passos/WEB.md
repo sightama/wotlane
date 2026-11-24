@@ -28,6 +28,14 @@ For online play start `wotm_server --ws-port <port>`; a page opened from `localh
 (a public page always uses its own host). Use one browser profile per player: tabs of the same profile share the saves.
 
 ## In the page
+- **Front panel loading:** Single player, Host online and Join are `disabled` in the HTML and `front.js` enables them in the same step that attaches
+  their handlers, so no press lands on a dead button. `index.html` preloads every module `front.js` imports, directly or not
+  (`<link rel="modulepreload">`; `web/page_startup.test.mjs` fails when the list and the import graph differ). The card is anchored to the top of
+  the screen, the device note and the Firefox tip sit below the actions, and the open lobbies area is there from the start with
+  "Looking for open lobbies…" and room for the two-line empty message; it stays on the page, greyed while a join is under way and with a
+  message in its place when the server cannot give the list, so no control above or below it moves after the first paint. A button shows a pressed
+  state at once (`:active`, `touch-action: manipulation`), and Host and Join say what they are doing in the status line. Controls are 44px on
+  any device with a touch screen (`pointer: coarse` or `any-pointer: coarse`) and 24px otherwise; field borders are 3:1 against the panel.
 - **Disc:** `/disc` is a WASMFS fetch backend over `data/`: the game's reads become 1 MiB range requests, each fetched once
   (`native/wotm_webfs.cpp`). `web/data_retry.js` retries network and 5xx failures in every thread and reports each chunk, which
   `web/loading.js` shows as "Downloading game data 34% (9 of 27 MB). Only the first visit downloads this much." over the game.
@@ -333,11 +341,12 @@ OpenGraph and Twitter tags and JSON-LD (`web/index.html`, tested by `web/legal.t
   (`tools/browser_mp_test/README.md`; its log readers: `node --test tools/browser_mp_test/test/`).
 - `node tools/browser_input_test/run.mjs --browser all`: a real Chromium and Firefox on the page with no game: Tab does not move focus once the game
   runs, and the cursor over the game hides after 2 s idle and shows on a move.
-- `node tools/page_check.mjs --browser chrome|brave|firefox`: the front panel's accessibility and layout in a real, muted browser against a
+- `node tools/page_check.mjs --browser chrome|brave|chromium|firefox|webkit` (the shared setup is `tools/page_env.mjs`): the front panel's accessibility and layout in a real, muted browser against a
   local `wotm_server` (no game is loaded): every rule checkbox has its own label, the first Tab stop is in the panel and the canvas is not a tab
   stop, an Enter that confirms an IME conversion does not send chat; computed text contrast of at least 4.5:1; control sizes of 44px on a
   touch phone and 24px with a mouse on the home, lobby and settings views (the Controls tab must not overflow the screen); the status bar at
-  full opacity, readable and sized on desktop and touch; the touch layout panel keeps its own button sizes. `--site <folder>` checks a copy of an older `web/`. Needs
+  full opacity, readable and sized on desktop and touch; the touch layout panel fits a short phone and keeps its own button sizes; nothing on the panel moves after first paint, and a press shows
+  at once. `--site <folder>` checks a copy of an older `web/`. Needs
   `sh tools/test_net.sh notest` first and Playwright.
 - `node tools/browser_diag_test/run.mjs`: a real Chromium against a local `wotm_server --diag-dir` (no game is loaded): the join,
   periodic and last reports and a Send report from the front page reach the server's files, with no chat text and no user agent string in

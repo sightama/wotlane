@@ -144,7 +144,7 @@ const CSS = `
   background: rgba(255,255,255,.12); opacity: calc(var(--tp-opacity) * .6); display: grid; place-items: center; }
 #touchpad .tp-stick.active { opacity: var(--tp-opacity); }
 #touchpad .tp-stick i { display: block; border-radius: 50%; background: rgba(255,255,255,.75); }
-#tpPanel { position: absolute; left: 50%; top: calc(var(--u) * 1.3); transform: translateX(-50%); pointer-events: auto; z-index: 6;
+#tpPanel { position: absolute; left: 50%; top: calc(var(--u) * 1.3); max-height: calc(100% - var(--u) * 1.3 - 8px); overflow-y: auto; transform: translateX(-50%); pointer-events: auto; z-index: 6;
   display: grid; gap: 8px; padding: 12px 16px; background: rgba(22,22,26,.96); border: 1px solid #2a2a30; border-radius: 8px; color: #d8d8dc; font-size: 14px; }
 #tpPanel label { display: grid; grid-template-columns: 6em 1fr; gap: 8px; align-items: center; }
 #tpRotate { position: absolute; inset: 0; display: none; place-content: center; text-align: center; background: rgba(11,11,13,.85); color: #d8d8dc;
