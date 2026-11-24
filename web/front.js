@@ -526,11 +526,7 @@ function showFirefoxTip() {
 }
 
 function init() {
-  if (window.wotmLoadFailure) {
-    say(window.wotmLoadFailure);
-    $('frontMsg').className = 'problem';
-    return;
-  }
+  $('frontMsg').removeAttribute('data-pending');
   say('');   // the page said Loading until now
   // a browser that can't run the game gets a plain message instead of a page that freezes
   const problem = window.wotmSupportProblem();

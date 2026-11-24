@@ -254,26 +254,42 @@ for (const [what, serve] of [['cannot be fetched', (route) => route.abort()], ['
   });
 }
 
-await check('a classic script that throws keeps the warning and the buttons off', async () => {
+await check('a classic script of the page that cannot be fetched stops the panel with a message', async () => {
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const page = await ctx.newPage();
-  await page.route('**/boot.js', (route) => route.fulfill({ contentType: 'text/javascript', body: "throw new Error('boot.js is broken');" }));
+  await page.route('**/support.js', (route) => route.abort());
   await page.goto(pageUrl, { waitUntil: 'load' });
   await sleep(1000);
   const r = await page.evaluate(() => ({ text: document.getElementById('frontMsg').textContent, cls: document.getElementById('frontMsg').className, on: ['single', 'host', 'join', 'refreshLobbies'].filter((id) => !document.getElementById(id).disabled) }));
   await ctx.close();
-  expect(/could not load/i.test(r.text) && r.cls === 'problem', `message '${r.text}' class '${r.cls}'`);
+  expect(r.text !== '' && r.cls === 'problem', `message '${r.text}' class '${r.cls}'`);
   expect(r.on.length === 0, `enabled: ${r.on}`);
 });
 
+await check('a page that is slow to start says so, and recovers when it does', async () => {
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const page = await ctx.newPage();
+  await page.route('**/front.js', async (route) => { await sleep(7500); await route.continue(); });
+  await page.goto(pageUrl, { waitUntil: 'commit' });
+  await page.waitForFunction(() => /Still loading/.test(document.getElementById('frontMsg').textContent), null, { timeout: 9000 });
+  await page.waitForFunction(() => !document.getElementById('single').disabled, null, { timeout: 15000 });
+  const after = await page.evaluate(() => ({ text: document.getElementById('frontMsg').textContent, cls: document.getElementById('frontMsg').className }));
+  await ctx.close();
+  expect(after.text === '' && after.cls === '', `after start: '${after.text}' class '${after.cls}'`);
+});
+
 // ---- a failed icon or stylesheet before the page is ready is not a failed page
-await check('a failed asset while front.js is still loading does not leave a warning behind', async () => {
+await check('a failed icon, stylesheet or unrelated script while front.js is still loading does not raise an alarm', async () => {
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const page = await ctx.newPage();
   await page.route('**/front.js', async (route) => { await sleep(1500); await route.continue(); });
   await page.goto(pageUrl, { waitUntil: 'commit' });
   await page.waitForSelector('#frontMsg', { state: 'attached' });
-  await page.evaluate(() => { const l = document.createElement('link'); l.rel = 'stylesheet'; l.href = '/no-such-file.css'; document.head.append(l); });
+  await page.route('**/stray.js', (route) => route.fulfill({ contentType: 'text/javascript', body: "throw new Error('an unrelated script of this origin');" }));
+  await page.evaluate(() => {
+    const l = document.createElement('link'); l.rel = 'stylesheet'; l.href = '/no-such-file.css'; document.head.append(l);
+    for (const src of ['/stray.js', '/missing.js']) { const s = document.createElement('script'); s.src = src; document.head.append(s); }
+  });
   await sleep(500);
   const during = await page.evaluate(() => document.getElementById('frontMsg').textContent);
   await page.waitForFunction(() => !document.getElementById('single').disabled, null, { timeout: 10000 });

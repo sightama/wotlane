@@ -93,9 +93,8 @@ test('hover is drawn only where a pointer can hover, so a tap leaves nothing stu
 });
 
 test('the status line starts as Loading and keeps room for two lines', () => {
-  assert.match(html, /<p id="frontMsg" role="status">Loading…<\/p>/);
   assert.match(rule('#frontMsg'), /min-height:\s*2\.8em/);
-  assert.match(read('front.js'), /function init\(\) \{[^}]*\}\n  say\(''\);   \/\/ the page said Loading until now/);
+  assert.match(read('front.js'), /function init\(\) \{\n  \$\('frontMsg'\)\.removeAttribute\('data-pending'\);\n  say\(''\);   \/\/ the page said Loading until now/);
 });
 
 test('buttons answer a press at once: no double-tap delay, a pressed state, a focus ring', () => {
@@ -130,17 +129,18 @@ test('the touch layout panel scrolls inside the screen instead of running past i
 
 // ---- follow-ups from a fresh review of the first round
 
-test('a page whose scripts fail to load says so instead of staying on Loading', () => {
-  // a capturing listener sees a script that cannot be fetched, a syntax error and an error thrown while the modules run
+test('a page whose modules fail to load says so instead of staying on Loading', () => {
+  // only the module graph stops front.js from running: its scripts and the modules the head preloads decide, not any error on the page
   const head = html.slice(0, html.indexOf('</head>'));
-  assert.match(head, /<script>[^<]*window\.addEventListener\('error', [^<]*, true\)[^<]*<\/script>/);
-  assert.match(head, /textContent === 'Loading…'/);
+  assert.match(head, /<script>[^<]*\(\(\) => \{[^<]*window\.addEventListener\('error', [^<]*, true\)[^<]*\}\)\(\);[^<]*<\/script>/);   // in a function: no global names for the other scripts to collide with
+  assert.match(head, /querySelectorAll\('link\[rel="modulepreload"\], script\[type="module"\]'\)/);
+  assert.match(head, /const url = t === window \? e\.filename : t\.tagName === 'SCRIPT' \? t\.src : '';/);   // a failed link, icon or stylesheet is not a failed page
+  assert.match(head, /#frontMsg\[data-pending\]/);   // until init() has run
+  assert.match(html, /<p id="frontMsg" role="status" data-pending>Loading…<\/p>/);
   assert.match(head, /The page could not load\. Reload it; if it keeps happening, try Chrome, Firefox or Edge\./);
-  assert.match(head, /t === window \? e\.filename\.startsWith\(location\.origin\) : t\.tagName === 'SCRIPT'/);   // a failed icon or preload link, or a foreign error, is not a failed page
-  assert.match(head, /window\.wotmLoadFailure = /);
-  assert.match(read('front.js'), /function init\(\) \{\n  if \(window\.wotmLoadFailure\) \{\n    say\(window\.wotmLoadFailure\);\n    \$\('frontMsg'\)\.className = 'problem';\n    return;\n  \}/);   // init keeps the warning and leaves the buttons off
+  assert.match(head, /setTimeout\(\(\) => \{[^}]*Still loading/);   // an engine that reports a syntax error without a file name
+  assert.doesNotMatch(html, /onerror=|wotmLoadFailure/);
   assert.match(read('front.js'), /const say = \(text\) => \{ \$\('frontMsg'\)\.textContent = text; \$\('frontMsg'\)\.className = ''; \};/);
-  assert.doesNotMatch(html, /onerror=/);
 });
 
 test('Enter in the join code cannot start a second connection while one is under way or the buttons are off', () => {
