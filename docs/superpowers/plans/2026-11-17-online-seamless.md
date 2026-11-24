@@ -117,7 +117,8 @@ Gain: no 2.6 to 4.8 s freeze at the start. Cost: small to medium. Risk: low.
 
 Gain: fewer visible hitches when one PC runs ahead (GGRS frame advantage: the leader slows its frame by up to ~10% instead of stopping). Cost: medium. Risk: low (pacing only, no state).
 
-- [ ] With task 3's grid: the server already knows `behind` per player; each client stretches its period by `min(10%, advantage/30 frames)`. Measure `waits` and `wait_ms` per window.
+- [x] With task 3's grid: the server already knows `behind` per player; each client stretches its period by `min(10%, advantage/30 frames)`. Measure `waits` and `wait_ms` per window.
+- Status: closed, not shipped (Lane, 2026-11-24). The lockstep barrier keeps the leader's lead near 1 frame, so the stretch stays under a slower peer's rate gap and the waits stay; a PI variant slows the match. `docs/investigacoes/2026-11-24/time-sync/README.md`; code on branch `sightama/time-sync-frame-stretch`.
 
 ### Task 9: Rollback go/no-go (synctest), then hybrid if GO
 
@@ -168,7 +169,7 @@ round up), Chrome 15-17 ms, Brave 12.5-13 ms (like Chrome). Reading a match:
 
 **Remaining tasks**, in order: Firefox's game-thread cost on Windows (the CPU-bound player above); 7b only if `in_gap_max_ms` of the first window still
 shows a hold with the prefetch in (start the match clock when every client reports frame 0); the ~40 MB wasm downloads at match start on
-a cold cache (every deploy makes it cold for everyone: 17 s at 20 Mbps), 5 (phase-locked present), 8 (time sync), 9 (rollback synctest go/no-go), the TODO item on short freezes that keep coming (holdback), and an online opt-in for interpolation if Lane wants smoothness back.
+a cold cache (every deploy makes it cold for everyone: 17 s at 20 Mbps), 5 (phase-locked present), 9 (rollback synctest go/no-go), the TODO item on short freezes that keep coming (holdback), and an online opt-in for interpolation if Lane wants smoothness back.
 
 **Master ports**: per-PR ports of the online-seamless stack are skipped (coordinator, 2026-11-18): master lacks #133 to #150, and a
 single batch port (runtime rebuild and desync matrix) is its own task once the rollback and pacing work settles.
