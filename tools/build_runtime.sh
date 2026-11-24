@@ -21,6 +21,7 @@ targets=${*:-ps2EntryRunner wotm}
 rt=$(runtime_dir)
 bdir=$rt/$build
 [ -f "$bdir/build.ninja" ] || fail "$bdir isn't configured (run sh tools/setup_runtime.sh)"
+check_build_dir "$bdir" "$rt"
 need cmake ninja python3 git
 
 gen=$bdir/wotm_gen

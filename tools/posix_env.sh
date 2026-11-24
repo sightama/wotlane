@@ -39,3 +39,16 @@ use_emsdk() {
     cd "$1" && . ./emsdk_env.sh >/dev/null 2>&1
     cd "$_here"
 }
+
+# check_build_dir <build folder> <runtime folder>: a CMake build folder compiles the sources its cache names, so one copied from another
+# worktree builds that tree's native/ and PS2Recomp under this tree's build id. Fails unless the folder is configured for this tree
+# (or not configured yet).
+check_build_dir() {
+    _cache=$1/CMakeCache.txt
+    [ -f "$_cache" ] || return 0
+    _native=$(sed -n 's/^WOTM_NATIVE_DIR:PATH=//p' "$_cache")
+    _src=$(sed -n 's/^CMAKE_HOME_DIRECTORY:INTERNAL=//p' "$_cache")
+    _redo="delete it and configure it again (build_dev: sh tools/setup_runtime.sh --skip-build; build_web: sh tools/build_web.sh)"
+    [ -z "$_native" ] || [ "$_native" -ef "$REPO/native" ] || fail "$1 is configured for $_native, not $REPO/native: $_redo"
+    [ -z "$_src" ] || [ "$_src" -ef "$2/PS2Recomp" ] || fail "$1 is configured for $_src, not $2/PS2Recomp: $_redo"
+}
