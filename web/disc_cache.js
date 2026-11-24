@@ -239,8 +239,9 @@ function syncReadClient(post, { waitMs = 5000, pingMs = 300, pauseMs = 2000, now
 
 // A XMLHttpRequest whose synchronous disc range GETs are answered by `client` when it has the bytes; what it lacks is read from the
 // server's chunk files by `chunks` (disc_chunks.js syncChunkReader) when the server has them, else with `Base` from the whole file;
-// everything else is `Base`'s
-function syncDiscXHR(Base, client, chunks = null) {
+// everything else is `Base`'s. Cache hits report via `onHit` and both cache hits and chunk-reader reads set `wotmReported = true` so
+// native/wotm_webdisc.cpp does not post them again as network downloads.
+function syncDiscXHR(Base, client, chunks = null, { onHit = null } = {}) {
   return class extends Base {
     open(method, url, async, ...rest) {
       this.wotm = { method, url: String(url), sync: async === false, range: null };
@@ -262,12 +263,15 @@ function syncDiscXHR(Base, client, chunks = null) {
       if (hit) {
         Object.defineProperty(this, 'status', { value: 206 });
         Object.defineProperty(this, 'response', { value: hit.buffer });
+        Object.defineProperty(this, 'wotmReported', { value: true });
+        onHit?.(hit.byteLength);
         return undefined;
       }
       const read = chunks?.read(url, start, end);
       if (read) {
         Object.defineProperty(this, 'status', { value: 206 });
         Object.defineProperty(this, 'response', { value: read.bytes.buffer });
+        Object.defineProperty(this, 'wotmReported', { value: true });
         client.remember(url, start, read.bytes, read.etag);
         return undefined;
       }
@@ -306,6 +310,8 @@ else if (typeof document === 'undefined' && globalThis.name === HELPER_NAME) {
     // the chunks this worker fetches itself go on the page's disc channel, like the fetch path's (the loading note and the diag count them)
     const progress = new BroadcastChannel('wotlane-disc');
     const reader = discChunks.syncChunkReader(XMLHttpRequest, { onBytes: (n) => progress.postMessage(n) });
-    globalThis.XMLHttpRequest = syncDiscXHR(XMLHttpRequest, syncReadClient((m) => channel.postMessage(m)), reader);
+    globalThis.XMLHttpRequest = syncDiscXHR(XMLHttpRequest, syncReadClient((m) => channel.postMessage(m)), reader, {
+      onHit: (n) => progress.postMessage({ hit: n }),
+    });
   }
 }

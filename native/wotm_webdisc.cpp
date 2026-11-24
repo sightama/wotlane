@@ -27,7 +27,7 @@ constexpr uint32_t kChunkBytes = 1u << 20;   // one range request per MiB the ga
 
 // Both copy bytes [start, end) of `url` to dst and return how many arrived, or -1. On the main thread the page's fetch is
 // web/data_retry.js's, which already retries network and 5xx errors and reports each chunk to web/loading.js; the synchronous
-// XHR of the other threads does both itself.
+// XHR of the other threads retries itself and reports bytes only when web/disc_cache.js syncDiscXHR did not already report the read.
 EM_ASYNC_JS(int, web_range_async, (const char *url, double start, double end, uint8_t *dst), {
     try {
         const r = await fetch(UTF8ToString(url), {headers: {Range: `bytes=${start}-${end - 1}`}});
@@ -54,8 +54,10 @@ EM_JS(int, web_range_sync, (const char *url, double start, double end, uint8_t *
                 let b = new Uint8Array(x.response);
                 if (x.status === 200) b = b.subarray(start, end);
                 HEAPU8.set(b, dst);
-                globalThis.wotmDiscChannel = globalThis.wotmDiscChannel || new BroadcastChannel('wotlane-disc');
-                globalThis.wotmDiscChannel.postMessage(b.length);
+                if (!x.wotmReported) {
+                    globalThis.wotmDiscChannel = globalThis.wotmDiscChannel || new BroadcastChannel('wotlane-disc');
+                    globalThis.wotmDiscChannel.postMessage(b.length);
+                }
                 return b.length;
             }
             if (x.status < 500 && x.status !== 429) return -1;

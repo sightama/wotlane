@@ -277,6 +277,33 @@ test('a miss reads the network as before and hands the client the bytes to keep'
   assert.equal(x.sent, 1);
   assert.equal(x.status, 206);
   assert.deepEqual(kept.map(([u, s, b, etag]) => [u.endsWith('/data/game.iso'), s, b, etag]), [[true, 0, [0, 1, 2, 3, 4, 5, 6, 7], '"v1"']]);
+  assert.ok(!x.wotmReported);   // fallback XHR: web_range_sync still reports the network bytes
+});
+
+test('syncDiscXHR reports cache hits via onHit and marks cache and chunk-reader reads as reported', () => {
+  const hits = [];
+  const XHit = syncDiscXHR(FakeXHR, { ask: () => Uint8Array.from([9, 8, 7, 6, 5, 4, 3, 2]), remember: () => assert.fail('cached') }, null, {
+    onHit: (n) => hits.push(n),
+  });
+  const xHit = new XHit();
+  xHit.open('GET', 'http://x/data/game.iso', false);
+  xHit.setRequestHeader('Range', 'bytes=0-7');
+  xHit.send();
+  assert.deepEqual(hits, [8]);
+  assert.equal(xHit.wotmReported, true);
+
+  const kept = [];
+  const chunks = { read: () => ({ bytes: Uint8Array.from([1, 2, 3, 4, 5, 6, 7, 8]), etag: '"c1"' }) };
+  const XChunk = syncDiscXHR(FakeXHR, { ask: () => null, remember: (u, s, b, etag) => kept.push([s, etag]) }, chunks, {
+    onHit: () => assert.fail('chunk miss is not a cache hit'),
+  });
+  const xChunk = new XChunk();
+  xChunk.open('GET', 'http://x/data/game.iso', false);
+  xChunk.setRequestHeader('Range', 'bytes=0-7');
+  xChunk.send();
+  assert.equal(xChunk.status, 206);
+  assert.equal(xChunk.wotmReported, true);   // chunk reader already posted network bytes
+  assert.deepEqual(kept, [[0, '"c1"']]);
 });
 
 test('requests that are not synchronous disc range GETs never reach the client', () => {
