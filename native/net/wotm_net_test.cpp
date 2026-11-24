@@ -1230,6 +1230,74 @@ namespace
         CHECK(readUntil(watcher, "LOBBY " + code).size() > 0u);
     }
 
+    // staggered rematch exit: an early REJOIN while the other player's match socket is still open fails with "lobby is in a match"
+    // without consuming the ghost or token, so retrying once the match closes restores both players and the owner
+    TEST(lobby_rejoin_succeeds_after_match_ends_even_after_an_early_attempt)
+    {
+        ServerConfig cfg = testConfig();
+        RunningServer rs(cfg);
+        std::string code, ta, tb;
+        MatchClient ca, cb;
+        {
+            LineSocket a, b;
+            hello(a, cfg.port, "b1", "rejoin=1");
+            code = createLobby(a, "Lobby", "Ana", 3);
+            ta = tokenOf(a);
+            CHECK(ta.size() == 32u);
+            hello(b, cfg.port, "b1", "rejoin=1");
+            b.sendLine("JOIN " + code + " Bia 1");
+            tb = tokenOf(b);
+            CHECK(tb.size() == 32u);
+            CHECK(readUntil(a, "MEMBERS " + code + " Ana Ana:3,Bia:1").size() > 0u);
+            a.sendLine("START");
+            const auto ma = p::keyValues(p::words(readUntil(a, "MATCH")));
+            const auto mb = p::keyValues(p::words(readUntil(b, "MATCH")));
+            ClientConfig cfa, cfb;
+            cfa.host = cfb.host = "127.0.0.1";
+            cfa.port = cfb.port = cfg.port;
+            cfa.token = ma.at("token");
+            cfb.token = mb.at("token");
+            cfa.buildId = cfb.buildId = "b1";
+            cfa.configHash = cfb.configHash = "cfg";
+            cfa.name = "Ana";
+            cfb.name = "Bia";
+            std::string err;
+            CHECK(ca.start(cfa, err) && cb.start(cfb, err));
+            CHECK(ca.waitStarted(5000) && cb.waitStarted(5000));
+            // Ana reloads while Bia is still in the match
+            ca.stop();
+        }
+        LineSocket a2;
+        hello(a2, cfg.port, "b1", "rejoin=1");
+        a2.sendLine("REJOIN " + code + " " + ta);
+        CHECK(readUntil(a2, "ERROR") == "ERROR lobby is in a match; wait for it to end");
+        // Bia leaves the match too: the match ends and Ana's retry with the same token succeeds
+        cb.stop();
+        bool rejoined = false;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        while (std::chrono::steady_clock::now() < deadline)
+        {
+            a2.sendLine("REJOIN " + code + " " + ta);
+            const std::string r = readUntil(a2, "");
+            if (r == "JOINED " + code)
+            {
+                rejoined = true;
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        CHECK(rejoined);
+        const std::string fresh = tokenOf(a2);
+        CHECK(fresh.size() == 32u && fresh != ta);
+        LineSocket b2;
+        hello(b2, cfg.port, "b1", "rejoin=1");
+        b2.sendLine("REJOIN " + code + " " + tb);
+        CHECK(readUntil(b2, "JOINED") == "JOINED " + code);
+        CHECK(readUntil(a2, "MEMBERS " + code + " Ana Ana:3,Bia:1").size() > 0u);
+        a2.sendLine("SET wins=3");   // owner status survived the early REJOIN refusal
+        CHECK(readUntil(a2, "SETTINGS " + code + " stage=1 wins=3").size() > 0u);
+    }
+
     // the linger cap holds also for a lobby that already has ghosts when its last member drops or leaves
     TEST(lobby_linger_cap_counts_lobbies_that_already_have_ghosts)
     {
