@@ -577,28 +577,7 @@ namespace wotm_sync
     // the waits of the current pace window (netPace); the whole match's are g_netStalls and g_netStallMs (above, with latencyProbe)
     uint32_t g_paceStalls = 0;
     double g_paceStallMs = 0.0;
-    wotm_net::timesync::AdvantageSmoother g_aheadSmoother;
-    wotm_net::timesync::StretchPacer g_stretchPacer;
-
-    // Smooth period stretch when this PC is ahead of another player (wotm_net_timesync.hpp): slows each frame by up to 10%
-    // instead of hitting a hard stall in netWaitFrame. Runs right after the fixed-step vblank wait.
-    void netStretchPace(int frameVsyncs)
-    {
-        if (!g_net || !g_levelLoaded || frameVsyncs <= 0)
-            return;
-        const double periodMs = (1000.0 / 60.0) * static_cast<double>(frameVsyncs);
-        const double adv = g_aheadSmoother.update(g_net->aheadFrames(), periodMs / 1000.0);
-        const double stretch = wotm_net::timesync::stretchFraction(adv);
-        const auto now = std::chrono::steady_clock::now();
-        const double nowMs = std::chrono::duration<double, std::milli>(now.time_since_epoch()).count();
-        const double sleepMs = g_stretchPacer.extraSleepMs(nowMs, periodMs, stretch);
-        if (sleepMs <= 0.0 || stopRequested())
-            return;
-        std::this_thread::sleep_for(std::chrono::duration<double, std::milli>(sleepMs));
-        const auto us = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - now).count();
-        if (us > 0)
-            ::g_wotmIdleUs.fetch_add(static_cast<unsigned long long>(us), std::memory_order_relaxed);
-    }
+    wotm_net::timesync::Stretcher g_stretcher;   // netStretchPace
 
     // browser: tells the others when this tab is hidden or back, so their "Waiting for" message says why (the game keeps running in a
     // hidden tab, but the browser may slow or freeze it)
@@ -645,15 +624,31 @@ namespace wotm_sync
         wotm_netstatus::g_waiting = false;
         const auto waited = std::chrono::steady_clock::now() - t0;
         g_runtime->eeScheduler().shiftHostDeadlines(waited);
-        g_net->clearAhead();
-        g_aheadSmoother.reset();
-        g_stretchPacer.reset();
+        g_stretcher.waited();
         ++g_netStalls;
         g_netStallMs += std::chrono::duration<double, std::milli>(waited).count();
         ++g_paceStalls;
         g_paceStallMs += std::chrono::duration<double, std::milli>(waited).count();
         if ((g_netStalls & 63u) == 1u)
             std::fprintf(stderr, "[net] frame %u: %u waits for the network, %.0f ms in total\n", frame, g_netStalls, g_netStallMs);
+    }
+
+    // Smooth period stretch when this PC is ahead of another player (wotm_net_timesync.hpp): slows each frame by up to 10%
+    // instead of hitting a hard stall in netWaitFrame. Runs right after the fixed-step vblank wait.
+    void netStretchPace(int frameVsyncs)
+    {
+        if (!g_net || !g_levelLoaded || frameVsyncs <= 0)
+            return;
+        const double periodMs = (1000.0 / 60.0) * static_cast<double>(frameVsyncs);
+        const auto now = std::chrono::steady_clock::now();
+        const double nowMs = std::chrono::duration<double, std::milli>(now.time_since_epoch()).count();
+        const double sleepMs = g_stretcher.sleepMs(nowMs, periodMs, g_net->aheadFrames());
+        if (sleepMs <= 0.0 || stopRequested())
+            return;
+        std::this_thread::sleep_for(std::chrono::duration<double, std::milli>(sleepMs));
+        const auto us = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - now).count();
+        if (us > 0)
+            ::g_wotmIdleUs.fetch_add(static_cast<unsigned long long>(us), std::memory_order_relaxed);
     }
 
     // the game frames by length since the match started (netPace, for the page): without their network waits, in frame periods, up to
@@ -898,8 +893,7 @@ namespace wotm_sync
         {
             netStart();
             latencyReset();
-            g_aheadSmoother.reset();
-            g_stretchPacer.reset();
+            g_stretcher.reset();
             std::fill(std::begin(g_framePeriods), std::end(g_framePeriods), 0u);
             g_framePeriodAt = 0.0;
         }

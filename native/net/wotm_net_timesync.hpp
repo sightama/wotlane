@@ -129,4 +129,28 @@ namespace wotm_net::timesync
         bool active_ = false;
         double targetMs_ = 0.0;
     };
+
+    // The client's side, once per fixed-step frame right after its vblank wait: smooths the advantage the server reports (proto::Ahead)
+    // and returns how long to sleep so this frame lasts period * (1 + stretchFraction).
+    class Stretcher
+    {
+    public:
+        void reset()
+        {
+            smoother_.reset();
+            pacer_.reset();
+        }
+        // after a lockstep wait: the pacer's deadline restarts from the new time, but the advantage stays (the wait is what a leader
+        // that stretches too little runs into)
+        void waited() { pacer_.reset(); }
+        double sleepMs(double nowMs, double periodMs, double aheadFrames)
+        {
+            const double adv = smoother_.update(aheadFrames, periodMs / 1000.0);
+            return pacer_.extraSleepMs(nowMs, periodMs, stretchFraction(adv));
+        }
+
+    private:
+        AdvantageSmoother smoother_;
+        StretchPacer pacer_;
+    };
 }

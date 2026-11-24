@@ -57,9 +57,8 @@ namespace wotm_net
         uint32_t delay() const;   // this player's current input delay (it follows the server's Pace advice one frame at a time)
         std::vector<std::string> names() const;
         uint32_t rttMs() const { return rtt_.load(); }
-        // frame advantage reported by the server (0.0 when synced or not ahead); cleared on a local stall
+        // frame advantage reported by the server (0.0 when synced or not ahead)
         double aheadFrames() const { return aheadHundredths_.load(std::memory_order_relaxed) / 100.0; }
-        void clearAhead() { aheadHundredths_.store(0u, std::memory_order_relaxed); }
 
         // local input that applies on frame `frame` (sampled `delay` frames earlier)
         void pushLocal(uint32_t frame, const PadState &s);

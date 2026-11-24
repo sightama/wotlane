@@ -3427,6 +3427,33 @@ namespace
         CHECK(p.extraSleepMs(1041.67, kPeriod, 0.0) == 0.0);
     }
 
+    // a lockstep wait is what a leader hits when it does not slow down: it must not throw away the advantage the server reported,
+    // or a leader that waits every few frames never stretches at all
+    TEST(timesync_stretcher_keeps_stretching_after_a_wait)
+    {
+        namespace ts = wotm_net::timesync;
+        constexpr double kPeriod = 1000.0 / 60.0;
+        ts::Stretcher st;
+        double now = 0.0, slept = 0.0;
+        for (int f = 0; f < 60; ++f)
+        {
+            now += kPeriod;
+            now += st.sleepMs(now, kPeriod, 1.5);
+        }
+        st.waited();
+        now += 15.0;   // the wait
+        for (int f = 0; f < 5; ++f)
+        {
+            now += kPeriod;
+            const double s = st.sleepMs(now, kPeriod, 1.5);
+            slept += s;
+            now += s;
+        }
+        CHECK(slept > 5 * kPeriod * 0.03);
+        st.reset();
+        CHECK(st.sleepMs(now + kPeriod, kPeriod, 0.0) == 0.0);
+    }
+
     TEST(proto_ahead_roundtrip)
     {
         namespace pr = wotm_net::proto;
