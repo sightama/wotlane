@@ -211,9 +211,9 @@ for (const [view, viewport, opts, url, net] of [['desktop', { width: 1280, heigh
   await page.goto(url, { waitUntil: 'commit' });
   await page.waitForSelector('#home:not([hidden])');
   await sleep(3800);
-  const r = await page.evaluate(() => ({ moves: [...new Set(window.__moves)], readyAt: window.__readyAt, firstDisabled: window.__first && true }));
+  const r = await page.evaluate(() => ({ moves: [...new Set(window.__moves)], readyAt: window.__readyAt, panelSeen: window.__first && true }));
   await check(`[${view}${net}] no control moves after first paint`, async () => {
-    expect(r.firstDisabled, 'the whole panel never appeared, so nothing was compared');
+    expect(r.panelSeen, 'the whole panel never appeared, so nothing was compared');
     expect(r.moves.length === 0, r.moves.slice(0, 3).join('; '));
     return `Single player usable at ${r.readyAt}ms`;
   });
@@ -253,6 +253,23 @@ for (const [what, serve] of [['cannot be fetched', (route) => route.abort()], ['
     expect(on.length === 0, `enabled: ${on}`);
   });
 }
+
+// ---- a failed icon or stylesheet before the page is ready is not a failed page
+await check('a failed asset while front.js is still loading does not leave a warning behind', async () => {
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const page = await ctx.newPage();
+  await page.route('**/front.js', async (route) => { await sleep(1500); await route.continue(); });
+  await page.goto(pageUrl, { waitUntil: 'commit' });
+  await page.waitForSelector('#frontMsg', { state: 'attached' });
+  await page.evaluate(() => { const l = document.createElement('link'); l.rel = 'stylesheet'; l.href = '/no-such-file.css'; document.head.append(l); });
+  await sleep(500);
+  const during = await page.evaluate(() => document.getElementById('frontMsg').textContent);
+  await page.waitForFunction(() => !document.getElementById('single').disabled, null, { timeout: 10000 });
+  const after = await page.evaluate(() => ({ text: document.getElementById('frontMsg').textContent, cls: document.getElementById('frontMsg').className }));
+  await ctx.close();
+  expect(during === 'Loading…', `the message became: ${during}`);
+  expect(after.text === '' && after.cls === '', `after start: '${after.text}' class '${after.cls}'`);
+});
 
 // ---- nothing can be pressed until front.js has run, then everything can
 await check('Single player, Host, Join and Refresh are off until front.js runs, then on', async () => {
@@ -294,9 +311,8 @@ await check('Enter pressed twice in the join code opens one connection', async (
   await sleep(600);   // the list watcher's own connection is settled
   let opened = 0;
   g.page.on('websocket', () => { opened++; });
-  await g.page.focus('#joinCode');
-  await g.page.keyboard.press('Enter');
-  await g.page.keyboard.press('Enter');
+  // both key presses in one task: the second must find the Join button already off
+  await g.page.evaluate(() => { const i = document.getElementById('joinCode'); for (let k = 0; k < 2; k++) i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); });
   await g.page.waitForSelector('#inLobby:not([hidden])', { timeout: 10000 });
   await sleep(500);
   await g.ctx.close();

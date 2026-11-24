@@ -135,7 +135,9 @@ test('a page whose scripts fail to load says so instead of staying on Loading', 
   const head = html.slice(0, html.indexOf('</head>'));
   assert.match(head, /<script>[^<]*window\.addEventListener\('error', [^<]*, true\)[^<]*<\/script>/);
   assert.match(head, /textContent === 'Loading…'/);
-  assert.match(head, /The page could not load\. Reload it to try again\./);
+  assert.match(head, /The page could not load\. Reload it; if it keeps happening, try Chrome, Firefox or Edge\./);
+  assert.match(head, /t !== window && t\.tagName !== 'SCRIPT'/);   // a failed icon or preload link is not a failed page
+  assert.match(read('front.js'), /const say = \(text\) => \{ \$\('frontMsg'\)\.textContent = text; \$\('frontMsg'\)\.className = ''; \};/);
   assert.doesNotMatch(html, /onerror=/);
 });
 

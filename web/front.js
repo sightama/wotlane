@@ -29,7 +29,7 @@ function leaveFront() {
   front.hidden = true;
   $('stage').inert = false;
 }
-const say = (text) => { $('frontMsg').textContent = text; };
+const say = (text) => { $('frontMsg').textContent = text; $('frontMsg').className = ''; };
 
 function remember(key, value) { try { localStorage.setItem('wotlane.' + key, value); } catch { /* private window: not kept */ } }
 function recall(key, fallback) { try { return localStorage.getItem('wotlane.' + key) ?? fallback; } catch { return fallback; } }
