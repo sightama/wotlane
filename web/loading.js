@@ -4,10 +4,12 @@
 
 class LoadingProgress {
   // `expectedBytes`: what a first visit downloads before the game is on screen (measured: about 27 MB to the title, 57 MB to a fight)
-  constructor(expectedBytes, { quietMs = 1500 } = {}) {
+  constructor(expectedBytes, { quietMs = 1500, initial = 'Starting...' } = {}) {
     this.expectedBytes = expectedBytes;
     this.quietMs = quietMs;
+    this.initial = initial;
     this.bytes = 0;
+    this.cacheBytes = 0;
     this.lastChunkAt = null;
     this.done = false;
   }
@@ -17,10 +19,20 @@ class LoadingProgress {
     this.lastChunkAt = now;
   }
 
+  addCacheHit(bytes, now) {
+    this.cacheBytes += bytes;
+    this.lastChunkAt = now;
+  }
+
+  finish() {
+    this.done = true;
+  }
+
   // the text to show at `now`, or null once the downloads went quiet (and from then on)
   text(now) {
     if (this.lastChunkAt !== null && now - this.lastChunkAt > this.quietMs) this.done = true;
     if (this.done) return null;
+    if (this.bytes === 0) return this.cacheBytes > 0 ? 'Loading from cache...' : this.initial;
     const MB = 1 << 20;
     const raw = Math.floor((this.bytes / this.expectedBytes) * 100);
     const total = Math.floor(this.expectedBytes / MB);
@@ -59,8 +71,74 @@ class StreamActivity {
   }
 }
 
-if (typeof module !== 'undefined' && module.exports) module.exports = { LoadingProgress, StreamActivity };
+// Monotonic status-bar state for game boot and online match startup.
+// Phases: 0 starting, 1 emscripten text, 2 connecting, 3 waiting for peers, 4 loading stage, 5 running, 6 terminal error/abort.
+class BootStatus {
+  constructor({ online = false, otherNames = [] } = {}) {
+    this.online = online;
+    this.otherNames = otherNames.filter(Boolean);
+    this.phase = 0;
+    this.text = online ? 'Starting match...' : 'Starting...';
+  }
+
+  setEmscriptenStatus(text) {
+    if (this.phase >= 5) return null;
+    if (text) {
+      if (this.phase > 1) return null;
+      this.phase = 1;
+      this.text = text;
+      return this.text;
+    }
+    if (!this.online) {
+      this.phase = 5;
+      this.text = 'Running';
+      return this.text;
+    }
+    if (this.phase < 2) {
+      this.phase = 2;
+      this.text = 'Connecting to match...';
+      return this.text;
+    }
+    return null;
+  }
+
+  onLog(line, errorStatus) {
+    if (errorStatus) {
+      this.phase = 6;
+      this.text = errorStatus;
+      return this.text;
+    }
+    if (!this.online || this.phase >= 5) return null;
+    if (this.phase < 3 && /^\[net\] connecting to /.test(line)) {
+      this.phase = 3;
+      this.text = this.otherNames.length ? `Waiting for ${this.otherNames.join(', ')}...` : 'Waiting for other players...';
+      return this.text;
+    }
+    if (this.phase < 4 && /^\[net\] start: /.test(line)) {
+      this.phase = 4;
+      this.text = 'Loading stage...';
+      return this.text;
+    }
+    return null;
+  }
+
+  onFrame(frame) {
+    if (this.phase >= 5 || !(frame > 0)) return null;
+    this.phase = 5;
+    this.text = 'Running';
+    return this.text;
+  }
+
+  onAbort(what) {
+    this.phase = 6;
+    this.text = 'Stopped: ' + what;
+    return this.text;
+  }
+}
+
+if (typeof module !== 'undefined' && module.exports) module.exports = { LoadingProgress, StreamActivity, BootStatus };
 else {
   globalThis.LoadingProgress = LoadingProgress;
   globalThis.StreamActivity = StreamActivity;
+  globalThis.BootStatus = BootStatus;
 }

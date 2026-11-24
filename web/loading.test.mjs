@@ -4,11 +4,34 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
-const { LoadingProgress, StreamActivity } = createRequire(import.meta.url)('./loading.js');
+const { LoadingProgress, StreamActivity, BootStatus } = createRequire(import.meta.url)('./loading.js');
 const MB = 1 << 20;
 
-test('nothing to show before the first chunk arrives', () => {
-  assert.equal(new LoadingProgress(10 * MB).text(0), 'Downloading game data 0% (0 of 10 MB). Only the first visit downloads this much.');
+test('shows the initial label before the first chunk arrives instead of 0% downloading', () => {
+  assert.equal(new LoadingProgress(10 * MB).text(0), 'Starting...');
+  assert.equal(new LoadingProgress(10 * MB, { initial: 'Starting match...' }).text(0), 'Starting match...');
+});
+
+test('cache hits do not count as downloaded bytes and show loading from cache', () => {
+  const p = new LoadingProgress(10 * MB, { quietMs: 1500 });
+  p.addCacheHit(4 * MB, 100);
+  p.addCacheHit(6 * MB, 200);
+  assert.equal(p.text(300), 'Loading from cache...');
+  // if a network chunk arrives afterwards, only network bytes count toward the download percent
+  p.add(2 * MB, 400);
+  assert.equal(p.text(500), 'Downloading game data 20% (2 of 10 MB). Only the first visit downloads this much.');
+  // once quiet, it finishes
+  assert.equal(p.text(2000), null);
+  assert.equal(p.done, true);
+});
+
+test('finish ends loading text immediately before the quiet timeout', () => {
+  const p = new LoadingProgress(10 * MB, { quietMs: 1500 });
+  p.addCacheHit(2 * MB, 100);
+  assert.equal(p.text(200), 'Loading from cache...');
+  p.finish();
+  assert.equal(p.text(250), null);
+  assert.equal(p.done, true);
 });
 
 test('the percent follows the bytes against the expected size', () => {
@@ -84,4 +107,47 @@ test('by default the note stays across the game\'s short gaps between the files 
   a.add(MB, 4200);
   assert.equal(a.text(4300), 'Loading game data (3 MB)');
   assert.equal(a.text(7800), null);
+});
+
+test('BootStatus advances through online match phases monotonically until frame 1', () => {
+  const s = new BootStatus({ online: true, otherNames: ['Bob'] });
+  assert.equal(s.text, 'Starting match...');
+  assert.equal(s.setEmscriptenStatus('Downloading...'), 'Downloading...');
+  assert.equal(s.setEmscriptenStatus(''), 'Connecting to match...');
+  // a late non-empty Emscripten status must not overwrite Connecting to match
+  assert.equal(s.setEmscriptenStatus('Preparing...'), null);
+  assert.equal(s.onLog('[net] connecting to wss://host/match as Ana (build x, config y)', null), 'Waiting for Bob...');
+  // a late Emscripten setStatus('') must not regress back to Connecting
+  assert.equal(s.setEmscriptenStatus(''), null);
+  assert.equal(s.setEmscriptenStatus('Preparing...'), null);
+  assert.equal(s.onLog('[net] start: player 1 of 2, delay 3 frames, ping 28 ms', null), 'Loading stage...');
+  // frame 0 does not yet flip to Running
+  assert.equal(s.onFrame(0), null);
+  assert.equal(s.onFrame(1), 'Running');
+  assert.equal(s.onFrame(2), null);
+});
+
+test('BootStatus falls back to Waiting for other players when no peer names were given', () => {
+  const s = new BootStatus({ online: true });
+  assert.equal(s.onLog('[net] connecting to wss://host/match as Ana', null), 'Waiting for other players...');
+});
+
+test('BootStatus transitions single player to Running when Emscripten clears status', () => {
+  const s = new BootStatus({ online: false });
+  assert.equal(s.text, 'Starting...');
+  assert.equal(s.setEmscriptenStatus('Preparing...'), 'Preparing...');
+  assert.equal(s.setEmscriptenStatus(''), 'Running');
+  assert.equal(s.onLog('[net] connecting to wss://host/match as Ana', null), null);
+});
+
+test('BootStatus locks terminal log errors and aborts against later updates', () => {
+  const s = new BootStatus({ online: true, otherNames: ['Bob'] });
+  assert.equal(s.onLog('[disc] LSN 12 (ISO) read FAILED', 'Lost the connection.'), 'Lost the connection.');
+  assert.equal(s.setEmscriptenStatus(''), null);
+  assert.equal(s.onLog('[net] start: player 1 of 2', null), null);
+  assert.equal(s.onFrame(5), null);
+
+  const a = new BootStatus({ online: true });
+  assert.equal(a.onAbort('oom'), 'Stopped: oom');
+  assert.equal(a.onFrame(1), null);
 });
