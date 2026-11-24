@@ -254,6 +254,18 @@ for (const [what, serve] of [['cannot be fetched', (route) => route.abort()], ['
   });
 }
 
+await check('a classic script that throws keeps the warning and the buttons off', async () => {
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const page = await ctx.newPage();
+  await page.route('**/boot.js', (route) => route.fulfill({ contentType: 'text/javascript', body: "throw new Error('boot.js is broken');" }));
+  await page.goto(pageUrl, { waitUntil: 'load' });
+  await sleep(1000);
+  const r = await page.evaluate(() => ({ text: document.getElementById('frontMsg').textContent, cls: document.getElementById('frontMsg').className, on: ['single', 'host', 'join', 'refreshLobbies'].filter((id) => !document.getElementById(id).disabled) }));
+  await ctx.close();
+  expect(/could not load/i.test(r.text) && r.cls === 'problem', `message '${r.text}' class '${r.cls}'`);
+  expect(r.on.length === 0, `enabled: ${r.on}`);
+});
+
 // ---- a failed icon or stylesheet before the page is ready is not a failed page
 await check('a failed asset while front.js is still loading does not leave a warning behind', async () => {
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });

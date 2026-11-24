@@ -95,7 +95,7 @@ test('hover is drawn only where a pointer can hover, so a tap leaves nothing stu
 test('the status line starts as Loading and keeps room for two lines', () => {
   assert.match(html, /<p id="frontMsg" role="status">Loading…<\/p>/);
   assert.match(rule('#frontMsg'), /min-height:\s*2\.8em/);
-  assert.match(read('front.js'), /function init\(\) \{\n  say\(''\);/);
+  assert.match(read('front.js'), /function init\(\) \{[^}]*\}\n  say\(''\);   \/\/ the page said Loading until now/);
 });
 
 test('buttons answer a press at once: no double-tap delay, a pressed state, a focus ring', () => {
@@ -136,7 +136,9 @@ test('a page whose scripts fail to load says so instead of staying on Loading', 
   assert.match(head, /<script>[^<]*window\.addEventListener\('error', [^<]*, true\)[^<]*<\/script>/);
   assert.match(head, /textContent === 'Loading…'/);
   assert.match(head, /The page could not load\. Reload it; if it keeps happening, try Chrome, Firefox or Edge\./);
-  assert.match(head, /t !== window && t\.tagName !== 'SCRIPT'/);   // a failed icon or preload link is not a failed page
+  assert.match(head, /t === window \? e\.filename\.startsWith\(location\.origin\) : t\.tagName === 'SCRIPT'/);   // a failed icon or preload link, or a foreign error, is not a failed page
+  assert.match(head, /window\.wotmLoadFailure = /);
+  assert.match(read('front.js'), /function init\(\) \{\n  if \(window\.wotmLoadFailure\) \{\n    say\(window\.wotmLoadFailure\);\n    \$\('frontMsg'\)\.className = 'problem';\n    return;\n  \}/);   // init keeps the warning and leaves the buttons off
   assert.match(read('front.js'), /const say = \(text\) => \{ \$\('frontMsg'\)\.textContent = text; \$\('frontMsg'\)\.className = ''; \};/);
   assert.doesNotMatch(html, /onerror=/);
 });
