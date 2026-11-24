@@ -1,7 +1,7 @@
 // ABOUTME: Checks the front panel's accessibility and layout in a real browser (Chrome, Brave or Firefox, muted): serves a web/ folder,
 // ABOUTME: runs a local wotm_server for a real lobby, prints a table of checks and saves screenshots. Exit 1 when a check fails.
 import { join } from 'node:path';
-import { REPO } from './browser_mp_test/lib/infra.mjs';
+import { REPO, loadPlaywright } from './browser_mp_test/lib/infra.mjs';
 import { BROWSERS, argv, launchBrowser, sleep, startPageEnv } from './page_env.mjs';
 
 const USAGE = `usage: node tools/page_check.mjs [--browser chrome|brave|chromium|firefox|webkit] [--site <web folder>] [--out <folder>] [--label <name>]
@@ -33,6 +33,17 @@ const check = async (name, fn) => {
 const expect = (cond, msg) => { if (!cond) throw new Error(msg); };
 const shot = (page, view) => page.screenshot({ path: join(out, `${label}-${browserName}-${view}.png`) });
 
+async function finish() {
+  await browser.close();
+  env.stop();
+
+  const bad = rows.filter((r) => !r.ok);
+  console.log(`\n${browserName}  (${site})`);
+  for (const r of rows) console.log(`${r.ok ? 'PASS' : 'FAIL'}  ${r.name}${r.detail ? `  [${r.detail}]` : ''}`);
+  console.log(`\n${rows.length - bad.length}/${rows.length} passed; screenshots in ${out}`);
+  process.exit(bad.length ? 1 : 0);
+}
+
 // `refuseFullscreen`: the browser turns down requestFullscreen, as a phone may; the first tap on a button asks for it (web/touch.js), and
 // where it is granted Firefox's window becomes as tall as the screen, which hides a panel that runs past a short phone
 async function openPage(viewport, opts = {}, { refuseFullscreen = false } = {}) {
@@ -42,6 +53,44 @@ async function openPage(viewport, opts = {}, { refuseFullscreen = false } = {}) 
   await page.goto(pageUrl, { waitUntil: 'load' });
   await page.waitForSelector('#home:not([hidden])');
   return { ctx, page };
+}
+
+// ---- Safari (WebKit): the game cannot run there, so the page must say so and stay tidy
+if (browserName === 'webkit') {
+  const pw = await loadPlaywright();
+  for (const [view, ctxOpts, wanted] of [['Safari on a Mac', { viewport: { width: 1280, height: 800 } }, /Chrome, Firefox or Edge/], ['Safari on an iPhone', { ...pw.devices['iPhone 13'] }, /iPhone or iPad/]]) {
+    const ctx = await browser.newContext(ctxOpts);
+    const page = await ctx.newPage();
+    await page.goto(pageUrl, { waitUntil: 'load' });
+    await page.waitForSelector('#home:not([hidden])');
+    await sleep(800);
+    await check(`[${view}] the page says why the game cannot run`, async () => {
+      const msg = await page.locator('#frontMsg').innerText();
+      expect(wanted.test(msg), `message: ${msg}`);
+      return msg.slice(0, 60);
+    });
+    await check(`[${view}] nothing is offered that cannot work (no name, monster, play or settings controls)`, async () => {
+      const shown = await page.evaluate(() => ['name', 'monster', 'single', 'host', 'join', 'openSettings'].filter((id) => document.getElementById(id).offsetParent !== null));
+      expect(shown.length === 0, `still shown: ${shown}`);
+    });
+    await check(`[${view}] one main landmark, and nothing runs off the screen sideways`, async () => {
+      expect(await page.getByRole('main').count() === 1, 'no single main landmark');
+      const w = await page.evaluate(() => [document.documentElement.scrollWidth, innerWidth]);
+      expect(w[0] <= w[1], `page is ${w[0]}px wide in a ${w[1]}px screen`);
+    });
+    await check(`[${view}] the message is readable (4.5:1)`, async () => {
+      const r = await page.evaluate(() => {
+        const parse = (c) => c.match(/[\d.]+/g).slice(0, 3).map(Number);
+        const lum = (rgb) => { const [r, g, b] = rgb.map((v) => { const s = v / 255; return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4; }); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+        const [hi, lo] = [lum(parse(getComputedStyle(document.getElementById('frontMsg')).color)), lum(parse(getComputedStyle(document.getElementById('home')).backgroundColor))].sort((a, b) => b - a);
+        return (hi + 0.05) / (lo + 0.05);
+      });
+      expect(r >= 4.5, `${r.toFixed(2)}:1`);
+    });
+    await page.screenshot({ path: join(out, `${label}-webkit-${view.includes('iPhone') ? 'phone' : 'desktop'}-home.png`), fullPage: true });
+    await ctx.close();
+  }
+  await finish();
 }
 
 // ---- keyboard order and the game canvas
@@ -348,6 +397,49 @@ await check('Enter pressed twice in the join code opens one connection', async (
   expect(opened === 1, `${opened} connections opened`);
 });
 
+// ---- structure: landmarks, the online group, Start beside Leave, what a guest sees
+{
+  const { ctx, page } = await openPage({ width: 1280, height: 800 });
+  await check('the panel is the one main landmark, with a Play online region', async () => {
+    expect(await page.getByRole('main').count() === 1, 'no single main landmark');
+    expect(await page.getByRole('region', { name: 'Play online' }).count() === 1, 'no region named Play online');
+  });
+  await check('the status bar is not drawn under the panel', async () => {
+    const v = await page.evaluate(() => getComputedStyle(document.getElementById('bar')).visibility);
+    expect(v === 'hidden', `visibility ${v}`);
+  });
+  await check('desktop buttons and fields are at least 32px tall', async () => {
+    const small = await page.evaluate(() => [...document.querySelectorAll('#home button, #home input, #home select')].filter((e) => e.offsetParent && !e.disabled).map((e) => [e.id, e.getBoundingClientRect().height]).filter(([, h]) => h < 31.5).map(([id, h]) => `${id} ${Math.round(h)}px`));
+    expect(small.length === 0, small.join(', '));
+  });
+  await page.fill('#name', 'Checker');
+  await page.click('#host');
+  await page.waitForSelector('#inLobby:not([hidden]) #code:not(:empty)', { timeout: 10000 });
+  await check('Start and Leave sit on one row, Start the wider', async () => {
+    const [s, l] = await Promise.all([page.locator('#start').boundingBox(), page.locator('#leave').boundingBox()]);
+    expect(Math.abs(s.y - l.y) < 2 && s.width > l.width, `start ${JSON.stringify(s)} leave ${JSON.stringify(l)}`);
+  });
+  await check('the lobby code is the largest text on the lobby', async () => {
+    const [c, h] = await page.evaluate(() => [parseFloat(getComputedStyle(document.getElementById('code')).fontSize), parseFloat(getComputedStyle(document.querySelector('#home h1')).fontSize)]);
+    expect(c > h, `code ${c}px, heading ${h}px`);
+  });
+  const code = (await page.locator('#code').innerText()).trim();
+  const guest = await openPage({ width: 390, height: 844 }, { isMobile: true, hasTouch: true });
+  await guest.page.fill('#name', 'Guest');
+  await guest.page.fill('#joinCode', code);
+  await guest.page.click('#join');
+  await guest.page.waitForSelector('#inLobby:not([hidden])', { timeout: 10000 });
+  await check('a guest has Leave and no Start or rule controls', async () => {
+    expect(await guest.page.locator('#leave').isVisible() && !(await guest.page.locator('#start').isVisible()) && !(await guest.page.locator('#rules').isVisible()), 'guest controls wrong');
+  });
+  await check('the owner sees the guest join and Start stays', async () => {
+    await page.waitForFunction(() => document.querySelectorAll('#members li').length === 2, null, { timeout: 8000 });
+    expect(await page.locator('#start').isVisible(), 'Start hidden for the owner');
+  });
+  await guest.ctx.close();
+  await ctx.close();
+}
+
 // ---- the status bar over the game: not faded, readable, sized
 for (const [view, viewport, opts, min] of [['desktop', { width: 1280, height: 800 }, {}, 24], ['touch', { width: 844, height: 390 }, { hasTouch: true }, 44]]) {
   const { ctx, page } = await openPage(viewport, opts);
@@ -405,12 +497,4 @@ for (const [w, h] of [[844, 390], [568, 320]]) {
   await shot(page, `touchpanel-${w}x${h}`);
   await ctx.close();
 }
-
-await browser.close();
-env.stop();
-
-const bad = rows.filter((r) => !r.ok);
-console.log(`\n${browserName}  (${site})`);
-for (const r of rows) console.log(`${r.ok ? 'PASS' : 'FAIL'}  ${r.name}${r.detail ? `  [${r.detail}]` : ''}`);
-console.log(`\n${rows.length - bad.length}/${rows.length} passed; screenshots in ${out}`);
-process.exit(bad.length ? 1 : 0);
+await finish();

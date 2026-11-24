@@ -71,6 +71,7 @@ let myMonster = 0;   // the monster the server last accepted
 function setOwner(isOwner) {
   owner = isOwner;
   $('ownerOnly').hidden = !isOwner;
+  $('start').hidden = !isOwner;
   $('guestSettings').hidden = isOwner;
   showMemberList();   // the owner's buttons come and go with the role
 }
@@ -575,8 +576,10 @@ function init() {
   const problem = window.wotmSupportProblem();
   if (problem) {
     say(problem);
-    for (const id of ['single', 'host', 'join', 'openSettings']) $(id).disabled = true;
-    $('lobbyList').hidden = true;
+    $('frontMsg').className = 'problem';
+    $('profile').hidden = true;   // nothing here can start a game: the reason is all the panel shows
+    $('choose').hidden = true;
+    $('openSettings').hidden = true;
     return;
   }
   initCreations(STAGES);

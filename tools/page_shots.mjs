@@ -35,7 +35,7 @@ async function open(ctxOpts, name) {
   const page = await ctx.newPage();
   await page.goto(env.pageUrl, { waitUntil: 'load' });
   await page.waitForSelector('#home:not([hidden])');
-  await page.waitForFunction(() => !document.getElementById('single').disabled || document.getElementById('single').title !== undefined);
+  if (browserName !== 'webkit') await page.waitForFunction(() => !document.getElementById('single').disabled);   // WebKit's page says the game cannot run, so the buttons stay off
   if (name) await page.fill('#name', name);
   return { ctx, page };
 }
