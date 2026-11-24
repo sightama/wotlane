@@ -308,10 +308,7 @@ else if (typeof document === 'undefined' && globalThis.name === HELPER_NAME) {
   } else if (typeof document === 'undefined' && canBlock && typeof XMLHttpRequest === 'function') {
     const channel = new BroadcastChannel(HELPER_CHANNEL);
     // the chunks this worker fetches itself go on the page's disc channel, like the fetch path's (the loading note and the diag count them)
-    const progress = new BroadcastChannel('wotlane-disc');
-    const reader = discChunks.syncChunkReader(XMLHttpRequest, { onBytes: (n) => progress.postMessage(n) });
-    globalThis.XMLHttpRequest = syncDiscXHR(XMLHttpRequest, syncReadClient((m) => channel.postMessage(m)), reader, {
-      onHit: (n) => progress.postMessage({ hit: n }),
-    });
+    const reader = discChunks.syncChunkReader(XMLHttpRequest, { onBytes });
+    globalThis.XMLHttpRequest = syncDiscXHR(XMLHttpRequest, syncReadClient((m) => channel.postMessage(m)), reader, { onHit });
   }
 }
