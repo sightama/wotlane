@@ -32,7 +32,8 @@ For online play start `wotm_server --ws-port <port>`; a page opened from `localh
   their handlers, so no press lands on a dead button. `index.html` preloads every module `front.js` imports, directly or not
   (`<link rel="modulepreload">`; `web/page_startup.test.mjs` fails when the list and the import graph differ). The card is anchored to the top of
   the screen, the device note and the Firefox tip sit below the actions, and the open lobbies area is there from the start with
-  "Looking for open lobbies…" and room for the two-line empty message, so nothing moves after the first paint. A button shows a pressed
+  "Looking for open lobbies…" and room for the two-line empty message; it stays on the page, greyed while a join is under way and with a
+  message in its place when the server cannot give the list, so no control above or below it moves after the first paint. A button shows a pressed
   state at once (`:active`, `touch-action: manipulation`), and Host and Join say what they are doing in the status line. Controls are 44px on
   any device with a touch screen (`pointer: coarse` or `any-pointer: coarse`) and 24px otherwise; field borders are 3:1 against the panel.
 - **Disc:** `/disc` is a WASMFS fetch backend over `data/`: the game's reads become 1 MiB range requests, each fetched once
