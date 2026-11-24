@@ -71,10 +71,16 @@ For online play start `wotm_server --ws-port <port>`; a page opened from `localh
   skipping what the cache holds (`cachedChunks` reads the cache's keys only), so no later fight or menu waits on the network. It
   makes way for the game: from the game's start it holds until the runtime is up (the wasm download is no disc read), and any game
   read pauses it until the disc has been quiet for 5 s; a read says so as it starts (`{want}` on the `wotlane-disc` channel, from
-  `cachingFetch`'s `onRead` and the Firefox XHR path), a download as it ends (a number) and a cache hit as `{hit}`; its own
-  downloads go as `{prefetch: bytes}`, which the loading text, the streaming note and the diag leave out. It stops for good when an
-  online match starts (the bandwidth is the match's), does nothing with Save-Data on or without room under 90% of the quota, and gives
-  up on chunks two uninterrupted passes could not fetch. It never calls `navigator.storage.persist()`: Chrome and Brave answer false to
+  `cachingFetch`'s `onRead` and the Firefox XHR path), before the cache is asked, so a load the cache serves pauses it too (it wants
+  the page's thread); a download goes on the channel as it ends (a number) and a cache hit as `{hit}`; the prefetch's own downloads
+  go as `{prefetch: bytes}`, which the loading text, the streaming note and the diag leave out. It stops for good when an online
+  match starts (the bandwidth is the match's), does nothing with Save-Data on or without a version (ETag) for a disc file, asks
+  before every pass for room under 90% of the quota (the HTTP cache's copies of the chunk files count there too), and ends when a
+  pass that asked for chunks left as many missing (the network keeps failing them, or the cache keeps nothing). In a fight it runs
+  once the disc is quiet; its cost is the SHA-256 and the store of each chunk on the page's thread: in Chrome at 20 Mbit/s the
+  seconds with background downloads present frames as the seconds without (median 8.3 ms, 1.7% over 25 ms against 1.9%); in
+  Firefox on a local server, about 200 MiB in 2 to 4 s, 0 and 3.4% of those seconds' frames went over 25 ms (0.75% without); a real
+  line spreads the same work over a minute or more. It never calls `navigator.storage.persist()`: Chrome and Brave answer false to
   a new visitor and Firefox would ask with a prompt; the quota (2 GiB in Brave, 10 GiB in Chrome and Firefox on a desktop) holds the
   set. `node tools/browser_mp_test/prefetch_probe.mjs` measures it. In Firefox
   the game's own reads from worker threads are synchronous XHR (below), which the Cache API can't serve, so the page starts a helper

@@ -14,9 +14,11 @@ const HELP = `Usage: node tools/browser_mp_test/prefetch_probe.mjs [options]
   --fight M,M,S   the direct fight measured (WOTM_MATCH, default 5,7,8: neither the boot's chunks nor a lobby's)
   --live <url>    measure on a public site instead (e.g. https://playwotm.com): its caching headers are the real ones; the local
                   server sends the page with no-store, so there every visit downloads the wasm again
-  --flow probe|page  probe (default): this script fetches the whole-game set itself, as a page could; page: the page's own
+  --flow probe|page|fps  probe (default): this script fetches the whole-game set itself, as a page could; page: the page's own
                   background prefetch (web/game_prefetch.js): a fight opened straight away in a fresh profile (is the first load any
-                  slower?), then a fresh profile left on the front panel until the page logs how its prefetch ended, and a fight after it
+                  slower?), then a fresh profile left on the front panel until the page logs how its prefetch ended, and a fight after it;
+                  fps: a fight in a fresh profile, every animation frame for --secs (default 40) once it runs, frame times in the seconds
+                  with background downloads against those without (does the prefetch cost frames?)
   --timeline      after each fight, the disc channel per 5 s: game downloads, cache hits, game reads started, background downloads
   --headed        a visible window (headless Chromium reports another quota than a real profile)
 Runs on a local server (tools/serve_web.py and wotm_server) or --live, each visit in a fresh browser profile of its own (a disk HTTP
@@ -38,6 +40,7 @@ const fightSpec = opt('fight', '5,7,8');
 const headed = args.includes('--headed');
 const live = opt('live', '');
 const flow = opt('flow', 'probe');
+const fpsSecs = Number(opt('secs', '40'));
 const timeline = args.includes('--timeline');
 if (mbps && browserName === 'firefox') { console.error('error: --mbps needs a Chromium-family browser (Firefox has no network emulation)'); process.exit(2); }
 
@@ -133,6 +136,7 @@ async function fight(page) {
 const lines = [`${browserName} on ${live || 'local'}, flow ${flow}${mbps ? `, ${mbps} Mbit/s` : ''}${headed ? ', headed' : ''}; fight ${fightSpec}; load ${loadavg().map((x) => x.toFixed(1)).join(' ')}`];
 try {
   if (flow === 'page') await pageFlow();
+  else if (flow === 'fps') await fpsFlow();
   else await probeFlow();
 } catch (e) {
   lines.push(`error: ${e.message}`);
@@ -143,6 +147,37 @@ try {
   await target.stop();
 }
 console.log(lines.join('\n'));
+
+async function fpsFlow() {
+  const { context, page } = await newPage();
+  await fight(page);
+  const r = await page.evaluate(async (ms) => {
+    const start = performance.now();
+    const frames = [];
+    await new Promise((resolve) => {
+      const step = (t) => { frames.push(t); if (t - start < ms) requestAnimationFrame(step); else resolve(); };
+      requestAnimationFrame(step);
+    });
+    const bg = window.__disc.events.filter(([at, kind]) => kind === 'bg' && at >= start).map(([at, , n]) => [at, n]);
+    return { start, frames, bg };
+  }, fpsSecs * 1000);
+  // per second of the window: the frame times that ended in it, and whether background chunks arrived in it
+  const secs = new Map();
+  for (let i = 1; i < r.frames.length; i++) {
+    const s = Math.floor((r.frames[i] - r.start) / 1000);
+    (secs.get(s) ?? secs.set(s, { d: [], bg: 0 }).get(s)).d.push(r.frames[i] - r.frames[i - 1]);
+  }
+  for (const [at, n] of r.bg) { const s = Math.floor((at - r.start) / 1000); if (secs.has(s)) secs.get(s).bg += n; }
+  const sum = (with_) => {
+    const d = [...secs.values()].filter((x) => (x.bg > 0) === with_).flatMap((x) => x.d).sort((a, b) => a - b);
+    if (!d.length) return 'none';
+    const q = (p) => d[Math.min(d.length - 1, Math.floor(p * d.length))].toFixed(1);
+    return `${[...secs.values()].filter((x) => (x.bg > 0) === with_).length} s, ${d.length} frames, median ${q(0.5)} ms, p95 ${q(0.95)}, p99 ${q(0.99)}, over 25 ms ${d.filter((x) => x > 25).length}`;
+  };
+  lines.push(`frames with background downloads     ${sum(true)} (${MiB(r.bg.reduce((a, [, n]) => a + n, 0))} MiB in the window)`);
+  lines.push(`frames without background downloads  ${sum(false)}`);
+  await context.close();
+}
 
 async function pageFlow() {
   {

@@ -17,23 +17,25 @@ test('the whole game is every stage, every monster with all its costumes and the
   assert.deepEqual(wholeGameChunks({}, {}), { 'game.iso': [], 'SCUS_971.97': [] });
 });
 
-// A fake disc cache and clock: `prefetch` stores each chunk it is asked for (unless `failing`) and checks `stop()` before each one,
+// A fake disc cache and clock: `prefetch` stores each chunk it is asked for (unless `failing`: true, or a test of the chunk number)
+// and checks `stop()` before each one,
 // as disc_cache.js prefetch does with its runs; `during(file, chunk)` runs before a chunk is fetched (a test makes the game read there)
-function fakeWorld({ cached = {}, failing = false, room = true, during = () => {} } = {}) {
+function fakeWorld({ cached = {}, failing = false, room = () => true, during = () => {} } = {}) {
   const w = { t: 0, calls: [], kept: Object.fromEntries(Object.entries(cached).map(([f, l]) => [f, new Set(l)])) };
   w.opts = {
     files: async () => wholeGameChunks(TABLE, BOOT),
     missing: async (file, chunks) => chunks.filter((c) => !w.kept[file]?.has(c)),
-    canKeep: async (count) => { w.askedRoom = count; return room; },
+    canKeep: async (count) => { w.askedRoom = count; return room(count); },
     prefetch: async (file, chunks, { stop }) => {
       const got = [];
       for (const c of chunks) {
         if (stop()) break;
         during(file, c);
         got.push(c);
-        if (!failing) (w.kept[file] ??= new Set()).add(c);
+        if (!(failing === true || (failing && failing(c)))) (w.kept[file] ??= new Set()).add(c);
       }
       w.calls.push([file, got]);
+      return got.length;   // as disc_cache.js prefetch returns the runs it asked for
     },
     now: () => w.t,
     sleep: async (ms) => { w.t += ms; w.onSleep?.(); },
@@ -53,7 +55,7 @@ test('it fetches only what the cache lacks, file by file, after asking whether t
 });
 
 test('without room for the missing chunks nothing is fetched', async () => {
-  const w = fakeWorld({ room: false });
+  const w = fakeWorld({ room: () => false });
   assert.equal(await createGameWarmer(w.opts).start(), 'no room');
   assert.deepEqual(w.calls, []);
 });
@@ -101,15 +103,38 @@ test('stop() ends it for good: nothing more is fetched', async () => {
   assert.equal(w.calls.length, 1);
 });
 
-test('chunks the network keeps failing are given up after two whole passes, not fetched forever', async () => {
+test('a whole pass that kept nothing ends it at once: the set is not downloaded again for nothing', async () => {
   const w = fakeWorld({ failing: true });
   assert.equal(await createGameWarmer(w.opts).start(), 'gave up');
-  assert.equal(w.calls.filter(([file]) => file === 'game.iso').length, 2);
+  assert.equal(w.calls.filter(([file]) => file === 'game.iso').length, 1);
+});
+
+test('passes the game keeps interrupting that keep nothing end it too', async () => {
+  let warmer;
+  const w = fakeWorld({ failing: true, during: (file, c) => { if (c === 11) warmer.activity(); } });
+  warmer = createGameWarmer(w.opts);
+  assert.equal(await warmer.start(), 'gave up');
+  assert.equal(w.calls.length, 1, 'the interrupted pass asked for chunks and kept none: no second pass');
+});
+
+test('a pass that kept some goes on with the rest, and ends when a pass keeps no more', async () => {
+  const w = fakeWorld({ failing: (c) => c === 31 });
+  assert.equal(await createGameWarmer(w.opts).start(), 'gave up');
+  assert.deepEqual(w.calls.filter(([file]) => file === 'game.iso').map(([, got]) => got), [[0, 10, 11, 12, 20, 21, 22, 23, 30, 31], [31]]);
+});
+
+test('room is asked before every pass: storage that filled up meanwhile ends it', async () => {
+  let warmer, asked = 0;
+  const w = fakeWorld({ room: () => ++asked === 1, during: (file, c) => { if (c === 20 && asked === 1) warmer.activity(); } });
+  warmer = createGameWarmer(w.opts);
+  assert.equal(await warmer.start(), 'no room');
+  assert.equal(asked, 2);
+  assert.deepEqual(w.calls, [['game.iso', [0, 10, 11, 12, 20]]]);
 });
 
 test('a missing chunk table means no prefetch', async () => {
   const w = fakeWorld();
-  w.opts.files = async () => { throw new Error('HTTP 404'); };
-  assert.equal(await createGameWarmer(w.opts).start(), 'no table');
+  w.opts.files = async () => { throw new Error('match_chunks.json: HTTP 404'); };
+  assert.equal(await createGameWarmer(w.opts).start(), 'no table (match_chunks.json: HTTP 404)');
   assert.deepEqual(w.calls, []);
 });

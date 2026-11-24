@@ -13,12 +13,14 @@ function wholeGameChunks(table, boot) {
   return { 'game.iso': sorted(iso), 'SCUS_971.97': sorted(new Set(boot?.['SCUS_971.97'] ?? [])) };
 }
 
-// Fetches what the cache lacks of `files()` ({file: chunks}), file by file, through `prefetch(file, chunks, {stop})`. The game's own disc
+// Fetches what the cache lacks of `files()` ({file: chunks}), file by file, through `prefetch(file, chunks, {stop})` (which returns how
+// many requests it made). The game's own disc
 // reads (`activity()`) come first: a fetch stops asking for chunks while the disc has not been quiet for `quietMs`, and goes on with
 // what is still missing (`missing(file, chunks)`) once it is; hold() pauses it until release() (while the game's wasm downloads, which
-// is no disc read), and the quiet wait starts over from the release. Chunks still missing after two passes that nothing interrupted are left
-// to the game (the network keeps failing them). `canKeep(count)` false: no room to keep them, nothing is fetched. start() resolves to
-// how it ended: 'done', 'stopped' (stop(): an online match, where the bandwidth is the match's), 'no room', 'gave up' or 'no table'
+// is no disc read), and the quiet wait starts over from the release. A pass that asked for chunks and left as many missing as before
+// ends it (the network keeps failing them, or the cache keeps nothing: fetching again would only download them again).
+// `canKeep(count)` is asked before every pass: false, no room to keep them, nothing more is fetched. start() resolves to how it ended:
+// 'done', 'stopped' (stop(): an online match, where the bandwidth is the match's), 'no room', 'gave up' or 'no table (<why>)'
 function createGameWarmer({ files, missing, canKeep, prefetch, now, sleep, quietMs = 5000 }) {
   let stopped = false, started = false, held = false, lastActivity = -Infinity;
   const busy = () => held || now() - lastActivity < quietMs;
@@ -29,8 +31,8 @@ function createGameWarmer({ files, missing, canKeep, prefetch, now, sleep, quiet
 
   async function run() {
     let want;
-    try { want = await files(); } catch { return 'no table'; }
-    let failedPasses = 0, askedRoom = false;
+    try { want = await files(); } catch (e) { return `no table (${e.message})`; }
+    let lastLeft = Infinity, lastAsked = 0;
     while (!stopped) {
       await waitQuiet();
       if (stopped) break;
@@ -40,22 +42,21 @@ function createGameWarmer({ files, missing, canKeep, prefetch, now, sleep, quiet
         if (lacking.length) left.push([file, lacking]);
       }
       if (!left.length) return 'done';
-      if (failedPasses >= 2) return 'gave up';
-      if (!askedRoom) {
-        askedRoom = true;
-        if (!(await canKeep(left.reduce((n, [, l]) => n + l.length, 0)))) return 'no room';
-      }
+      const count = left.reduce((n, [, l]) => n + l.length, 0);
+      if (lastAsked > 0 && count >= lastLeft) return 'gave up';
+      if (!(await canKeep(count))) return 'no room';
+      lastLeft = count;
       let interrupted = false;
       const stop = () => {
         if (stopped) return true;
         if (busy()) interrupted = true;
         return interrupted;
       };
+      lastAsked = 0;
       for (const [file, lacking] of left) {
-        await prefetch(file, lacking, { stop });
+        lastAsked += await prefetch(file, lacking, { stop });
         if (stopped || interrupted) break;
       }
-      if (!interrupted) failedPasses++;
     }
     return 'stopped';
   }
@@ -97,8 +98,11 @@ if (typeof window !== 'undefined') {
       gameWarmer = createGameWarmer({
         files: async () => {
           const all = wholeGameChunks(await json('match_chunks.json'), await json('boot_chunks.json'));
-          // the version each file's chunks are kept under (disc_cache.js names a cache by it)
-          for (const file of Object.keys(all)) etags[file] = (await fetch('data/' + file, { method: 'HEAD' })).headers.get('etag');
+          // the version each file's chunks are kept under (disc_cache.js names a cache by it, and keeps nothing without one)
+          for (const file of Object.keys(all)) {
+            etags[file] = (await fetch('data/' + file, { method: 'HEAD' })).headers.get('etag');
+            if (!etags[file]) throw new Error(`data/${file} has no version (ETag): the cache would keep nothing`);
+          }
           return all;
         },
         missing: async (file, chunks) => {
