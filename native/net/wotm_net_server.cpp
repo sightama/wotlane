@@ -1219,6 +1219,7 @@ namespace wotm_net
         {
             const Slot &s = m.slots[i];
             const bool active = s.peer && !s.gone && !s.away;
+            // s.advised is the target delay (LocalSchedule converges toward it one frame at a time after a Pace change).
             progress.push_back({m.inputs.nextMissing(static_cast<int>(i)), s.advised, active ? rttOf(s.peer) : 0u, active});
         }
         const std::vector<double> adv = timesync::computeAdvantages(progress, proto::frameMs(m.step));
@@ -1231,9 +1232,8 @@ namespace wotm_net
             const uint16_t hundredths = scaled <= 0.0 ? 0u : static_cast<uint16_t>(std::min(scaled, 65535.0));
             if (hundredths == 0u && s.lastAheadSent == 0u)
                 continue;
-            // Clearing back to 0 goes on kControl (reliable) so a dropped UDP packet never leaves a client stretching.
-            const bool reliable = hundredths == 0u;
-            send(s.peer, reliable ? proto::kControl : proto::kInputs, proto::encode(proto::Ahead{hundredths}), reliable);
+            // All Ahead messages go on kControl (reliable, ordered) so a delayed positive value can never arrive after a 0 clear.
+            send(s.peer, proto::kControl, proto::encode(proto::Ahead{hundredths}), true);
             s.lastAheadSent = hundredths;
         }
     }

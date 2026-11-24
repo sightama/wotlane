@@ -20,6 +20,7 @@ namespace wotm_net
         }
         connected_ = false;
         haveServerRtt_ = false;   // the last connection's round trip says nothing about this one
+        aheadHundredths_.store(0u, std::memory_order_relaxed);
         const std::string where = isWebSocketAddress(c.host) ? c.host : c.host + ":" + std::to_string(c.port);
         {
             std::lock_guard<std::mutex> lk(mu_);
@@ -44,6 +45,7 @@ namespace wotm_net
             net_.reset();
         }
         connected_ = false;
+        aheadHundredths_.store(0u, std::memory_order_relaxed);
         std::lock_guard<std::mutex> lk(mu_);
         if (status_ == Status::Connecting || status_ == Status::Waiting || status_ == Status::Running)
             status_ = Status::Idle;
@@ -128,6 +130,7 @@ namespace wotm_net
                     inputs_.drop(d.first, d.second);
                 serverAck_ = s.delay;
                 sentAcks_.assign(static_cast<size_t>(players_), 0u);
+                aheadHundredths_.store(0u, std::memory_order_relaxed);
                 setStatus(Status::Running, "match in progress");
             }
             break;

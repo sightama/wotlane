@@ -53,7 +53,7 @@ namespace wotm_net::timesync
 
     inline double stretchFraction(double advantageFrames)
     {
-        if (advantageFrames <= kDeadbandFrames)
+        if (!std::isfinite(advantageFrames) || !(advantageFrames > kDeadbandFrames))
             return 0.0;
         return std::min(kMaxStretch, advantageFrames / kAdvantageDivisor);
     }
@@ -67,8 +67,8 @@ namespace wotm_net::timesync
 
         double update(double targetFrames, double dtSec)
         {
-            const double target = std::max(0.0, targetFrames);
-            const double alpha = dtSec > 0.0 ? std::clamp(1.0 - std::exp(-dtSec / kSmoothTauSec), 0.0, 1.0) : 1.0;
+            const double target = (std::isfinite(targetFrames) && targetFrames > 0.0) ? targetFrames : 0.0;
+            const double alpha = (std::isfinite(dtSec) && dtSec > 0.0) ? std::clamp(1.0 - std::exp(-dtSec / kSmoothTauSec), 0.0, 1.0) : 1.0;
             value_ += (target - value_) * alpha;
             return value_;
         }
@@ -92,9 +92,9 @@ namespace wotm_net::timesync
 
         double extraSleepMs(double nowMs, double periodMs, double stretchFrac)
         {
-            if (periodMs <= 0.0)
+            if (!std::isfinite(nowMs) || !std::isfinite(periodMs) || periodMs <= 0.0)
                 return 0.0;
-            const double stretch = std::clamp(stretchFrac, 0.0, kMaxStretch);
+            const double stretch = std::isfinite(stretchFrac) ? std::clamp(stretchFrac, 0.0, kMaxStretch) : 0.0;
             if (!active_)
             {
                 if (stretch <= 0.0)
