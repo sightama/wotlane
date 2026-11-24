@@ -16,7 +16,8 @@ function sha256Hex(subtle, bytes) { return discChunks.sha256Hex(subtle, bytes); 
 // Wraps `baseFetch`: a HEAD of a disc file records its version and size; a GET of a chunk-aligned range of a known version is served
 // from the cache when every chunk in it is there and matches its hash, else from the network, whose chunks are then stored. Anything
 // the cache can't do (no Cache API, storage nearly full, a failing call) leaves the network's answer as it is. `onRead()` hears each
-// range GET of a disc file as it starts, except a background prefetch's: the game is waiting on it (game_prefetch.js yields to it).
+// range GET of a disc file as it starts and again as it ends, except a background prefetch's: the game is waiting on it
+// (game_prefetch.js yields to it, and a slow read is no quiet disc).
 function cachingFetch(baseFetch, { caches, subtle, estimate, chunkBytes = 1 << 20, onBytes = null, onRead = null, fullAt = 0.9 } = {}) {
   const versions = new Map();   // file -> { etag, size }
 
@@ -45,7 +46,7 @@ function cachingFetch(baseFetch, { caches, subtle, estimate, chunkBytes = 1 << 2
     }
   }
 
-  return async function (url, init = {}) {
+  async function read(url, init) {
     const file = discFile(url);
     if (!file) return baseFetch(url, init);
     if (init.method === 'HEAD') {
@@ -56,7 +57,6 @@ function cachingFetch(baseFetch, { caches, subtle, estimate, chunkBytes = 1 << 2
       return r;
     }
     const m = /^bytes=(\d+)-(\d+)$/.exec(init.headers?.Range ?? init.headers?.range ?? '');
-    if (m && !init.background) onRead?.();
     const v = versions.get(file);
     if (!m || !v || !caches || !subtle) return baseFetch(url, init);
     const start = Number(m[1]), end = Math.min(Number(m[2]), v.size - 1);
@@ -91,6 +91,17 @@ function cachingFetch(baseFetch, { caches, subtle, estimate, chunkBytes = 1 << 2
       // storage full or unavailable: the game still gets its bytes
     }
     return new Response(bytes, { status: 206, headers: r.headers });
+  }
+
+  return async function (url, init = {}) {
+    const game = !init.background && init.method !== 'HEAD' && discFile(url) && /^bytes=\d+-\d+$/.test(init.headers?.Range ?? init.headers?.range ?? '');
+    if (!game) return read(url, init);
+    onRead?.();
+    try {
+      return await read(url, init);
+    } finally {
+      onRead?.();
+    }
   };
 }
 
@@ -250,7 +261,7 @@ function syncReadClient(post, { waitMs = 5000, pingMs = 300, pauseMs = 2000, now
 // A XMLHttpRequest whose synchronous disc range GETs are answered by `client` when it has the bytes; what it lacks is read from the
 // server's chunk files by `chunks` (disc_chunks.js syncChunkReader) when the server has them, else with `Base` from the whole file;
 // everything else is `Base`'s. Cache hits report via `onHit` and both cache hits and chunk-reader reads set `wotmReported = true` so
-// native/wotm_webdisc.cpp does not post them again as network downloads. `onRead()` hears each such read as it starts
+// native/wotm_webdisc.cpp does not post them again as network downloads. `onRead()` hears each such read as it starts and as it ends
 function syncDiscXHR(Base, client, chunks = null, { onHit = null, onRead = null } = {}) {
   return class extends Base {
     open(method, url, async, ...rest) {
@@ -270,6 +281,14 @@ function syncDiscXHR(Base, client, chunks = null, { onHit = null, onRead = null 
       const url = new URL(w.url, globalThis.location?.href).href;
       const start = Number(m[1]), end = Number(m[2]) + 1;
       onRead?.();
+      try {
+        return this.wotmSend(body, url, start, end);
+      } finally {
+        onRead?.();
+      }
+    }
+
+    wotmSend(body, url, start, end) {
       const hit = client.ask(url, start, end);
       if (hit) {
         Object.defineProperty(this, 'status', { value: 206 });

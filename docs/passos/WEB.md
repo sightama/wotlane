@@ -67,11 +67,11 @@ For online play start `wotm_server --ws-port <port>`; a page opened from `localh
   every monster's fight is the stage's, the rest of a monster's fight is the monster's, and its costumes follow the disc's file names
   (`MON/<NAME><costume>.*`, `RST/<NAME><costume>.AIC`). A map of the player's own (a map id as the stage) prefetches its monsters
   only. Once the boot's chunks and the wasm are in, `web/game_prefetch.js` fetches the rest of the game in the background: every chunk
-  of `match_chunks.json` (every stage, every monster with all its costumes) and the boot's, about 270 MiB, two 2 MiB runs at a time,
-  skipping what the cache holds (`cachedChunks` reads the cache's keys only), so no later fight or menu waits on the network. It
+  of `match_chunks.json` (every stage, every monster with all its costumes) and the boot's, about 270 MiB, two 2 MiB runs at a time
+  (one 1 MiB chunk at a time where the game runs on the page's thread: `support.js` `mainThreadFiles`, Firefox), skipping what the cache holds (`cachedChunks` reads the cache's keys only), so no later fight or menu waits on the network. It
   makes way for the game: from the game's start it holds until the runtime is up (the wasm download is no disc read), and any game
-  read pauses it until the disc has been quiet for 5 s; a read says so as it starts (`{want}` on the `wotlane-disc` channel, from
-  `cachingFetch`'s `onRead` and the Firefox XHR path), before the cache is asked, so a load the cache serves pauses it too (it wants
+  read pauses it until the disc has been quiet for 5 s; a read says so as it starts and again as it ends (`{want}` on the
+  `wotlane-disc` channel, from `cachingFetch`'s `onRead` and the Firefox XHR path: a slow read is no quiet disc), the first before the cache is asked, so a load the cache serves pauses it too (it wants
   the page's thread); a download goes on the channel as it ends (a number) and a cache hit as `{hit}`; the prefetch's own downloads
   go as `{prefetch: bytes}`, which the loading text, the streaming note and the diag leave out. It stops for good when an online
   match starts (the bandwidth is the match's), does nothing with Save-Data on or without a version (ETag) for a disc file, asks
@@ -79,8 +79,8 @@ For online play start `wotm_server --ws-port <port>`; a page opened from `localh
   pass that asked for chunks left as many missing (the network keeps failing them, or the cache keeps nothing). In a fight it runs
   once the disc is quiet; its cost is the SHA-256 and the store of each chunk on the page's thread: in Chrome at 20 Mbit/s the
   seconds with background downloads present frames as the seconds without (median 8.3 ms, 1.7% over 25 ms against 1.9%); in
-  Firefox on a local server, about 200 MiB in 2 to 4 s, 0 and 3.4% of those seconds' frames went over 25 ms (0.75% without); a real
-  line spreads the same work over a minute or more. It never calls `navigator.storage.persist()`: Chrome and Brave answer false to
+  Firefox on a local server, one chunk at a time, about 200 MiB in 3 to 5 s, 0 and 1.4% of those seconds' frames went over 25 ms
+  (3.1% and 0.7% without); a real line spreads the same work over a minute or more. It never calls `navigator.storage.persist()`: Chrome and Brave answer false to
   a new visitor and Firefox would ask with a prompt; the quota (2 GiB in Brave, 10 GiB in Chrome and Firefox on a desktop) holds the
   set. `node tools/browser_mp_test/prefetch_probe.mjs` measures it. In Firefox
   the game's own reads from worker threads are synchronous XHR (below), which the Cache API can't serve, so the page starts a helper

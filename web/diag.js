@@ -111,7 +111,8 @@ export class FrameWatch {
   }
 }
 
-// The disc bytes the game and the page's prefetch got: each chunk that came over the network is a number on the 'wotlane-disc' channel
+// The disc bytes the game and the boot's and the lobby's prefetches got (the whole-game prefetch's are {prefetch}, left out): each chunk
+// that came over the network is a number on the 'wotlane-disc' channel
 // (data_retry.js, disc_chunks.js), each read the disc cache served is {hit: bytes} (disc_cache.js). `channel`: that BroadcastChannel, or
 // null (no source)
 export class DiscWatch {

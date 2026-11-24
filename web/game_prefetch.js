@@ -14,10 +14,9 @@ function wholeGameChunks(table, boot) {
 }
 
 // Fetches what the cache lacks of `files()` ({file: chunks}), file by file, through `prefetch(file, chunks, {stop})` (which returns how
-// many requests it made). The game's own disc
-// reads (`activity()`) come first: a fetch stops asking for chunks while the disc has not been quiet for `quietMs`, and goes on with
-// what is still missing (`missing(file, chunks)`) once it is; hold() pauses it until release() (while the game's wasm downloads, which
-// is no disc read), and the quiet wait starts over from the release. A pass that asked for chunks and left as many missing as before
+// many requests it made). The game's own disc reads (`activity()`) come first: a fetch stops asking for chunks while the disc has not
+// been quiet for `quietMs`, and goes on with what is still missing (`missing(file, chunks)`) once it is; hold() pauses it until
+// release() (while the game's wasm downloads, which is no disc read), and the quiet wait starts over from the release. A pass that asked for chunks and left as many missing as before
 // ends it (the network keeps failing them, or the cache keeps nothing: fetching again would only download them again).
 // `canKeep(count)` is asked before every pass: false, no room to keep them, nothing more is fetched. start() resolves to how it ended:
 // 'done', 'stopped' (stop(): an online match, where the bandwidth is the match's), 'no room', 'gave up' or 'no table (<why>)'
@@ -111,8 +110,9 @@ if (typeof window !== 'undefined') {
         },
         // match_prefetch.js (loaded before this script) knows whether the cache can keep that many chunks
         canKeep: (count) => canKeepChunks({ caches: window.caches, estimate: storage?.estimate ? () => storage.estimate() : null }, count),
-        // two 2 MiB runs at a time: a game read that starts meanwhile waits behind at most four chunk files
-        prefetch: (file, chunks, { stop }) => dc.prefetch(fetch, 'data/' + file, chunks, { maxRun: 2, concurrency: 2, stop, background: true }),
+        // two 2 MiB runs at a time: a game read that starts meanwhile waits behind at most four chunk files. Where the game runs on the
+        // page's thread (support.js mainThreadFiles: Firefox), one 1 MiB chunk at a time, so each chunk's hash and store is spread out
+        prefetch: (file, chunks, { stop }) => dc.prefetch(fetch, 'data/' + file, chunks, { ...(window.wotmMainThreadFiles?.() ? { maxRun: 1, concurrency: 1 } : { maxRun: 2, concurrency: 2 }), stop, background: true }),
         now: () => performance.now(),
         sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
       });

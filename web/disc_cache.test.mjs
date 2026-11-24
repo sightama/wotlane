@@ -188,7 +188,7 @@ test('the caching fetch hands a range request\'s options to the network it falls
   assert.deepEqual(seen, [true]);
 });
 
-test('a game\'s disc read is announced as it starts, a background prefetch\'s and a HEAD are not', async () => {
+test('a game\'s disc read is announced as it starts and again as it ends, a background prefetch\'s and a HEAD are not', async () => {
   const starts = [];
   let release;
   const gate = new Promise((r) => { release = r; });
@@ -201,19 +201,22 @@ test('a game\'s disc read is announced as it starts, a background prefetch\'s an
   assert.deepEqual(starts, ['read'], 'heard before the network answers');
   release();
   await pending;
+  assert.deepEqual(starts, ['read', 'read'], 'and again once it has its bytes (a slow read is no quiet disc)');
+  await f('data/game.iso', range(0, 7));
+  assert.deepEqual(starts, ['read', 'read', 'read', 'read'], 'a read the cache served too');
   await f('data/game.iso', { ...range(8, 15), background: true });
   await f('page.html', {});
-  assert.deepEqual(starts, ['read']);
+  assert.equal(starts.length, 4);
 });
 
-test('a synchronous disc read is announced before it is answered, from the cache or the network', () => {
+test('a synchronous disc read is announced before it is answered and again after, from the cache or the network', () => {
   const heard = [];
   const X = syncDiscXHR(FakeXHR, { ask: () => (heard.push('ask'), null), remember: () => {} }, null, { onRead: () => heard.push('read') });
   const x = new X();
   x.open('GET', 'http://x/data/game.iso', false);
   x.setRequestHeader('Range', 'bytes=0-7');
   x.send();
-  assert.deepEqual(heard, ['read', 'ask']);
+  assert.deepEqual(heard, ['read', 'ask', 'read']);
 });
 
 test('cachedChunks lists the chunks kept for one version of a file, and nothing of other versions or files', async () => {
