@@ -56,7 +56,7 @@ The Mods tab (your creations, map editor) is not redesigned; it only picks up th
 | Field borders against the panel | 1.27:1 | 3.4:1 |
 | Controls on a touch device | 24 to 38px | 44px |
 | axe-core (4.10.2), home, lobby and six settings tabs, Firefox and Chrome | `region` (no landmark) on every view | no violations |
-| `tools/page_check.mjs` | 39 of 50 in Firefox, 38 of 50 in Chrome, 4 of 8 in WebKit | 50 of 50 in Firefox, Chrome and Brave; 8 of 8 in WebKit |
+| `tools/page_check.mjs` | 39 of 58 in Firefox, 39 of 58 in Chrome, 4 of 8 in WebKit | 58 of 58 in Firefox, Chrome and Brave; 8 of 8 in WebKit |
 
 ## What was not tested
 
