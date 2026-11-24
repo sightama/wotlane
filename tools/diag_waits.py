@@ -5,7 +5,7 @@
 For each run and each player, over the steady windows (the page's 5 s diag windows from seq N+1 on, default N=2, whose game rate is
 at least --min-gfps, default 75% of the match rate): windows used, median and mean waits per window, wait share of the time, median gfps and fps, mean
 ee_busy_ms, the fr_len buckets summed, raf_p95_ms median, lat_ms median, and the server's behind_avg mean for that player.
---windows also prints every window's line. Exit status 1 when no match.log is found."""
+--windows also prints every window's line. Exit status 1 when no match.log is found, 2 on a bad option."""
 import glob
 import os
 import statistics
@@ -72,20 +72,32 @@ def summarize(path, skip, min_gfps, show):
 
 def main(argv):
     skip, min_gfps, show, paths = 2, None, False, []
+
+    def refuse(why):
+        print('%s\n%s' % (why, __doc__), file=sys.stderr)
+        return 2
+
     i = 1
     while i < len(argv):
         a = argv[i]
         if a in ('-h', '--help'):
             print(__doc__)
             return 0
-        if a == '--skip':
+        if a in ('--skip', '--min-gfps'):
             i += 1
-            skip = int(argv[i])
-        elif a == '--min-gfps':
-            i += 1
-            min_gfps = float(argv[i])
+            if i >= len(argv):
+                return refuse('%s needs a value' % a)
+            try:
+                if a == '--skip':
+                    skip = int(argv[i])
+                else:
+                    min_gfps = float(argv[i])
+            except ValueError:
+                return refuse('%s: not a number: %s' % (a, argv[i]))
         elif a == '--windows':
             show = True
+        elif a.startswith('-'):
+            return refuse('unknown option %s' % a)
         else:
             paths.append(a)
         i += 1

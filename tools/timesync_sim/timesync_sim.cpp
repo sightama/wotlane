@@ -8,6 +8,7 @@
 // nextMissing - delay + rtt/2/frame, sends its lead over the slowest peer, and the client smooths it (0.25 s) and stretches its frames.
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -70,7 +71,8 @@ namespace
     struct Peer
     {
         double t = 0, grid = 0, endT = 0, lastUp = 0, ahead = 0, smoothed = 0, integral = 0;
-        uint32_t frame = 0, waits = 0;
+        uint32_t frame = 0, waits = 0, leadN = 0;
+        double leadSum = 0, leadMax = 0;   // the lead the server reported, at each frame
         double waitMs = 0;
         bool blocked = false;
         std::vector<double> atServer;                       // when the input for frame F reached the server
@@ -80,7 +82,7 @@ namespace
 
     struct Result
     {
-        double gfps[2], waitsPer5s[2], waitShare[2];
+        double gfps[2], waitsPer5s[2], waitShare[2], leadMean[2], leadMax[2];
     };
 
     Result simulate(const Options &o)
@@ -149,6 +151,7 @@ namespace
             {
                 while (!me.aheadMsgs.empty() && me.aheadMsgs.front().first <= t)
                     me.ahead = me.aheadMsgs.front().second, me.aheadMsgs.pop_front();
+                me.leadSum += me.ahead, me.leadMax = std::max(me.leadMax, me.ahead), ++me.leadN;
                 const double dt = kFrameMs / 1000.0;
                 me.smoothed += (me.ahead - me.smoothed) * (1.0 - std::exp(-dt / kSmoothSec));
                 double stretch = me.smoothed > kDeadband ? std::min(kMaxStretch, me.smoothed * kGain) : 0.0;
@@ -173,6 +176,8 @@ namespace
             r.gfps[q] = peers[q].frame / o.secs;
             r.waitsPer5s[q] = peers[q].waits / (o.secs / 5);
             r.waitShare[q] = 100.0 * peers[q].waitMs / (o.secs * 1000);
+            r.leadMean[q] = peers[q].leadN ? peers[q].leadSum / peers[q].leadN : 0.0;
+            r.leadMax[q] = peers[q].leadMax;
         }
         return r;
     }
@@ -190,10 +195,14 @@ namespace
             so.seed = o.seed + s;
             const Result r = simulate(so);
             for (int q = 0; q < 2; ++q)
-                sum.gfps[q] += r.gfps[q] / kSeeds, sum.waitsPer5s[q] += r.waitsPer5s[q] / kSeeds, sum.waitShare[q] += r.waitShare[q] / kSeeds;
+                sum.gfps[q] += r.gfps[q] / kSeeds, sum.waitsPer5s[q] += r.waitsPer5s[q] / kSeeds, sum.waitShare[q] += r.waitShare[q] / kSeeds,
+                sum.leadMean[q] += r.leadMean[q] / kSeeds, sum.leadMax[q] = std::max(sum.leadMax[q], r.leadMax[q]);
         }
-        std::printf("%-34s %-3s  gfps %5.1f  waits/5s P1 %6.1f P2 %6.1f  wait share P1 %4.1f%% P2 %4.1f%%\n", label, name(o.sync), sum.gfps[0],
+        std::printf("%-34s %-3s  gfps %5.1f  waits/5s P1 %6.1f P2 %6.1f  wait share P1 %4.1f%% P2 %4.1f%%", label, name(o.sync), sum.gfps[0],
                     sum.waitsPer5s[0], sum.waitsPer5s[1], sum.waitShare[0], sum.waitShare[1]);
+        if (o.sync != Sync::Off)
+            std::printf("  P1 lead mean %.2f max %.2f", sum.leadMean[0], sum.leadMax[0]);
+        std::printf("\n");
     }
 
     void table(const Options &base)
@@ -225,7 +234,10 @@ namespace
         "  --table (the default with no options): every scenario of docs/investigacoes/2026-11-24/time-sync, each with no time sync,\n"
         "  the proportional stretch (lead/30, Task 8) and PI (proportional plus an integral toward --pi-target frames of lead).\n"
         "  Otherwise one scenario. Two peers; P1 is the fast one (--work: mean ms of game work per frame, sd 1.5 and 2.5;\n"
-        "  --spike: P2's chance per frame of 12 ms more). Each figure is the mean of 5 seeds from --seed.\n";
+        "  --spike: P2's chance per frame of 12 ms more). Each figure is the mean of 5 seeds from --seed; with time sync the row\n"
+        "  ends with the lead (frames) the server reported to P1, its mean and its largest.\n"
+        "  Defaults: --secs 120 --delay 4 --rtt 40,60 --jitter 15 --work 7,13 --spike 0.04 --pi-target 0.5 --pi-gain 0.05 --seed 1.\n"
+        "  Exit status 2 on a bad option or value.\n";
 }
 
 int main(int argc, char **argv)
@@ -243,13 +255,24 @@ int main(int argc, char **argv)
             }
             return argv[++i];
         };
+        auto refuse = [&](const char *v, const char *expected) {
+            std::fprintf(stderr, "%s: expected %s (got %s)\n%s", a.c_str(), expected, v, kUsage);
+            std::exit(2);
+        };
+        // a number at least `low` (above it when `above`); `expected` names the range in the error
+        auto number = [&](double low, bool above, const char *expected) {
+            const char *v = value();
+            char *end = nullptr;
+            const double x = std::strtod(v, &end);
+            if (end == v || *end != '\0' || !std::isfinite(x) || x < low || (above && x == low))
+                refuse(v, expected);
+            return x;
+        };
         auto pair = [&](double *out) {
             const char *v = value();
-            if (std::sscanf(v, "%lf,%lf", &out[0], &out[1]) != 2)
-            {
-                std::fprintf(stderr, "%s: expected A,B (got %s)\n", a.c_str(), v);
-                std::exit(2);
-            }
+            char tail = 0;
+            if (std::sscanf(v, "%lf,%lf%c", &out[0], &out[1], &tail) != 2 || out[0] < 0 || out[1] < 0)
+                refuse(v, "A,B, two numbers not below 0");
         };
         if (a == "-h" || a == "--help")
             return std::printf("%s", kUsage), 0;
@@ -263,15 +286,15 @@ int main(int argc, char **argv)
                 return std::fprintf(stderr, "--sync: off, p or pi\n"), 2;
             one = true;
         }
-        else if (a == "--secs") o.secs = std::atof(value()), one = true;
-        else if (a == "--delay") o.delay = std::atof(value()), one = true;
+        else if (a == "--secs") o.secs = number(0, true, "a number above 0"), one = true;
+        else if (a == "--delay") o.delay = std::floor(number(0, false, "a whole number, 0 or more")), one = true;
         else if (a == "--rtt") pair(o.rtt), one = true;
-        else if (a == "--jitter") o.jitter = std::atof(value()), one = true;
+        else if (a == "--jitter") o.jitter = number(0, false, "a number, 0 or more"), one = true;
         else if (a == "--work") pair(o.work), one = true;
-        else if (a == "--spike") o.spikeP[1] = std::atof(value()), one = true;
-        else if (a == "--pi-target") o.piTarget = std::atof(value()), one = true;
-        else if (a == "--pi-gain") o.piGain = std::atof(value()), one = true;
-        else if (a == "--seed") o.seed = static_cast<unsigned>(std::atoi(value())), one = true;
+        else if (a == "--spike") o.spikeP[1] = std::min(1.0, number(0, false, "a chance from 0 to 1")), one = true;
+        else if (a == "--pi-target") o.piTarget = number(-1e9, false, "a number"), one = true;
+        else if (a == "--pi-gain") o.piGain = number(0, false, "a number, 0 or more"), one = true;
+        else if (a == "--seed") o.seed = static_cast<unsigned>(number(0, false, "a whole number, 0 or more")), one = true;
         else
             return std::fprintf(stderr, "unknown option %s\n%s", a.c_str(), kUsage), 2;
     }

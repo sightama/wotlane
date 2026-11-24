@@ -21,9 +21,9 @@ shipped. The code stays on branch `sightama/time-sync-frame-stretch` for referen
 ## Why the lead is capped
 
 A leader can only be ahead by the slack the input delay leaves over the path between the players: with delay 4 at 60 Hz (66.7 ms) and
-a 50 ms path (round trips 40 and 60 ms), about 1 frame. Past that it waits. So the lead the server reports never grows past about 1 to
-1.5 frames, and `lead / 30` never gets past 3 to 5% of stretch, while a peer running at 55 fps needs the leader 7.5% slower. The
-proportional stretch stays below the gap, and the waits stay.
+a 50 ms path (round trips 40 and 60 ms), about 1 frame. Past that it waits. So the lead the server reports stays near 1 frame: with the
+slow peer at 55.3 fps, the simulation below reports a mean lead of 0.99 frames (largest 3.4), so `lead / 30` stretches about 3%, while that peer needs the leader 7.8% slower. The proportional stretch stays below the
+gap, and the waits stay.
 
 An integral term (the stretch keeps growing while the lead stays above a target) does reach the gap, but the lead it acts on is noisy
 (input packets arrive in bursts, round trips jitter), so it overshoots: the slow peer starts waiting for the leader, and every wait of

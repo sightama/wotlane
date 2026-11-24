@@ -61,6 +61,14 @@ class DiagWaitsTest(unittest.TestCase):
         self.assertEqual(status, 1)
         self.assertIn('no *-match.log', err)
 
+    def test_bad_options_are_refused_with_the_usage(self):
+        for args, why in ((['--skip'], '--skip needs a value'), (['--min-gfps', 'fast'], '--min-gfps: not a number'),
+                          (['--frobnicate'], 'unknown option --frobnicate')):
+            status, _, err = self.run_tool(*args)
+            self.assertEqual(status, 2, args)
+            self.assertIn(why, err)
+            self.assertIn('Usage:', err)
+
 
 if __name__ == '__main__':
     unittest.main()

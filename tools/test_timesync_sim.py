@@ -39,6 +39,20 @@ class TimesyncSimTest(unittest.TestCase):
         self.assertEqual(r.returncode, 2)
         self.assertIn('--sync: off, p or pi', r.stderr)
 
+    def test_out_of_range_values_are_refused(self):
+        for args in (['--secs', '0'], ['--delay', '-1'], ['--jitter', '-5'], ['--secs', 'abc']):
+            r = subprocess.run(['sh', RUN] + args, capture_output=True, text=True)
+            self.assertEqual(r.returncode, 2, args)
+            self.assertIn(args[0], r.stderr)
+            self.assertIn('usage:', r.stderr)
+
+    def test_one_scenario_prints_the_lead_the_leader_saw(self):
+        out = subprocess.run(['sh', RUN, '--sync', 'p', '--work', '7,17.5', '--secs', '60'], capture_output=True, text=True,
+                             check=True).stdout
+        m = re.search(r'P1 lead mean ([\d.]+) max ([\d.]+)', out)
+        self.assertTrue(m, out)
+        self.assertLess(float(m.group(1)), 1.5)   # the barrier holds the lead near one frame on average
+
 
 if __name__ == '__main__':
     unittest.main()
