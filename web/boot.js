@@ -11,14 +11,21 @@
   const lines = [];
   window.wotmLog = lines;
 
+  let bootStatus = null;
+
+  function tabStorage() {
+    try { return sessionStorage; } catch { return null; }
+  }
+
   function out(text) {
     const line = ((performance.now() - t0) / 1000).toFixed(2) + 's ' + text;
     lines.push(line);
     logEl.textContent += line + '\n';
     // a disc read that failed for good, or a match refused for a setup that differs (log_status.js)
     const status = window.wotmLogStatus(text);
-    if (status)
-      statusEl.textContent = status;
+    const next = bootStatus ? bootStatus.onLog(text, status) : status;
+    if (next)
+      statusEl.textContent = next;
   }
 
   document.getElementById('logToggle').addEventListener('click', () => logEl.classList.toggle('open'));
@@ -44,19 +51,31 @@
   const fixed = { ...env };   // pageEnv() keeps these over anything from the address or an online match
 
   // the text over the game while the disc streams in (data_retry.js reports each chunk from the worker that fetches it)
-  function showLoading(expectedBytes) {
+  function showLoading(expectedBytes, initial) {
     const loadingEl = document.getElementById('loading');
-    const progress = new LoadingProgress(expectedBytes);
+    const progress = new LoadingProgress(expectedBytes, { initial });
     const channel = new BroadcastChannel('wotlane-disc');
-    channel.onmessage = (e) => progress.add(typeof e.data === 'number' ? e.data : e.data?.hit ?? 0, performance.now());   // a cache hit is {hit}
+    channel.onmessage = (e) => {
+      if (typeof e.data === 'number') progress.add(e.data, performance.now());
+      else if (e.data?.hit) progress.addCacheHit(e.data.hit, performance.now());
+    };
+    loadingEl.textContent = progress.text(performance.now());
     loadingEl.hidden = false;
-    const timer = setInterval(() => {
-      const text = progress.text(performance.now());
-      if (text) return void (loadingEl.textContent = text);
+    let finished = false;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      progress.finish();
       loadingEl.hidden = true;
       clearInterval(timer);
       showStreaming(channel);
+    };
+    const timer = setInterval(() => {
+      const text = progress.text(performance.now());
+      if (text) return void (loadingEl.textContent = text);
+      finish();
     }, 250);
+    return finish;
   }
 
   // after boot, a stage or monster not cached yet makes the game wait on its download, on a black screen (issue #112): a small note
@@ -121,17 +140,22 @@
     }, 500);
   }
 
-  // the display's refresh rate, measured while the front panel is idle: above 60 Hz the game draws in-between frames (WOTM_DISPLAY_HZ,
-  // native/runtime/wotm_live.inc). A hidden tab gets no animation frames, so after 2 s the rate is unknown and the game draws at 60
-  const displayRate = Promise.race([
-    wotmMeasureRefresh(60),
-    new Promise((resolve) => setTimeout(() => resolve({ hz: 0, raw: 0 }), 2000)),
-  ]).then((r) => {
-    if (r.hz) {
-      env.WOTM_DISPLAY_HZ = String(r.hz);
-      out(`[web] display ${r.raw.toFixed(1)} Hz, read as ${r.hz}`);
-    }
-  });
+  // the display's refresh rate, measured while the front panel is idle and cached in sessionStorage: above 60 Hz single player draws
+  // in-between frames (WOTM_DISPLAY_HZ, native/runtime/wotm_live.inc). A hidden tab gets no animation frames, so after 2 s the rate is
+  // unknown and the game draws at 60. Online matches disable frame interpolation, so they do not wait for this measurement.
+  const cachedHz = window.wotmReadCachedRefresh?.(tabStorage()) || 0;
+  const displayRate = cachedHz
+    ? (env.WOTM_DISPLAY_HZ = String(cachedHz), out(`[web] display ${cachedHz} Hz (cached)`), Promise.resolve())
+    : Promise.race([
+        wotmMeasureRefresh(60),
+        new Promise((resolve) => setTimeout(() => resolve({ hz: 0, raw: 0 }), 2000)),
+      ]).then((r) => {
+        if (r.hz) {
+          env.WOTM_DISPLAY_HZ = String(r.hz);
+          window.wotmWriteCachedRefresh?.(tabStorage(), r.hz);
+          out(`[web] display ${r.raw.toFixed(1)} Hz, read as ${r.hz}`);
+        }
+      });
 
   // also from the page's load: the game's wasm into the browser's HTTP cache, so that wotm.js's own request is only a revalidation
   // (the server sends it with an ETag and no-cache). The game starts once this is done; a failure only means wotm.js downloads it
@@ -157,34 +181,44 @@
   // loads the game once (front.js calls it for single player, or with a lobby's match environment); `build` is version.json's
   // build id, which the server compares with the lobby's
   let started = false;
-  window.wotmStart = function (matchEnv, build) {
+  window.wotmStart = function (matchEnv, build, { otherNames = [] } = {}) {
     if (started) return;
     started = true;
     wotmInstallGameInput({ win: window, canvas, running: () => started });   // Tab is the game's; the idle mouse cursor hides
     // held for as long as this tab lives: another tab's Settings and Saves see that a game is running (web/gamelock.js)
     navigator.locks?.request('wotlane-game', { mode: 'shared' }, () => new Promise(() => {}));
     Object.assign(env, pageEnv(params, fixed, matchEnv, build));
+    const isOnline = !!(matchEnv || env.WOTM_NET);
+    bootStatus = new BootStatus({ online: isOnline, otherNames });
+    statusEl.textContent = bootStatus.text;
     window.Module = {
       canvas,
       arguments: ['/disc/SCUS_971.97'],
       print: out,
       printErr: out,
-      setStatus: (text) => { statusEl.textContent = text || 'Running'; },
+      setStatus: (text) => {
+        const next = bootStatus.setEmscriptenStatus(text);
+        if (next) statusEl.textContent = next;
+      },
       preRun: [() => Object.assign(window.Module.ENV, env)],
-      onAbort: (what) => { statusEl.textContent = 'Stopped: ' + what; logEl.classList.add('open'); },
+      onAbort: (what) => { statusEl.textContent = bootStatus.onAbort(what); logEl.classList.add('open'); },
       onRuntimeInitialized: tellHidden,
     };
-    showLoading(matchEnv ? 57 << 20 : 27 << 20);   // a first visit's download to a fight, or to the title
+    const finishLoading = showLoading(isOnline ? 57 << 20 : 27 << 20, bootStatus.text);   // a first visit's download to a fight, or to the title
     // a match's stage and monsters: what the lobby has not fetched yet comes down while the game boots (web/match_prefetch.js)
     const match = matchEnv && window.wotmMatchPrefetch?.matchOfEnv(matchEnv.WOTM_MATCH);
-    if (match) {
-      window.wotmMatchPrefetch.warmer.want(match.stage, match.members, 0);
-      // once the fight runs it has read its load: nothing more is fetched next to the match
+    if (match) window.wotmMatchPrefetch.warmer.want(match.stage, match.members, 0);
+    if (isOnline) {
+      // once frame 1 is reached, the fight is on screen: stop match prefetch, clear the loading overlay, and mark Running
       const loaded = setInterval(() => {
-        if (!(window.Module?._wotm_web_net_stat?.(0) > 0)) return;
-        window.wotmMatchPrefetch.warmer.stop();
+        const frame = window.Module?._wotm_web_net_stat?.(0) ?? 0;
+        if (!(frame > 0)) return;
+        const next = bootStatus.onFrame(frame);
+        if (next) statusEl.textContent = next;
+        finishLoading();
+        if (match) window.wotmMatchPrefetch.warmer.stop();
         clearInterval(loaded);
-      }, 500);
+      }, 200);
     }
     document.addEventListener('visibilitychange', tellHidden);
     // a key going down is the input latency probe's press time (wotm_web_input_at, native/wotm_webfs.cpp; pads report theirs in
@@ -193,9 +227,11 @@
       if (!e.repeat) window.Module?._wotm_web_input_at?.(performance.timeOrigin + e.timeStamp);
     }, true);
     window.addEventListener('pagehide', syncSaves);
-    if (matchEnv) watchStalls();
+    if (isOnline) watchStalls();
     // the game reads its mods at start, so the repo's built-in mods are in place first
-    Promise.all([syncMods(), mainThreadFiles(), discWarm, wasmWarm, displayRate]).finally(() => {
+    const ready = [syncMods(), mainThreadFiles(), discWarm, wasmWarm];
+    if (!isOnline) ready.push(displayRate);
+    Promise.all(ready).finally(() => {
       const script = document.createElement('script');
       script.src = 'wotm.js';
       document.body.appendChild(script);

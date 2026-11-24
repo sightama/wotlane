@@ -29,11 +29,41 @@ function measureRefresh(frames = 60) {
   });
 }
 
+const DISPLAY_HZ_KEY = 'wotlane.displayHz';
+
+function validRefreshHz(hz) {
+  return Number.isInteger(hz) && hz >= 30 && hz <= 1000;
+}
+
+// cached display refresh rate for this tab (avoids re-running measureRefresh across reloads)
+function readCachedRefresh(storage) {
+  try {
+    const raw = storage?.getItem(DISPLAY_HZ_KEY);
+    if (!raw || !/^\d+$/.test(raw)) return 0;
+    const hz = Number(raw);
+    return validRefreshHz(hz) ? hz : 0;
+  } catch {
+    return 0;
+  }
+}
+
+function writeCachedRefresh(storage, hz) {
+  if (!validRefreshHz(hz)) return;
+  try { storage?.setItem(DISPLAY_HZ_KEY, String(hz)); } catch { /* storage refused */ }
+}
+
 // a CSS size in device pixels at the page's pixel ratio
 function devicePixels(cssW, cssH, ratio) {
   const r = ratio > 0 ? ratio : 1;
   return { w: Math.round(cssW * r), h: Math.round(cssH * r) };
 }
 
-if (typeof module !== 'undefined' && module.exports) module.exports = { refreshFromTimes, measureRefresh, devicePixels };
-else Object.assign(globalThis, { wotmRefreshFromTimes: refreshFromTimes, wotmMeasureRefresh: measureRefresh, wotmDevicePixels: devicePixels });
+if (typeof module !== 'undefined' && module.exports)
+  module.exports = { refreshFromTimes, measureRefresh, devicePixels, readCachedRefresh, writeCachedRefresh };
+else Object.assign(globalThis, {
+  wotmRefreshFromTimes: refreshFromTimes,
+  wotmMeasureRefresh: measureRefresh,
+  wotmDevicePixels: devicePixels,
+  wotmReadCachedRefresh: readCachedRefresh,
+  wotmWriteCachedRefresh: writeCachedRefresh,
+});

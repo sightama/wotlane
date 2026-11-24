@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
-const { refreshFromTimes, devicePixels } = createRequire(import.meta.url)('./display.js');
+const { refreshFromTimes, devicePixels, readCachedRefresh, writeCachedRefresh } = createRequire(import.meta.url)('./display.js');
 
 const frames = (n, periodMs, start = 1000) => Array.from({ length: n }, (_, i) => start + i * periodMs);
 
@@ -45,4 +45,30 @@ test('the canvas size in device pixels follows the pixel ratio', () => {
 test('a missing or odd pixel ratio counts as 1', () => {
   assert.deepEqual(devicePixels(800, 600, 0), { w: 800, h: 600 });
   assert.deepEqual(devicePixels(800, 600, undefined), { w: 800, h: 600 });
+});
+
+function memStorage({ broken = false } = {}) {
+  const data = new Map();
+  const guard = () => { if (broken) throw new Error('SecurityError'); };
+  return {
+    getItem: (k) => { guard(); return data.has(k) ? data.get(k) : null; },
+    setItem: (k, v) => { guard(); data.set(k, String(v)); },
+  };
+}
+
+test('cached refresh rate round-trips valid integer rates and ignores invalid or broken storage', () => {
+  const s = memStorage();
+  assert.equal(readCachedRefresh(s), 0);
+  writeCachedRefresh(s, 120);
+  assert.equal(readCachedRefresh(s), 120);
+  writeCachedRefresh(s, 0);
+  assert.equal(readCachedRefresh(s), 120, 'invalid hz does not overwrite a cached value');
+  for (const bad of ['0', '15', '2000', 'abc', '60.5', '']) {
+    const t = memStorage();
+    t.setItem('wotlane.displayHz', bad);
+    assert.equal(readCachedRefresh(t), 0, `rejects ${JSON.stringify(bad)}`);
+  }
+  const b = memStorage({ broken: true });
+  assert.doesNotThrow(() => writeCachedRefresh(b, 60));
+  assert.equal(readCachedRefresh(b), 0);
 });

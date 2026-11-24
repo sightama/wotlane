@@ -25,9 +25,10 @@ const $ = (id) => document.getElementById(id);
 const front = $('front');
 
 // The panel covers the game stage until a game starts; the stage (status bar buttons, canvas) is inert meanwhile, so Tab starts in the panel
-function leaveFront() {
+function leaveFront(status) {
   front.hidden = true;
   $('stage').inert = false;
+  if (status) $('status').textContent = status;
 }
 const say = (text) => { $('frontMsg').textContent = text; };
 
@@ -290,10 +291,12 @@ async function connect(build) {
   client.onClose = () => { if (!front.hidden) say('Lost the connection to the game server. Reload the page to try again.'); };
   client.onMatch = async (match) => {
     try { sessionStorage.setItem('wotlane.lobby', client.code); } catch { /* private window: not kept */ }
-    leaveFront();
+    leaveFront('Starting match...');
     await settingsSaved();   // a change made a moment ago is in the file before the game reads it
     startDiag(client, ws, match, build);
-    window.wotmStart({ ...matchEnv(match, serverUrl('/match')), ...(await lightDrawing()) }, build);
+    const you = Number(match.you);
+    const otherNames = (match.names ?? '').split(',').filter((n, i) => n && i !== you);
+    window.wotmStart({ ...matchEnv(match, serverUrl('/match')), ...(await lightDrawing()) }, build, { otherNames });
   };
   await client.ready;
   return client;
@@ -581,7 +584,7 @@ function init() {
   initSettings({ remember, recall });
   initReport({ send: sendReport }).available(!!lastDiag());   // after a match the page has reloaded: its numbers are what the report holds
   if (window.wotmDirect) {
-    leaveFront();
+    leaveFront('Starting...');
     buildId().then((b) => window.wotmStart(null, b));
     return;
   }
@@ -614,7 +617,7 @@ function init() {
   $('single').addEventListener('click', async () => {
     clearRejoin(tabStorage());   // leaving the online flow: do not auto-rejoin an old lobby after Single player
     stopWatchingLobbies();
-    leaveFront();
+    leaveFront('Starting...');
     await settingsSaved();
     // the boot movies play over the game while it loads (not awaited); in a match they never play
     playStartupMovies({ mode: recall('movies', 'skippable'), overlay: $('movie'), video: $('movieVideo'), hint: $('movieHint'), log: (t) => window.wotmLog?.push(t) });
