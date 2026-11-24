@@ -1,13 +1,13 @@
 #!/bin/sh
 # ABOUTME: Checks that the native VU0 microprograms give bit-identical results in this machine's native build and in the wasm build,
-# ABOUTME: on edge cases and on calls recorded in a fight; with --time (and --ref) it also times them.
+# ABOUTME: on calls recorded in a fight; with --time (and --ref) it also times them.
 # Checks that the native VU0 microprograms (tools/vu0native.py -> wotm_vu0_native.gen.inc) give bit-identical results in the native
 # build of this machine (macOS/Linux) and in the WebAssembly build: every PC in a match must compute the same thing. Use it after
 # changing wotm_vu0_native.cpp or vu0native.py, and on any new compiler or CPU (arm64 goes through sse2neon). It plays an AI-vs-AI
 # fight in the ps2EntryRunner test build with PS2X_DUMP_VU0=1 (the interpreter records up to 60 samples per microprogram once 300k
 # calls have run), replays every sample through the native code with tools/vu0bench.cpp, native then wasm (under node), compares the
 # two, and deletes the dumps (they contain game state). How many results differ from the interpreter (round toward zero, the PS2's) is
-# printed for information. First it runs the arithmetic's edge cases (tools/vu0edges.cpp) in both builds. With --time it also times
+# printed for information (the arithmetic's edge cases are unit tests: native/tests/wotm_vu0_test.cpp). With --time it also times
 # the native code on those samples, and with --ref the same code from another commit (e.g. before a change to wotm_vu0_native.cpp),
 # on the same samples.
 set -eu
@@ -80,15 +80,7 @@ build_bench() {
     run_logged "$log" "$cc" "$@" -I"$src" -I"$src/runtime" -I"$REPO/native" -I"$REPO/native/runtime" \
         -I"$rt/PS2Recomp/ps2xRuntime/include" -I"$gen" "$REPO/tools/vu0bench.cpp" "$src/runtime/wotm_vu0_native.cpp" -o "$out"
 }
-# build_edges <compiler> <log> <output> [flags]: tools/vu0edges.cpp, the arithmetic's edge cases, with the same flags
-build_edges() {
-    cc=$1 log=$2 out=$3
-    shift 3
-    run_logged "$log" "$cc" "$@" -I"$REPO/native" -I"$REPO/native/runtime" -I"$rt/PS2Recomp/ps2xRuntime/include" \
-        "$REPO/tools/vu0edges.cpp" -o "$out"
-}
 build_bench c++ "$rt/logs/vu0bench_build.log" "$REPO/native" "$bench" "$@"
-build_edges c++ "$rt/logs/vu0edges_build.log" "$bench.edges" "$@"
 [ -z "$ref" ] || build_bench c++ "$rt/logs/vu0bench_ref_build.log" "$refsrc" "$bench.ref" "$@"
 step 'build vu0bench (wasm)'
 use_emsdk "${EMSDK:-$HOME/emsdk}" || fail "no Emscripten (set EMSDK)"
@@ -97,11 +89,6 @@ need em++ node
 set -- -std=c++20 -O2 -ffp-contract=off -fno-fast-math -msimd128 -msse4.1 -sNODERAWFS=1 -sEXIT_RUNTIME=1 -sALLOW_MEMORY_GROWTH=1
 build_bench em++ "$rt/logs/vu0bench_wasm_build.log" "$REPO/native" "$bench.js" "$@"
 [ -z "$ref" ] || build_bench em++ "$rt/logs/vu0bench_ref_wasm_build.log" "$refsrc" "$bench.ref.js" "$@"
-build_edges em++ "$rt/logs/vu0edges_wasm_build.log" "$bench.edges.js" "$@"
-
-step 'edge cases (native, then wasm)'
-"$bench.edges" || fail "the native VU0 arithmetic fails an edge case"
-node "$bench.edges.js" || fail "the wasm VU0 arithmetic fails an edge case"
 
 step "record samples (${secs}s AI fight in ps2EntryRunner)"
 disc=$rt/discroot

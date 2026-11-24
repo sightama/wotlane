@@ -131,7 +131,7 @@ and its four `rtz_*` unit tests are removed (Lane's call: nothing uses them; git
 - **Same bits everywhere:** `sh tools/vu0bench.sh` now replays the recorded calls through the native and the wasm build and fails
   when they differ. On 840 recorded calls (M1 Max): 0 differ; 755 differ from the PS2 interpreter (686 on another recording), which
   is the rounding. On that second recording the round-toward-zero build checked against the new results also gives 686 (it equals
-  the interpreter), so the check sees a change. `tools/vu0edges.cpp` (run by `vu0bench.sh` in both builds) covers what recordings
+  the interpreter), so the check sees a change. `native/tests/wotm_vu0_test.cpp` (unit tests, run by CI on Linux, Windows and wasm) covers what recordings
   rarely reach: a madd whose float product or sum rounds past the largest float saturates instead of leaving an infinity.
 - **Per VU0 call** (`vu0bench --time 50 --ref origin/wip/browser`, 3 alternating rounds): native 186/235/217 -> 180/148/205 ns
   (noise), wasm under node 516/505/515 -> 393/330/337 ns (-24 to -35%).
