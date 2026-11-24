@@ -441,3 +441,9 @@ test('LobbyClient rejoin sends REJOIN and resolves with the code once the member
   ws.reply("ERROR can't rejoin (that place is gone or was already used); join again with the code");
   await assert.rejects(refused, /can't rejoin/);
 });
+
+test('LobbyClient request rejects immediately once the socket has closed instead of hanging', async () => {
+  const { ws, client } = await connected();
+  ws.onclose();
+  await assert.rejects(client.rejoin('QZXW', 'aa'.repeat(16)), /lost the connection/);
+});

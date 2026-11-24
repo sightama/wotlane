@@ -2,7 +2,7 @@
 // ABOUTME: given back only while the server would still hold the place, and cleared on leaving. Run: node --test web/
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { storeRejoin, takeRejoin, peekRejoin, clearRejoin, leavingPage, isInMatchError, retryRejoin, LINGER_MS } from './rematch.js';
+import { storeRejoin, takeRejoin, peekRejoin, clearRejoin, leavingPage, isInMatchError, isRejoinTokenError, retryRejoin, LINGER_MS } from './rematch.js';
 
 function storage({ broken = false } = {}) {
   const data = new Map();
@@ -83,6 +83,13 @@ test('isInMatchError matches only the transient match-still-ending refusal', () 
   assert.equal(isInMatchError("can't rejoin (that place is gone or was already used); join again with the code"), false);
   assert.equal(isInMatchError('the lobby is gone; host or join a new one'), false);
   assert.equal(isInMatchError(null), false);
+});
+
+test('isRejoinTokenError matches only expired/used/kicked token refusals', () => {
+  assert.equal(isRejoinTokenError("can't rejoin (that place is gone or was already used); join again with the code"), true);
+  assert.equal(isRejoinTokenError('lobby is in a match; wait for it to end'), false);
+  assert.equal(isRejoinTokenError('lost the connection to the game server'), false);
+  assert.equal(isRejoinTokenError(null), false);
 });
 
 test('retryRejoin retries while the match is finishing and succeeds once it ends', async () => {

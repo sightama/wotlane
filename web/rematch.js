@@ -46,6 +46,10 @@ export function isInMatchError(message) {
   return typeof message === 'string' && /lobby is in a match/i.test(message);
 }
 
+export function isRejoinTokenError(message) {
+  return typeof message === 'string' && /can't rejoin/i.test(message);
+}
+
 // retries REJOIN while peers' match sockets are still closing; stops immediately on terminal errors or after waitMs
 export async function retryRejoin(attempt, {
   waitMs = REJOIN_WAIT_MS,
