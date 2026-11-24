@@ -8,8 +8,10 @@
 // A program only runs if the hash of its bytes in VU0 code memory matches the generator's.
 #include "wotm_vu0_native.h"
 
+#include <cfenv>
 #include <cfloat>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #if defined(USE_SSE2NEON)   // ARM: PS2Recomp's CMake fetches sse2neon and defines this
@@ -132,8 +134,7 @@ namespace
     };
 
     // D4: the exact value of the 4 lanes in double. x86 uses one AVX register. ARM has no AVX, so it uses two NEON pairs (x,y | z,w)
-    // with the same IEEE semantics: both round to nearest, and the ordered comparisons are false
-    // on NaN, like _CMP_*_OQ.
+    // with the same IEEE semantics: both round to nearest, and the ordered comparisons are false on NaN, like _CMP_*_OQ.
 #if defined(USE_SSE2NEON)
     struct D4
     {
@@ -341,6 +342,28 @@ namespace
     }
 }
 
+namespace
+{
+    // The microprograms need the thread's floating point as WebAssembly always has it: round to nearest, subnormals kept (no
+    // flush to zero, no denormals-are-zero). Nothing in the runtime changes that; if something on the thread did, this sets it back
+    // and says so, since a PC that rounds otherwise desyncs from the others without any other sign
+    void ensureIeeeDefaults()
+    {
+        volatile float one = 1.0f, step = 0x1.8p-24f, tiny = FLT_MIN, sub = 0x1p-140f;
+        const bool nearest = one + step == 0x1.000002p+0f;
+        const bool subnormals = tiny * 0.5f != 0.0f && sub * 2.0f != 0.0f;
+        if (nearest && subnormals)
+            return;
+        std::fprintf(stderr, "[vu0] this thread's floating point %s%s%s: set back to round to nearest with subnormals\n",
+                     nearest ? "" : "does not round to nearest", nearest || subnormals ? "" : " and ", subnormals ? "" : "flushes subnormals");
+        std::fesetround(FE_TONEAREST);
+#if !defined(__EMSCRIPTEN__)
+        _MM_SET_FLUSH_ZERO_MODE(_MM_FLUSH_ZERO_OFF);
+        _MM_SET_DENORMALS_ZERO_MODE(_MM_DENORMALS_ZERO_OFF);
+#endif
+    }
+}
+
 WotmVu0Fn wotmVu0NativeLookup(const uint8_t *vu0Code, uint32_t codeSize, uint64_t generation, uint32_t pc)
 {
     static WotmVu0Fn s_byPc[512];
@@ -351,6 +374,7 @@ WotmVu0Fn wotmVu0NativeLookup(const uint8_t *vu0Code, uint32_t codeSize, uint64_
     if (generation != s_generation)
     {
         s_generation = generation;
+        ensureIeeeDefaults();   // once per code generation, not per call
         std::memset(s_byPc, 0, sizeof(s_byPc));
         for (size_t k = 0; k < kProgramCount; ++k)
         {

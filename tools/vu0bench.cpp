@@ -175,15 +175,18 @@ int main(int argc, char **argv)
     }
     std::printf("total: %ld samples, %ld without a native program, %ld differ from the interpreter (it rounds toward zero, like the PS2)",
                 n, noNative, offInterp);
+    bool differs = false;
     if (expect)
     {
         uint32_t extra;
         const bool longer = std::fread(&extra, 4, 1, expect) == 1;
         std::printf(", %ld differ from the expected build%s%s", offExpected, missing ? " (its file ended early)" : "",
                     longer ? " (its file has more samples)" : "");
-        std::printf("\n");
-        return offExpected || missing || longer ? 1 : 0;
+        differs = offExpected || missing || longer;
     }
     std::printf("\n");
-    return 0;
+    const bool empty = n == noNative;
+    if (empty)
+        std::printf("error: no sample ran through a native program, so nothing was checked\n");
+    return differs || empty ? 1 : 0;
 }
