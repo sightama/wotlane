@@ -461,12 +461,14 @@ namespace wotm_net::proto
     }
 
     // The delay to advise a player whose delay is `current` during the match: it rises as soon as the path for the rise levels needs
-    // another frame, and falls only when the path for the fall levels (RttWindow) leaves half a frame to spare at the lower delay, so
-    // neither a ping sitting on a frame boundary nor spikes that keep coming move it back and forth
+    // another frame, and falls once the path for the fall levels (RttWindow) leaves kDelayFallMarginFrames to spare at the lower delay,
+    // so neither a ping sitting on a frame boundary nor spikes that keep coming move it back and forth
+    constexpr double kDelayFallMarginFrames = 0.2;
     inline uint32_t adviseDelay(uint32_t current, const std::vector<uint32_t> &riseMs, const std::vector<uint32_t> &fallMs, size_t player,
                                 double frameMs)
     {
-        const uint32_t up = framesFor(pathFrames(riseMs, player, frameMs)), down = framesFor(pathFrames(fallMs, player, frameMs) + 0.5);
+        const uint32_t up = framesFor(pathFrames(riseMs, player, frameMs)),
+                       down = framesFor(pathFrames(fallMs, player, frameMs) + kDelayFallMarginFrames);
         return up >= current ? up : std::min(current, down);
     }
     inline uint32_t adviseDelay(uint32_t current, const std::vector<uint32_t> &rttMs, size_t player, double frameMs)
