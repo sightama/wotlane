@@ -118,7 +118,7 @@ Gain: no 2.6 to 4.8 s freeze at the start. Cost: small to medium. Risk: low.
 Gain: fewer visible hitches when one PC runs ahead (GGRS frame advantage: the leader slows its frame by up to ~10% instead of stopping). Cost: medium. Risk: low (pacing only, no state).
 
 - [x] With task 3's grid: the server already knows `behind` per player; each client stretches its period by `min(10%, advantage/30 frames)`. Measure `waits` and `wait_ms` per window.
-- Status: not shipped (Lane, 2026-11-24). The lockstep barrier keeps the leader's lead near 1 frame, so the stretch stays under a slower peer's rate gap and the waits stay; a PI variant slows the match. `docs/investigacoes/2026-11-24/time-sync/README.md`; code on branch `sightama/time-sync-frame-stretch`.
+- Status: closed, not shipped (Lane, 2026-11-24). The lockstep barrier keeps the leader's lead near 1 frame, so the stretch stays under a slower peer's rate gap and the waits stay; a PI variant slows the match. `docs/investigacoes/2026-11-24/time-sync/README.md`; code on branch `sightama/time-sync-frame-stretch`.
 
 ### Task 9: Rollback go/no-go (synctest), then hybrid if GO
 

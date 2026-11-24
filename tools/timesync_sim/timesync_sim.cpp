@@ -271,7 +271,7 @@ int main(int argc, char **argv)
         auto pair = [&](double *out) {
             const char *v = value();
             char tail = 0;
-            if (std::sscanf(v, "%lf,%lf%c", &out[0], &out[1], &tail) != 2 || out[0] < 0 || out[1] < 0 || out[0] > 10000 || out[1] > 10000)
+            if (std::sscanf(v, "%lf,%lf%c", &out[0], &out[1], &tail) != 2 || !(out[0] >= 0 && out[0] <= 10000 && out[1] >= 0 && out[1] <= 10000))
                 refuse(v, "A,B, two numbers from 0 to 10000");
         };
         if (a == "-h" || a == "--help")
@@ -283,7 +283,7 @@ int main(int argc, char **argv)
             const std::string v = value();
             o.sync = v == "p" ? Sync::Proportional : v == "pi" ? Sync::PI : Sync::Off;
             if (v != "p" && v != "pi" && v != "off")
-                return std::fprintf(stderr, "--sync: off, p or pi\n"), 2;
+                return std::fprintf(stderr, "--sync: off, p or pi\n%s", kUsage), 2;
             one = true;
         }
         else if (a == "--secs") o.secs = number(1, 3600, "a number of seconds from 1 to 3600"), one = true;

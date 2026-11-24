@@ -3,7 +3,7 @@
 """Usage: python3 tools/diag_waits.py [--skip N] [--min-gfps F] [--windows] <run dir or match.log> [...]
 
 For each run and each player, over the steady windows (the page's 5 s diag windows from seq N+1 on, default N=2, whose game rate is
-at least --min-gfps, default 75% of the match rate): windows used, median and mean waits per window, wait share of the time, median gfps and fps, mean
+at least --min-gfps, default 75% of the window's hz, the match rate): windows used, median and mean waits per window, wait share of the time, median gfps and fps, mean
 ee_busy_ms, the fr_len buckets summed, raf_p95_ms median, lat_ms median, and the server's behind_avg mean for that player.
 --windows also prints every window's line. Exit status 1 when no match.log is found or one can't be read, 2 on a bad option."""
 import glob

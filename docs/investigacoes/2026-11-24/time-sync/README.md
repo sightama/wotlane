@@ -1,9 +1,10 @@
 # Time sync (frame-advantage stretch): not shipped
 
 Question: the page diagnostics of live match `H24X` (2026-11-23, Chrome with Firefox, 55-58 game frames per second in its steady
-windows) showed 56 to 73 lockstep waits per 5 s on Chrome (13-17% of the time blocked) and 30 to 43 on Firefox, which suggested Task 8
-of `docs/superpowers/plans/2026-11-17-online-seamless.md`: the server tells each player how many frames it leads the slowest one, and
-a leading client stretches its frames by `min(10%, lead / 30 frames)` instead of hitting `netWaitFrame`.
+windows) showed 56 to 73 lockstep waits per 5 s on Chrome (13-17% of the time blocked) and 30 to 43 on Firefox (finding 4 of
+`docs/investigacoes/2026-11-23/online-experience.md`). That suggested Task 8 of `docs/superpowers/plans/2026-11-17-online-seamless.md`:
+the server tells each player how many frames it leads the slowest one, and a leading client stretches its frames by
+`min(10%, lead / 30 frames)` instead of hitting `netWaitFrame`.
 
 Answer: it does not remove the waits, and the variant that does cut some of them slows the match. Decision (Lane, 2026-11-24): not
 shipped. The code stays on branch `sightama/time-sync-frame-stretch` for reference (server `proto::Ahead` at 10 Hz,
@@ -66,7 +67,7 @@ round trip, so its lead is noisier than here. Means of 5 seeds:
 
 The rate-gap rows match the live pattern (a fast leader waiting 45 to 115 times per 5 s while the match runs at 53-58 fps). The
 proportional stretch changes almost nothing; PI cuts the leader's waits but costs 0.1 to 1.1 gfps (slow motion for everyone) and turns
-the slow peer into a waiter; with jitter both make it worse. The PI target sets the trade, and the gain barely matters
+the slow peer into a waiter; with jitter both make it worse. The PI target sets the trade, and the gain matters much less
 (`--sync pi --work 7,17.5 --pi-target T --pi-gain G`, leader waits per 5 s and gfps against 87.1 at 55.3 with no time sync):
 
 | target | gain 0.02 | gain 0.05 | gain 0.15 |
@@ -75,7 +76,8 @@ the slow peer into a waiter; with jitter both make it worse. The PI target sets 
 | 0.75 | 52.4, 55.2 | 49.3, 55.1 | 52.4, 55.1 |
 | 1 | 77.9, 55.3 | 77.0, 55.3 | 72.6, 55.2 |
 
-Only a target of 1 frame keeps the match at full speed, and there it removes 11 to 17% of the waits.
+A target of 0.75 frames costs 0.1 to 0.2 gfps for about 40% fewer leader waits; a target of 1 keeps full speed and removes 11 to
+17% of them.
 
 ## Real browsers
 
