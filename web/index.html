@@ -39,7 +39,7 @@ window.addEventListener('error', (e) => {
   const t = e.target;
   const url = t === window ? e.filename : t.tagName === 'SCRIPT' ? t.src : '';
   const m = pending();
-  if (m && modules.includes(url)) { m.textContent = 'The page could not load. Reload it; if it keeps happening, try Chrome, Firefox or Edge.'; m.className = 'problem'; }
+  if (m && url && modules.includes(url)) { m.textContent = 'The page could not load. Reload it; if it keeps happening, try Chrome, Firefox or Edge.'; m.className = 'problem'; }
 }, true);
 setTimeout(() => { const m = pending(); if (m && !m.classList.contains('problem')) m.textContent = 'Still loading. If this stays, reload the page.'; }, 6000);
 })();

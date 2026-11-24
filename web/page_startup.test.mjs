@@ -127,7 +127,7 @@ test('the touch layout panel scrolls inside the screen instead of running past i
   assert.match(panel, /overflow-y:\s*auto/);
 });
 
-// ---- follow-ups from a fresh review of the first round
+// ---- failed loads, a second connection, the lobbies list after Leave, Refresh
 
 test('a page whose modules fail to load says so instead of staying on Loading', () => {
   // only the module graph stops front.js from running: its scripts and the modules the head preloads decide, not any error on the page
