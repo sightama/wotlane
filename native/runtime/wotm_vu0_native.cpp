@@ -265,8 +265,8 @@ namespace
     WOTM_VU0_FI __m128 MUL4(__m128 a, __m128 b, Fm &f) { return fin4<D>(_mm_mul_ps(a, b), dMul(W(a), W(b)), f); }
 
     // an infinity becomes the largest float of its sign (the VU has no infinity). Rounding to nearest can carry a madd's float
-    // product past the largest float while the exact value fin4 classifies stays below it (a sum that rounds past it is past it
-    // exactly too, so fin4 flags it as an overflow and saturates it)
+    // product, or its sum, past the largest float while the exact value fin4 classifies stays at or below it (a product that ties up
+    // can make the float sum tie up to infinity while the exact sum is the largest float)
     WOTM_VU0_FI __m128 saturate(__m128 v)
     {
         const __m128i b = _mm_castps_si128(v);
@@ -280,7 +280,7 @@ namespace
     {
         const D4 p = dMul(W(a), W(b));
         const __m128 pf = saturate(_mm_mul_ps(a, b));
-        const __m128 r = sub ? _mm_sub_ps(c, pf) : _mm_add_ps(c, pf);
+        const __m128 r = saturate(sub ? _mm_sub_ps(c, pf) : _mm_add_ps(c, pf));
         const D4 e = sub ? dSub(W(c), p) : dAdd(W(c), p);
         f.ext |= flagsOf(classify4<D>(p));
         return fin4<D>(r, e, f);

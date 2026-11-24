@@ -6,10 +6,6 @@
 #include <string>
 #if defined(_WIN32)
 #include <io.h>
-#define dup _dup
-#define dup2 _dup2
-#define close _close
-#define fileno _fileno
 #else
 #include <unistd.h>
 #endif
@@ -35,6 +31,19 @@ namespace
     }
 
 #if !defined(__EMSCRIPTEN__)
+    // the C runtime's descriptor calls, by their Windows or POSIX names
+#if defined(_WIN32)
+    int fdOf(FILE *f) { return _fileno(f); }
+    int fdDup(int fd) { return _dup(fd); }
+    int fdDup2(int from, int to) { return _dup2(from, to); }
+    void fdClose(int fd) { _close(fd); }
+#else
+    int fdOf(FILE *f) { return fileno(f); }
+    int fdDup(int fd) { return dup(fd); }
+    int fdDup2(int from, int to) { return dup2(from, to); }
+    void fdClose(int fd) { close(fd); }
+#endif
+
     // what `f` writes to stderr (the guard's [vu0] lines), captured in a file next to the test instead of shown
     template <class F> std::string stderrOf(F f)
     {
@@ -42,13 +51,20 @@ namespace
         std::fflush(stderr);
         FILE *file = std::fopen(path, "w+");
         if (!file)
-            return "(stderr not captured)";
-        const int saved = dup(fileno(stderr));
-        dup2(fileno(file), fileno(stderr));
+            return "(stderr not captured: can't create the file in the current folder)";
+        const int saved = fdDup(fdOf(stderr));
+        if (saved < 0 || fdDup2(fdOf(file), fdOf(stderr)) < 0)
+        {
+            if (saved >= 0)
+                fdClose(saved);
+            std::fclose(file);
+            std::remove(path);
+            return "(stderr not captured: dup failed)";
+        }
         f();
         std::fflush(stderr);
-        dup2(saved, fileno(stderr));
-        close(saved);
+        fdDup2(saved, fdOf(stderr));
+        fdClose(saved);
         std::string text;
         std::rewind(file);
         for (int c; (c = std::fgetc(file)) != EOF;)
@@ -104,8 +120,12 @@ int main()
     bad += check(-FLT_MAX, FLT_MAX, 2.0f, false, 0.0f, "product past the largest float, accumulator of the other sign");
     bad += check(FLT_MAX, -FLT_MAX, 2.0f, false, 0.0f, "negative product past the largest float");
     bad += check(FLT_MAX, FLT_MAX, 2.0f, true, 0.0f, "msub: product past the largest float");
-    // a sum rounding past the largest float: its exact value is past it too, so it is flagged as an overflow and saturated
+    // a sum rounding past the largest float: saturated too. Its exact value is usually past it as well (flagged as an overflow), but
+    // not always: here a*b = 16777227 * 2^103 ties up to an even float, so the float sum ties up to infinity while the exact sum
+    // c + a*b is exactly the largest float (no overflow flag)
     bad += check(FLT_MAX, 0x1p103f, 1.0f, false, FLT_MAX, "sum alone rounds up past the largest float (half an ulp, a tie)");
+    bad += check(std::ldexp(16777203.0f, 103), 3.0f * 0x1p50f, std::ldexp(5592409.0f, 53), false, FLT_MAX,
+                 "product ties up, then the sum ties up past the largest float while the exact sum is the largest float");
     bad += check(FLT_MAX, std::nextafter(FLT_MAX, 0.f), 1.0f + 0x1p-23f, false, FLT_MAX, "product and sum past the largest float");
     bad += check(-FLT_MAX, std::nextafter(FLT_MAX, 0.f), 1.0f + 0x1p-23f, true, -FLT_MAX, "msub: product and sum past -largest");
 #if !defined(__EMSCRIPTEN__)
