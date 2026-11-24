@@ -127,7 +127,7 @@ Checked on 2026-11-19 with the rules in `CLAUDE.md` ("Before taking a task").
 4. Jake is told what upstream has (#10 already says so) and is asked for his preference between the options in the #10 comment
    of 2026-11-18; this roadmap recommends option 2 below.
 
-**Proposed approach to upstream** (Lane's call; draft in "Draft note to Yan"): stop treating the 377-commit gap as one merge. Take it
+**Proposed approach to upstream** (Lane's call, approved; see "Decisions for Lane", decision 2): stop treating the 377-commit gap as one merge. Take it
 by slices, tools first, with a determinism check on every native slice, and open one upstream issue about the `stages/<id>/stage.json`
 name collision before either side ships more.
 
@@ -371,9 +371,9 @@ Deliverables: one script `tools/creation_new.py <kind> <id>` that scaffolds a fo
 with a way to see the full one (the validator CI runs on every shipped creation); and one agent-facing guide,
 `docs/passos/CREATOR_GUIDE.md`, with the table above as copy-paste recipes. About 500 lines of Python, 2 PRs.
 
-### Draft note to Yan (for Lane to send or discard)
+### Draft note to Yan (kept for reference; Lane has since talked to Yan, see decision 2)
 
-> Hi Yan, we run a fork of War_of_the_Monsters_recomp that plays in the browser (WebAssembly, online lobbies, playwotm.com) and is
+> Hi Yan, we run a fork of War_of_the_Monsters_recomp that plays in the browser (WebAssembly, online lobbies) and is
 > English only. We would like to take your level editor and monster pipeline as the base for our players' creations. Two things to
 > agree on first: we both use `mods/<mod>/stages/<id>/stage.json` for a map with different schemas; could yours carry a `format` key
 > (or move to `custom_stages`) so both tools can tell them apart? And we would like to send the pieces that help you back: a patch
@@ -488,23 +488,39 @@ PR count if everything ships: about 47 PRs (the digest by use is counted once, i
 ## Decisions for Lane
 
 Only these need a yes; everything else above is the author's call and can be overridden in review.
+
+**Status: Lane approved all six as recommended on 2026-11-23.** Each item below ends with what that approval means in practice.
 1. **Backward compatibility of existing `stage.json` and skin folders.** `CLAUDE.md` requires explicit approval for it. Default
    recommendation: yes for one release, as a one way converter at load, because Jake's and Lane's test maps would otherwise
    break; remove it after the next deploy.
+   **Approved as recommended.** Existing `stage.json` and skin folders keep loading through a one way converter at load for one
+   release. This covers only that converter; no `stage.json` format change starts before Jake answers on #10.
 2. **Contacting Yan** with the draft above, or leaving upstream alone and importing quietly. Recommendation: contact, because the
    schema collision exists either way.
+   **Approved as recommended: contact Yan.** Lane has since talked to Yan on Discord; the outcome is the next paragraph.
+   **Yan's reply (Discord, relayed by Lane).** Pull requests upstream are welcome. Yan is focusing on characters, so custom levels
+   are "unattended for a while" and we are free to work on them. He agrees on a **single map file format**: we may drive the
+   `stage.json` format, based on Yan's schema and coordinated with Jake on #10, and plan PRs upstream for the shared tools.
+   **Constraint on every upstream PR, issue and comment: no mention of and no link to playwotm.com**, at Yan's request.
+   Upstream-facing text describes the tools only (they read the user's own disc), and the draft note above no longer names the
+   site.
+   **Lane's instruction for slice B0:** no `stage.json` format change starts before Jake answers on #10.
 3. **A hosted gallery** stays out of phases 1 to 3 (B-decision 5); and whether anything derived from disc art may be shared at all
    by lobby transfer: PNG skins, but also `.NGP`, `.PTR`, `.TEX`, `.RTX`, `.BNK` and WAV files made from disc data, which tier 3
    would relay. Rule 1 forbids game bytes in the repo; the site's own position on derived art is Lane's call. Recommendation:
    recipes and original art travel freely; derived files travel only between lobby members, only with consent, and are never
    published or stored by us. The tooling imported from upstream (B0) brings no `mods/` content.
+   **Approved as recommended:** no hosted gallery in phases 1 to 3, and the travel rule above.
 4. **`TODO.md` item 8** (mods that add monsters) rewritten from "write the `.NGP` writer" to "adopt upstream's pipeline". Lane edits
    the list; this document only recommends it.
+   **Approved as recommended.** The `TODO.md` rewrite itself is still Lane's edit to make.
 5. **Versioned builds on the VM and 10 retained builds** (about 40 MB brotli on disk, more raw), with the simulation id of C3.
    Recommendation: yes.
+   **Approved as recommended.** Server and deploy work for the deploy owner; tracked in #187.
 6. **Backward compatibility of the wire** (C3): retained builds talking to a newer `wotm_server` means every wire change is
    additive and negotiated by version. `CLAUDE.md` makes that a decision for Lane. Recommendation: yes, additive only, and the
    protocol number moves only when a message's format changes.
+   **Approved as recommended.** Server and deploy work for the deploy owner; tracked in #188.
 
 ## Review focus
 

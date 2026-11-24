@@ -440,7 +440,10 @@ namespace wotm_net
             return void(c.link->sendLine(kBadPick));
         if (li < 0)
             return void(c.link->sendLine("ERROR no such lobby (check the code)"));
+        finishMatchIfEveryoneGone(li);
         Lobby &l = lobbies_[static_cast<size_t>(li)];
+        if (!l.open)
+            return void(c.link->sendLine("ERROR no such lobby (check the code)"));
         if (c.lobby == li)
             return void(c.link->sendLine("ERROR you are already in this lobby"));
         if (name.empty())
@@ -489,7 +492,10 @@ namespace wotm_net
             return void(c.link->sendLine("ERROR the lobby is gone; host or join a new one"));
         if (c.lobby == li)
             return void(c.link->sendLine("ERROR you are already in this lobby"));
+        finishMatchIfEveryoneGone(li);
         Lobby &l = lobbies_[static_cast<size_t>(li)];
+        if (!l.open)
+            return void(c.link->sendLine("ERROR the lobby is gone; host or join a new one"));
         const std::string &token = w[2];
         // the place's old connection may still be open (a phone that switched networks reloads before the server sees the drop): it
         // gives the place up, as a ghost, and this connection takes it
@@ -1440,6 +1446,22 @@ namespace wotm_net
         checkHashes(m);
     }
 
+    bool Server::finishMatchIfEveryoneGone(int li)
+    {
+        Lobby &l = lobbies_[static_cast<size_t>(li)];
+        if (!l.match)
+            return false;
+        for (const Slot &s : l.match->slots)
+            if (!s.gone)
+                return false;
+        log("lobby %s: match over; lobby waiting again with %zu member(s)", l.code.c_str(), l.members.size());
+        diagEvent(l, "event=match_over members=" + std::to_string(l.members.size()));
+        l.match.reset();
+        if (!closeIfEmpty(li))
+            sendMembers(li);   // tells the members (each one's launcher) the lobby is waiting again
+        return true;
+    }
+
     void Server::tickMatches()
     {
         const Clock::time_point now = Clock::now();
@@ -1535,18 +1557,7 @@ namespace wotm_net
                 if (oldest != 0xFFFFFFFFu)
                     m->inputs.discardBefore(oldest);
             }
-            bool everyoneGone = true;
-            for (const Slot &s : m->slots)
-                everyoneGone = everyoneGone && s.gone;
-            if (everyoneGone)
-            {
-                const int li = m->lobby;
-                log("lobby %s: match over; lobby waiting again with %zu member(s)", l.code.c_str(), l.members.size());
-                diagEvent(l, "event=match_over members=" + std::to_string(l.members.size()));
-                l.match.reset();
-                if (!closeIfEmpty(li))
-                    sendMembers(li);   // tells the members (each one's launcher) the lobby is waiting again
-            }
+            finishMatchIfEveryoneGone(m->lobby);
         }
     }
 

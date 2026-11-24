@@ -1,5 +1,6 @@
 // ABOUTME: The browser version's front panel: single player, or an online lobby on the game server (Host shows a 4-letter code,
 // ABOUTME: Join takes one). When the owner starts, every member's game loads with the match environment (boot.js wotmStart).
+import { isSubmitEnter } from './enter_key.js';
 import { LobbyClient, halfRateDevice, inviteLink, lastLobbyNotice, lobbyRow, lobbySocketUrl, matchEnv } from './lobby.js';
 import { initCreations, addLobbyChoices } from './creations_ui.js';
 import { initSettings } from './settings_ui.js';
@@ -11,7 +12,7 @@ import { RateMemory, healthLine, rememberedHealth } from './rate.js';
 import { lobbyWarnings, memberStatus } from './lobby_status.js';
 import { frontNotice } from './device_notice.js';
 import { dismissFirefoxTip, firefoxTip } from './firefox_tip.js';
-import { clearRejoin, leavingPage, storeRejoin, takeRejoin } from './rematch.js';
+import { clearRejoin, isInMatchError, isRejoinTokenError, leavingPage, peekRejoin, retryRejoin, storeRejoin } from './rematch.js';
 
 const MONSTERS = [[1, 'Congar'], [2, 'Robo-47'], [3, 'Togera'], [4, 'Ultra V'], [5, 'Preytor'], [7, 'Kineticlops'], [8, 'Magmo'],
   [9, 'Raptros'], [10, 'Agamo'], [11, 'Zorgulon']];
@@ -22,6 +23,12 @@ const MODIFIERS = ['jump', 'fast', 'turbo'];
 
 const $ = (id) => document.getElementById(id);
 const front = $('front');
+
+// The panel covers the game stage until a game starts; the stage (status bar buttons, canvas) is inert meanwhile, so Tab starts in the panel
+function leaveFront() {
+  front.hidden = true;
+  $('stage').inert = false;
+}
 const say = (text) => { $('frontMsg').textContent = text; };
 
 function remember(key, value) { try { localStorage.setItem('wotlane.' + key, value); } catch { /* private window: not kept */ } }
@@ -52,6 +59,7 @@ async function buildId() {
 const cleanName = (s) => s.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 16);
 
 let lobby = null;
+let entering = false;   // a connection to a lobby is being made: Single player, Host and Join stay off until it ends
 let owner = false;
 let myName = '';
 let members = { owner: '', members: [] };
@@ -282,7 +290,7 @@ async function connect(build) {
   client.onClose = () => { if (!front.hidden) say('Lost the connection to the game server. Reload the page to try again.'); };
   client.onMatch = async (match) => {
     try { sessionStorage.setItem('wotlane.lobby', client.code); } catch { /* private window: not kept */ }
-    front.hidden = true;
+    leaveFront();
     await settingsSaved();   // a change made a moment ago is in the file before the game reads it
     startDiag(client, ws, match, build);
     window.wotmStart({ ...matchEnv(match, serverUrl('/match')), ...(await lightDrawing()) }, build);
@@ -300,7 +308,7 @@ let watching = 0;
 let refreshingFor = 0;
 
 function showLobbyList(lobbies) {
-  $('lobbyList').hidden = false;
+  $('lobbyList').inert = false;
   const rows = lobbies.map((l) => {
     const { text, joinable } = lobbyRow(l);
     const li = document.createElement('li');
@@ -333,34 +341,40 @@ async function refreshLobbies() {
     }
     const lobbies = await watcher.list();
     if (mine === watching) showLobbyList(lobbies);
-  } catch {   // the server is out of reach or refused this build: the list stays hidden, Host and Join still show why
+  } catch {   // the server is out of reach or refused this build: the list says so in the room it had, Host and Join still show why
     if (mine !== watching) return;
     (client ?? watcher)?.close();
     watcher = null;
-    $('lobbyList').hidden = true;
+    $('lobbies').replaceChildren(Object.assign(document.createElement('li'), { textContent: 'The list of open lobbies is not available right now.' }));
+    $('lobbyList').inert = false;   // Refresh works again
   } finally {
     if (refreshingFor === mine) refreshingFor = 0;
   }
 }
 
 function startWatchingLobbies() {
-  stopWatchingLobbies();
+  cancelWatching();
   watching++;
   const tick = () => { if (!document.hidden) refreshLobbies(); };
   tick();
   watchTimer = setInterval(tick, LIST_EVERY_MS);
 }
 
-function stopWatchingLobbies() {
+function cancelWatching() {
   watching++;
-  $('lobbyList').hidden = true;   // no Join while a join is under way
   clearInterval(watchTimer);
   watchTimer = 0;
   watcher?.close();
   watcher = null;
 }
 
+function stopWatchingLobbies() {
+  cancelWatching();
+  $('lobbyList').inert = true;   // no Join while a join is under way; the list keeps its room
+}
+
 async function hostOrJoin(join) {
+  if (entering) return;
   const name = cleanName($('name').value);
   if (!name) return say('Type a name first (letters, digits, - and _).');
   const monster = $('monster').value;   // "<monster>" or "<monster>:<skin id>"
@@ -371,8 +385,33 @@ async function hostOrJoin(join) {
   const code = $('joinCode').value.trim().toUpperCase();
   if (join && !/^[A-Z2-9]{4}$/.test(code)) return say('The code has 4 characters (letters and digits).');
   say(join ? 'Joining' : 'Creating a lobby');
-  const entered = await enterLobby(async (l) => ({ code: join ? await l.join(code, name, monster) : await l.create(name, monster), isOwner: !join }));
+  const saved = join ? peekRejoin(tabStorage(), Date.now()) : null;
+  const useSaved = !!(saved && saved.code === code && saved.name === name);
+  let rejoined = false;
+  const entered = await enterLobby(async (l) => {
+    if (!join) return { code: await l.create(name, monster), isOwner: true };
+    if (useSaved) {
+      myMonster = saved.monster;   // server restores the ghost's pick; onToken records it until a change succeeds
+      try {
+        const backCode = await l.rejoin(saved.code, saved.token);
+        rejoined = true;
+        if (monster !== saved.monster) {
+          await l.monster(monster).then(() => { myMonster = monster; }, () => { $('monster').value = String(saved.monster); });
+        }
+        return { code: backCode, isOwner: members.owner === myName };
+      } catch (e) {
+        if (!isRejoinTokenError(e?.message)) {
+          if (/the lobby is gone/i.test(e?.message ?? '')) clearRejoin(tabStorage());
+          throw e;
+        }
+        clearRejoin(tabStorage());   // expired, kicked, or already used: fall back to a plain JOIN
+        myMonster = monster;
+      }
+    }
+    return { code: await l.join(code, name, monster), isOwner: false };
+  });
   if (entered && !join) await sendSettings();
+  if (entered && rejoined && owner) showLobbySettings(lobby.settings);
 }
 
 // connects and runs `enter` (create, join or rejoin, resolving with the lobby's code and whether this player owns it), then shows
@@ -384,6 +423,7 @@ async function enterLobby(enter, rematch = false) {
   stopWatchingLobbies();
   const buttons = ['single', 'host', 'join'].map($);
   for (const b of buttons) b.disabled = true;   // one connection per click
+  entering = true;
   try {
     const build = await buildId();
     lobby = await connect(build);
@@ -402,6 +442,8 @@ async function enterLobby(enter, rematch = false) {
     for (const b of buttons) b.disabled = false;
     startWatchingLobbies();
     return false;
+  } finally {
+    entering = false;
   }
 }
 
@@ -411,13 +453,30 @@ function tabStorage() {
 }
 
 // back from a match (the page reloads after it): this tab takes its `place` in the lobby back while the server keeps it (quick
-// rematch, web/rematch.js, takeRejoin); without a place, or when the server no longer has it, the lobby's code is offered as before
+// rematch, web/rematch.js, peekRejoin); without a place, or when the server no longer has it, the lobby's code is offered as before
 async function rejoinLastLobby(place) {
   if (!place) return offerLastLobby();
   myName = place.name;   // the server gives back the name and monster this player had; this tab kept both with its token
   myMonster = place.monster;
   say('Going back to your lobby');
-  await enterLobby(async (l) => ({ code: await l.rejoin(place.code, place.token), isOwner: members.owner === myName }), true);
+  let errMsg = '';
+  const entered = await enterLobby(async (l) => {
+    try {
+      const code = await retryRejoin(() => l.rejoin(place.code, place.token), {
+        onWait: () => say('Waiting for the match to finish'),
+      });
+      return { code, isOwner: members.owner === myName };
+    } catch (e) {
+      errMsg = e?.message ?? '';
+      throw e;
+    }
+  }, true);
+  if (entered) return;
+  if (isInMatchError(errMsg)) {
+    if (!$('joinCode').value.trim()) $('joinCode').value = place.code;
+  } else if (errMsg && !/lost the connection/i.test(errMsg)) {
+    clearRejoin(tabStorage());   // terminal refusal (gone, expired, kicked, full, build mismatch): do not retry this token
+  }
 }
 
 async function sendSettings() {
@@ -509,18 +568,20 @@ function showFirefoxTip() {
 }
 
 function init() {
+  say('');   // the page said Loading until now
   // a browser that can't run the game gets a plain message instead of a page that freezes
   const problem = window.wotmSupportProblem();
   if (problem) {
     say(problem);
     for (const id of ['single', 'host', 'join', 'openSettings']) $(id).disabled = true;
+    $('lobbyList').hidden = true;
     return;
   }
   initCreations(STAGES);
   initSettings({ remember, recall });
   initReport({ send: sendReport }).available(!!lastDiag());   // after a match the page has reloaded: its numbers are what the report holds
   if (window.wotmDirect) {
-    front.hidden = true;
+    leaveFront();
     buildId().then((b) => window.wotmStart(null, b));
     return;
   }
@@ -531,8 +592,8 @@ function init() {
   showFirefoxTip();
   const invited = window.inviteCode(new URLSearchParams(location.search));
   // the server keeps a place from the moment this page's lobby connection drops: that is when the rejoin's clock starts too
-  window.addEventListener('pagehide', () => leavingPage(tabStorage(), Date.now(), { name: myName, monster: myMonster }));
-  const place = invited ? null : takeRejoin(tabStorage(), Date.now());
+  window.addEventListener('pagehide', () => { if (lobby && !entering) leavingPage(tabStorage(), Date.now(), { name: myName, monster: myMonster }); });
+  const place = invited ? null : peekRejoin(tabStorage(), Date.now());
   if (invited) {   // a reload doesn't join again; the address keeps its other parts
     const rest = new URLSearchParams(location.search);
     rest.delete('join');
@@ -551,8 +612,9 @@ function init() {
     if (lobby && owner) showLobbySettings(lobby.settings);   // a rejoined owner's lobby may play a saved map, listed only now
   }).catch(() => {}).then(() => { if (invited) acceptInvite(invited); });
   $('single').addEventListener('click', async () => {
+    clearRejoin(tabStorage());   // leaving the online flow: do not auto-rejoin an old lobby after Single player
     stopWatchingLobbies();
-    front.hidden = true;
+    leaveFront();
     await settingsSaved();
     // the boot movies play over the game while it loads (not awaited); in a match they never play
     playStartupMovies({ mode: recall('movies', 'skippable'), overlay: $('movie'), video: $('movieVideo'), hint: $('movieHint'), log: (t) => window.wotmLog?.push(t) });
@@ -560,7 +622,7 @@ function init() {
   });
   $('host').addEventListener('click', () => hostOrJoin(false));
   $('join').addEventListener('click', () => hostOrJoin(true));
-  $('joinCode').addEventListener('keydown', (e) => { if (e.key === 'Enter') hostOrJoin(true); });
+  $('joinCode').addEventListener('keydown', (e) => { if (isSubmitEnter(e)) hostOrJoin(true); });
   for (const id of ['lobbyStage', 'wins', ...MODIFIERS.map((m) => 'mod_' + m)])
     $(id).addEventListener('change', () => lobby && owner && sendSettings());
   $('monster').addEventListener('change', () => {
@@ -574,7 +636,7 @@ function init() {
   });
   $('copyInvite').addEventListener('click', copyInvite);
   $('chatSend').addEventListener('click', sendChat);
-  $('chatText').addEventListener('keydown', (e) => { if (e.key === 'Enter') sendChat(); });
+  $('chatText').addEventListener('keydown', (e) => { if (isSubmitEnter(e)) sendChat(); });
   $('refreshLobbies').addEventListener('click', refreshLobbies);
   if (!place) startWatchingLobbies();   // a rejoin has its own lobby; a refused one starts the watching itself
   $('start').addEventListener('click', () => lobby?.start().catch((e) => say(friendlyError(e.message))));
@@ -586,6 +648,14 @@ function init() {
     leaving?.close();
     backToChoice('');
   });
+  // the buttons work now: their handlers are attached (a rejoin under way has switched them off for itself)
+  if (!entering) for (const id of ['single', 'host', 'join']) $(id).disabled = false;
 }
 
-init();
+try {
+  init();
+} catch (e) {
+  say('The page did not start properly. Reload it to try again.');
+  $('frontMsg').className = 'problem';
+  throw e;
+}

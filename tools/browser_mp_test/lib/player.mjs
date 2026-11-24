@@ -92,12 +92,14 @@ export class Player {
   }
 
   async host() {
+    await this.page.waitForFunction(() => !document.getElementById('host').disabled, null, { timeout: 15000 });
     await this.page.evaluate(() => { window.__frontMsgs = []; });
     await this.page.click('#host');
     return this.settle();
   }
 
   async join(code) {
+    await this.page.waitForFunction(() => !document.getElementById('join').disabled, null, { timeout: 15000 });
     await this.page.evaluate(() => { window.__frontMsgs = []; });
     await this.page.fill('#joinCode', code);
     await this.page.click('#join');
