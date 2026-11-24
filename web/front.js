@@ -71,6 +71,7 @@ let myMonster = 0;   // the monster the server last accepted
 function setOwner(isOwner) {
   owner = isOwner;
   $('ownerOnly').hidden = !isOwner;
+  $('start').hidden = !isOwner;
   $('guestSettings').hidden = isOwner;
   showMemberList();   // the owner's buttons come and go with the role
 }
@@ -80,6 +81,7 @@ function showLobby(code, isOwner, rematch = false) {
   setOwner(isOwner);
   $('choose').hidden = true;
   $('inLobby').hidden = false;
+  $('chat').hidden = false;
   $('code').textContent = code;
   $('start').textContent = rematch ? 'Rematch' : 'Start';
   if (rematch) say(isOwner ? 'Back in the lobby. Press Rematch when everyone is back.' : 'Back in the lobby. Waiting for the owner to start the rematch.');
@@ -501,6 +503,7 @@ function backToChoice(text) {
   members = { owner: '', members: [] };   // the next lobby's settings must not warm this one's monsters
   window.wotmMatchPrefetch?.warmer.cancel();
   $('inLobby').hidden = true;
+  $('chat').hidden = true;
   $('inviteLink').hidden = true;
   $('choose').hidden = false;
   for (const id of ['single', 'host', 'join']) $(id).disabled = false;
@@ -575,8 +578,10 @@ function init() {
   const problem = window.wotmSupportProblem();
   if (problem) {
     say(problem);
-    for (const id of ['single', 'host', 'join', 'openSettings']) $(id).disabled = true;
-    $('lobbyList').hidden = true;
+    $('frontMsg').className = 'problem';
+    $('profile').hidden = true;   // nothing here can start a game: the reason is all the panel shows
+    $('choose').hidden = true;
+    $('openSettings').hidden = true;
     return;
   }
   initCreations(STAGES);

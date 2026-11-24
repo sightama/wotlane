@@ -65,7 +65,7 @@ setTimeout(() => { const m = pending(); if (m && !m.classList.contains('problem'
 <link rel="modulepreload" href="firefox_tip.js">
 <link rel="modulepreload" href="rematch.js">
 <style>
-  :root { --bg: #0b0b0d; --panel: #16161a; --fg: #d8d8dc; --dim: #8b8b94; --accent: #e0592a; --accent-fill: #c8461a; --accent-fill-hover: #b83f15; --field-line: #6a6a74; --target: 24px; --line: #2a2a30; --good: #3fb950; --warn: #d29922; --bad: #f85149; }
+  :root { color-scheme: dark; --bg: #0b0b0d; --panel: #16161a; --fg: #d8d8dc; --dim: #8b8b94; --accent: #e0592a; --accent-fill: #c8461a; --accent-fill-hover: #b83f15; --field-line: #6a6a74; --target: 24px; --line: #2a2a30; --good: #3fb950; --warn: #d29922; --bad: #f85149; }
   @media (pointer: coarse), (any-pointer: coarse) { :root { --target: 44px; } }
   * { box-sizing: border-box; }
   [hidden] { display: none !important; }
@@ -84,6 +84,7 @@ setTimeout(() => { const m = pending(); if (m && !m.classList.contains('problem'
   #stall { position: absolute; inset: 0; z-index: 7; display: grid; place-content: center; gap: 4px; text-align: center; background: rgba(11, 11, 13, .94); }
   #stall .row { justify-content: center; margin-top: 8px; }
   #stage:fullscreen #bar { display: none; }
+  #stage[inert] #bar { visibility: hidden; }
   #bar { position: absolute; right: 8px; bottom: 8px; display: flex; gap: 12px; align-items: center; color: #b4b4bc; font-size: 12px;
          padding: 4px 8px; border-radius: 6px; background: rgba(11, 11, 13, .85); }
   button { background: none; border: 1px solid var(--dim); color: var(--fg); border-radius: 4px; padding: 2px 8px; cursor: pointer; font: inherit; touch-action: manipulation; }
@@ -97,6 +98,8 @@ setTimeout(() => { const m = pending(); if (m && !m.classList.contains('problem'
   #front button:not(.key, .keyclear), #bar button, #stall button { min-width: var(--target); }
   button:disabled { opacity: .4; cursor: not-allowed; }
   button.main { background: var(--accent-fill); border-color: var(--accent-fill); color: #fff; padding: 8px 16px; font-weight: 600; }
+  #front button { border-radius: 8px; padding: 6px 14px; }
+  #front button.main { padding: 10px 18px; font-size: 16px; }
   #log { display: none; position: fixed; inset: auto 0 0 0; height: 35vh; overflow: auto; margin: 0; padding: 8px;
          background: rgba(0, 0, 0, .85); font: 11px/1.3 ui-monospace, monospace; white-space: pre-wrap; }
   #log.open { display: block; }
@@ -105,24 +108,40 @@ setTimeout(() => { const m = pending(); if (m && !m.classList.contains('problem'
   #front > .card { margin: 0 auto auto; }
   .card { width: min(440px, 100%); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 20px;
           display: grid; gap: 14px; }
-  .card h1 { margin: 0; font-size: 20px; }
+  .card h1 { margin: 0; font-size: 22px; }
   .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .stack { display: grid; gap: 14px; }
   /* a field fills its cell, so filling a list with options later does not change its width */
-  #home .row > label { flex: 1 1 8em; min-width: 0; }
-  #home .row > label > :is(input, select) { width: 100%; min-width: 0; }
+  .fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(9em, 1fr)); gap: 12px; }
+  .fields > label { min-width: 0; }
+  .fields > label > :is(input, select) { width: 100%; min-width: 0; }
+  .wide { width: 100%; }
+  #frontMsg.problem { color: var(--fg); border: 1px solid var(--warn); border-radius: 8px; padding: 10px 12px; font-size: 15px; }
   label { color: var(--dim); font-size: 12px; display: grid; gap: 4px; }
-  input, select, textarea { background: #0e0e11; color: var(--fg); border: 1px solid var(--field-line); border-radius: 4px; padding: 6px 8px; font: inherit; }
+  input, select, textarea { background: #0e0e11; color: var(--fg); border: 1px solid var(--field-line); border-radius: 8px; padding: 7px 10px; font: inherit; }
   textarea { resize: vertical; }
-  #rules { display: flex; gap: 4px 12px; align-items: center; flex-wrap: wrap; border: 0; margin: 0; padding: 0; min-width: 0; }
-  #rules legend { color: var(--dim); font-size: 12px; padding: 0 0 4px; }
-  #rules label { display: flex; gap: 4px; align-items: center; color: var(--fg); font-size: 14px; }
+  #rules { display: flex; gap: 0 20px; align-items: center; flex-wrap: wrap; border: 1px solid var(--line); border-radius: 8px; margin: 0; padding: 4px 12px 8px; min-width: 0; }
+  #rules legend { color: var(--dim); font-size: 12px; padding: 0 6px; }
+  #rules label { display: flex; gap: 8px; align-items: center; color: var(--fg); font-size: 14px; }
+  #rules input { width: 20px; height: 20px; margin: 0; accent-color: var(--accent-fill); }
+  #choose .online { display: grid; gap: 10px; border-top: 1px solid var(--line); padding-top: 16px; }
+  #choose .online h2, .listhead h3 { margin: 0; font-size: 12px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); }
+  .online > .hint { margin: 2px 0 -4px; color: var(--dim); font-size: 12px; }
+  .joinrow { display: flex; gap: 8px; }
+  .joinrow input { flex: 1; min-width: 0; }
+  .listhead { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .codebar { display: flex; justify-content: space-between; align-items: end; gap: 12px; flex-wrap: wrap; }
+  .label { display: block; color: var(--dim); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }
+  .actions { display: flex; gap: 10px; }
+  .actions .main { flex: 1; }
+  #guestSettings { margin: 0; color: var(--dim); }
   ::placeholder { color: var(--dim); }
   #report .note { color: var(--dim); font-size: 12px; margin: 0; }
-  #joinCode { width: 6em; text-transform: uppercase; letter-spacing: .2em; }
-  #code { font: 700 28px/1 ui-monospace, monospace; letter-spacing: .25em; color: var(--accent); }
+  #joinCode { text-transform: uppercase; letter-spacing: .2em; }
+  #code { display: block; font: 700 32px/1.1 ui-monospace, monospace; letter-spacing: .25em; color: var(--accent); }
   #members { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
-  #members li { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  #members .who { flex: 1 1 auto; }
+  #members li { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 8px 0; border-bottom: 1px solid var(--line); }
+  #members .who { flex: 1 1 10em; }
   .chip { font-size: 12px; padding: 1px 8px; border-radius: 10px; border: 1px solid var(--dim); color: var(--dim); }
   .chip:empty { display: none; }
   .chip.good { border-color: var(--good); color: var(--good); }
@@ -136,10 +155,11 @@ setTimeout(() => { const m = pending(); if (m && !m.classList.contains('problem'
   #chatLog { margin: 0; padding: 0; list-style: none; max-height: 8em; overflow-y: auto; font-size: 13px; overflow-wrap: anywhere; }
   #chatLog:empty { display: none; }
   #lobbyList[inert] { opacity: .5; }
-  #lobbies { margin: 8px 0 0; padding: 0; list-style: none; display: grid; gap: 6px; min-height: 2.8em; }
+  #lobbies { margin: 8px 0 0; padding: 0; list-style: none; display: grid; gap: 6px; min-height: 1.4em; }
   #lobbies li { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
-  #frontMsg { color: var(--dim); min-height: 2.8em; margin: 0; }
-  #frontMsg.problem { color: var(--fg); border: 1px solid var(--warn); border-radius: 8px; padding: 10px 12px; }
+  #frontMsg { color: var(--dim); min-height: 1.4em; margin: 0; }
+  @media (max-width: 480px) { #frontMsg, #lobbies { min-height: 2.8em; } }
+  #inLobby:not([hidden]) ~ #frontMsg { min-height: 2.8em; }
   hr { border: 0; border-top: 1px solid var(--line); margin: 0; width: 100%; }
   #settings { width: min(560px, 100%); }
   #settings h2 { margin: 12px 0 4px; font-size: 14px; color: var(--dim); font-weight: 600; }
@@ -162,7 +182,7 @@ setTimeout(() => { const m = pending(); if (m && !m.classList.contains('problem'
   #controlsTable td + td, #touchTable td + td { color: var(--dim); }
   #controlsTable td + td { white-space: nowrap; }
   .keytools { display: flex; gap: 8px; margin-top: 8px; }
-  #controlsTable .key { min-width: 44px; margin-right: 2px; }
+  #controlsTable .key { min-width: 44px; margin-right: 2px; padding: 2px 8px; }
   #controlsTable .keyclear { padding: 0 6px; margin-right: 8px; }
   #touchTable { border-collapse: collapse; font-size: 13px; width: 100%; }
   #touchTable td { padding: 3px 8px 3px 0; vertical-align: top; }
@@ -183,47 +203,55 @@ setTimeout(() => { const m = pending(); if (m && !m.classList.contains('problem'
   <div id="bar"><span id="status">Choose how to play</span><button id="fullscreen" title="Fullscreen">Fullscreen</button>
     <button id="logToggle" title="Show the log">L</button></div>
 </div>
-<div id="front">
+<main id="front">
   <div id="home" class="card">
     <h1>War of the Monsters</h1>
-    <div class="row">
+    <div id="profile" class="fields">
       <label>Name <input id="name" maxlength="16" autocomplete="nickname"></label>
       <label>Monster <select id="monster"></select></label>
     </div>
-    <div id="choose" class="card" style="padding:0;border:0">
-      <div class="row"><button id="single" class="main" disabled>Single player</button></div>
-      <hr>
-      <div class="row"><button id="host" disabled>Host online</button>
-        <span style="color:var(--dim)">or</span>
-        <input id="joinCode" maxlength="4" placeholder="CODE" aria-label="Lobby code"><button id="join" disabled>Join</button></div>
-      <div id="lobbyList">
-        <div class="row"><span style="color:var(--dim)">Open lobbies</span><button id="refreshLobbies" disabled>Refresh</button></div>
-        <ul id="lobbies"><li>Looking for open lobbies…</li></ul>
-      </div>
+    <div id="choose" class="stack">
+      <button id="single" class="main wide" disabled>Single player</button>
+      <section class="online" aria-labelledby="onlineHeading">
+        <h2 id="onlineHeading">Play online</h2>
+        <button id="host" class="wide" disabled>Host online</button>
+        <p class="hint">or join with a code</p>
+        <div class="joinrow">
+          <input id="joinCode" maxlength="4" placeholder="CODE" aria-label="Lobby code" autocapitalize="characters" autocomplete="off" spellcheck="false"><button id="join" disabled>Join</button>
+        </div>
+        <div id="lobbyList">
+          <div class="listhead"><h3>Open lobbies</h3><button id="refreshLobbies" disabled>Refresh</button></div>
+          <ul id="lobbies"><li>Looking for open lobbies…</li></ul>
+        </div>
+      </section>
     </div>
-    <div id="inLobby" hidden style="display:grid;gap:12px">
-      <div class="row">Lobby code <span id="code"></span><button id="copyInvite">Copy invite link</button></div>
+    <div id="inLobby" hidden class="stack">
+      <div class="codebar">
+        <div><span id="codeLabel" class="label">Lobby code</span><span id="code"></span></div>
+        <button id="copyInvite">Copy invite link</button>
+      </div>
       <input id="inviteLink" readonly hidden aria-label="Invite link">
       <ul id="members"></ul>
       <ul id="lobbyWarnings" aria-live="polite"></ul>
-      <div id="ownerOnly" class="row">
-        <label>Stage <select id="lobbyStage"></select></label>
-        <label>Wins <select id="wins"></select></label>
+      <div id="ownerOnly" class="stack">
+        <div class="fields">
+          <label>Stage <select id="lobbyStage"></select></label>
+          <label>Wins <select id="wins"></select></label>
+        </div>
         <fieldset id="rules"><legend>Rules</legend>
           <label><input type="checkbox" id="mod_jump"> Jump</label>
           <label><input type="checkbox" id="mod_fast"> Fast</label>
           <label><input type="checkbox" id="mod_turbo"> Turbo</label>
         </fieldset>
-        <button id="start" class="main">Start</button>
       </div>
-      <div id="chat" style="display:grid;gap:6px">
-        <ul id="chatLog" aria-live="polite"></ul>
-        <div class="row"><input id="chatText" maxlength="200" placeholder="Say something" aria-label="Chat message" autocomplete="off" style="flex:1"><button id="chatSend">Send</button></div>
-      </div>
-      <p id="guestSettings" style="margin:0;color:var(--dim)"></p>
-      <div class="row"><button id="leave">Leave</button></div>
+      <p id="guestSettings"></p>
+      <div class="actions"><button id="start" class="main">Start</button><button id="leave">Leave</button></div>
     </div>
     <p id="frontMsg" role="status" data-pending>Loading…</p>
+    <div id="chat" class="stack" hidden>
+      <ul id="chatLog" aria-live="polite"></ul>
+      <div class="joinrow"><input id="chatText" maxlength="200" placeholder="Say something" aria-label="Chat message" autocomplete="off"><button id="chatSend">Send</button></div>
+    </div>
     <div class="row"><button id="openSettings">Settings</button><button id="openReport" hidden>Send report</button></div>
     <p id="deviceNote" hidden role="note"></p>
     <p id="firefoxTip" hidden role="note"><span id="firefoxTipText"></span> <button id="firefoxTipOk" type="button">Got it</button></p>
@@ -286,7 +314,7 @@ setTimeout(() => { const m = pending(); if (m && !m.classList.contains('problem'
     <div class="row"><button id="sendReport" class="main">Send report</button></div>
     <p id="reportMsg" class="note" aria-live="polite"></p>
   </div>
-</div>
+</main>
 <pre id="log"></pre>
 <script src="support.js"></script>
 <script src="data_retry.js"></script>

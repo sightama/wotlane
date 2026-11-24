@@ -84,7 +84,7 @@ test('the open lobbies area is there from the start, with a line saying it is lo
 // ---- a press
 
 test('the lobbies list keeps room for the two-line empty message, so the answer from the server moves nothing', () => {
-  assert.match(rule('#lobbies'), /min-height:\s*2\.8em/);
+  assert.match(css, /@media \(max-width: 480px\)\s*\{\s*#frontMsg, #lobbies \{ min-height: 2\.8em; \}/);
 });
 
 test('hover is drawn only where a pointer can hover, so a tap leaves nothing stuck', () => {
@@ -92,8 +92,8 @@ test('hover is drawn only where a pointer can hover, so a tap leaves nothing stu
   assert.doesNotMatch(css.replace(/@media \(hover: hover\)\s*\{[^@]*?\n  \}/, ''), /button(\.main)?:hover/);
 });
 
-test('the status line starts as Loading and keeps room for two lines', () => {
-  assert.match(rule('#frontMsg'), /min-height:\s*2\.8em/);
+test('the status line starts as Loading and keeps room for a line', () => {
+  assert.match(rule('#frontMsg'), /min-height:\s*1\.4em/);
   assert.match(read('front.js'), /function init\(\) \{\n  \$\('frontMsg'\)\.removeAttribute\('data-pending'\);\n  say\(''\);   \/\/ the page said Loading until now/);
 });
 

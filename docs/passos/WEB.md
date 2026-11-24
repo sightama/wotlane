@@ -40,6 +40,11 @@ For online play start `wotm_server --ws-port <port>`; a page opened from `localh
   fetched, has a syntax error or throws as it runs replaces it with "The page could not load…" (a head script decides from the page's module
   scripts and `modulepreload` links; a failed icon, stylesheet, preload link or unrelated script does not). After 6 s without `init()` it says
   "Still loading…". A broken classic script that `init()` needs ends in `init()`'s own message.
+- **Front panel layout:** the panel is the page's `<main>`. Home has Name and Monster, one filled button (Single player) and a "Play online"
+  region (Host online, join with a code, open lobbies). The lobby shows its code large next to Copy invite link, the members as rows with
+  their ping and device chips, Stage and Wins side by side, the Rules group, then Start (the owner only) beside Leave, then the chat. A
+  browser that cannot run the game (Safari, an iPhone) sees only the reason, as a note, and no controls. The status bar under the panel is
+  not drawn while the panel covers the stage. Colour scheme is dark (`color-scheme`), so selects, scrollbars and checkboxes match.
 - **Disc:** `/disc` is a WASMFS fetch backend over `data/`: the game's reads become 1 MiB range requests, each fetched once
   (`native/wotm_webfs.cpp`). `web/data_retry.js` retries network and 5xx failures in every thread and reports each chunk, which
   `web/loading.js` shows as "Downloading game data 34% (9 of 27 MB). Only the first visit downloads this much." over the game.
@@ -352,6 +357,9 @@ OpenGraph and Twitter tags and JSON-LD (`web/index.html`, tested by `web/legal.t
   full opacity, readable and sized on desktop and touch; the touch layout panel fits a short phone and keeps its own button sizes; nothing on the panel moves after first paint, and a press shows
   at once. `--site <folder>` checks a copy of an older `web/`. Needs
   `sh tools/test_net.sh notest` first and Playwright.
+- `node tools/page_shots.mjs --out <folder> --browser firefox|chrome|brave|webkit [--site <web folder>] [--label <name>]`: the same set of
+  screenshots of any copy of `web/` (home, lobby with two players, settings, controls, the touch layout panel; phone and desktop), for before
+  and after comparisons.
 - `node tools/browser_diag_test/run.mjs`: a real Chromium against a local `wotm_server --diag-dir` (no game is loaded): the join,
   periodic and last reports and a Send report from the front page reach the server's files, with no chat text and no user agent string in
   them. Needs `sh tools/test_net.sh notest` first and Playwright (see `tools/browser_mp_test/README.md`).

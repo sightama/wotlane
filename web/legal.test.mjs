@@ -20,7 +20,7 @@ test('the footer gives rights holders a contact address', () => {
 });
 
 test('the footer sits inside the front panel, so it shows before the game starts', () => {
-  const front = html.slice(html.indexOf('<div id="front">'), html.indexOf('<pre id="log">'));
+  const front = html.slice(html.indexOf('<main id="front">'), html.indexOf('<pre id="log">'));
   assert.match(front, /<footer id="legal">/);
 });
 
