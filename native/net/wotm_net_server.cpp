@@ -1148,9 +1148,10 @@ namespace wotm_net
         return out;
     }
 
-    // During the match, every paceMs: samples each player's round trip, tells each player theirs (Rtt) and sends a player whose delay
-    // should change its new one (Pace).
-    // The window (RttWindow) raises a player's delay once 4 of its last 16 samples are high, and lowers it once at most 1 is left
+    // During the match, every paceMs: tells each player their current round trip (Rtt), and once every active player has played
+    // through the 1-second warmup window past stage load, samples each player's round trip into RttWindow and sends a player whose
+    // delay should change its new one (Pace). Holding RttWindow until warmup finishes keeps boot/shader-compile main-thread stalls
+    // from poisoning delay at match start.
     void Server::pace(Match &m, const Lobby &l)
     {
         const Clock::time_point now = Clock::now();
@@ -1159,10 +1160,30 @@ namespace wotm_net
         m.lastPace = now;
         for (Slot &s : m.slots)
             if (s.peer && !s.gone)
-            {
-                s.rtt.add(rttHighOf(s.peer));
                 send(s.peer, proto::kControl, proto::encode(proto::Rtt{rttOf(s.peer)}), true);
+        if (!m.paceWarmedUp)
+        {
+            const uint32_t warmupFrames = static_cast<uint32_t>(60 / std::max(1, m.step));
+            const uint32_t readyFrame = m.delay + warmupFrames;
+            bool anyActive = false, allReady = true;
+            for (size_t i = 0; i < m.slots.size(); ++i)
+            {
+                if (m.slots[i].gone)
+                    continue;
+                anyActive = true;
+                if (m.inputs.nextMissing(static_cast<int>(i)) < readyFrame)
+                {
+                    allReady = false;
+                    break;
+                }
             }
+            if (!anyActive || !allReady)
+                return;
+            m.paceWarmedUp = true;
+        }
+        for (Slot &s : m.slots)
+            if (s.peer && !s.gone)
+                s.rtt.add(rttHighOf(s.peer));
         const std::vector<uint32_t> levels = rttLevels(m), fallLevels = rttLevels(m, true);
         const double frame = proto::frameMs(m.step);
         for (size_t i = 0; i < m.slots.size(); ++i)
@@ -1500,13 +1521,12 @@ namespace wotm_net
                 if (all && now - m->allJoined >= std::chrono::milliseconds(cfg_.startWaitMs))
                 {
                     proto::Start st;
+                    std::vector<uint32_t> rtt;
                     for (Slot &s : m->slots)
                     {
-                        if (s.peer && !s.gone)
-                            s.rtt.add(rttHighOf(s.peer));
+                        rtt.push_back(s.peer && !s.gone ? rttHighOf(s.peer) : 0u);
                         st.names.push_back(s.name);
                     }
-                    const std::vector<uint32_t> rtt = rttLevels(*m);
                     st.delay = cfg_.forcedDelay ? cfg_.forcedDelay : proto::startDelay(rtt, proto::frameMs(m->step));
                     for (Slot &s : m->slots)
                         s.advised = st.delay;

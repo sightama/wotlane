@@ -1908,6 +1908,58 @@ namespace
         CHECK(a.status() == Status::Running && b.status() == Status::Running);
     }
 
+    // a boot or stage-load stall right after Start delays pings while clients have not played yet: the server still reports Rtt,
+    // but does not feed RttWindow or raise delay until every active player has played through the warmup window
+    TEST(match_delay_ignores_rtt_spikes_before_warmup_completes)
+    {
+        ServerConfig cfg = testConfig();
+        cfg.paceMs = 20;
+        RunningServer rs(cfg);
+        auto ms = formMatch(cfg.port, {"Ana", "Bia"}, {3, 1});
+        MatchClient a, b;
+        std::string err;
+        CHECK(a.start(clientFor(cfg.port, *ms[0]), err));
+        CHECK(b.start(clientFor(cfg.port, *ms[1]), err));
+        CHECK(a.waitStarted(5000) && b.waitStarted(5000));
+        const uint32_t startD = a.delay();
+        CHECK(startD <= 3u && b.delay() == startD);
+
+        // simulate a multi-second boot/load stall before either player submits live gameplay frames, and while only one has finished loading
+        rs.server.setTestRtt(250);
+        for (int i = 0; i < 25; ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        for (uint32_t i = 0; i < 4; ++i)
+            a.pushSample(pressed(0x1000));   // Ana finished loading and queued ahead; Bia is still loading
+        for (int i = 0; i < 25; ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        CHECK(a.rttMs() >= 250u && b.rttMs() >= 250u);   // Rtt still updates during load
+        CHECK(a.delay() == startD && b.delay() == startD);
+
+        // load finishes and RTT settles before warmup completes: delay must stay at startD
+        rs.server.setTestRtt(0);
+        for (uint32_t i = 0; i < 65; ++i)
+        {
+            if (i >= 4)
+                a.pushSample(pressed(0x1000));
+            b.pushSample(pressed(0x2000));
+            CHECK(a.waitFrame(i, 5000) && b.waitFrame(i, 5000));
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        CHECK(a.delay() <= startD && b.delay() <= startD);   // LAN may step down from startD (2) to 1, never up from the boot spike
+
+        // once warmed up, a sustained real RTT increase raises delay as usual
+        rs.server.setTestRtt(150);
+        for (uint32_t i = 65; i < 265; ++i)
+        {
+            a.pushSample(pressed(0x1000));
+            b.pushSample(pressed(0x2000));
+            CHECK(a.waitFrame(i, 5000) && b.waitFrame(i, 5000));
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        CHECK(a.delay() >= 10u && b.delay() >= 10u);
+        rs.server.setTestRtt(0);
+    }
+
     // a member whose device can't compute 60 game frames a second (a phone: HELLO ... hz=30) puts a 2-player match in the game's
     // 30 Hz mode, and the delay counts 33 ms frames: 150 ms everywhere is (150 + 150) / 2 + 3 = 153 ms = 5 frames, not 10
     TEST(match_with_a_30hz_member_runs_at_30hz)
