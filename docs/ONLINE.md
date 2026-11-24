@@ -237,6 +237,10 @@ cause can be read afterwards without asking anyone to copy logs.
   the total or `lat_in_ms`). A present is timed at the animation frame after the draw, so it is a multiple of the display's refresh;
   the compositor and the display add their own time after it, which a page can't see. Measured on this computer by
   `node tools/browser_mp_test/latency.mjs` (tabs behind `tools/net_lagproxy.py --tcp` links with a round trip, jitter and spikes).
+  `python3 tools/diag_waits.py <run dir>` sums up a local run's steady windows per player (waits per 5 s, wait share, gfps, fps,
+  `ee_busy_ms`, `fr_len`, `raf_p95_ms`, `lat_ms` and the server's `behind_avg`), to compare runs before and after a pacing change;
+  `sh tools/timesync_sim/run.sh` simulates the lockstep's waits between a fast and a slow device, with and without a frame-advantage
+  stretch.
   `disc_net_mb` and `disc_hit_mb`: the disc megabytes the game and the page's prefetch got in the window over the network and from the
   browser's disc cache (`web/diag.js` DiscWatch; Firefox's synchronous reads through the helper worker are not counted). A match
   start whose first frames came late with a large `disc_net_mb` waited on its download.
