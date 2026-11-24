@@ -1,3 +1,5 @@
+// ABOUTME: Interface of the native VU0 microprograms (wotm_vu0_native.cpp): the lookup by pc, the run, the code memory image.
+// ABOUTME: Used by the runtime patch (executeVU0Microprogram) and the live hooks (wotm_live.inc).
 #ifndef WOTM_VU0_NATIVE_H
 #define WOTM_VU0_NATIVE_H
 

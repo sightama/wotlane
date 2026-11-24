@@ -15,17 +15,20 @@ set -eu
 
 usage() {
     cat <<EOF
-usage: sh tools/vu0bench.sh [--secs N] [--build <dir>] [--time N] [--ref <commit>]
+usage: sh tools/vu0bench.sh [--secs N] [--build <dir>] [--time N] [--ref <commit>] [--keep <dir>]
   --secs   how long the fight records samples (default 150; fewer than ~120 s may not reach 300k VU0 calls)
   --build  build folder in the runtime folder (default build_dev; sh tools/build_runtime.sh first)
   --time   after the check, run every sample N more times and print the time per call of each microprogram
   --ref    with --time: also build that commit's native VU0 code (wotm_vu0_native.cpp and its headers) and time it on the
            same samples, native and wasm; prints both, so a change's speedup is measured on one machine
+  --keep   copy the samples (vu0_code.bin, vu0_samples.bin) and the native results (native.results) into <dir> before they are
+           deleted, to check another build against them: vu0bench <code> <samples> --expect <dir>/native.results (they hold game
+           state: keep them on this machine)
 Needs Emscripten (EMSDK, or ~/emsdk) and node for the wasm build. Prints one line per microprogram and a total for each build;
 exits 1 when the wasm build's results differ from the native build's on any sample. Game log: <runtime>/live.err.log.
 EOF
 }
-secs=150 build=build_dev repeats= ref=
+secs=150 build=build_dev repeats= ref= keep=
 while [ $# -gt 0 ]; do
     case $1 in
         -h|--help) usage; exit 0 ;;
@@ -33,6 +36,7 @@ while [ $# -gt 0 ]; do
         --build) build=$2; shift 2 ;;
         --time) repeats=$2; shift 2 ;;
         --ref) ref=$2; shift 2 ;;
+        --keep) keep=$2; shift 2 ;;
         *) usage >&2; exit 2 ;;
     esac
 done
@@ -110,7 +114,12 @@ stop_game() {   # every step may find nothing to stop (|| true: set -e would abo
     game=
 }
 results=$rt/logs/vu0bench_native.results   # the native build's results, which the wasm build must give too
-trap 'stop_game; rm -f "$disc/vu0_samples.bin" "$disc/vu0_code.bin" "$results"' EXIT
+# --keep copies them out first (keep_files); the dumps and the results are deleted on every exit
+keep_files() {
+    [ -n "$keep" ] && [ -s "$results" ] || return 0
+    mkdir -p "$keep" && cp "$disc/vu0_code.bin" "$disc/vu0_samples.bin" "$keep/" && cp "$results" "$keep/native.results" && echo "kept in $keep"
+}
+trap 'stop_game; keep_files || true; rm -f "$disc/vu0_samples.bin" "$disc/vu0_code.bin" "$results"' EXIT
 trap 'exit 130' INT TERM
 rm -f "$disc/vu0_samples.bin" "$disc/vu0_code.bin"
 # under caffeinate where there is one (macOS): a native game window stops making progress once the display sleeps

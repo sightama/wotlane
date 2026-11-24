@@ -38,12 +38,29 @@ namespace
         std::printf("%s a thread left %s is set back to round to nearest with subnormals\n", ok ? "ok  " : "FAIL", what);
         return !ok;
     }
+
+    // the same within one code generation: the periodic check (every 4096 lookups) puts the mode back
+    int modeIsRestoredWithoutNewGeneration()
+    {
+        static const uint8_t code[4096] = {};
+        wotmVu0NativeLookup(code, sizeof code, 0x5eed9, 0);   // the generation is now current
+        std::fesetround(FE_TOWARDZERO);
+        bool ok = !ieeeDefaultsHold();
+        for (int k = 0; k < 4096; ++k)
+            wotmVu0NativeLookup(code, sizeof code, 0x5eed9, 0);
+        ok = ok && ieeeDefaultsHold();
+        std::printf("%s within one code generation, a changed mode is set back within 4096 lookups\n", ok ? "ok  " : "FAIL");
+        return !ok;
+    }
 #endif
 }
 
 int main()
 {
     int bad = 0;
+#if !defined(_WIN32)
+    unsetenv("WOTM_VU0_INTERP");   // the lookup (and its guard) is off with it
+#endif
     // a madd's float product, or its sum, rounding past the largest float: the largest float of its sign, never an infinity. With the
     // product saturated first, -MAX + 2*MAX gives 0 while the flags (from the exact value) say a normal result, as round toward zero did
     bad += check(-FLT_MAX, FLT_MAX, 2.0f, false, 0.0f, "product past the largest float, accumulator of the other sign");
@@ -55,6 +72,7 @@ int main()
     bad += modeIsRestored(FE_TOWARDZERO, true, "rounding toward zero and flushing subnormals", 0x5eed1);
     bad += modeIsRestored(FE_UPWARD, false, "rounding upward", 0x5eed2);
     bad += modeIsRestored(FE_DOWNWARD, false, "rounding downward", 0x5eed3);
+    bad += modeIsRestoredWithoutNewGeneration();
 #endif
     std::printf("%d failure(s)\n", bad);
     return bad ? 1 : 0;
