@@ -391,7 +391,7 @@ WotmVu0Fn wotmVu0NativeLookup(const uint8_t *vu0Code, uint32_t codeSize, uint64_
     static uint32_t s_lookups = 0;
     if (s_disabled || pc >= codeSize)
         return nullptr;
-    if ((++s_lookups & 4095u) == 0)   // the mode, also between code generations (which change at a stage load)
+    if ((++s_lookups & 255u) == 0)   // the mode, also between code generations (which change at a stage load)
         ensureIeeeDefaults();
     if (generation != s_generation)
     {

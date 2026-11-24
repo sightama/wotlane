@@ -30,6 +30,51 @@ namespace
         return bad;
     }
 
+    // Every arithmetic helper the generated programs use, on a grid of edge values (normal floats, as the programs see them after
+    // normalizing: zeros, FLT_MIN, values around 1, ties near the largest float) in two lane masks, folded into one hash of every
+    // result's bits and flags. It must be the same on every build (native x86 and ARM, wasm): CI compares it with kSweepDigest
+    uint64_t sweepDigest()
+    {
+        const float g[] = {0.0f, -0.0f, FLT_MIN, -FLT_MIN, 0x1.000002p-126f, 1.0f, -1.0f, 0x1.000002p+0f, 0x1.fffffep-1f, 0.1f,
+                           -0.75f, 3.0f, 1.5f, 0x1p103f, -0x1p103f, 3.0f * 0x1p50f, 5592409.0f * 0x1p53f, 0x1.fffffcp+127f, FLT_MAX,
+                           -FLT_MAX, 16777203.0f * 0x1p103f, 12345.678f, -1e-30f, 1e30f};
+        const size_t n = sizeof g / sizeof g[0];
+        uint64_t h = 1469598103934665603ull;   // FNV-1a
+        auto mix = [&h](uint32_t v) {
+            for (int i = 0; i < 4; ++i)
+                h = (h ^ ((v >> (8 * i)) & 0xFFu)) * 1099511628211ull;
+        };
+        auto vec = [&](size_t k) { return _mm_setr_ps(g[k % n], g[(k + 7) % n], g[(k + 13) % n], g[(k + 19) % n]); };
+        auto out = [&](__m128 v, const Fm &f) {
+            float o[4];
+            _mm_storeu_ps(o, v);
+            for (float x : o)
+                mix(bitsOf(x));
+            mix(f.mac), mix(f.cur), mix(f.ext);
+        };
+        for (size_t i = 0; i < n; ++i)
+            for (size_t j = 0; j < n; ++j)
+            {
+                const __m128 a = vec(i), b = vec(j);
+                { Fm f; out(ADD4<15>(a, b, f), f); }
+                { Fm f; out(SUB4<15>(a, b, f), f); }
+                { Fm f; out(MUL4<15>(a, b, f), f); }
+                { Fm f; out(ADD4<5>(a, b, f), f); }
+                { Fm f; out(MUL4<10>(a, b, f), f); }
+                for (size_t k = 0; k < n; k += 3)
+                {
+                    { Fm f; out(MADD4<15>(vec(k), a, b, f, false), f); }
+                    { Fm f; out(MADD4<15>(vec(k), a, b, f, true), f); }
+                }
+            }
+        for (int32_t v : {0, 1, -1, 16777217, -16777219, 2147483647, static_cast<int32_t>(0x80000000u), 123456789})
+            mix(bitsOf(I2F(v)));
+        for (float x : g)
+            mix(static_cast<uint32_t>(F2I(x)));
+        return h;
+    }
+    constexpr uint64_t kSweepDigest = 0x0dd7492b4fc44e33ull;   // the Mac (ARM through sse2neon), wasm and x86 AVX2 (Rosetta) agree
+
 #if !defined(__EMSCRIPTEN__)
     // the C runtime's descriptor calls, by their Windows or POSIX names
 #if defined(_WIN32)
@@ -89,7 +134,7 @@ namespace
         return !ok;
     }
 
-    // the same within one code generation: the periodic check (every 4096 lookups) puts the mode back
+    // the same within one code generation: the periodic check (every 256 lookups) puts the mode back
     int modeIsRestoredWithoutNewGeneration()
     {
         static const uint8_t code[4096] = {};
@@ -97,11 +142,11 @@ namespace
         std::fesetround(FE_TOWARDZERO);
         bool ok = !ieeeDefaultsHold();
         const std::string log = stderrOf([&] {
-            for (int k = 0; k < 4096; ++k)
+            for (int k = 0; k < 256; ++k)
                 wotmVu0NativeLookup(code, sizeof code, 0x5eed9, 0);
         });
         ok = ok && ieeeDefaultsHold() && log == kSetBack;
-        std::printf("%s within one code generation, a changed mode is set back within 4096 lookups\n", ok ? "ok  " : "FAIL");
+        std::printf("%s within one code generation, a changed mode is set back within 256 lookups\n", ok ? "ok  " : "FAIL");
         return !ok;
     }
 #endif
@@ -116,7 +161,7 @@ int main()
     unsetenv("WOTM_VU0_INTERP");
 #endif
     // a madd's float product rounding past the largest float: the largest float of its sign, never an infinity. With the product
-    // saturated first, -MAX + 2*MAX gives 0 while the flags (from the exact value) say a normal result, as round toward zero did
+    // saturated first, -MAX + 2*MAX gives 0 while the flags (from the exact value) say a normal result
     bad += check(-FLT_MAX, FLT_MAX, 2.0f, false, 0.0f, "product past the largest float, accumulator of the other sign");
     bad += check(FLT_MAX, -FLT_MAX, 2.0f, false, 0.0f, "negative product past the largest float");
     bad += check(FLT_MAX, FLT_MAX, 2.0f, true, 0.0f, "msub: product past the largest float");
@@ -128,6 +173,15 @@ int main()
                  "product ties up, then the sum ties up past the largest float while the exact sum is the largest float");
     bad += check(FLT_MAX, std::nextafter(FLT_MAX, 0.f), 1.0f + 0x1p-23f, false, FLT_MAX, "product and sum past the largest float");
     bad += check(-FLT_MAX, std::nextafter(FLT_MAX, 0.f), 1.0f + 0x1p-23f, true, -FLT_MAX, "msub: product and sum past -largest");
+    {
+        const uint64_t digest = sweepDigest();
+        const bool ok = digest == kSweepDigest;
+        std::printf("%s every helper on the edge-value grid gives the same bits as on every other build (digest %016llx, want "
+                    "%016llx)\n", ok ? "ok  " : "FAIL", static_cast<unsigned long long>(digest),
+                    static_cast<unsigned long long>(kSweepDigest));
+        bad += !ok;
+    }
+    // the mode guard (WebAssembly has no rounding or flush mode to change, so these run natively only)
 #if !defined(__EMSCRIPTEN__)
     bad += modeIsRestored(FE_TOWARDZERO, true, "rounding toward zero and flushing subnormals", 0x5eed1);
     bad += modeIsRestored(FE_UPWARD, false, "rounding upward", 0x5eed2);
