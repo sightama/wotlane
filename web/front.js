@@ -346,6 +346,7 @@ async function refreshLobbies() {
     (client ?? watcher)?.close();
     watcher = null;
     $('lobbies').replaceChildren(Object.assign(document.createElement('li'), { textContent: 'The list of open lobbies is not available right now.' }));
+    $('lobbyList').inert = false;   // Refresh works again
   } finally {
     if (refreshingFor === mine) refreshingFor = 0;
   }

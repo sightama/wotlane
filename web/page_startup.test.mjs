@@ -68,6 +68,7 @@ test('the open lobbies area never leaves the page once shown: a join under way g
   const front = read('front.js');
   assert.match(front, /function stopWatchingLobbies\(\) \{\n  cancelWatching\(\);\n  \$\('lobbyList'\)\.inert = true;/);
   assert.match(front, /\$\('lobbies'\)\.replaceChildren\(Object\.assign\(document\.createElement\('li'\), \{ textContent: 'The list of open lobbies is not available right now\.'/);
+  assert.match(front, /not available right now\.' \}\)\);\n    \$\('lobbyList'\)\.inert = false;/);
   assert.doesNotMatch(front.slice(front.indexOf('async function refreshLobbies'), front.indexOf('function startWatchingLobbies')), /lobbyList'\)\.hidden = true/);
 });
 
