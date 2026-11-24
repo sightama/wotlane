@@ -216,7 +216,8 @@ cause can be read afterwards without asking anyone to copy logs.
   `raf_max_ms`, `lt_n`, `lt_ms` and `lt_max_ms` (main-thread tasks over 50 ms, Chrome and Edge only), `au_cb`, `au_gaps` and
   `au_max_ms` (audio callbacks, and the ones later than 1.5 buffers, which are dropped buffers), `au_buf_ms` (the length of one audio
   buffer), `hid_s` (seconds the tab was hidden), `focus_pct` (share of samples with the page focused), `lag_ms` and `lag_max_ms` (how
-  late a task posted to the page ran: the match WebSocket waits in that queue), the input latency (below), plus `up_s`, `frame`,
+  late a task posted to the page ran: the match WebSocket waits in that queue), `tmr_ms` and `tmr_max_ms` (the same for a setTimeout: a page
+  whose timers are throttled or starved shows it here while `lag_ms` stays low), the input latency (below), plus `up_s`, `frame`,
   `build`, `players`. The device is the class of device: `touch`, `mobile`, `os`, `ua` (browser name and major version, for example
   `Chrome-131`; never the user agent string), `cores`, `mem_gb`, `dpr`, `scr` (window size), `net`, `dl_mbps` and `est_rtt_ms` (the
   browser's own connection estimate), `gpu` (the GPU model from WebGL, `software ...` when the browser draws without one: hardware

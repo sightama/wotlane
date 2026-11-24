@@ -373,6 +373,8 @@ export function windowFields(prev, cur) {
     ['focus_pct', whole(cur.focusPct)],
     ['lag_ms', fix(cur.taskLag?.avg)],
     ['lag_max_ms', whole(cur.taskLag?.max)],
+    ['tmr_ms', fix(cur.timerLag?.avg)],
+    ['tmr_max_ms', whole(cur.timerLag?.max)],
     ['lat_n', lat?.n],
     ['lat_ms', fix(timed?.total)],
     ['lat_p95_ms', fix(timed?.p95)],
@@ -410,11 +412,11 @@ export function reportFields({ saved, device, lobby, name, build }) {
 // Every SAMPLE_EVERY_MS reads the game's counters (the ping is sampled this often, for its jitter) and every REPORT_EVERY_MS sends the
 // window as a periodic report; finish() sends the last one (why=end) with the device. `base`: [key, value] pairs on every report (build,
 // lobby, name, hz, players). `send(line)` puts a line on the lobby socket; `store.set` keeps the latest report for a hand-sent one;
-// `hasFocus()` and `lag` (TaskLagWatch) are read at every sample, `latency` (latencySource) once per report
+// `hasFocus()`, `lag` and `timerLag` (TaskLagWatch, the second one posting through setTimeout) are read at every sample, `latency` (latencySource) once per report
 // after the page reloads. A source that throws is left out, never reported as a failure of the page.
 export class DiagReporter {
-  constructor({ send, base, now, setTimer, clearTimer, store, frames, longTasks, audio, game, device, isHidden, hasFocus, lag, latency, disc }) {
-    Object.assign(this, { send, base, now, setTimer, clearTimer, store, frames, longTasks, audio, game, device, isHidden, hasFocus, lag, latency, disc });
+  constructor({ send, base, now, setTimer, clearTimer, store, frames, longTasks, audio, game, device, isHidden, hasFocus, lag, timerLag, latency, disc }) {
+    Object.assign(this, { send, base, now, setTimer, clearTimer, store, frames, longTasks, audio, game, device, isHidden, hasFocus, lag, timerLag, latency, disc });
     this.seq = 0;
     this.started = false;
     this.pings = [];
@@ -444,6 +446,7 @@ export class DiagReporter {
     ++this.samples;
     try { if (this.hasFocus?.()) ++this.focused; } catch { /* no focus reading */ }
     try { this.lag?.probe(); } catch { /* no task probe */ }
+    try { this.timerLag?.probe(); } catch { /* no timer probe */ }
     this.latest = game;
     if (this.now() - this.lastReportAt >= REPORT_EVERY_MS) this.report('periodic', game);
   }
@@ -455,7 +458,7 @@ export class DiagReporter {
   report(why, game) {
     const now = this.now();
     const cur = { t: now - this.start, ...game, pings: this.pings, raf: this.take(this.frames), lt: this.take(this.longTasks),
-      audio: this.take(this.audio), hiddenMs: this.hiddenMs, taskLag: this.take(this.lag), lat: this.take(this.latency), disc: this.take(this.disc),
+      audio: this.take(this.audio), hiddenMs: this.hiddenMs, taskLag: this.take(this.lag), timerLag: this.take(this.timerLag), lat: this.take(this.latency), disc: this.take(this.disc),
       focusPct: this.hasFocus && this.samples ? (100 * this.focused) / this.samples : undefined };
     const fields = [['v', SCHEMA], ['why', why], ['seq', ++this.seq], ...this.base, ...windowFields(this.prev, cur)];
     if (why === 'end') fields.push(...this.device());

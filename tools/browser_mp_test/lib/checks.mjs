@@ -1,7 +1,7 @@
 // ABOUTME: The checks, grouped in sessions that each form a lobby of N browser players: match (lobby, picks, start, inputs, sync, frame
 // ABOUTME: rate, late join, leaving), round (round end, win screen, rematch, quit, quick rematch), stall (frozen player, Away note), creations, single, saves, movies.
 import { Player, sleep } from './player.mjs';
-import { Run, formLobby, startMatch, waitAll, hasStart, stopped, MONSTER_IDS } from './session.mjs';
+import { Run, formLobby, startMatch, waitAll, hasStart, stopped, backInLobbyScript, MONSTER_IDS } from './session.mjs';
 import { CpuMeter } from './infra.mjs';
 import { hashes, compareHashes, gameFps, lastWaits, desyncs, padButtons, hasLine, roundsEnded, netStart, sinceReload } from './logs.mjs';
 import { makeCreations } from './creations.mjs';
@@ -406,7 +406,7 @@ export async function roundSession(run, n) {
 // button reads Rematch, and it starts the next match on every tab
 async function quickRematch(run, n, players, code) {
   const R = run.report;
-  const backIn = (p) => p.page.waitForFunction((c) => !document.getElementById('inLobby').hidden && document.getElementById('code').textContent.trim() === c,
+  const backIn = (p) => p.page.waitForFunction(backInLobbyScript,
     code, { timeout: 30000 }).then(() => true, () => false);
   const back = await Promise.all(players.map(backIn));
   const listed = await Promise.all(players.map((p) => p.waitMembers(n, 15000).then(() => true, () => false)));
@@ -418,7 +418,7 @@ async function quickRematch(run, n, players, code) {
     `back in lobby ${code}: ${players.filter((_, i) => back[i]).length}/${n} tabs, ${listed.filter(Boolean).length}/${n} list ${n} members; owner ${JSON.stringify(owner)}; ` +
     `button ${JSON.stringify(label)}; panels say ${JSON.stringify([...new Set(msgs)])}`);
   if (!lobbyOk) return;
-  const again = await startMatch(players);
+  const again = await startMatch(players, { afterReload: true });
   const sides = players.map((p) => netStart(sinceReload(p.logText)));
   // the seats follow the order the players came back in: each tab has its own, 1 to n
   const seats = sides.every((s) => s && s.of === n) && new Set(sides.map((s) => s?.player)).size === n;
