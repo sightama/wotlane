@@ -12,7 +12,7 @@ import { RateMemory, healthLine, rememberedHealth } from './rate.js';
 import { lobbyWarnings, memberStatus } from './lobby_status.js';
 import { frontNotice } from './device_notice.js';
 import { dismissFirefoxTip, firefoxTip } from './firefox_tip.js';
-import { clearRejoin, isInMatchError, isRejoinTokenError, leavingPage, peekRejoin, retryRejoin, storeRejoin, takeRejoin } from './rematch.js';
+import { clearRejoin, isInMatchError, isRejoinTokenError, leavingPage, peekRejoin, retryRejoin, storeRejoin } from './rematch.js';
 
 const MONSTERS = [[1, 'Congar'], [2, 'Robo-47'], [3, 'Togera'], [4, 'Ultra V'], [5, 'Preytor'], [7, 'Kineticlops'], [8, 'Magmo'],
   [9, 'Raptros'], [10, 'Agamo'], [11, 'Zorgulon']];
@@ -374,6 +374,7 @@ function stopWatchingLobbies() {
 }
 
 async function hostOrJoin(join) {
+  if (entering) return;
   const name = cleanName($('name').value);
   if (!name) return say('Type a name first (letters, digits, - and _).');
   const monster = $('monster').value;   // "<monster>" or "<monster>:<skin id>"
@@ -452,14 +453,13 @@ function tabStorage() {
 }
 
 // back from a match (the page reloads after it): this tab takes its `place` in the lobby back while the server keeps it (quick
-// rematch, web/rematch.js, takeRejoin); without a place, or when the server no longer has it, the lobby's code is offered as before
+// rematch, web/rematch.js, peekRejoin); without a place, or when the server no longer has it, the lobby's code is offered as before
 async function rejoinLastLobby(place) {
   if (!place) return offerLastLobby();
   myName = place.name;   // the server gives back the name and monster this player had; this tab kept both with its token
   myMonster = place.monster;
   say('Going back to your lobby');
-  const startedAt = Date.now();
-  let inMatch = false;
+  let errMsg = '';
   const entered = await enterLobby(async (l) => {
     try {
       const code = await retryRejoin(() => l.rejoin(place.code, place.token), {
@@ -467,14 +467,15 @@ async function rejoinLastLobby(place) {
       });
       return { code, isOwner: members.owner === myName };
     } catch (e) {
-      inMatch = isInMatchError(e?.message);
+      errMsg = e?.message ?? '';
       throw e;
     }
   }, true);
-  if (!entered && inMatch) {
-    // the match is still running, so the token was not consumed: keep it for a manual Join once the match ends
-    storeRejoin(tabStorage(), place.code, place.token, startedAt, place);
+  if (entered) return;
+  if (isInMatchError(errMsg)) {
     if (!$('joinCode').value.trim()) $('joinCode').value = place.code;
+  } else if (errMsg && !/lost the connection/i.test(errMsg)) {
+    clearRejoin(tabStorage());   // terminal refusal (gone, expired, kicked, full, build mismatch): do not retry this token
   }
 }
 
@@ -591,8 +592,8 @@ function init() {
   showFirefoxTip();
   const invited = window.inviteCode(new URLSearchParams(location.search));
   // the server keeps a place from the moment this page's lobby connection drops: that is when the rejoin's clock starts too
-  window.addEventListener('pagehide', () => { if (lobby) leavingPage(tabStorage(), Date.now(), { name: myName, monster: myMonster }); });
-  const place = invited ? null : takeRejoin(tabStorage(), Date.now());
+  window.addEventListener('pagehide', () => { if (lobby && !entering) leavingPage(tabStorage(), Date.now(), { name: myName, monster: myMonster }); });
+  const place = invited ? null : peekRejoin(tabStorage(), Date.now());
   if (invited) {   // a reload doesn't join again; the address keeps its other parts
     const rest = new URLSearchParams(location.search);
     rest.delete('join');
