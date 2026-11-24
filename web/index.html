@@ -181,7 +181,7 @@
         <span style="color:var(--dim)">or</span>
         <input id="joinCode" maxlength="4" placeholder="CODE" aria-label="Lobby code"><button id="join" disabled>Join</button></div>
       <div id="lobbyList">
-        <div class="row"><span style="color:var(--dim)">Open lobbies</span><button id="refreshLobbies">Refresh</button></div>
+        <div class="row"><span style="color:var(--dim)">Open lobbies</span><button id="refreshLobbies" disabled>Refresh</button></div>
         <ul id="lobbies"><li>Looking for open lobbies…</li></ul>
       </div>
     </div>
@@ -289,6 +289,6 @@
 <script src="gameinput.js"></script>
 <script src="log_status.js"></script>
 <script src="boot.js"></script>
-<script type="module" src="front.js"></script>
+<script type="module" src="front.js" onerror="const m = document.getElementById('frontMsg'); m.textContent = 'The page could not load. Reload it to try again.'; m.className = 'problem'"></script>
 </body>
 </html>

@@ -49,7 +49,7 @@ test('every module front.js loads, directly or not, is preloaded', () => {
 test('Single player, Host and Join start disabled and front.js enables them once its handlers are attached', () => {
   for (const id of ['single', 'host', 'join']) assert.match(html, new RegExp(`<button id="${id}"[^>]*\\bdisabled\\b`), `#${id} must not be pressable before front.js runs`);
   // after the last handler, and not while a rejoin has them off for itself
-  assert.match(read('front.js'), /\$\('leave'\)\.addEventListener\('click'[\s\S]*?\n  \}\);\n[^\n]*\n  if \(!entering\) for \(const id of \['single', 'host', 'join'\]\) \$\(id\)\.disabled = false;\n\}/);
+  assert.match(read('front.js'), /\$\('leave'\)\.addEventListener\('click'[\s\S]*?\n  \}\);\n[^\n]*\n  if \(!entering\) for \(const id of \['single', 'host', 'join'\]\) \$\(id\)\.disabled = false;\n/);
 });
 
 // ---- nothing moves
@@ -126,4 +126,25 @@ test('the touch layout panel scrolls inside the screen instead of running past i
   const panel = readFileSync(new URL('./touch.js', import.meta.url), 'utf8').match(/#tpPanel \{([^}]*)\}/)[1];
   assert.match(panel, /max-height:\s*calc\(100% - /);
   assert.match(panel, /overflow-y:\s*auto/);
+});
+
+// ---- follow-ups from a fresh review of the first round
+
+test('a page whose scripts fail to load says so instead of staying on Loading', () => {
+  assert.match(html, /<script type="module" src="front\.js" onerror="[^"]*frontMsg[^"]*"><\/script>/);
+});
+
+test('Enter in the join code cannot start a second connection while one is under way or the buttons are off', () => {
+  const front = read('front.js');
+  assert.match(front, /\$\('joinCode'\)\.addEventListener\('keydown', \(e\) => \{ if \(isSubmitEnter\(e\) && !\$\('join'\)\.disabled\) hostOrJoin\(true\); \}\);/);
+  assert.match(front, /async function hostOrJoin\(join\) \{\n  if \(entering\) return;/);
+});
+
+test('watching the lobbies again makes the list usable at once, even in a hidden tab', () => {
+  assert.match(read('front.js'), /function startWatchingLobbies\(\) \{\n  cancelWatching\(\);\n  \$\('lobbyList'\)\.inert = false;/);
+});
+
+test('Refresh is off until the handlers are attached, like the main buttons', () => {
+  assert.match(html, /<button id="refreshLobbies" disabled>/);
+  assert.match(read('front.js'), /\n  \$\('refreshLobbies'\)\.disabled = false;\n\}/);
 });
