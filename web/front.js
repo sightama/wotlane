@@ -29,7 +29,7 @@ function leaveFront() {
   front.hidden = true;
   $('stage').inert = false;
 }
-const say = (text) => { $('frontMsg').textContent = text; };
+const say = (text) => { $('frontMsg').textContent = text; $('frontMsg').className = ''; };
 
 function remember(key, value) { try { localStorage.setItem('wotlane.' + key, value); } catch { /* private window: not kept */ } }
 function recall(key, fallback) { try { return localStorage.getItem('wotlane.' + key) ?? fallback; } catch { return fallback; } }
@@ -354,6 +354,7 @@ async function refreshLobbies() {
 
 function startWatchingLobbies() {
   cancelWatching();
+  $('lobbyList').inert = false;
   watching++;
   const tick = () => { if (!document.hidden) refreshLobbies(); };
   tick();
@@ -568,6 +569,7 @@ function showFirefoxTip() {
 }
 
 function init() {
+  $('frontMsg').removeAttribute('data-pending');
   say('');   // the page said Loading until now
   // a browser that can't run the game gets a plain message instead of a page that freezes
   const problem = window.wotmSupportProblem();
@@ -622,7 +624,7 @@ function init() {
   });
   $('host').addEventListener('click', () => hostOrJoin(false));
   $('join').addEventListener('click', () => hostOrJoin(true));
-  $('joinCode').addEventListener('keydown', (e) => { if (isSubmitEnter(e)) hostOrJoin(true); });
+  $('joinCode').addEventListener('keydown', (e) => { if (isSubmitEnter(e) && !$('join').disabled) hostOrJoin(true); });
   for (const id of ['lobbyStage', 'wins', ...MODIFIERS.map((m) => 'mod_' + m)])
     $(id).addEventListener('change', () => lobby && owner && sendSettings());
   $('monster').addEventListener('change', () => {
@@ -650,6 +652,7 @@ function init() {
   });
   // the buttons work now: their handlers are attached (a rejoin under way has switched them off for itself)
   if (!entering) for (const id of ['single', 'host', 'join']) $(id).disabled = false;
+  $('refreshLobbies').disabled = false;
 }
 
 try {

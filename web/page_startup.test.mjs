@@ -49,7 +49,7 @@ test('every module front.js loads, directly or not, is preloaded', () => {
 test('Single player, Host and Join start disabled and front.js enables them once its handlers are attached', () => {
   for (const id of ['single', 'host', 'join']) assert.match(html, new RegExp(`<button id="${id}"[^>]*\\bdisabled\\b`), `#${id} must not be pressable before front.js runs`);
   // after the last handler, and not while a rejoin has them off for itself
-  assert.match(read('front.js'), /\$\('leave'\)\.addEventListener\('click'[\s\S]*?\n  \}\);\n[^\n]*\n  if \(!entering\) for \(const id of \['single', 'host', 'join'\]\) \$\(id\)\.disabled = false;\n\}/);
+  assert.match(read('front.js'), /\$\('leave'\)\.addEventListener\('click'[\s\S]*?\n  \}\);\n[^\n]*\n  if \(!entering\) for \(const id of \['single', 'host', 'join'\]\) \$\(id\)\.disabled = false;\n/);
 });
 
 // ---- nothing moves
@@ -93,9 +93,8 @@ test('hover is drawn only where a pointer can hover, so a tap leaves nothing stu
 });
 
 test('the status line starts as Loading and keeps room for two lines', () => {
-  assert.match(html, /<p id="frontMsg" role="status">Loading…<\/p>/);
   assert.match(rule('#frontMsg'), /min-height:\s*2\.8em/);
-  assert.match(read('front.js'), /function init\(\) \{\n  say\(''\);/);
+  assert.match(read('front.js'), /function init\(\) \{\n  \$\('frontMsg'\)\.removeAttribute\('data-pending'\);\n  say\(''\);   \/\/ the page said Loading until now/);
 });
 
 test('buttons answer a press at once: no double-tap delay, a pressed state, a focus ring', () => {
@@ -126,4 +125,34 @@ test('the touch layout panel scrolls inside the screen instead of running past i
   const panel = readFileSync(new URL('./touch.js', import.meta.url), 'utf8').match(/#tpPanel \{([^}]*)\}/)[1];
   assert.match(panel, /max-height:\s*calc\(100% - /);
   assert.match(panel, /overflow-y:\s*auto/);
+});
+
+// ---- failed loads, a second connection, the lobbies list after Leave, Refresh
+
+test('a page whose modules fail to load says so instead of staying on Loading', () => {
+  // only the module graph stops front.js from running: its scripts and the modules the head preloads decide, not any error on the page
+  const head = html.slice(0, html.indexOf('</head>'));
+  assert.match(head, /<script>[^<]*\(\(\) => \{[^<]*window\.addEventListener\('error', [^<]*, true\)[^<]*\}\)\(\);[^<]*<\/script>/);   // in a function: no global names for the other scripts to collide with
+  assert.match(head, /querySelectorAll\('link\[rel="modulepreload"\], script\[type="module"\]'\)/);
+  assert.match(head, /const url = t === window \? e\.filename : t\.tagName === 'SCRIPT' \? t\.src : '';/);   // a failed link, icon or stylesheet is not a failed page
+  assert.match(head, /#frontMsg\[data-pending\]/);   // until init() has run
+  assert.match(html, /<p id="frontMsg" role="status" data-pending>Loading…<\/p>/);
+  assert.match(head, /The page could not load\. Reload it; if it keeps happening, try Chrome, Firefox or Edge\./);
+  assert.match(head, /setTimeout\(\(\) => \{[^}]*Still loading/);   // an engine that reports a syntax error without a file name
+  assert.doesNotMatch(html, /onerror=|wotmLoadFailure/);
+  assert.match(read('front.js'), /const say = \(text\) => \{ \$\('frontMsg'\)\.textContent = text; \$\('frontMsg'\)\.className = ''; \};/);
+});
+
+test('Enter in the join code cannot start a second connection while one is under way or the buttons are off', () => {
+  const front = read('front.js');
+  assert.match(front, /\$\('joinCode'\)\.addEventListener\('keydown', \(e\) => \{ if \(isSubmitEnter\(e\) && !\$\('join'\)\.disabled\) hostOrJoin\(true\); \}\);/);
+});
+
+test('watching the lobbies again makes the list usable at once, even in a hidden tab', () => {
+  assert.match(read('front.js'), /function startWatchingLobbies\(\) \{\n  cancelWatching\(\);\n  \$\('lobbyList'\)\.inert = false;/);
+});
+
+test('Refresh is off until the handlers are attached, like the main buttons', () => {
+  assert.match(html, /<button id="refreshLobbies" disabled>/);
+  assert.match(read('front.js'), /\n  \$\('refreshLobbies'\)\.disabled = false;\n\}/);
 });

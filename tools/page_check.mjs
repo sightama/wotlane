@@ -33,9 +33,12 @@ const check = async (name, fn) => {
 const expect = (cond, msg) => { if (!cond) throw new Error(msg); };
 const shot = (page, view) => page.screenshot({ path: join(out, `${label}-${browserName}-${view}.png`) });
 
-async function openPage(viewport, opts = {}) {
+// `refuseFullscreen`: the browser turns down requestFullscreen, as a phone may; the first tap on a button asks for it (web/touch.js), and
+// where it is granted Firefox's window becomes as tall as the screen, which hides a panel that runs past a short phone
+async function openPage(viewport, opts = {}, { refuseFullscreen = false } = {}) {
   const ctx = await browser.newContext({ viewport, ...opts });
   const page = await ctx.newPage();
+  if (refuseFullscreen) await page.addInitScript(() => { Element.prototype.requestFullscreen = () => Promise.reject(new TypeError('fullscreen refused')); });
   await page.goto(pageUrl, { waitUntil: 'load' });
   await page.waitForSelector('#home:not([hidden])');
   return { ctx, page };
@@ -197,7 +200,7 @@ for (const [view, viewport, opts, url, net] of [['desktop', { width: 1280, heigh
     const tick = () => {
       const r = Object.fromEntries(ids.map((id) => { const e = document.getElementById(id); const b = e?.getBoundingClientRect(); return [id, b ? [Math.round(b.x), Math.round(b.y), Math.round(b.width), Math.round(b.height)] : null]; }));
       const here = JSON.stringify(r);
-      if (window.__first === null && r.single) window.__first = r;
+      if (window.__first === null && ids.every((id) => r[id])) window.__first = r;   // the whole panel is parsed (a streaming parser shows it in pieces)
       else if (window.__first) for (const id of ids) if (r[id] && JSON.stringify(r[id]) !== JSON.stringify(window.__first[id])) window.__moves.push(`${id} ${window.__first[id]} to ${r[id]} at ${Math.round(performance.now() - t0)}ms`);
       const s = document.getElementById('single');
       if (window.__readyAt === null && s && !s.disabled) window.__readyAt = Math.round(performance.now() - t0);
@@ -208,8 +211,9 @@ for (const [view, viewport, opts, url, net] of [['desktop', { width: 1280, heigh
   await page.goto(url, { waitUntil: 'commit' });
   await page.waitForSelector('#home:not([hidden])');
   await sleep(3800);
-  const r = await page.evaluate(() => ({ moves: [...new Set(window.__moves)], readyAt: window.__readyAt, firstDisabled: window.__first && true }));
+  const r = await page.evaluate(() => ({ moves: [...new Set(window.__moves)], readyAt: window.__readyAt, panelSeen: window.__first && true }));
   await check(`[${view}${net}] no control moves after first paint`, async () => {
+    expect(r.panelSeen, 'the whole panel never appeared, so nothing was compared');
     expect(r.moves.length === 0, r.moves.slice(0, 3).join('; '));
     return `Single player usable at ${r.readyAt}ms`;
   });
@@ -218,7 +222,8 @@ for (const [view, viewport, opts, url, net] of [['desktop', { width: 1280, heigh
     await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
     await page.mouse.down();
     const t = await page.evaluate(() => getComputedStyle(document.getElementById('single')).transform);
-    await page.mouse.up({ button: 'left' }).catch(() => {});
+    await page.mouse.move(2, 2);   // let go away from the button: a click would start the game
+    await page.mouse.up();
     expect(t !== 'none', 'no transform while pressed');
   });
   await ctx.close();
@@ -235,6 +240,114 @@ await check('field borders are at least 3:1 against the panel', async () => {
   await ctx.close();
   expect(r.length === 0, r.join(', '));
 });
+// ---- a page whose scripts do not load says so
+for (const [what, serve] of [['cannot be fetched', (route) => route.abort()], ['has a syntax error', (route) => route.fulfill({ contentType: 'text/javascript', body: 'export {{{ not javascript' })]]) {
+  await check(`a page whose front.js ${what} says so and offers nothing`, async () => {
+    const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+    const page = await ctx.newPage();
+    await page.route('**/front.js', serve);
+    await page.goto(pageUrl, { waitUntil: 'load' });
+    await page.waitForFunction(() => /could not load/i.test(document.getElementById('frontMsg').textContent), null, { timeout: 5000 });
+    const on = await page.evaluate(() => ['single', 'host', 'join', 'refreshLobbies'].filter((id) => !document.getElementById(id).disabled));
+    await ctx.close();
+    expect(on.length === 0, `enabled: ${on}`);
+  });
+}
+
+await check('a classic script of the page that cannot be fetched stops the panel with a message', async () => {
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const page = await ctx.newPage();
+  await page.route('**/support.js', (route) => route.abort());
+  await page.goto(pageUrl, { waitUntil: 'load' });
+  await sleep(1000);
+  const r = await page.evaluate(() => ({ text: document.getElementById('frontMsg').textContent, cls: document.getElementById('frontMsg').className, on: ['single', 'host', 'join', 'refreshLobbies'].filter((id) => !document.getElementById(id).disabled) }));
+  await ctx.close();
+  expect(r.text !== '' && r.cls === 'problem', `message '${r.text}' class '${r.cls}'`);
+  expect(r.on.length === 0, `enabled: ${r.on}`);
+});
+
+await check('a page that is slow to start says so, and recovers when it does', async () => {
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const page = await ctx.newPage();
+  await page.route('**/front.js', async (route) => { await sleep(7500); await route.continue(); });
+  await page.goto(pageUrl, { waitUntil: 'commit' });
+  await page.waitForFunction(() => /Still loading/.test(document.getElementById('frontMsg').textContent), null, { timeout: 9000 });
+  await page.waitForFunction(() => !document.getElementById('single').disabled, null, { timeout: 15000 });
+  const after = await page.evaluate(() => ({ text: document.getElementById('frontMsg').textContent, cls: document.getElementById('frontMsg').className }));
+  await ctx.close();
+  expect(after.text === '' && after.cls === '', `after start: '${after.text}' class '${after.cls}'`);
+});
+
+// ---- a failed icon or stylesheet before the page is ready is not a failed page
+await check('a failed icon, stylesheet or unrelated script while front.js is still loading does not raise an alarm', async () => {
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const page = await ctx.newPage();
+  await page.route('**/front.js', async (route) => { await sleep(1500); await route.continue(); });
+  await page.goto(pageUrl, { waitUntil: 'commit' });
+  await page.waitForSelector('#frontMsg', { state: 'attached' });
+  await page.route('**/stray.js', (route) => route.fulfill({ contentType: 'text/javascript', body: "throw new Error('an unrelated script of this origin');" }));
+  await page.evaluate(() => {
+    const l = document.createElement('link'); l.rel = 'stylesheet'; l.href = '/no-such-file.css'; document.head.append(l);
+    for (const src of ['/stray.js', '/missing.js']) { const s = document.createElement('script'); s.src = src; document.head.append(s); }
+  });
+  await sleep(500);
+  const during = await page.evaluate(() => document.getElementById('frontMsg').textContent);
+  await page.waitForFunction(() => !document.getElementById('single').disabled, null, { timeout: 10000 });
+  const after = await page.evaluate(() => ({ text: document.getElementById('frontMsg').textContent, cls: document.getElementById('frontMsg').className }));
+  await ctx.close();
+  expect(during === 'Loading…', `the message became: ${during}`);
+  expect(after.text === '' && after.cls === '', `after start: '${after.text}' class '${after.cls}'`);
+});
+
+// ---- nothing can be pressed until front.js has run, then everything can
+await check('Single player, Host, Join and Refresh are off until front.js runs, then on', async () => {
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+  const page = await ctx.newPage();
+  await page.route('**/front.js', async (route) => { await sleep(1500); await route.continue(); });
+  await page.goto(pageUrl, { waitUntil: 'commit' });
+  await page.waitForSelector('#refreshLobbies', { state: 'attached' });
+  const ids = ['single', 'host', 'join', 'refreshLobbies'];
+  const early = await page.evaluate((list) => list.filter((id) => !document.getElementById(id).disabled), ids);
+  await page.waitForFunction((list) => list.every((id) => !document.getElementById(id).disabled), ids, { timeout: 10000 });
+  await ctx.close();
+  expect(early.length === 0, `pressable before front.js ran: ${early}`);
+});
+
+// ---- back from a lobby the list works at once
+await check('after Leave the open lobbies list is not greyed', async () => {
+  const { ctx, page } = await openPage({ width: 1280, height: 800 });
+  await page.fill('#name', 'Leaver');
+  await page.click('#host');
+  await page.waitForSelector('#inLobby:not([hidden]) #code:not(:empty)', { timeout: 10000 });
+  await page.click('#leave');
+  await page.waitForSelector('#choose:not([hidden])');
+  const inert = await page.evaluate(() => document.getElementById('lobbyList').inert);
+  await ctx.close();
+  expect(!inert, 'the list is inert after leaving a lobby');
+});
+
+// ---- Enter in the join code, pressed twice, joins once
+await check('Enter pressed twice in the join code opens one connection', async () => {
+  const host = await openPage({ width: 1280, height: 800 });
+  await host.page.fill('#name', 'Owner');
+  await host.page.click('#host');
+  await host.page.waitForSelector('#inLobby:not([hidden]) #code:not(:empty)', { timeout: 10000 });
+  const code = (await host.page.locator('#code').innerText()).trim();
+  const g = await openPage({ width: 1280, height: 800 });
+  await g.page.fill('#name', 'Twice');
+  await g.page.fill('#joinCode', code);
+  await sleep(600);   // the list watcher's own connection is settled
+  let opened = 0;
+  g.page.on('websocket', () => { opened++; });
+  // both key presses in one task: the second must find the Join button already off
+  await g.page.evaluate(() => { const i = document.getElementById('joinCode'); for (let k = 0; k < 2; k++) i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); });
+  await g.page.waitForSelector('#inLobby:not([hidden])', { timeout: 10000 });
+  await sleep(500);
+  await g.ctx.close();
+  await host.ctx.close();
+  expect(opened === 1, `${opened} connections opened`);
+});
+
 // ---- the status bar over the game: not faded, readable, sized
 for (const [view, viewport, opts, min] of [['desktop', { width: 1280, height: 800 }, {}, 24], ['touch', { width: 844, height: 390 }, { hasTouch: true }, 44]]) {
   const { ctx, page } = await openPage(viewport, opts);
@@ -267,15 +380,15 @@ for (const [view, viewport, opts, min] of [['desktop', { width: 1280, height: 80
 
 // ---- the touch layout panel (gear) still fits a phone held sideways and still edits
 for (const [w, h] of [[844, 390], [568, 320]]) {
-  const { ctx, page } = await openPage({ width: w, height: h }, { isMobile: true, hasTouch: true });
+  const { ctx, page } = await openPage({ width: w, height: h }, { isMobile: true, hasTouch: true }, { refuseFullscreen: true });
   await page.locator('#single').tap();
   await page.waitForSelector('#touchpad.on', { timeout: 5000 });
   await page.locator('#touchpad [data-id=gear]').tap();
   await page.waitForSelector('#tpPanel:not([hidden])');
-  // against the viewport as it is now: the first tap on a button asks for fullscreen, which makes Firefox's window as tall as the screen
   await check(`touch panel fits the screen (${w}x${h} phone)`, async () => {
+    const inner = await page.evaluate(() => innerHeight);
+    expect(inner === h, `the window is ${inner}px tall, not ${h}: the measurement would mean nothing`);
     const box = await page.locator('#tpPanel').boundingBox();
-    const h = await page.evaluate(() => innerHeight);
     expect(box.y >= 0 && box.y + box.height <= h, `panel spans ${Math.round(box.y)} to ${Math.round(box.y + box.height)} of ${h}`);
   });
   // the panel's own size is the touch layout's (web/touch.js); the page's target size must not reach it, and its span is reported

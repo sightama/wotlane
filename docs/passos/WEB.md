@@ -33,9 +33,13 @@ For online play start `wotm_server --ws-port <port>`; a page opened from `localh
   (`<link rel="modulepreload">`; `web/page_startup.test.mjs` fails when the list and the import graph differ). The card is anchored to the top of
   the screen, the device note and the Firefox tip sit below the actions, and the open lobbies area is there from the start with
   "Looking for open lobbies…" and room for the two-line empty message; it stays on the page, greyed while a join is under way and with a
-  message in its place when the server cannot give the list, so no control above or below it moves after the first paint. A button shows a pressed
+  message in its place when the server cannot give the list, so no control above it moves after the first paint (the controls below it move when several lobbies arrive). A button shows a pressed
   state at once (`:active`, `touch-action: manipulation`), and Host and Join say what they are doing in the status line. Controls are 44px on
   any device with a touch screen (`pointer: coarse` or `any-pointer: coarse`) and 24px otherwise; field borders are 3:1 against the panel.
+- **Front panel start:** the status line says "Loading…" (`data-pending`) until `init()` runs. A script of `front.js`'s module graph that cannot be
+  fetched, has a syntax error or throws as it runs replaces it with "The page could not load…" (a head script decides from the page's module
+  scripts and `modulepreload` links; a failed icon, stylesheet, preload link or unrelated script does not). After 6 s without `init()` it says
+  "Still loading…". A broken classic script that `init()` needs ends in `init()`'s own message.
 - **Disc:** `/disc` is a WASMFS fetch backend over `data/`: the game's reads become 1 MiB range requests, each fetched once
   (`native/wotm_webfs.cpp`). `web/data_retry.js` retries network and 5xx failures in every thread and reports each chunk, which
   `web/loading.js` shows as "Downloading game data 34% (9 of 27 MB). Only the first visit downloads this much." over the game.

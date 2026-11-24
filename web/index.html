@@ -28,6 +28,22 @@
  "image": "https://playwotm.com/og.png", "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"}}
 </script>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%23e0592a'/%3E%3Ctext x='8' y='12' font-size='10' font-family='sans-serif' font-weight='700' text-anchor='middle' fill='%23fff'%3EW%3C/text%3E%3C/svg%3E">
+<script>
+// front.js cannot start the panel when a module of its graph fails: a script that cannot be fetched, a syntax error, or an error thrown as
+// the modules run. Those replace the Loading status. Errors of other files, a failed icon, stylesheet or preload link, do not; and an engine
+// that reports a syntax error without a file name gets the slow-start note after a few seconds. The status line is cleared when init() runs.
+(() => {
+const pending = () => document.querySelector('#frontMsg[data-pending]');
+window.addEventListener('error', (e) => {
+  const modules = [...document.querySelectorAll('link[rel="modulepreload"], script[type="module"]')].map((n) => n.href || n.src);
+  const t = e.target;
+  const url = t === window ? e.filename : t.tagName === 'SCRIPT' ? t.src : '';
+  const m = pending();
+  if (m && url && modules.includes(url)) { m.textContent = 'The page could not load. Reload it; if it keeps happening, try Chrome, Firefox or Edge.'; m.className = 'problem'; }
+}, true);
+setTimeout(() => { const m = pending(); if (m && !m.classList.contains('problem')) m.textContent = 'Still loading. If this stays, reload the page.'; }, 6000);
+})();
+</script>
 <link rel="modulepreload" href="front.js">
 <link rel="modulepreload" href="enter_key.js">
 <link rel="modulepreload" href="lobby.js">
@@ -181,7 +197,7 @@
         <span style="color:var(--dim)">or</span>
         <input id="joinCode" maxlength="4" placeholder="CODE" aria-label="Lobby code"><button id="join" disabled>Join</button></div>
       <div id="lobbyList">
-        <div class="row"><span style="color:var(--dim)">Open lobbies</span><button id="refreshLobbies">Refresh</button></div>
+        <div class="row"><span style="color:var(--dim)">Open lobbies</span><button id="refreshLobbies" disabled>Refresh</button></div>
         <ul id="lobbies"><li>Looking for open lobbies…</li></ul>
       </div>
     </div>
@@ -207,7 +223,7 @@
       <p id="guestSettings" style="margin:0;color:var(--dim)"></p>
       <div class="row"><button id="leave">Leave</button></div>
     </div>
-    <p id="frontMsg" role="status">Loading…</p>
+    <p id="frontMsg" role="status" data-pending>Loading…</p>
     <div class="row"><button id="openSettings">Settings</button><button id="openReport" hidden>Send report</button></div>
     <p id="deviceNote" hidden role="note"></p>
     <p id="firefoxTip" hidden role="note"><span id="firefoxTipText"></span> <button id="firefoxTipOk" type="button">Got it</button></p>
