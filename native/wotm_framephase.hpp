@@ -56,9 +56,9 @@ namespace wotm::framephase
     // How far (ms) a capture at captureMs is from the target marginMs before an animation frame of the grid lastRafMs + k *
     // displayPeriodMs: positive when it came early (the boundary may move later), negative past the target (it then aims at the
     // animation frame it just missed), within +-half a display frame. NaN on a display that does not lock, or with no animation frame
-    // for staleMs (a hidden tab draws none)
+    // for staleMs (a hidden tab draws none; past that the phase extrapolated from a period a little off drifts by a few ms)
     inline double errorMs(double captureMs, double lastRafMs, double displayPeriodMs, double gamePeriodMs, double marginMs = 2.0,
-                          double staleMs = 1000.0)
+                          double staleMs = 250.0)
     {
         if (!locks(gamePeriodMs, displayPeriodMs) || captureMs - lastRafMs > staleMs)
             return std::nan("");
@@ -94,6 +94,7 @@ namespace wotm::framephase
         explicit Aim(double percentile = 0.1) : percentile_(percentile) {}
         void add(double error, double displayPeriodMs)
         {
+            // (a coarse animation-frame clock whose median interval flips by over 1% keeps the window starting over: no slew, which is safe)
             if (std::isnan(error) || std::fabs(displayPeriodMs - period_) > 0.01 * displayPeriodMs)
             {
                 count_ = next_ = 0;
@@ -123,10 +124,12 @@ namespace wotm::framephase
             for (std::size_t i = 0; i < count_; ++i)
                 v[i] = ref + std::remainder(errors_[i] - ref, period_);
             std::sort(v.begin(), v.begin() + count_);
-            const double low = v[count_ / 10], high = v[count_ - 1 - count_ / 10];
+            const std::size_t k = static_cast<std::size_t>(percentile_ * (count_ - 1));   // the aimed percentile
+            const std::size_t tail = static_cast<std::size_t>(0.1 * (count_ - 1));      // the spread: 10th to 90th
+            const double low = v[tail], high = v[count_ - 1 - tail];
             if (high - low > period_ / 2)
                 return 0.0;
-            const double step = stepFor(v[static_cast<std::size_t>(percentile_ * (count_ - 1))], maxStepMs, deadBandMs);
+            const double step = stepFor(v[k], maxStepMs, deadBandMs);
             for (std::size_t i = 0; i < count_; ++i)
                 errors_[i] -= step;
             return step;

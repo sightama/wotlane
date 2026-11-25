@@ -5737,7 +5737,9 @@ TEST(framephase_display_period_follows_the_animation_frames)
     CHECK(std::fabs(d.periodMs() - 1000.0 / 120.0) < 0.01);
 }
 
-// Closed loop: frames start on the grid (moved by each slew), take a busy time with jitter, and the wait from capture to the next
+// Closed loop (a model: here each step moves the next capture; in the runtime the vblank that applies it falls after the next frame
+// started, so it moves the one after, which a scratch simulation found makes no difference): frames start on the grid, take a busy
+// time with jitter, and the wait from capture to the next
 // animation frame falls from about half a display period to about the margin, on 60 and 120 Hz and through a change between them;
 // a 144 Hz display is never slewed
 TEST(framephase_closed_loop_brings_the_wait_for_the_display_down_to_the_margin)
