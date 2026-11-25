@@ -757,15 +757,16 @@ namespace
         std::atomic<bool> stop{false};
         std::thread thread;
         bool ok = false;
-        explicit RunningServer(ServerConfig c) : server(withQuiet(c))
+        // `pollMs`: how long each Server::poll may wait for something to arrive
+        explicit RunningServer(ServerConfig c, int pollMs = 1) : server(withQuiet(c))
         {
             std::string err;
             ok = server.start(err);
             if (!ok)
                 std::printf("  server failed to start: %s\n", err.c_str());
-            thread = std::thread([this] {
+            thread = std::thread([this, pollMs] {
                 while (!stop)
-                    server.poll(1);
+                    server.poll(pollMs);
             });
         }
         ~RunningServer()
@@ -2450,6 +2451,29 @@ namespace
         CHECK(pings.rfind("PINGS " + code + " Ana:-,Bia:", 0) == 0);
         CHECK(pings.find("Bia:-") == std::string::npos);
         CHECK(pings.find_first_not_of("0123456789", pings.find("Bia:") + 4) == std::string::npos);
+    }
+
+    // Server::poll waits for any of its sockets, not only ENet's: a browser's ping is answered as it arrives, however long the poll may
+    // wait (its round trip is the input delay's measure, and its inputs come the same way)
+    TEST(ws_ping_is_answered_without_waiting_out_the_poll)
+    {
+        ServerConfig cfg = wsTestConfig();
+        RunningServer rs(cfg, 200);
+        CHECK(rs.ok);
+        for (int i = 0; i < 5; ++i)
+        {
+            wotm_net::WsLink b;
+            std::string err;
+            CHECK(b.connect(wsUrl(cfg, "/lobby"), 2000, err));
+            b.ping();
+            const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+            while (b.pingMs() < 0 && std::chrono::steady_clock::now() < until)
+            {
+                b.waitReadable(20);
+                b.pump();
+            }
+            CHECK(b.pingMs() >= 0 && b.pingMs() < 50);
+        }
     }
 
     // the owner hands the lobby to another member (OWNER <name>): MEMBERS names the new owner to everyone and only the new owner may

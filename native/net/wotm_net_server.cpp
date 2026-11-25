@@ -142,9 +142,19 @@ namespace wotm_net
     {
         if (!host_)   // start failed or was never called
             return;
+        // the wait is for any socket, not only ENet's: a browser's pong or input is read as it arrives, not after the poll's wait
+        std::vector<SocketHandle> sockets{host_->socket, listener_.handle(), wsListener_.handle()};
+        for (const std::unique_ptr<Conn> &c : conns_)
+            if (c)
+                sockets.push_back(c->link->handle());
+        for (const std::unique_ptr<WsLink> &l : wsPending_)
+            sockets.push_back(l->handle());
+        for (const std::unique_ptr<WsPeer> &p : wsPeers_)
+            sockets.push_back(p->link->handle());
+        waitAnyReadable(sockets, ms);
         acceptAndReadLobby();
         serviceWebSockets();
-        serviceEnet(ms);
+        serviceEnet(0);
         tickMatches();
         tickLobbyPings();
         expireGhosts();

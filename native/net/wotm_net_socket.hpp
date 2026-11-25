@@ -23,6 +23,7 @@
 #include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <poll.h>
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -69,6 +70,25 @@ namespace wotm_net
         return n > 0;
     }
 
+    // waits up to `ms` for any of the sockets to become readable (a connection to accept, data, or a close); true if one did
+    inline bool waitAnyReadable(const std::vector<SocketHandle> &sockets, int ms)
+    {
+        std::vector<pollfd> fds;
+        for (SocketHandle s : sockets)
+            if (s != kNoSocket)
+                fds.push_back(pollfd{s, POLLIN, 0});
+#ifdef _WIN32
+        if (fds.empty())   // WSAPoll refuses an empty set instead of waiting
+        {
+            Sleep(static_cast<DWORD>(ms));
+            return false;
+        }
+        return WSAPoll(fds.data(), static_cast<ULONG>(fds.size()), ms) > 0;
+#else
+        return ::poll(fds.data(), static_cast<nfds_t>(fds.size()), ms) > 0;
+#endif
+    }
+
     // Sending to a peer that already closed raises SIGPIPE on POSIX, which kills the process (wotm_server when a lobby member drops);
     // with the signal suppressed, send fails and sendLine closes the socket like any other error. Windows has no SIGPIPE.
 #if defined(MSG_NOSIGNAL)
@@ -94,6 +114,8 @@ namespace wotm_net
         virtual int pingMs() const { return -1; }
         // waits up to `ms` for something to arrive
         virtual void waitReadable(int ms) = 0;
+        // the socket underneath (for a wait on many links at once: waitAnyReadable)
+        virtual SocketHandle handle() const = 0;
 
         // waits up to `timeoutMs` for a line
         bool readLine(std::string &line, int timeoutMs)
@@ -253,7 +275,7 @@ namespace wotm_net
             s_ = kNoSocket;
         }
 
-        SocketHandle handle() const { return s_; }
+        SocketHandle handle() const override { return s_; }
 
     private:
         void setup()
@@ -332,6 +354,7 @@ namespace wotm_net
                 closeSocket(s_);
             s_ = kNoSocket;
         }
+        SocketHandle handle() const { return s_; }
 
     private:
         SocketHandle s_ = kNoSocket;
