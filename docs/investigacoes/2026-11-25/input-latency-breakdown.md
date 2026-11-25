@@ -62,7 +62,7 @@ each player's round trip would suggest was not measured here (the lag proxy adds
 
 ## What this says to attack next
 
-1. **The input delay (74% live).** Each frame of delay is 16.7 ms for every press. It is set by the round trip, so the levers are:
+1. **The input delay (70% of the live stage sum).** Each frame of delay is 16.7 ms for every press. It is set by the round trip, so the levers are:
    - *Rollback* (issue #30, paused): predicts the remote input and corrects mispredictions, so local input can apply after a small delay
      instead of one covering the round trip. It is the largest candidate lever on this stage (by how lockstep works, not measured here);
      its cost is re-simulating frames.
