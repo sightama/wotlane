@@ -55,7 +55,9 @@ left=$(otool -L "$app/Contents/Resources/game/wotm" "$app"/Contents/Resources/ga
 # changing the libraries breaks their signatures; arm64 needs every binary signed (ad hoc here: no Apple developer ID)
 run_logged "$REPO/dist/codesign.log" codesign --force --deep --sign - "$app"
 cp "$REPO/tools/friends/mac/README.txt" "$out/"
-printf 'wotlane build %s, commit %s\n' "$id" "$(git -C "$REPO" rev-parse --short HEAD)" >"$out/BUILD.txt"
+# plays with: the simulation id the server compares (packages with the same one join each other's games)
+printf 'wotlane build %s, commit %s\nplays with: %s\n' "$id" "$(git -C "$REPO" rev-parse --short HEAD)" \
+    "$(tr -d '\r\n' <"$bin/wotm.buildid")" >"$out/BUILD.txt"
 
 bad=$(find "$out" -type f \( -name 'SCUS*' -o -name '*.iso' -o -name '*.elf' -o -name '*.rom' \) | head -3)
 [ -z "$bad" ] || fail "disc file in the package: $bad"

@@ -151,7 +151,8 @@ class SimulationIdTest(unittest.TestCase):
     def test_the_core_simulation_files_are_never_presentation(self):
         core = ('native/runtime/wotm_sync.inc', 'native/runtime/wotm_overrides.cpp', 'native/runtime/wotm_live.inc', 'native/net',
                 'native/runtime/wotm_snd.inc', 'native/runtime/wotm_rollback.inc', 'native/wotm_detmath.cpp', 'native/wotm_lockon.hpp',
-                'native/runtime/wotm_creator.inc', 'native/wotm_model.hpp', 'native/wotm_tint.hpp', 'native/runtime/wotm_mapedit_view.inc')
+                'native/runtime/wotm_creator.inc', 'native/wotm_model.hpp', 'native/wotm_tint.hpp', 'native/runtime/wotm_mapedit_view.inc',
+                'native/runtime/wotm_trainview.inc')
         for rel in core:
             self.assertFalse(any(rel == p or rel.startswith(p + '/') or p.startswith(rel + '/') for p in build_id.PRESENTATION), rel)
 
@@ -164,7 +165,7 @@ class SimulationIdTest(unittest.TestCase):
         # game's hooks read (g_wotm*); a pattern check, so a listed file that does any of them fails
         writes = re.compile(r'rdram\[|rdram \+|rdram\)|uint8_t \*rdram|const_cast<uint8_t|R5900Context|ctx->|runtime->|PS2Runtime &|'
                             r'registerFunction|hostLeaf|ps2_stubs::|setReturn|setReg|'
-                            r'g_wotm\w*\s*(=[^=]|\|=|&=|\+=|-=)|\+\+g_wotm|g_wotm\w*\+\+|g_wotm\w*\.(store|fetch_add|fetch_sub|exchange)\(')
+                            r'g_wotm\w*\s*(=[^=]|\|=|&=|\+=|-=)|\+\+g_wotm|g_wotm\w*\+\+|\bg_\w+\.(store|fetch_\w+|exchange)\(')
         for rel in build_id.PRESENTATION:
             root = build_id.REPO / rel
             files = [root] if root.is_file() else [p for p in root.rglob('*') if p.suffix in ('.hpp', '.h', '.cpp', '.inc')]

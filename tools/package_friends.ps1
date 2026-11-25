@@ -49,7 +49,9 @@ foreach ($m in Get-ChildItem (Join-Path $repo 'mods') -Directory) {
     Copy-Item $m.FullName (Join-Path $out 'mods') -Recurse
 }
 Set-Content (Join-Path $out 'ISO\PUT_YOUR_ISO_HERE.txt') 'Put your own War of the Monsters (USA) .iso in this folder, then run Setup.bat.' -Encoding ascii
-Set-Content (Join-Path $out 'BUILD.txt') "wotlane build $id, commit $(git -C $repo rev-parse --short HEAD)" -Encoding ascii
+# plays with: the simulation id the server compares (packages with the same one join each other's games)
+$plays = (Get-Content (Join-Path $bin 'wotm.buildid')).Trim()
+Set-Content (Join-Path $out 'BUILD.txt') "wotlane build $id, commit $(git -C $repo rev-parse --short HEAD)`r`nplays with: $plays" -Encoding ascii
 
 $bad = @(Get-ChildItem $out -Recurse -File | Where-Object { $_.Name -match '^SCUS|\.(iso|elf|rom)$' })
 if ($bad.Count) { throw "disc file in the package: $($bad.FullName -join ', ')" }

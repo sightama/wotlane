@@ -32,12 +32,12 @@ PRESENTATION = (
     'native/wotm_native.hpp', 'native/wotm_fx.hpp', 'native/wotm_gs.hpp', 'native/wotm_glsl.hpp', 'native/wotm_interp.hpp',
     'native/wotm_msaa.hpp', 'native/wotm_preview.hpp', 'native/wotm_flame.hpp', 'native/wotm_texmods.hpp', 'native/wotm_glad_web.cpp',
     # (not wotm_model.hpp or wotm_tint.hpp: the creator makes the skins' PNGs with them, and mods are in the config hash)
-    # presenting and measuring: the present phase, the window, the pause view, the latency probes
+    # presenting and measuring: the present phase, the window, the pause view, the latency probes. The present phase slews when this
+    # machine's vblanks fire (g_wotmVblankSlewUs): wall-clock pacing only, since lockstep keys every input by frame index
     'native/wotm_framephase.hpp', 'native/wotm_windowfit.hpp', 'native/wotm_pauseview.hpp', 'native/wotm_latency.hpp',
-    # drawn screens: the menu font, the legend and prompts, the training view (not the map editor's view: it hands the pad to the
-    # free camera)
+    # drawn screens: the menu font, the legend and prompts (not the map editor's view, which hands the pad to the free camera, nor the
+    # training view, which resets the training state it shares with the hooks)
     'native/runtime/wotm_menufont.inc', 'native/runtime/wotm_legend.inc', 'native/runtime/wotm_prompts.inc',
-    'native/runtime/wotm_trainview.inc',
     # not in the game: the standalone viewers and players, tests, art, the Windows resources and build script
     'native/fmvplay.cpp', 'native/monview.cpp', 'native/sndplay.cpp', 'native/viewer.cpp', 'native/tests', 'native/assets',
     'native/build.bat', 'native/wotm.ico', 'native/wotm.rc',

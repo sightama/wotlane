@@ -38,6 +38,7 @@ If something goes wrong
 -----------------------
 The app says what's wrong in plain words. The usual ones:
 - "There is no game ...": the code is wrong or that game is over. Ask your friend for a new code.
-- "a different version": everyone needs the same download (compare BUILD.txt).
+- "a different version": everyone needs a download that plays with the others' (compare the
+  "plays with" line of BUILD.txt).
 - Anything else: send your friend the files in your home folder under Library/Application Support/wotlane/logs
   (in Finder: Go > Go to Folder, then type ~/Library/Application Support/wotlane/logs).
