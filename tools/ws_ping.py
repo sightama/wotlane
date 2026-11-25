@@ -5,7 +5,7 @@
 
   url           ws:// or wss:// endpoint, e.g. wss://playwotm.com/lobby, or ws://127.0.0.1:7780/lobby on the server's VM
   --secs        how long to measure (default 60)
-  --every       ms between pings (default 100: the server pings each browser this often)
+  --every       ms between pings (default 100: the server pings each browser in a match this often)
   --connect-to  connect to this address instead of the URL's host; the TLS name and Host stay the URL's (e.g. the origin's IP, to
                 leave Cloudflare out)
   --insecure    with --connect-to an origin whose certificate is not for its IP: skip the certificate check (pings carry nothing)
