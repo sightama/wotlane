@@ -37,6 +37,9 @@ void wotmWebNetStall(double ms, const char *text);
 // late in all, how many, how many over half a vblank late); any thread
 void wotmWebNetStats(uint32_t frame, uint32_t waits, double waitMs, uint32_t delay, uint32_t pingMs, double idleMs, const uint32_t periods[4],
                      double vblankLateMs, double vblankWakes, double vblankSlowWakes);
+// rollback (WOTM_ROLLBACK) for the page's diagnostics: the window this PC runs with, and since the match began the rollbacks, the frames
+// redone and their ms, the states kept and their ms
+void wotmWebRollbackStats(uint32_t window, uint32_t rollbacks, uint32_t redone, double redoMs, uint32_t saves, double saveMs);
 
 // the earliest key or button the page saw go down since the last call (ms, emscripten_get_now's clock; 0: none), and forgets it: the
 // input latency probe takes it at every sample (wotm_latency.hpp; boot.js and touch.js report through wotm_web_input_at); any thread

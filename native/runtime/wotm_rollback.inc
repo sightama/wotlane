@@ -543,6 +543,9 @@ namespace wotm_rollback
         constexpr uint32_t kWindowFrames = 300u;
         std::vector<double> g_played, g_saves, g_restores, g_redos;
         uint32_t g_frames = 0, g_rollbacks = 0, g_redone = 0, g_depthMax = 0;
+        // since the match began, for the page's diagnostics (wotmWebRollbackStats)
+        uint32_t g_allRollbacks = 0, g_allRedone = 0, g_allSaves = 0;
+        double g_allRedoMs = 0.0, g_allSaveMs = 0.0;
         clk::time_point g_frameBegin, g_redoStart;
         uint32_t g_redoFrom = 0;     // the first frame the running redo runs again
         bool g_frameValid = false;   // g_frameBegin marks a present frame's start with no rollback since
@@ -572,6 +575,8 @@ namespace wotm_rollback
             g_state.save(g_slots[slot(frame)], frame);
             g_slotFrame[slot(frame)] = frame;
             g_saves.push_back(ms(t0, clk::now()));
+            ++g_allSaves;
+            g_allSaveMs += g_saves.back();
         }
 
         // the state after `frame`'s boundary comes back; false (and the match stops) when it isn't kept
@@ -624,8 +629,7 @@ namespace wotm_rollback
             g_redoFrom = wrong;
             g_frameValid = false;
             ++g_rollbacks;
-            g_redone += present - wrong + 1u;
-            g_depthMax = std::max(g_depthMax, present - wrong + 1u);
+            ++g_allRollbacks;
             return true;
         }
 
@@ -638,8 +642,15 @@ namespace wotm_rollback
             if (frame < g_presentFrame)
                 g_skipSamples += g_presentFrame - frame;
             g_redo = false;
-            if (frame >= g_redoFrom)
-                g_redos.push_back(ms(g_redoStart, clk::now()) / static_cast<double>(frame - g_redoFrom + 1u));
+            if (frame < g_redoFrom)
+                return;
+            const uint32_t frames = frame - g_redoFrom + 1u;
+            const double spent = ms(g_redoStart, clk::now());
+            g_redos.push_back(spent / frames);
+            g_redone += frames;
+            g_depthMax = std::max(g_depthMax, frames);
+            g_allRedone += frames;
+            g_allRedoMs += spent;
         }
 
         // Every kWindowFrames present frames: the costs measured (a save and a restore of the same state now and then when no rollback
@@ -702,6 +713,8 @@ namespace wotm_rollback
             g_hashed = kNone;
             g_skipSamples = 0;
             g_frameValid = false;
+            g_allRollbacks = g_allRedone = g_allSaves = 0;
+            g_allRedoMs = g_allSaveMs = 0.0;
         }
     }
 
@@ -813,6 +826,9 @@ namespace wotm_rollback
             return;
         if (!g_lockstep && g_state.size() != 0)
             measure();
+#ifdef __EMSCRIPTEN__
+        wotmWebRollbackStats(g_window, g_allRollbacks, g_allRedone, g_allRedoMs, g_allSaves, g_allSaveMs);
+#endif
         const uint32_t next = wotm_sync::g_index, ahead = g_lockstep ? 0u : g_window;
         if (next >= ahead)
             waitThrough(next - ahead);

@@ -23,7 +23,7 @@ namespace
     std::atomic<bool> g_hidden{false};
     std::atomic<double> g_stallMs{0};
     // the match's counters for the page's diagnostics (wotmWebNetStats): index = web/diag.js NET_STAT
-    std::atomic<double> g_netStats[13];
+    std::atomic<double> g_netStats[20];
     std::atomic<double> g_inputAt{0};   // the earliest button or key down not taken yet (wotm_web_input_at, 0: none)
     wotm::latency::Window g_latency;    // the window the page took last (wotm_web_latency_take); main thread only
     wotm::framephase::Display g_display;   // main thread only (the present)
@@ -106,12 +106,24 @@ void wotmWebNetStats(uint32_t frame, uint32_t waits, double waitMs, uint32_t del
     g_netStats[12] = vblankSlowWakes;
 }
 
+void wotmWebRollbackStats(uint32_t window, uint32_t rollbacks, uint32_t redone, double redoMs, uint32_t saves, double saveMs)
+{
+    g_netStats[13] = 1;
+    g_netStats[14] = window;
+    g_netStats[15] = rollbacks;
+    g_netStats[16] = redone;
+    g_netStats[17] = redoMs;
+    g_netStats[18] = saves;
+    g_netStats[19] = saveMs;
+}
+
 // called by the page (boot.js)
 extern "C"
 {
     // the match's counters, as wotmWebNetStats set them: 0 frame, 1 waits, 2 wait ms, 3 delay, 4 ping, 5 game thread idle ms, 6 to 9
-    // frames by length, 10 vblank wake lateness ms, 11 vblank wakes, 12 wakes over half a vblank late (anything else: 0)
-    EMSCRIPTEN_KEEPALIVE double wotm_web_net_stat(int which) { return which >= 0 && which < 13 ? g_netStats[which].load() : 0; }
+    // frames by length, 10 vblank wake lateness ms, 11 vblank wakes, 12 wakes over half a vblank late; rollback (wotmWebRollbackStats):
+    // 13 on (1), 14 window, 15 rollbacks, 16 frames redone, 17 their ms, 18 states kept, 19 their ms (anything else: 0)
+    EMSCRIPTEN_KEEPALIVE double wotm_web_net_stat(int which) { return which >= 0 && which < 20 ? g_netStats[which].load() : 0; }
     // a button or key went down at `ms` (performance.timeOrigin + the event's time, the clock of emscripten_get_now): kept unless an
     // earlier one is still waiting for the game's next sample (wotmWebTakeInputAt)
     EMSCRIPTEN_KEEPALIVE void wotm_web_input_at(double ms)

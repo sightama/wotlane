@@ -297,6 +297,8 @@ cause can be read afterwards without asking anyone to copy logs.
   `ee_busy_ms`, `fr_len`, `raf_p95_ms`, `lat_ms` and the server's `behind_avg`), to compare runs before and after a pacing change;
   `sh tools/timesync_sim/run.sh` simulates the lockstep's waits between a fast and a slow device, with and without a frame-advantage
   stretch.
+  With rollback on ("Rollback"): `rb_win` (the frames this PC runs past its newest confirmed input), `rb_n` and `rb_frames` (the
+  window's rollbacks and frames redone), `rb_redo_ms` (a redone frame, with the state it keeps) and `rb_save_ms` (a state kept).
   `disc_net_mb` and `disc_hit_mb`: the disc megabytes the game and the page's prefetch got in the window over the network and from the
   browser's disc cache (`web/diag.js` DiscWatch; Firefox's synchronous reads through the helper worker are not counted). A match
   start whose first frames came late with a large `disc_net_mb` waited on its download.

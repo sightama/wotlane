@@ -286,7 +286,8 @@ export function installAudioWatch(win) {
 // delay in frames, the ping, the ms the game thread spent idle (waiting for a vblank or an event), its frames by length in frame periods
 // (up to 1.25, 1.75, 2.25, longer: `periods`) and the vblank clock's wakes (`vblankWakes`), the ms they woke late in all (`vblankLateMs`) and
 // how many were over half a vblank late (`vblankSlow`): how coarse this browser's timers are. Only reads.
-export const NET_STAT = { frame: 0, waits: 1, waitMs: 2, delay: 3, pingMs: 4, idleMs: 5, periods: 6, vblankLateMs: 10, vblankWakes: 11, vblankSlow: 12 };
+export const NET_STAT = { frame: 0, waits: 1, waitMs: 2, delay: 3, pingMs: 4, idleMs: 5, periods: 6, vblankLateMs: 10, vblankWakes: 11, vblankSlow: 12,
+  rbOn: 13, rbWindow: 14, rollbacks: 15, redone: 16, redoMs: 17, saves: 18, saveMs: 19 };
 export function readGame(win) {
   const m = win.Module;
   const f = win.wotmFrames;
@@ -297,6 +298,8 @@ export function readGame(win) {
     idleMs: stat(NET_STAT.idleMs),
     periods: typeof m?._wotm_web_net_stat === 'function' ? [0, 1, 2, 3].map((k) => stat(NET_STAT.periods + k)) : undefined,
     vblankLateMs: stat(NET_STAT.vblankLateMs), vblankWakes: stat(NET_STAT.vblankWakes), vblankSlow: stat(NET_STAT.vblankSlow),
+    rbOn: stat(NET_STAT.rbOn), rbWindow: stat(NET_STAT.rbWindow), rollbacks: stat(NET_STAT.rollbacks), redone: stat(NET_STAT.redone),
+    redoMs: stat(NET_STAT.redoMs), saves: stat(NET_STAT.saves), saveMs: stat(NET_STAT.saveMs),
   };
 }
 
@@ -339,6 +342,9 @@ export function windowFields(prev, cur) {
   // is counted in this one can leave less than nothing: no figure then)
   const busyMs = frames > 0 && Number.isFinite(cur.idleMs) ? cur.t - prev.t - since('idleMs') - (since('waitMs') ?? 0) : -1;
   const timed = lat && lat.unknown < lat.n ? lat : undefined;   // the total and the sample stage need presses with a page time
+  // rollback (docs/ONLINE.md "Rollback"): the window this PC runs with, and the window's rollbacks, frames redone and their costs
+  const rb = cur.rbOn === 1;
+  const redone = rb ? since('redone') : undefined, saves = rb ? since('saves') : undefined;
   return present([
     ['up_s', whole(cur.t / 1000)],
     ['fps', fix(perSecond(presented))],
@@ -387,6 +393,11 @@ export function windowFields(prev, cur) {
     ['lat_pr_ms', fix(lat?.present)],
     ['lat_bl_ms', fix(lat?.blend)],
     ['lat_unk', lat?.unknown > 0 ? lat.unknown : undefined],
+    ['rb_win', rb ? cur.rbWindow : undefined],
+    ['rb_n', rb ? since('rollbacks') : undefined],
+    ['rb_frames', redone],
+    ['rb_redo_ms', redone > 0 ? fix(since('redoMs') / redone) : undefined],
+    ['rb_save_ms', saves > 0 ? fix(since('saveMs') / saves) : undefined],
     ['disc_net_mb', cur.disc?.net > 0 ? fix(cur.disc.net / MIB) : undefined],
     ['disc_hit_mb', cur.disc?.hit > 0 ? fix(cur.disc.hit / MIB) : undefined],
   ]);

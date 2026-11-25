@@ -123,12 +123,33 @@ test('audio: callbacks later than 1.5 buffers are underruns; a page without scri
 
 test('the game counters are read from the wasm module and the presented-frame counter, and a game that is not there yet gives nothing', () => {
   const calls = [];
-  const Module = { _wotm_web_net_stat: (i) => { calls.push(i); return [600, 3, 120.5, 4, 55, 9000.5, 500, 40, 30, 5, 300.5, 600, 7][i]; } };
+  const Module = { _wotm_web_net_stat: (i) => { calls.push(i); return [600, 3, 120.5, 4, 55, 9000.5, 500, 40, 30, 5, 300.5, 600, 7, 1, 2, 40, 75, 300.5, 90, 120.5][i]; } };
   assert.deepEqual(readGame({ Module, wotmFrames: { frames: 590, workMs: 2950.5 } }), { presented: 590, workMs: 2950.5, frame: 600, waits: 3, waitMs: 120.5, delay: 4, pingMs: 55, idleMs: 9000.5,
-    periods: [500, 40, 30, 5], vblankLateMs: 300.5, vblankWakes: 600, vblankSlow: 7 });
-  assert.deepEqual(calls, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);   // reads only
+    periods: [500, 40, 30, 5], vblankLateMs: 300.5, vblankWakes: 600, vblankSlow: 7,
+    rbOn: 1, rbWindow: 2, rollbacks: 40, redone: 75, redoMs: 300.5, saves: 90, saveMs: 120.5 });
+  assert.deepEqual(calls, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]);   // reads only
   assert.deepEqual(readGame({}), { presented: undefined, workMs: undefined, frame: undefined, waits: undefined, waitMs: undefined, delay: undefined, pingMs: undefined, idleMs: undefined,
-    periods: undefined, vblankLateMs: undefined, vblankWakes: undefined, vblankSlow: undefined });
+    periods: undefined, vblankLateMs: undefined, vblankWakes: undefined, vblankSlow: undefined,
+    rbOn: undefined, rbWindow: undefined, rollbacks: undefined, redone: undefined, redoMs: undefined, saves: undefined, saveMs: undefined });
+});
+
+// rollback (WOTM_ROLLBACK, docs/ONLINE.md "Rollback"): the window this PC runs with, the rollbacks and frames redone in the report's window,
+// and what a redone frame and a save cost; nothing when rollback is off
+test('a window gives the rollback window, the rollbacks and the cost of a redone frame and of a save', () => {
+  const prev = { t: 0, rbOn: 1, rollbacks: 10, redone: 20, redoMs: 100, saves: 50, saveMs: 75 };
+  const cur = { t: 5000, rbOn: 1, rbWindow: 2, rollbacks: 40, redone: 80, redoMs: 400, saves: 350, saveMs: 525 };
+  const f = Object.fromEntries(windowFields(prev, cur));
+  assert.equal(f.rb_win, 2);
+  assert.equal(f.rb_n, 30);
+  assert.equal(f.rb_frames, 60);
+  assert.equal(f.rb_redo_ms, '5.0');   // 300 / 60
+  assert.equal(f.rb_save_ms, '1.5');   // 450 / 300
+  const off = Object.fromEntries(windowFields({ t: 0 }, { t: 5000, rbOn: 0, rbWindow: 0, rollbacks: 0 }));
+  assert.equal('rb_win' in off || 'rb_n' in off || 'rb_redo_ms' in off, false);
+  const none = Object.fromEntries(windowFields(prev, { ...cur, redone: 20, saves: 50 }));   // nothing redone or saved in the window
+  assert.equal(none.rb_frames, 0);
+  assert.equal(none.rb_redo_ms, undefined);
+  assert.equal(none.rb_save_ms, undefined);
 });
 
 test('a window is the difference of two samples: rates, the cost of a frame, waits for the network, ping and its jitter', () => {
