@@ -5,7 +5,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import os from 'node:os';
 import { parseArgs } from 'node:util';
-import { loadPlaywright, startLocal, startLive, launchBrowsers, launchFirefox, REPO } from './lib/infra.mjs';
+import { loadPlaywright, startLagProxy, startLocal, startLive, launchBrowsers, launchFirefox, REPO } from './lib/infra.mjs';
 import { Report } from './lib/report.mjs';
 import { Run } from './lib/session.mjs';
 import { desyncTrial, SCRIPTS } from './lib/desync.mjs';
@@ -17,6 +17,9 @@ const USAGE = `Usage: node tools/browser_mp_test/desync.mjs [options]
   --mods jump,fast,turbo   modifiers the owner turns on          --firefox K  the last K players of each lobby in Firefox
   --target local|live  --url <url>  --password <pw>  --site <dir>  --data <dir>  --server <file>  --browser chromium|chrome|brave  --headed
   --win-secs 70 (game seconds to the vencer win)  --warmup-secs 15  --width 640  --height 400  --lobby-height 900  --out <dir>
+  --env NAME=VALUE         a game environment variable for every tab (repeatable; e.g. WOTM_ROLLBACK=2 for the rollback netcode)
+  --rtt MS  --jitter MS    local target: every tab reaches the server through tools/net_lagproxy.py with this round trip (default 0:
+                           direct), so the input delay is a real one (the rollback cut needs one to cut)
 Exit code 0 when no trial failed.
 `;
 const { values: v } = parseArgs({
@@ -29,6 +32,7 @@ const { values: v } = parseArgs({
     headed: { type: 'boolean', default: false }, 'win-secs': { type: 'string', default: '70' }, 'warmup-secs': { type: 'string', default: '15' },
     width: { type: 'string', default: '640' }, height: { type: 'string', default: '400' }, 'lobby-height': { type: 'string', default: '900' },
     out: { type: 'string' }, help: { type: 'boolean', default: false },
+    env: { type: 'string', multiple: true, default: [] }, rtt: { type: 'string', default: '0' }, jitter: { type: 'string', default: '0' },
   },
 });
 if (v.help) { console.log(USAGE); process.exit(0); }
@@ -41,6 +45,8 @@ const cases = v.cases.split(',').map((c) => c.split('+').map(Number));
 const scenarios = v.scenarios.split(',');
 for (const s of scenarios) if (!SCRIPTS[s]) { console.error(`unknown scenario ${s}`); process.exit(2); }
 const mods = v.mods.split(',').filter(Boolean);
+const env = Object.fromEntries(v.env.map((e) => { const [k, ...rest] = e.split('='); return [k, rest.join('=')]; }));
+const rtt = Number(v.rtt), jitter = Number(v.jitter);
 const opts = {
   maxPlayers: 8, isolation: 'context', video: false, width: Number(v.width), height: Number(v.height), warmupSecs: Number(v['warmup-secs']),
   lobbyHeight: Number(v['lobby-height']), firefoxCount: Number(v.firefox), playSecs: 0, padlogFrames: 0, disc: '',
@@ -56,11 +62,18 @@ if (v.target === 'live') {
     server: resolve(v.server ?? join(REPO, 'native/net/build/wotm_server')), outDir,
   });
 }
+let proxy = null;
+if (rtt > 0) {
+  if (target.kind !== 'local') { console.error('--rtt needs the local target'); process.exit(2); }
+  proxy = await startLagProxy({ wsPort: target.wsPort, links: [{ rtt, jitter }], logPath: join(outDir, 'proxy.log') });
+  target = { ...target, pageUrl: `http://127.0.0.1:${target.webPort}/?server=ws://127.0.0.1:${proxy.ports[0]}` };
+}
 const pw = await loadPlaywright();
 const browsers = await launchBrowsers(pw, { n: 1, browser: v.browser, headed: v.headed, isolation: 'context' });
 const firefox = opts.firefoxCount ? await launchFirefox(pw, { headed: v.headed }) : null;
 const report = new Report({ target: `${target.kind} ${target.pageUrl.split('?')[0]}`, build: target.buildId, browser: `${v.browser} ${browsers[0].version()}${firefox ? `, Firefox ${firefox.version()} for the last ${opts.firefoxCount} of each lobby` : ''}`,
-  host: `${os.cpus().length} cores`, started: new Date().toISOString(), cases: v.cases, scenarios: v.scenarios, reps: v.reps, mods: v.mods || 'none' });
+  host: `${os.cpus().length} cores`, started: new Date().toISOString(), cases: v.cases, scenarios: v.scenarios, reps: v.reps, mods: v.mods || 'none',
+  env: v.env.join(' ') || 'none', rtt: rtt > 0 ? `${rtt} ms (jitter ${jitter} ms)` : 'direct' });
 const run = new Run({ pw, target, browsers, opts, report, outDir, firefox });
 console.log(`Desync matrix: ${report.meta.target} (build ${target.buildId}), results in ${outDir}`);
 
@@ -72,7 +85,7 @@ try {
         const label = `${lobbies.join('+')} ${scenario} #${rep}`;
         console.log(`== ${label} (load ${os.loadavg()[0].toFixed(1)})`);
         const trials = await Promise.all(lobbies.map((n, i) => desyncTrial(run, {
-          n, scenario, rep, tag: lobbies.length > 1 ? `-${'ab'[i]}` : '', mods, winSecs: Number(v['win-secs']),
+          n, scenario, rep, tag: lobbies.length > 1 ? `-${'ab'[i]}` : '', mods, env, winSecs: Number(v['win-secs']),
           // concurrent lobbies need different stages so a seed or stage coincidence is not mistaken for sharing
         }).then((r) => ({ ...r, cases: lobbies.join('+') }))));
         for (const r of trials) {
@@ -92,6 +105,7 @@ try {
   writeFileSync(join(outDir, 'results.json'), JSON.stringify({ meta: report.meta, rows }, null, 2));
   for (const b of browsers) await b.close().catch(() => {});
   await firefox?.close().catch(() => {});
+  proxy?.stop();
   await target.stop();
 }
 const failed = rows.filter((r) => r.status === 'fail');

@@ -1,9 +1,8 @@
 // ABOUTME: Measures the input latency of an online match on this computer: N browser tabs on a local wotm_server, each behind its own
 // ABOUTME: latency proxy link (round trip, jitter, spikes), pressing a button now and then; prints each player's latency stages.
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { spawn } from 'node:child_process';
 import { join } from 'node:path';
-import { REPO, freePort, launchBrowsers, launchFirefox, loadPlaywright, startLocal } from './lib/infra.mjs';
+import { REPO, launchBrowsers, launchFirefox, loadPlaywright, startLagProxy, startLocal } from './lib/infra.mjs';
 import { Player, sleep } from './lib/player.mjs';
 import { formLobby, startMatch, MONSTER_IDS } from './lib/session.mjs';
 import { latencySummary } from './lib/latency.mjs';
@@ -56,28 +55,6 @@ function parseArgs(argv) {
   return o;
 }
 
-// one latency proxy for every tab (tools/net_lagproxy.py --tcp): link i listens on ports[i]
-async function startProxy(o, wsPort, logPath) {
-  const ports = [];
-  for (let i = 0; i < o.players; i++) ports.push(await freePort());
-  const args = [join(REPO, 'tools/net_lagproxy.py'), '--tcp', '--to', `127.0.0.1:${wsPort}`];
-  ports.forEach((port, i) => args.push('--link', `${port}:${o.rtt[Math.min(i, o.rtt.length - 1)]}:${o.jitter}`));
-  for (const s of o.spikes) {
-    const [player, ...rest] = s.split(':');
-    args.push('--spike', `${ports[Number(player) - 1]}:${rest.join(':')}`);
-  }
-  const proc = spawn('python3', args, { stdio: ['ignore', 'pipe', 'pipe'] });
-  let log = '';
-  proc.stdout.on('data', (d) => { log += d; });
-  proc.stderr.on('data', (d) => { log += d; });
-  const end = Date.now() + 10000;
-  while ((log.match(/listening/g) ?? []).length < o.players) {
-    if (Date.now() > end) throw new Error(`latency proxy did not start:\n${log}`);
-    await sleep(100);
-  }
-  return { ports, stop: () => { writeFileSync(logPath, log); proc.kill('SIGTERM'); } };
-}
-
 // limits a Chromium page's downloads to `mbps` (DevTools network emulation; no added latency: the proxy links model the round trip)
 async function throttle(page, mbps) {
   const cdp = await page.context().newCDPSession(page);
@@ -104,7 +81,9 @@ async function main() {
   const diagDir = join(o.out, 'diag');
   const pw = await loadPlaywright();
   const target = await startLocal({ site: o.site, data: o.data, server: o.server, outDir: o.out, diagDir });
-  const proxy = await startProxy(o, target.wsPort, join(o.out, 'proxy.log'));
+  // one link per tab: link i listens on proxy.ports[i]
+  const links = Array.from({ length: o.players }, (_, i) => ({ rtt: o.rtt[Math.min(i, o.rtt.length - 1)], jitter: o.jitter }));
+  const proxy = await startLagProxy({ wsPort: target.wsPort, links, spikes: o.spikes, logPath: join(o.out, 'proxy.log') });
   const [chromium] = await launchBrowsers(pw, { n: o.players, browser: o.browser, headed: o.headed, unlockFrames: o.unlockFrames });
   const firefox = o.firefox > 0 ? await launchFirefox(pw, { headed: o.headed }) : null;
   const players = [];

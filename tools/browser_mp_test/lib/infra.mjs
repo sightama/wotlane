@@ -2,7 +2,7 @@
 // ABOUTME: password. Also launches the browser(s) and samples the browsers' CPU through the DevTools SystemInfo domain.
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
-import { openSync, existsSync, readFileSync, mkdirSync } from 'node:fs';
+import { openSync, existsSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import os from 'node:os';
 import { createRequire } from 'node:module';
@@ -73,6 +73,30 @@ export async function startLocal({ site, data, server, outDir, maxPlayers = 8, d
 
 // Live target: a public site needs nothing; a site with a password gate (password given) sets a cookie at its login form that every
 // player's context gets. The server's log is not reachable from here, so the client logs are the only witness.
+// A latency proxy between the tabs and the local server's WebSocket port (tools/net_lagproxy.py --tcp): one listening port per link,
+// each `{ rtt, jitter }` in ms; every connection to a link's port gets that round trip (several tabs may share one link). `spikes`:
+// "<link (1-based)>:<every s>:<extra rtt ms>:<length ms>". Returns the links' ports and stop(), which writes the proxy's log to `logPath`
+export async function startLagProxy({ wsPort, links, spikes = [], logPath }) {
+  const ports = [];
+  for (let i = 0; i < links.length; i++) ports.push(await freePort());
+  const args = [join(REPO, 'tools/net_lagproxy.py'), '--tcp', '--to', `127.0.0.1:${wsPort}`];
+  ports.forEach((port, i) => args.push('--link', `${port}:${links[i].rtt}:${links[i].jitter}`));
+  for (const s of spikes) {
+    const [link, ...rest] = s.split(':');
+    args.push('--spike', `${ports[Number(link) - 1]}:${rest.join(':')}`);
+  }
+  const proc = spawn('python3', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+  let log = '';
+  proc.stdout.on('data', (d) => { log += d; });
+  proc.stderr.on('data', (d) => { log += d; });
+  const end = Date.now() + 10000;
+  while ((log.match(/listening/g) ?? []).length < links.length) {
+    if (Date.now() > end) throw new Error(`latency proxy did not start:\n${log}`);
+    await sleep(100);
+  }
+  return { ports, stop: () => { writeFileSync(logPath, log); proc.kill('SIGTERM'); } };
+}
+
 export async function startLive({ url, password = '' }) {
   const base = url.replace(/\/$/, '');
   const cookies = password ? await loginCookies(base, password) : [];
