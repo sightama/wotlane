@@ -14,3 +14,10 @@ Choices made without asking, with the reason. Newest last.
 - **No time left once any data came from the cache.** The network rate says nothing about what remains then. The first-visit sentence stays (its #64 wording and tests).
 - **The START tip is left out.** Tab is START by default and the loading screen gives Tab to its button.
 - **`LoadingProgress.text()` stays.** It is the old one-line form with its tests; the screen uses `view()`.
+
+## Match result card (#229)
+- **Only counters the game stores.** Rounds won per fighter, the wins target and rounds played are in the game's state; damage dealt, KOs and a best combo are not (Hud::comboHits is the current combo). Reading them per drawn frame would differ between clients, so the card has none of them.
+- **The score is read where presentation already runs.** `Scene::takeSnapshot` is in `PRESENTATION`, and `wotm_matchresult.hpp` joins it there, so no simulation file changes and the simulation id stays. `native/wotm_webfs.cpp` is hashed into it and is left alone.
+- **No player names on the card.** The issue forbids a user name, and the monsters' names say who is who. Two fighters of one monster are numbered by slot.
+- **The button, not an automatic card.** A button reads game state only when pressed and does nothing to the quit and rematch path (#196), which reloads the page.
+- **The final frame is copied in the next animation frame.** A WebGL buffer is only valid until it is presented; a blank copy gives a card without a picture rather than a black one.
