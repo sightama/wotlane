@@ -5778,6 +5778,73 @@ TEST(framephase_closed_loop_brings_the_wait_for_the_display_down_to_the_margin)
     CHECK(slewed == 0.0 && untouched > 0.0);
 }
 
+// With a frame time that jitters by several ms, aiming one capture (the median) at the margin leaves many frames just past an animation
+// frame, each waiting a whole display frame; Aim moves the latest of the recent captures (their 10th percentile error) to the margin,
+// so the mean wait stays below the unslewed one (averaged over the grid's starting phases: a player's phase is random) at 60 Hz
+TEST(framephase_aim_keeps_jittery_frames_ahead_of_the_display)
+{
+    namespace fp = wotm::framephase;
+    const double game = 1000.0 / 60.0, display = 1000.0 / 60.0;
+    auto meanWait = [&](bool slew, bool aimLate, double start) {
+        fp::Aim aim;
+        double boundary = start, waits = 0.0;
+        int counted = 0;
+        for (int f = 0; f < 1200; ++f)
+        {
+            const double capture = boundary + 6.0 + ((f * 37) % 13) * 0.5;   // 6 to 12 ms of work: 6 ms of jitter, past the margin
+            const double since = std::fmod(capture, display);
+            if (f >= 600)
+            {
+                waits += display - since;
+                ++counted;
+            }
+            double s = 0.0;
+            if (slew && aimLate)
+            {
+                aim.add(fp::errorMs(capture, capture - since, display, game));
+                s = aim.slewMs();
+            }
+            else if (slew)
+                s = fp::slewMs(capture, capture - since, display, game);
+            boundary += game + s;
+        }
+        return waits / counted;
+    };
+    double none = 0.0, median = 0.0, late = 0.0;
+    for (int phase = 0; phase < 16; ++phase)
+    {
+        none += meanWait(false, false, phase * display / 16) / 16;
+        median += meanWait(true, false, phase * display / 16) / 16;
+        late += meanWait(true, true, phase * display / 16) / 16;
+    }
+    CHECK(late < none);
+    CHECK(late < median);
+    CHECK(late < 2.0 + 6.0 / 2 + 1.0);   // the margin, half the jitter and a little
+}
+
+// Aim: no slew before a few captures or with a non-locking display (errorMs gives NaN), the dead band and the step as slewMs
+TEST(framephase_aim_waits_for_enough_captures_and_skips_unlocked_ones)
+{
+    namespace fp = wotm::framephase;
+    fp::Aim aim;
+    aim.add(5.0);
+    CHECK(aim.slewMs() == 0.0);   // one capture is not enough
+    for (int i = 0; i < 8; ++i)
+        aim.add(5.0);
+    CHECK(aim.slewMs() == 0.5);   // all early: later, by the step
+    CHECK(aim.slewMs() == 0.5);   // the window moved with the step: 4.5 early still steps 0.5
+    for (int i = 0; i < 20; ++i)
+        aim.slewMs();
+    CHECK(aim.slewMs() == 0.0);   // after steps that add up to its error the window says on target, no overshoot
+    for (int i = 0; i < 40; ++i)
+        aim.add(-2.0);
+    CHECK(aim.slewMs() == -0.5);   // late: earlier
+    aim.add(std::nan(""));           // a capture that does not count leaves the window as it was
+    CHECK(aim.slewMs() == -0.5);
+    CHECK(std::isnan(fp::errorMs(1000.0, 990.0, 1000.0 / 144.0, 1000.0 / 60.0)));
+    CHECK(std::isnan(fp::errorMs(3000.0, 1000.0, 1000.0 / 60.0, 1000.0 / 60.0)));
+}
+
 // The present that draws a frame is the first one after the draw took it: a capture that arrives after the draw waits for the next present
 TEST(latency_present_counts_only_frames_the_draw_took)
 {

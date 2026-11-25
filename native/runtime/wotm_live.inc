@@ -753,13 +753,14 @@ struct Capture
         // the browser draws the newest capture on its next animation frame: a capture that lands just before one is shown at once
         // instead of waiting about half a display frame. The vblank grid's phase is slewed toward that, a little each frame
         // (WOTM_PRESENT_PHASE=0 leaves the grid as it is)
-        static const bool aim = [] { const char *e = std::getenv("WOTM_PRESENT_PHASE"); return !(e && std::strcmp(e, "0") == 0); }();
-        if (aim)
+        static const bool on = [] { const char *e = std::getenv("WOTM_PRESENT_PHASE"); return !(e && std::strcmp(e, "0") == 0); }();
+        static wotm::framephase::Aim aim;   // the late captures go to the margin (frame times jitter): EE thread only
+        if (on && !wotmWebHidden())       // a hidden tab draws no animation frames to aim at
         {
             double lastRafMs = 0.0, periodMs = 0.0;
             wotmWebDisplayPhase(lastRafMs, periodMs);
-            const double slew = wotm::framephase::slewMs(now, lastRafMs, periodMs, EeVBlankClock::kPeriod.count() / 1000.0);
-            g_wotmVblankSlewUs.store(static_cast<long long>(slew * 1000.0), std::memory_order_relaxed);
+            aim.add(wotm::framephase::errorMs(now, lastRafMs, periodMs, EeVBlankClock::kPeriod.count() / 1000.0));
+            g_wotmVblankSlewUs.store(static_cast<long long>(aim.slewMs() * 1000.0), std::memory_order_relaxed);
         }
 #endif
     }

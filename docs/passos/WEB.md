@@ -122,10 +122,11 @@ For online play start `wotm_server --ws-port <port>`; a page opened from `localh
 - **Present phase:** each animation frame draws the newest captured game frame, so a capture that lands just before one is shown at once
   and one that just missed it waits a whole display frame. The present records every animation frame's time on `emscripten_get_now`'s
   clock (`performance.timeOrigin` plus the frame's timestamp) and the display's period (the median of the last 16 intervals,
-  `wotmWebDisplayPhase`); each capture then slews the vblank grid by at most 0.5 ms toward a capture 2 ms before an animation frame
-  (`native/wotm_framephase.hpp`, `EeVBlankClock::fire`). Only displays whose period divides the game's are aimed at (60, 120, 240 Hz;
-  not 75, 144, 165); the slew never adds or drops a vblank, so game time and lockstep are untouched. `WOTM_PRESENT_PHASE=0` (also from
-  the address) keeps the grid's phase as it is.
+  `wotmWebDisplayPhase`); each capture then slews the vblank grid by at most 0.5 ms (once per capture: every other vblank at 30 Hz)
+  so that the latest of the recent captures (the 10th percentile of the last 32 errors, `framephase::Aim`: frame times jitter) lands
+  2 ms before an animation frame (`native/wotm_framephase.hpp`, `EeVBlankClock::fire`); a hidden tab is not aimed. Only displays whose
+  period divides the game's are aimed at (60, 120, 240 Hz; not 75, 144, 165); the slew never adds or drops a vblank, so game time and
+  lockstep are untouched. `WOTM_PRESENT_PHASE=0` (also from the address) keeps the grid's phase as it is.
 - **High frame rate:** the game logic always runs at 60, online and offline; only the drawing follows the display. Before the game starts
   the page measures the display's refresh rate from 60 animation frames (`web/display.js` `measureRefresh`: the median of 4-frame spans,
   snapped to a common rate within 4%; a hidden tab gives up after 2 s and the game assumes 60) and passes it as `WOTM_DISPLAY_HZ`, which
@@ -156,7 +157,7 @@ For online play start `wotm_server --ws-port <port>`; a page opened from `localh
 - **Main thread profile:** `node tools/web_profile.mjs <chrome|brave> <page url> [secs]` opens a direct AI fight, prints the presented frames
   per second, the page's work per present, what the page sees (cores, WebGL renderer, timer resolution) and the functions with the most
   self time in a CPU profile. `WOTM_BRAVE` names Brave's binary, `WOTM_BROWSER_ARGS` adds browser flags (`--disable-gpu`: software WebGL).
-- **Address switches** (`web/pageenv.js`, tested in `pageenv.test.mjs`): only `WOTM_MATCH`, `WOTM_AIVSAI`, `PS2X_STATS`, `WOTM_MAPEDIT` (the Settings page's Mods tab, Your creations, has a Map editor row that opens the page with it, on a stock stage) , `WOTM_VBLANK_SPIN` (a lone `0`: the vblank clock without its spin, for A/B runs; any other value keeps the spin) and `WOTM_PRESENT_PHASE` (a lone `0`: the vblank grid keeps its phase against the display) are read from the page address; the disc, save and renderer
+- **Address switches** (`web/pageenv.js`, tested in `pageenv.test.mjs`): only `WOTM_MATCH`, `WOTM_AIVSAI`, `PS2X_STATS`, `WOTM_MAPEDIT` (the Settings page's Mods tab, Your creations, has a Map editor row that opens the page with it, on a stock stage), `WOTM_VBLANK_SPIN` (a lone `0`: the vblank clock without its spin, for A/B runs; any other value keeps the spin) and `WOTM_PRESENT_PHASE` (a lone `0`: the vblank grid keeps its phase against the display) are read from the page address; the disc, save and renderer
   settings always win.
 - **Browser check:** `web/support.js` gives Safari, browsers without JSPI and iPhones and iPads (every browser there is WebKit) a plain message and disables the play buttons; the front panel says Chrome, Firefox and Edge on a computer or an Android phone work.
 - **Settings page:** the front panel's Settings button swaps the panel for a card of tabs (Online, Game, Display, Mods, Controls;
