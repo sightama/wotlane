@@ -757,15 +757,16 @@ namespace
         std::atomic<bool> stop{false};
         std::thread thread;
         bool ok = false;
-        explicit RunningServer(ServerConfig c) : server(withQuiet(c))
+        // `pollMs`: how long each Server::poll may wait for something to arrive
+        explicit RunningServer(ServerConfig c, int pollMs = 1) : server(withQuiet(c))
         {
             std::string err;
             ok = server.start(err);
             if (!ok)
                 std::printf("  server failed to start: %s\n", err.c_str());
-            thread = std::thread([this] {
+            thread = std::thread([this, pollMs] {
                 while (!stop)
-                    server.poll(1);
+                    server.poll(pollMs);
             });
         }
         ~RunningServer()
@@ -1799,6 +1800,38 @@ namespace
         CHECK(a.status() == Status::Running && b.status() == Status::Running);
     }
 
+    // what the server queues for ENet in a poll (the relays: tickMatches) goes out in that poll, not after the next one's wait: with
+    // Bia's inputs all in, each of Ana's is the only packet on its way, and its relay would otherwise wait for Ana's resend (16 ms)
+    TEST(match_relays_go_out_without_waiting_out_the_poll)
+    {
+        ServerConfig cfg = testConfig();
+        RunningServer rs(cfg, 200);
+        auto ms = formMatch(cfg.port, {"Ana", "Bia"}, {3, 1});
+        MatchClient a, b;
+        std::string err;
+        CHECK(a.start(clientFor(cfg.port, *ms[0]), err));
+        CHECK(b.start(clientFor(cfg.port, *ms[1]), err));
+        CHECK(a.waitStarted(5000) && b.waitStarted(5000));
+        const uint32_t d = a.delay(), steps = 11;
+        for (uint32_t f = 0; f < steps; ++f)
+            b.pushLocal(f + d, PadState{});
+        std::vector<double> took;
+        bool all = true;
+        for (uint32_t f = 0; f < steps && all; ++f)
+        {
+            const auto t0 = std::chrono::steady_clock::now();
+            a.pushLocal(f + d, PadState{});
+            all = b.waitFrame(f + d, 3000);
+            took.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+        }
+        CHECK(all);
+        std::sort(took.begin(), took.end());
+        const double median = took.empty() ? 0.0 : took[took.size() / 2];
+        CHECK(median < 8.0);
+        if (median >= 8.0)
+            std::printf("  median relay took %.1f ms\n", median);
+    }
+
     // up to 8 players (4 in the game's player slots and 4 in AI slots driven by the network): lobby, 30 Hz and everyone's inputs
     TEST(match_with_eight_players_shares_every_input)
     {
@@ -2466,6 +2499,29 @@ namespace
         CHECK(pings.rfind("PINGS " + code + " Ana:-,Bia:", 0) == 0);
         CHECK(pings.find("Bia:-") == std::string::npos);
         CHECK(pings.find_first_not_of("0123456789", pings.find("Bia:") + 4) == std::string::npos);
+    }
+
+    // Server::poll waits for any of its sockets, not only ENet's: a browser's ping is answered as it arrives, however long the poll may
+    // wait (its round trip is the input delay's measure, and its inputs come the same way)
+    TEST(ws_ping_is_answered_without_waiting_out_the_poll)
+    {
+        ServerConfig cfg = wsTestConfig();
+        RunningServer rs(cfg, 1000);
+        CHECK(rs.ok);
+        for (int i = 0; i < 5; ++i)
+        {
+            wotm_net::WsLink b;
+            std::string err;
+            CHECK(b.connect(wsUrl(cfg, "/lobby"), 2000, err));
+            b.ping();
+            const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+            while (b.pingMs() < 0 && std::chrono::steady_clock::now() < until)
+            {
+                b.waitReadable(20);
+                b.pump();
+            }
+            CHECK(b.pingMs() >= 0 && b.pingMs() < 150);   // waiting out the poll would be up to 1000 ms
+        }
     }
 
     // the owner hands the lobby to another member (OWNER <name>): MEMBERS names the new owner to everyone and only the new owner may

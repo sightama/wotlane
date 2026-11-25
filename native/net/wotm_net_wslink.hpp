@@ -183,6 +183,7 @@ namespace wotm_net
         bool sendLine(const std::string &line) override { return ready_ && sendFrame(ws::kText, reinterpret_cast<const uint8_t *>(line.data()), line.size()); }
 
         void waitReadable(int ms) override { sock_.waitReadable(ms); }
+        SocketHandle handle() const override { return sock_.handle(); }
 
         bool nextPacket(std::vector<uint8_t> &packet)
         {
