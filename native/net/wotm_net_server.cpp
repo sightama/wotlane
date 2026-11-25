@@ -224,10 +224,11 @@ namespace wotm_net
         }
     }
 
-    void Server::addConn(std::unique_ptr<LineLink> link, bool halfRate, std::string address)
+    void Server::addConn(std::unique_ptr<LineLink> link, bool halfRate, std::string address, std::string country)
     {
         auto c = std::make_unique<Conn>();
         c->address = std::move(address);
+        c->country = std::move(country);
         c->link = std::move(link);
         c->halfRate = halfRate;
         auto free = std::find(conns_.begin(), conns_.end(), nullptr);
@@ -612,7 +613,8 @@ namespace wotm_net
         c.link->sendLine(settingsLine(l));
         log("lobby %s: %s joined (monster %s), %zu player(s)", l.code.c_str(), name.c_str(), pick.text().c_str(), l.members.size());
         diagEvent(l, "event=join player=" + name + " transport=" + (dynamic_cast<WsLink *>(c.link.get()) ? "ws" : "tcp") +
-                         " half_rate=" + (c.halfRate ? "1" : "0") + " members=" + std::to_string(l.members.size()));
+                         " half_rate=" + (c.halfRate ? "1" : "0") + " country=" + (c.country.empty() ? "-" : c.country) +
+                         " members=" + std::to_string(l.members.size()));
         sendMembers(li);
         if (c.rejoin)
         {
@@ -1407,8 +1409,8 @@ namespace wotm_net
             if (link->path() == "/lobby")
             {
                 const bool phone = proto::halfRateUserAgent(link->userAgent());
-                const std::string address = proto::clientAddress(link->peerIp(), link->forwardedAddress());
-                addConn(std::move(link), phone, address);   // lines that arrived with the handshake wait in the link for acceptAndReadLobby
+                const std::string address = proto::clientAddress(link->peerIp(), link->forwardedAddress()), country = link->country();
+                addConn(std::move(link), phone, address, country);   // lines that arrived with the handshake wait in the link for acceptAndReadLobby
             }
             else if (link->path() == "/match")
             {
