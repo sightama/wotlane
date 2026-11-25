@@ -158,6 +158,7 @@ namespace wotm_net
         tickMatches();
         tickLobbyPings();
         expireGhosts();
+        enet_host_flush(host_);   // what those queued for ENet (the relays) goes out now, not after the next poll's wait
         updateCounts();
         if (archive_.enabled() && Clock::now() - lastPrune_ >= std::chrono::hours(1))
         {

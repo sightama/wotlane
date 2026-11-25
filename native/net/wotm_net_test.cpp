@@ -1800,6 +1800,38 @@ namespace
         CHECK(a.status() == Status::Running && b.status() == Status::Running);
     }
 
+    // what the server queues for ENet in a poll (the relays: tickMatches) goes out in that poll, not after the next one's wait: with
+    // Bia's inputs all in, each of Ana's is the only packet on its way, and its relay would otherwise wait for Ana's resend (16 ms)
+    TEST(match_relays_go_out_without_waiting_out_the_poll)
+    {
+        ServerConfig cfg = testConfig();
+        RunningServer rs(cfg, 200);
+        auto ms = formMatch(cfg.port, {"Ana", "Bia"}, {3, 1});
+        MatchClient a, b;
+        std::string err;
+        CHECK(a.start(clientFor(cfg.port, *ms[0]), err));
+        CHECK(b.start(clientFor(cfg.port, *ms[1]), err));
+        CHECK(a.waitStarted(5000) && b.waitStarted(5000));
+        const uint32_t d = a.delay(), steps = 11;
+        for (uint32_t f = 0; f < steps; ++f)
+            b.pushLocal(f + d, PadState{});
+        std::vector<double> took;
+        bool all = true;
+        for (uint32_t f = 0; f < steps && all; ++f)
+        {
+            const auto t0 = std::chrono::steady_clock::now();
+            a.pushLocal(f + d, PadState{});
+            all = b.waitFrame(f + d, 3000);
+            took.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+        }
+        CHECK(all);
+        std::sort(took.begin(), took.end());
+        const double median = took.empty() ? 0.0 : took[took.size() / 2];
+        CHECK(median < 8.0);
+        if (median >= 8.0)
+            std::printf("  median relay took %.1f ms\n", median);
+    }
+
     // up to 8 players (4 in the game's player slots and 4 in AI slots driven by the network): lobby, 30 Hz and everyone's inputs
     TEST(match_with_eight_players_shares_every_input)
     {
@@ -2458,7 +2490,7 @@ namespace
     TEST(ws_ping_is_answered_without_waiting_out_the_poll)
     {
         ServerConfig cfg = wsTestConfig();
-        RunningServer rs(cfg, 200);
+        RunningServer rs(cfg, 1000);
         CHECK(rs.ok);
         for (int i = 0; i < 5; ++i)
         {
@@ -2472,7 +2504,7 @@ namespace
                 b.waitReadable(20);
                 b.pump();
             }
-            CHECK(b.pingMs() >= 0 && b.pingMs() < 50);
+            CHECK(b.pingMs() >= 0 && b.pingMs() < 150);   // waiting out the poll would be up to 1000 ms
         }
     }
 
