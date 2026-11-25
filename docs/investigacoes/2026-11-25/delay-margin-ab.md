@@ -2,7 +2,8 @@
 
 After `ping-spikes.md` (same folder), the coordinator asked whether the delay rule's own slack is worth taking out. The rule takes half
 the player's round trip plus half the slowest other player's, adds `kDelayMarginMs` (3 ms) and rounds up to whole frames, at the 4/5
-level of the last 8 s. It falls only once the path leaves 0.2 frames to spare (`kDelayFallMarginFrames`, `native/net/wotm_net_proto.hpp`).
+level of the last 8 s (the 3 highest of 16 samples left out). It falls only at the level all but the highest sample stay under, and
+only once the path there leaves 0.2 frames to spare (`kDelayFallMarginFrames`, `native/net/wotm_net_proto.hpp`).
 The margin only changes the delay when the path falls within 3 ms of a frame boundary, so the A/B sits on one. Short answer: **keep the
 3 ms.** Without it the delay is up to a frame shorter, but the match spends 2.5 times as much of its time waiting and the game runs about
 2 frames a second slower.
@@ -10,9 +11,9 @@ The margin only changes the delay when the path falls within 3 ms of a frame bou
 ## Setup
 
 - `tools/browser_mp_test/latency.mjs --players 2 --rtt 57 --jitter 10 --secs 90`, two headless Chromium tabs on this Mac. The game
-  measured pings of 49 to 70 ms, which puts the rise level at roughly 65 ms (inferred from that range, not read off the server): at
-  60 Hz the 4-frame boundary is a path of 66.7 ms, crossed at a level of 63.7 ms with the margin and 66.7 ms without, so 5 frames with
-  the margin and 4 without. At `--rtt 52` the level would be about 60 ms, 4 frames for both (computed, not run).
+  measured pings of 49 to 70 ms, At 60 Hz the 4-frame boundary is a path of 66.7 ms, crossed at a level of 63.7 ms with the
+  margin and 66.7 ms without. The delays seen (5 with the margin, never 5 without) put the rise level between the two, near the top of
+  the measured range as a level that leaves out the 3 highest samples would be (inferred: the levels were not read off the server). At `--rtt 52` the level would be about 60 ms, 4 frames for both (computed, not run).
 - Two `wotm_server` builds of wip/browser 1aad89ef (the server deployed 2026-11-25 05:49Z): `kDelayMarginMs` 3.0 (as shipped) and 0.0.
 - Three runs of each, alternating. Each run started once this Mac's 1-minute load was under 4; sampled every 5 s, it peaked at 9.2
   to 10.8 during the runs.
@@ -32,11 +33,11 @@ The margin only changes the delay when the path falls within 3 ms of a frame bou
 Without the margin, delay plus waits per press is about 7 ms lower (from the stage means). But the match spends two and a half times
 as much of its time waiting (the means of the wait shares) and runs at 56 instead of 58 game frames a second, which fits inputs
 arriving just after the frame that needs them; for a player that would likely read as stutter and slow motion. With the margin every
-player saw both 4 and 5 frames in each run, consistent with a fall needing the 0.2 frames to spare, and its delay stage sits between the
-two. The rule's other slack (the 4/5 level and rounding up to whole frames) would trade the same way, delay for waits (inferred, not
+player saw both 4 and 5 frames in each run, and its delay stage sits between the two: the delay rose to 5 when the rise level passed
+63.7 ms and came back to 4 when the fall level dropped to about 60 ms (inferred from the rule; the level samples were not read). The rule's other slack (the 4/5 level and rounding up to whole frames) would trade the same way, delay for waits (inferred, not
 tested).
 
 The 6 rows are 3 runs of 2 players on one machine, not 6 independent samples, though the wait shares do not overlap. The tabs were
 headless and presented 8.8 to 11.0 frames a second (software GL), so the present stage and the totals are not meaningful here. The game
-thread's busy time per frame was the same in both (`ee_busy` 5.2 to 5.4 ms) and the variants alternated, so the gap in game rate is the
-waiting rather than the load.
+thread's busy time per frame was the same in both (`ee_busy` 5.2 to 5.4 ms) and the variants alternated, so the gap in game rate is consistent
+with the waiting rather than the load.
