@@ -223,7 +223,7 @@ has the design and its decisions).
 - **Desync check:** only final frames (every input up to them arrived and was checked) go into the hash the server compares, from the
   live RAM or from the frame's kept state, so PCs with and without rollback compare the same frames. `WOTM_STATEHASH` writes final frames
   only too.
-- **Checks:** `python3 tools/net_checks.py --only rollback_mouse` (and `rollback_pause`, `rollback_wins`, `rollback_mixed`,
+- **Checks:** `python3 tools/net_checks.py --only rollback_mouse` (and `rollback_pause`, `rollback_wins`, `rollback_mixed`, `rollback_mispredict`,
   `rollback_3p`): two or three native PCs behind a 60 ms round trip, mice that change every 3 frames, state compared on every final
   frame.
 

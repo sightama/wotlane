@@ -525,11 +525,13 @@ namespace wotm_rollback
     // every input up to them, and a wrong prediction found there restores an rtMain slot through the unwind (the hook returns with the
     // restored pc: the recompiled callers return and the EE resumes there). No state is kept at a lockstep point.
     //   WOTM_ROLLBACK_WINDOW=<n>: declare and run with n frames instead of what the measured costs afford (tests).
+    //   WOTM_ROLLBACK_MISPREDICT=1: every prediction is wrong (a button flipped), so every predicted frame rolls back (tests).
     namespace hybrid
     {
         constexpr uint32_t kNone = wotm_net::PredictedInputs::kNone;
         uint32_t g_cap = 0;           // WOTM_ROLLBACK: the most frames this PC may run past its newest confirmed input (0: lockstep)
         int g_fixedWindow = -1;       // WOTM_ROLLBACK_WINDOW
+        bool g_mispredict = false;    // WOTM_ROLLBACK_MISPREDICT
         uint32_t g_window = 0;        // the frames it runs past its newest confirmed input now (declared to the server)
         wotm_net::WindowChooser g_chooser;
         wotm_net::PredictedInputs g_predicted;
@@ -702,6 +704,11 @@ namespace wotm_rollback
             g_cap = static_cast<uint32_t>(std::clamp(std::atoi(e), 1, 3));
             if (const char *w = std::getenv("WOTM_ROLLBACK_WINDOW"); w && *w)
                 g_fixedWindow = std::clamp(std::atoi(w), 0, static_cast<int>(g_cap));
+            if (const char *m = std::getenv("WOTM_ROLLBACK_MISPREDICT"); m && std::atoi(m) > 0)
+            {
+                g_mispredict = true;
+                std::fprintf(stderr, "[rollback] WOTM_ROLLBACK_MISPREDICT: every prediction is wrong\n");
+            }
             g_slots.resize(g_cap + 2u);
             g_slotFrame.assign(g_cap + 2u, kNone);
             std::fprintf(stderr, "[rollback] on: up to %u frame(s) past the newest confirmed input%s\n", g_cap,
@@ -731,6 +738,8 @@ namespace wotm_rollback
         if (wotm_sync::g_net->arrived(controller, frame, s))
             return s;
         s = wotm_sync::g_net->prediction(controller);
+        if (hybrid::g_mispredict)
+            s.buttons ^= 0x0001u;   // L2 (active low): pressed or released the other way
         hybrid::g_predicted.predicted(frame, controller, s);
         return s;
     }

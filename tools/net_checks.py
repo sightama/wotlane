@@ -169,6 +169,12 @@ CHECKS = {
     # rollback on player 1 only: player 2 runs today's lockstep and its delay is the one cut (player 1 absorbs it)
     'rollback_mixed': dict(rtt=60, player_env=f'1:WOTM_ROLLBACK=3;WOTM_ROLLBACK_WINDOW=3;{ROLLBACK_MOUSE}|||2:{ROLLBACK_MOUSE}', secs=50,
                            expect=r'1:\[rollback\] window 0 -> 3|||1:[1-9]\d* rollbacks|||2:\[net\] delay \d+ -> \d+'),
+    # every prediction wrong (WOTM_ROLLBACK_MISPREDICT) and a cut of 3 frames, so both PCs predict: every predicted frame rolls back,
+    # the round's end (dialog 5) included, which opens on a predicted frame and restores through the runtime's unwind; then PLAY AGAIN
+    # and round 2 the same on both
+    'rollback_mispredict': dict(rtt=60, wins=1, extra_env='WOTM_ROLLBACK=3;WOTM_ROLLBACK_WINDOW=3;WOTM_ROLLBACK_MISPREDICT=1;'
+                                'WOTM_CHEATS=vencer=8', player_env='1:PS2X_PAD=34:0.3:cross|||2:PS2X_PAD=12:0.3:square', secs=60,
+                                expect=r'\[dialog\] 5 opened|||round 2 ended|||[1-9]\d* rollbacks|||through the unwind'),
     # rollback with 3 players (30 Hz), every mouse changing and player 2 pausing
     'rollback_3p': dict(**ROLLBACK, players=3, player_env=f'1:{ROLLBACK_MOUSE}|||2:{ROLLBACK_MOUSE};PS2X_PAD=24:0.3:start;25:0.3:up;'
                         f'26:0.3:cross|||3:{ROLLBACK_MOUSE}', secs=50, expect=r'\[dialog\] 0 opened|||[1-9]\d* rollbacks'),
