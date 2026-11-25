@@ -1,6 +1,6 @@
 #!/bin/sh
 # ABOUTME: Checks the browser build's own code without the game: the native layer's unit tests built with Emscripten and run under
-# ABOUTME: node, a compile of the browser-only sources (WebSocket transport, GL shim, web mounts) and the page scripts' node tests. Exit 0 when all pass.
+# ABOUTME: node, a compile of the browser-only sources (WebSocket transport, GL shim, web mounts), the page scripts' node tests and tools/page_id.sh. Exit 0 when all pass.
 set -eu
 . "$(dirname "$0")/posix_env.sh"
 
@@ -41,3 +41,7 @@ done
 step 'page scripts (node --test web/*.test.mjs)'
 node --test "$REPO/web/*.test.mjs" >"$build/node_test.log" 2>&1 || { cat "$build/node_test.log"; fail "web/*.test.mjs failed"; }
 grep -E "(tests|pass|fail) [0-9]+$" "$build/node_test.log"
+
+step 'page id (tools/test_page_id.sh)'
+sh "$REPO/tools/test_page_id.sh" >"$build/page_id_test.log" 2>&1 || { cat "$build/page_id_test.log"; fail "tools/test_page_id.sh failed"; }
+tail -1 "$build/page_id_test.log"

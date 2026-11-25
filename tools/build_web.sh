@@ -50,9 +50,12 @@ else wasm_sha=$(sha256sum "$dist/wotm.wasm" | cut -d' ' -f1); fi
 # build: the full id (which build this is); sim: the simulation id (tools/build_id.py), the one the page sends and lobbies compare
 full_id=$(cat "$bdir/ps2xRuntime/wotm.fullid" 2>/dev/null || true)
 sim_id=$(cat "$bdir/ps2xRuntime/wotm.buildid" 2>/dev/null || true)
-printf '{"wasm": "%s", "build": "%s", "sim": "%s"}\n' "$wasm_sha" "$full_id" "$sim_id" >"$dist/version.json"
 [ -n "$full_id" ] && [ -n "$sim_id" ] || fail "no wotm.fullid or wotm.buildid in $bdir/ps2xRuntime (tools/build_id.py --write runs in the build)"
-# the site's entry page (/, by deploy_web.sh): the build lives at b/<full id>/ (#187), and this page only sends the browser there with
+# page: the dist's own id, from both ids and every file in it (tools/page_id.sh: the page scripts and the mods are not in the full
+# id). The site serves the dist at b/<page id>/ (#187) and caches its files as never changing, so any change must be a new address
+page_id=$(sh "$REPO/tools/page_id.sh" "$dist" "$full_id" "$sim_id") || fail "page_id.sh failed"
+printf '{"wasm": "%s", "build": "%s", "sim": "%s", "page": "%s"}\n' "$wasm_sha" "$full_id" "$sim_id" "$page_id" >"$dist/version.json"
+# the site's entry page (/, by deploy_web.sh): the dist lives at b/<page id>/, and this page only sends the browser there with
 # its query (an invite's ?join=) and hash; inline, so the extra step costs one small request. It carries index.html's head from the
 # charset to the icon (description, canonical, social cards, JSON-LD) for crawlers and link previews, and its dark background
 head=$(sed -n '/^<meta charset/,/^<link rel="icon"/p' "$REPO/web/index.html")
@@ -63,9 +66,9 @@ cat >"$dist/entry.html" <<EOF
 <head>
 $head
 <style>html { background: #0b0b0d; color-scheme: dark; }</style>
-<script>location.replace('b/$full_id/' + location.search + location.hash);</script>
+<script>location.replace('b/$page_id/' + location.search + location.hash);</script>
 </head>
-<body><noscript><a href="b/$full_id/">War of the Monsters</a></noscript></body>
+<body><noscript><a href="b/$page_id/">War of the Monsters</a></noscript></body>
 </html>
 EOF
 echo "web_dist: $dist ($(du -sh "$dist" | cut -f1))"
