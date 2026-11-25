@@ -10,8 +10,8 @@
 param([Parameter(Mandatory = $true)][string]$Kept)
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
-if (-not (Test-Path $Kept)) { throw "No folder $Kept" }
-$Kept = (Resolve-Path $Kept).Path   # vu0bench.exe gets the paths too: absolute, whatever PowerShell's location is
+if (-not (Test-Path -LiteralPath $Kept)) { throw "No folder $Kept" }
+$Kept = Convert-Path -LiteralPath $Kept   # vu0bench.exe gets the paths too: absolute, whatever PowerShell's location is
 foreach ($f in 'vu0_code.bin', 'vu0_samples.bin', 'native.results') {
     if (-not (Test-Path (Join-Path $Kept $f))) { throw "$Kept has no $f (sh tools/vu0bench.sh --keep <folder> on the Mac fills it)" }
 }
@@ -40,5 +40,5 @@ if ($LASTEXITCODE -ne 0) { Get-Content "$work\build.log" -Tail 30; throw "the bu
 Write-Host '== replay the recorded calls and compare with the other machine''s results'
 & "$work\vu0bench.exe" (Join-Path $Kept 'vu0_code.bin') (Join-Path $Kept 'vu0_samples.bin') --expect (Join-Path $Kept 'native.results')
 $status = $LASTEXITCODE
-if ($status -eq 0) { Write-Host 'PASSED: MSVC x86 gives the recorded machine''s results on every call' } else { Write-Host "FAILED (vu0bench exit $status)" }
+if ($status -eq 0) { Write-Host 'PASSED: MSVC x64 gives the recorded machine''s results on every call' } else { Write-Host "FAILED (vu0bench exit $status)" }
 exit $status
