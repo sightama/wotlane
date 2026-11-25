@@ -13,9 +13,10 @@ The margin only changes the delay when the path falls within 3 ms of a frame bou
   measured pings of 49 to 70 ms, which puts the rise level at roughly 65 ms (inferred from that range, not read off the server): at
   60 Hz the 4-frame boundary is a path of 66.7 ms, crossed at a level of 63.7 ms with the margin and 66.7 ms without, so 5 frames with
   the margin and 4 without. At `--rtt 52` the level would be about 60 ms, 4 frames for both (computed, not run).
-- Two `wotm_server` builds of wip/browser 1aad89ef, the one deployed: `kDelayMarginMs` 3.0 (as shipped) and 0.0.
-- Three runs of each, alternating. Each run started once this Mac's 1-minute load was under 4, and the two tabs took it to about 10.
-  The stage medians (`lat_dl_ms`, `lat_st_ms`) are latency.mjs's per-player summary; the wait share and game rate come from
+- Two `wotm_server` builds of wip/browser 1aad89ef (the server deployed 2026-11-25 05:49Z): `kDelayMarginMs` 3.0 (as shipped) and 0.0.
+- Three runs of each, alternating. Each run started once this Mac's 1-minute load was under 4; sampled every 5 s, it peaked at 9.2
+  to 10.8 during the runs.
+  The stages (`lat_dl_ms`, `lat_st_ms`) are latency.mjs's per-player summary (the diag windows' medians averaged by presses); the wait share and game rate come from
   `python3 tools/diag_waits.py <run dir>`, over the steady windows.
 
 ## Result (6 player rows per variant)
@@ -30,10 +31,12 @@ The margin only changes the delay when the path falls within 3 ms of a frame bou
 
 Without the margin, delay plus waits per press is about 7 ms lower (from the stage means). But the match spends two and a half times
 as much of its time waiting (the means of the wait shares) and runs at 56 instead of 58 game frames a second, which fits inputs
-arriving just after the frame that needs them; for a player that would likely read as stutter and slow motion. With the margin the
-delay moved between 4 and 5 frames, consistent with a fall needing the 0.2 frames to spare, and its delay stage sits between the two.
-The rule's other slack (the 4/5 level and rounding up to whole frames) trades the same way, delay for waits.
+arriving just after the frame that needs them; for a player that would likely read as stutter and slow motion. With the margin every
+player saw both 4 and 5 frames in each run, consistent with a fall needing the 0.2 frames to spare, and its delay stage sits between the
+two. The rule's other slack (the 4/5 level and rounding up to whole frames) would trade the same way, delay for waits (inferred, not
+tested).
 
 The 6 rows are 3 runs of 2 players on one machine, not 6 independent samples, though the wait shares do not overlap. The tabs were
-headless and presented at about 10 fps with software GL, so the present stage and the totals are not meaningful here. The delay, waits
-and game rate come from the netcode and are.
+headless and presented 8.8 to 11.0 frames a second (software GL), so the present stage and the totals are not meaningful here. The game
+thread's busy time per frame was the same in both (`ee_busy` 5.2 to 5.4 ms) and the variants alternated, so the gap in game rate is the
+waiting rather than the load.
