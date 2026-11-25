@@ -314,7 +314,8 @@ namespace wotm_net
             c.build = w[2];
             c.halfRate = c.halfRate || proto::keyValues(w)["hz"] == "30";   // HELLO <protocol> <build> [hz=30], or a phone's User-Agent
             c.rejoin = proto::keyValues(w)["rejoin"] == "1";                // [rejoin=1]: TOKEN on join, a ghost when it drops
-            c.link->sendLine("WELCOME " + std::to_string(openLobbies()));
+            c.wire = proto::wireOf(proto::keyValues(w));                    // [wire=<n>]: what this client knows
+            c.link->sendLine("WELCOME " + std::to_string(openLobbies()) + (c.wire >= 1 ? " wire=" + std::to_string(proto::kWire) : ""));
             return;
         }
         if (!c.hello)

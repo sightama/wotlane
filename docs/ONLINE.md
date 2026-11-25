@@ -195,6 +195,22 @@ to the console) and starts once that many players are in; `--code <code> --name 
   blocks that differ. Please report it with the message and everyone's `runtime\live.err.log` (each one has that PC's block hashes
   of the moment, so two logs are enough to name what diverged).
 
+## Wire versions
+
+Older builds keep playing on the newest `wotm_server` (a deploy during a game night must not refuse a player whose page or package is
+from before it), so the wire changes only by adding, and every addition is negotiated:
+
+- `kProtocol` (`native/net/wotm_net_proto.hpp`) moves only when a message's format changes; the server refuses another protocol.
+- `kWire`, the additive level, moves when a message or an optional field is added. A client says its level in `HELLO` (`wire=<n>`;
+  none means 0, every build from before levels) and the server keeps it per connection.
+- The server never sends a member what its level does not know: a new message or field is sent only to members at or above the level
+  that added it, and what goes to a whole lobby uses only the lobby's lowest level (`lowestWire`). Level 1 adds the server's own level
+  to `WELCOME` (`WELCOME <lobbies> wire=<n>`); a level 0 client gets `WELCOME <lobbies>` as always.
+- The page says its level in `web/lobby.js` (`WIRE`, kept equal to `kWire` by `web/lobby.test.mjs`); the native lobby clients say none
+  yet, so they get only level 0 lines.
+- A match message added later follows the same rule: the server takes the level of the member's lobby connection.
+- Lobbies compare the simulation id (`tools/build_id.py`): builds that compute alike play together whatever their wire level.
+
 ## Diagnostics
 
 When an online match goes badly (lag, stutter, a freeze) the server holds what every player's page and the server itself saw, so the

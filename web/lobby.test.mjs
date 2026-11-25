@@ -2,7 +2,8 @@
 // ABOUTME: tools/net_lobby.py's match_env) and the lobby client's requests and replies over a fake WebSocket. Run: node --test web/
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { PROTOCOL, parseLine, parseMembers, matchEnv, lobbySocketUrl, lastLobbyNotice, inviteLink, lobbyRow, parsePings, parseHealth, parseChat, LobbyClient, halfRateDevice, phoneDevice } from './lobby.js';
+import { readFileSync } from 'node:fs';
+import { PROTOCOL, WIRE, parseLine, parseMembers, matchEnv, lobbySocketUrl, lastLobbyNotice, inviteLink, lobbyRow, parsePings, parseHealth, parseChat, LobbyClient, halfRateDevice, phoneDevice } from './lobby.js';
 
 const MATCH_LINE = 'MATCH lobby=QZXW players=2 stage=9 wins=2 mods=jump,turbo monsters=5,1 names=Ana,Bia ' +
   'seed=12345 step=1 you=1 token=00aa11bb22cc33dd port=7777';
@@ -61,7 +62,8 @@ async function connected(build = 'wl-1') {
   const client = new LobbyClient(ws, build);
   const ready = client.ready;
   ws.open();
-  assert.equal(ws.sent[0], `HELLO ${PROTOCOL} wl-1 rejoin=1`);   // the page asks for a rejoin token (quick rematch)
+  // the page asks for a rejoin token (quick rematch) and says its wire level (what the server may send it)
+  assert.equal(ws.sent[0], `HELLO ${PROTOCOL} wl-1 rejoin=1 wire=${WIRE}`);
   ws.reply('WELCOME 3');
   await ready;
   return { ws, client };
@@ -192,7 +194,7 @@ test('LobbyClient on a device that cannot compute 60 game frames a second says s
   const client = new LobbyClient(ws, 'wl-1', { halfRate: true });
   const ready = client.ready;
   ws.open();
-  assert.equal(ws.sent[0], `HELLO ${PROTOCOL} wl-1 hz=30 rejoin=1`);
+  assert.equal(ws.sent[0], `HELLO ${PROTOCOL} wl-1 hz=30 rejoin=1 wire=${WIRE}`);
   ws.reply('WELCOME 0');
   await ready;
 });
@@ -446,4 +448,10 @@ test('LobbyClient request rejects immediately once the socket has closed instead
   const { ws, client } = await connected();
   ws.onclose();
   await assert.rejects(client.rejoin('QZXW', 'aa'.repeat(16)), /lost the connection/);
+});
+
+test('the page speaks the protocol and wire level of native/net/wotm_net_proto.hpp', () => {
+  const header = readFileSync(new URL('../native/net/wotm_net_proto.hpp', import.meta.url), 'utf8');
+  assert.equal(PROTOCOL, Number(header.match(/constexpr uint16_t kProtocol = (\d+);/)[1]));
+  assert.equal(WIRE, Number(header.match(/constexpr int kWire = (\d+);/)[1]));
 });

@@ -18,6 +18,10 @@ namespace wotm_net::proto
 {
     constexpr uint16_t kProtocol = 5;   // 3: pad states carry mouse motion and camera settings; 4: Hash carries the 256 block hashes;
                                         // 5: the lobby carries saved map ids (stage) and skin ids (<monster>:<skin>)
+    // The additive wire level (docs/ONLINE.md "Wire versions"): it moves when a message or an optional field is added, and kProtocol
+    // only when a format changes. A client says its level in HELLO (wire=<n>; none: 0) and the server sends it only what that level
+    // knows, so older retained builds keep playing on the newest server. 1: WELCOME carries the server's level (wire=<n>)
+    constexpr int kWire = 1;
     constexpr int kMaxPlayers = 8;   // 4 in the game's player slots and 4 in AI slots driven by the network (wotm_multi.inc)
     constexpr uint16_t kDefaultPort = 7777;
     constexpr uint16_t kDefaultMasterPort = 7778;   // the master server (list of public servers, wotm_net_master.hpp)
@@ -571,6 +575,26 @@ namespace wotm_net::proto
             if (const size_t eq = s.find('='); eq != std::string::npos && eq > 0)
                 kv[s.substr(0, eq)] = s.substr(eq + 1);
         return kv;
+    }
+
+    // a HELLO's wire level (its key=values): 0 when it says none or something that is not a level (a build from before levels)
+    inline int wireOf(const std::map<std::string, std::string> &kv)
+    {
+        const auto it = kv.find("wire");
+        if (it == kv.end() || it->second.empty() || it->second.size() > 4)
+            return 0;
+        if (it->second.find_first_not_of("0123456789") != std::string::npos)
+            return 0;
+        return std::stoi(it->second);
+    }
+
+    // the level everyone in a lobby knows (what goes to all of them may use only that): the lowest member's; kWire when empty
+    inline int lowestWire(const std::vector<int> &levels)
+    {
+        int low = kWire;
+        for (int v : levels)
+            low = std::min(low, v);
+        return low;
     }
 
     // player name: letters, digits, '_' and '-', up to 16

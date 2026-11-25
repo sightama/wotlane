@@ -86,6 +86,7 @@ namespace wotm_net
             std::string build;
             bool halfRate = false;   // HELLO hz=30: the device can't compute 60 game frames a second (a phone); its matches run at 30 Hz
             bool rejoin = false;     // HELLO rejoin=1: a page that reloads after a match; it gets a TOKEN and becomes a ghost when it drops
+            int wire = 0;            // HELLO wire=<n>: the additive wire level it knows (proto::kWire); nothing newer goes to it
             std::string token;       // its current REJOIN token (TOKEN line), "" without rejoin
             int lobby = -1;
             std::string name;
