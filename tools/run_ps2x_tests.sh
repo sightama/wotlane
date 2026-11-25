@@ -41,8 +41,12 @@ cmake --build "$bdir" --target ps2x_tests >"$logs/ps2x_tests_build.log" 2>&1 || 
     fail "build failed; full log: $logs/ps2x_tests_build.log"
 }
 
+# some tests read the clone's sources through paths like ../ps2xRecomp/include/..., which hold from a folder inside the clone (as
+# in upstream's own build/); the suite also writes its memory card folders into its working directory
+run_dir=$pr/ps2x_tests_run
+mkdir -p "$run_dir"
 status=0
-(cd "$bdir" && ./ps2xTest/ps2x_tests) >"$logs/ps2x_tests.log" 2>&1 || status=$?
+(cd "$run_dir" && "$bdir/ps2xTest/ps2x_tests") >"$logs/ps2x_tests.log" 2>&1 || status=$?
 plain=$(sed 's/\x1b\[[0-9;]*m//g' "$logs/ps2x_tests.log")
 printf '%s\n' "$plain" | grep -E '^(Total Tests|Passed|Failed):'
 # a test's own log lines can come between its "[Run]: name" and its "[Failed]": name the last test started
