@@ -905,8 +905,8 @@ namespace
         CHECK(hello(low, cfg.port, "b1", "wire=0") == "WELCOME 0");
     }
 
-    // an older retained build (no wire level) and the newest build share a lobby and start a match on the newest server, and nothing
-    // the older one gets on the way carries a field of a later level
+    // an older retained build (no wire level) and the newest build share a lobby and start a match on the newest server, and no line
+    // the older one gets from JOIN to MATCH (its WELCOME: the test above) carries a field of a later level
     TEST(wire_level_an_older_member_joins_a_newer_members_lobby)
     {
         ServerConfig cfg = testConfig();

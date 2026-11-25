@@ -204,7 +204,8 @@ from before it), so the wire changes only by adding, and every addition is negot
 - `kWire`, the additive level, moves when a message or an optional field is added. A client says its level in `HELLO` (`wire=<n>`;
   none means 0, every build from before levels) and the server keeps it per connection.
 - The server never sends a member what its level does not know: a new message or field is sent only to members at or above the level
-  that added it, and a line that goes to a whole lobby may use only the lowest level among its members. Level 1 adds the server's own
+  that added it. The first addition that goes to a whole lobby at once also picks, per lobby, the lowest level among its members
+  and uses only that (no such line exists yet). Level 1 adds the server's own
   level to `WELCOME` (`WELCOME <lobbies> wire=<n>`); a level 0 client gets `WELCOME <lobbies>` as always.
 - The page says its level in `web/lobby.js` (`WIRE`, kept equal to `kWire` by `web/lobby.test.mjs`). The native lobby clients
   (`wotm_lobby_client.cpp`, the launcher, `net_lobby.py`) say none yet, so they get only level 0 lines; one must send `wire=` before
