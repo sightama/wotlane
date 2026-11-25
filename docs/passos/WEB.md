@@ -21,9 +21,9 @@ FFmpeg), builds `wotm` and assembles `<runtime>/web_dist`:
 **Versioned builds.** The site serves each build at its own address, `/b/<full id>/`: the whole dist, `index.html` included, whose
 references are relative, so a build's scripts and wasm never change at their address and a browser or the edge can keep them. The
 site's `/` is the build's `entry.html`, an inline page that only sends the browser on to `b/<full id>/` with the address's query (an
-invite's `?join=`) and hash; it costs one small request (measured with `node tools/browser_mp_test/versioned_builds.mjs --measure 9
---rtt 40`: through `/` about one round trip more than straight to the build). The disc is shared by every build at `/data/`, which the
-page and the game (`native/wotm_webdisc.cpp`) name from the site root. Invite links name the site's root (`web/lobby.js` `inviteLink`),
+invite's `?join=`) and hash; it costs one small request (`node tools/browser_mp_test/versioned_builds.mjs --measure N --rtt ms`
+times it). The site is served at its origin's root: the disc is shared by every build at `/data/`, which the page and the game
+(`native/wotm_webdisc.cpp`) name from there, and so are the public files (`/manifest.webmanifest`, the icons). Invite links name the site's root (`web/lobby.js` `inviteLink`),
 so they open the newest build. `/b/index.json` lists the builds the site keeps (`{builds: [{full, sim, time}]}`): when a lobby runs
 another build, the server refuses the join with that build's simulation id, and the page opens the newest kept build with it and the
 lobby code (`web/builds.js`), so a deploy during a session doesn't turn players away. localStorage, the private file system (saves,

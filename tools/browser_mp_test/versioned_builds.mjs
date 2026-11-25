@@ -84,7 +84,10 @@ try {
   check('the disc is read from /data/', urls.some((u) => u.startsWith('/data/')), 'no /data/ request');
   check('never from under the build', !urls.some((u) => u.startsWith('/b/') && u.includes('/data/')), urls.filter((u) => u.includes('/data/'))[0]);
 
-  // 2. what the page keeps (localStorage, the private file system's settings.ini) is the origin's: the next build has it
+  // 2. what the page keeps (localStorage, the private file system, the disc chunks in the Cache API) is the origin's: the next build
+  // has it (disc_cache.js names its caches by file and version, not by the page's address)
+  const cachesA = await page.evaluate(async () => (await caches.keys()).sort());
+  check('the disc cache has chunks after a build\'s first load', cachesA.length > 0, JSON.stringify(cachesA));
   await page.evaluate(async () => {
     localStorage.setItem('wotlane.name', 'Keeper');
     const dir = await navigator.storage.getDirectory();
@@ -102,6 +105,8 @@ try {
   });
   check('localStorage carries across builds', kept.name === 'Keeper' && kept.field === 'Keeper', JSON.stringify(kept));
   check('the private file system carries across builds', kept.ini === 'kept=1\n', JSON.stringify(kept.ini));
+  const cachesB = await pageB.evaluate(async () => (await caches.keys()).sort());
+  check('and the disc cache: the next build finds the same caches', cachesA.every((k) => cachesB.includes(k)), JSON.stringify(cachesB));
   await ctx.close();
 
   // 3. a player on build B joining a lobby of build A is refused by the server and opens build A with the code

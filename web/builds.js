@@ -13,7 +13,7 @@ export function buildForSim(index, sim) {
 
 // the site's own root above a build's address: /b/<id>/ is /, /play/b/<id>/ is /play/
 export function siteRoot(pathname) {
-  return pathname.replace(/b\/[^/]+\/$/, '');
+  return pathname.replace(/\/b\/[^/]+\/$/, '/');
 }
 
 // The server refuses a member of another build with "build differs from the lobby's (<simulation id>)". When the index keeps a build

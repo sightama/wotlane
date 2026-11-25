@@ -51,6 +51,7 @@ else wasm_sha=$(sha256sum "$dist/wotm.wasm" | cut -d' ' -f1); fi
 full_id=$(cat "$bdir/ps2xRuntime/wotm.fullid" 2>/dev/null || echo "")
 sim_id=$(cat "$bdir/ps2xRuntime/wotm.buildid" 2>/dev/null || echo "")
 printf '{"wasm": "%s", "build": "%s", "sim": "%s"}\n' "$wasm_sha" "$full_id" "$sim_id" >"$dist/version.json"
+[ -n "$full_id" ] && [ -n "$sim_id" ] || fail "no wotm.fullid or wotm.buildid in $bdir/ps2xRuntime (tools/build_id.py --write runs in the build)"
 # the site's entry page (/, by deploy_web.sh): the build lives at b/<full id>/ (#187), and this page only sends the browser there with
 # its query (an invite's ?join=) and hash; inline, so the extra step costs one small request
 cat >"$dist/entry.html" <<EOF

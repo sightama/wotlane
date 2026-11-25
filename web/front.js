@@ -424,15 +424,16 @@ async function hostOrJoin(join) {
       }
     }
     return { code: await l.join(code, name, monster), isOwner: false };
-  });
+  }, false, join ? code : '');
   if (entered && !join) await sendSettings();
   if (entered && rejoined && owner) showLobbySettings(lobby.settings);
 }
 
 // a lobby on another build (the server's "build differs from the lobby's (<simulation id>)"): when the site keeps that build
-// (/b/index.json, web/builds.js), the page opens it with the lobby code, so a deploy mid-session doesn't turn its players away
-async function followLobbyBuild(message) {
-  const code = ($('joinCode')?.value ?? '').trim().toUpperCase();
+// (/b/index.json, web/builds.js), the page opens it with the lobby code, so a deploy mid-session doesn't turn its players away;
+// `code`: the joined lobby's (none for a host or a rejoin: nothing to follow)
+async function followLobbyBuild(message, code) {
+  if (!code) return false;
   try {
     const r = await fetch(`${siteRoot(location.pathname)}b/index.json`, { cache: 'no-store' });
     if (!r.ok) return false;
@@ -447,8 +448,9 @@ async function followLobbyBuild(message) {
 }
 
 // connects and runs `enter` (create, join or rejoin, resolving with the lobby's code and whether this player owns it), then shows
-// the lobby; `rematch` as in showLobby. False, with the Host/Join choice back and the server's reason on the panel, when it fails
-async function enterLobby(enter, rematch = false) {
+// the lobby; `rematch` as in showLobby; `joinCode`: the code a join asks for (a refusal for another build follows it there). False,
+// with the Host/Join choice back and the server's reason on the panel, when it fails
+async function enterLobby(enter, rematch = false, joinCode = '') {
   pings = {};
   healths = {};
   $('chatLog').replaceChildren();
@@ -471,7 +473,7 @@ async function enterLobby(enter, rematch = false) {
   } catch (e) {
     lobby?.close();
     lobby = null;
-    if (await followLobbyBuild(e.message)) return false;   // the page leaves for the lobby's build
+    if (await followLobbyBuild(e.message, joinCode)) return false;   // the page leaves for the lobby's build
     say(friendlyError(e.message));
     for (const b of buttons) b.disabled = false;
     startWatchingLobbies();

@@ -23,6 +23,8 @@ test('the site root above a build address', () => {
   assert.equal(siteRoot('/play/b/wl-aaaa000000000002/'), '/play/');
   assert.equal(siteRoot('/'), '/');
   assert.equal(siteRoot('/play/'), '/play/');
+  assert.equal(siteRoot('/web/foo/'), '/web/foo/');   // only a whole b/<id>/ segment
+  assert.equal(siteRoot('/b/x/y/'), '/b/x/y/');
 });
 
 test('a lobby on another build sends the page to that build with the code', () => {
