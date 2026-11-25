@@ -2,8 +2,9 @@
 
 The coordinator asked, after the present-phase deploy (#210, build id wl-7e3c4e8e1dc25fd4), to break the ~131 ms press-to-screen latency
 of a live 1 vs 1 into its stages, to pick what to attack next. Short answer, from a small live sample (4 presses) and local runs with ~70
-presses each that agree: **the lockstep input delay is the largest stage by far, about 60 to 70% of the total**; everything the page and
-the game thread do is the rest.
+presses each that agree: **the lockstep input delay is the largest stage by far** (live 96.3 of a 131 ms median total, 73%; local
+~50 of 78 to 87 ms, 57 to 64%); everything the page and the game thread do is the rest. The delay is set by the players' ping level
+including its spikes, which is what put the live match at 5 frames.
 
 ## The stages (what the diag measures, `docs/ONLINE.md` "Diagnostics")
 
@@ -21,7 +22,8 @@ frame applying it:
 
 Sending the input to the server and the server relaying it are not a stage of their own: by design they happen inside the delay, which
 is chosen so the input reaches every other player before the frame that applies it (half the sender's ping plus half the slowest peer's,
-at the level the ping stays at or under 4/5 of the last 8 s, `docs/ONLINE.md` "Input delay"). A packet that misses that shows up as waits.
+at the level the ping stays at or under 4/5 of the last 8 s, plus 3 ms, rounded up to whole frames: `docs/ONLINE.md` "Input delay",
+`pathFrames` and `kDelayMarginMs` in `native/net/wotm_net_proto.hpp`). A packet that misses that shows up as waits.
 
 ## Live: playwotm.com, lobby J7XR (2026-11-25 03:50Z, the deploy's second smoke)
 
@@ -41,7 +43,11 @@ and 53), input delay 2 rising to 5 frames as the server measured the round trip,
 Each stage is a median over the presses, so the stages need not add up to the median total. `match_diag.sh J7XR --all`. Only one diag
 window had presses (the smoke's scripted taps), all from player 1, the headless Chrome tab, so this is a small sample from one browser.
 
-The window reported an input delay of 5 frames, 83 ms at 60 Hz, yet `lat_dl_ms` is 96.3 ms (5.8 frames). The game ran at ~57 frames a
+Why 5 frames: with the median pings (38 and 53 ms) the rule gives (38 + 53) / 2 + 3 = 48.5 ms, 2.9 frames, so 3. Five frames needs a
+ping level averaging over ~64 ms per player, above the medians but within the window's spikes (maxima 97 and 108 ms); the level is the
+4/5 point of the last 8 s, so spikes that come often enough raise it.
+
+The window reported that delay of 5 frames, 83 ms at 60 Hz, yet `lat_dl_ms` is 96.3 ms (5.8 frames). The game ran at ~57 frames a
 second in that window (5 frames of ~17.5 ms are ~88 ms), which explains part of it; the rest is not explained by these numbers (the delay
 may have changed within the window: the diag reports its value at the window's end). The live sim (0.4 ms) is also far below the local
 runs' 5.5 ms; with one headless tab and 4 presses this is not looked into further here.
@@ -57,28 +63,31 @@ runs' 5.5 ms; with one headless tab and 4 presses this is not looked into furthe
 | present | 13.1 to 20.4 |
 | total | 78 to 87 |
 
-At a 20 ms round trip the delay is still ~60% of the total: these runs settled at 3 frames (50 ms). Why 3 and not the 1 to 2 that half of
-each player's round trip would suggest was not measured here (the lag proxy adds its own time, and the rule rounds to whole frames).
+At a 20 ms round trip the delay is still ~60% of the total: these runs settled at 3 frames (50 ms). The pings the game measured were
+13 to 40 ms (the lag proxy adds to its 20 ms), and the rule reaches 3 frames once the two players' level averages over ~30 ms:
+(34 + 40) / 2 + 3 = 40 ms is 2.4 frames.
 
 ## What this says to attack next
 
-1. **The input delay (70% of the live stage sum).** Each frame of delay is 16.7 ms for every press. It is set by the round
-   trip, so the levers are:
-   - *Rollback* (issue #30, paused): predicts the remote input and corrects mispredictions, so local input can apply after a small delay
-     instead of one covering the round trip. It is the largest candidate lever on this stage (by how lockstep works, not measured here);
-     its cost is re-simulating frames.
+1. **The input delay (70% of the live stage sum).** Each frame of delay is 16.7 ms for every press. It is set by the ping level, so
+   the levers are:
+   - *Ping spikes*: live, the spikes rather than the median pings set 5 frames instead of 3 (above). Where they come from (the path,
+     the server, or this Mac running two browsers and the harness) is not measured; the server's journal and `match_diag.sh` per-report
+     pings over a few real matches would tell.
    - *Server placement*: the round trip to us-east1 sets the delay; players far from it pay more frames. A second region, or picking
      the region by the lobby's players, cuts frames for them.
-   - *The delay rule's margin*: #199 already tightened the margin before the delay falls (0.5 to 0.2 frames); the rounding to whole
-     frames and the 4/5 level are the remaining slack, each worth at most a frame and paid for in more waits.
-2. **The present (16% live, 21.4 ms).** This smoke's Chrome tab was headless (animation frames not tied to a display), so its present
-   is not the #210 case. With a real 60 Hz display the model after #210 is ~18.7 ms (2 ms margin + one display frame); before it,
-   ~25 ms on average (half a display frame of waiting for the next one, plus one display frame). Neither is measured at 60 Hz yet.
+   - *The delay rule*: #199 already tightened the margin before the delay falls (0.5 to 0.2 frames); the 4/5 level, the 3 ms margin and
+     the rounding to whole frames are the remaining slack, each worth at most a frame and paid for in more waits.
+   - Rollback and online time sync are under "Discarded" in `TODO.md` (the owner's decision), so they are not levers here.
+2. **The present (16% live, 21.4 ms).** This smoke's Chrome tab was headless, whose animation frames are presumably not tied to a
+   display's refresh (inferred, not checked), so its present is likely not the #210 case. With a real 60 Hz display the model after
+   #210 is ~18.7 ms (2 ms margin + one display frame); before it, ~25 ms on average (half a display frame of waiting for the next one, plus one display frame). Neither is measured at 60 Hz yet.
    The display frame in both is there by construction: the draw happens on an animation frame and shows on the next.
 3. **Waits (8%).** Late packets: jitter on the path, and on this Mac two browsers plus the harness, which may inflate it compared with
    players on their own machines (not measured).
 4. **Sample and sim (5%).** Already small: the sample waits for the next game frame (half a frame on average) and the frame is captured
    right after it is computed.
 
-So the largest remaining chunk is the input delay, and the candidate that could remove much of it is rollback (unmeasured; it trades
-delay for re-simulation and visible corrections); the other levers are worth about a frame or less each.
+So the largest remaining chunk is the input delay. Within lockstep, the next thing to look at is what raises the ping level above the
+median (the spikes); server placement helps players far from us-east1; the rule's own slack and the page stages are worth about a frame
+or less each.
