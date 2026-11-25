@@ -6454,6 +6454,12 @@ TEST(matchresult_winner_needs_the_target_and_a_clear_lead)
     CHECK(r.winner() == -2);   // a tie at the target is no winner
     r.target = 0;
     CHECK(r.winner() == -1);   // endless
+    r.target = 3;
+    r.fighter[0].wins = 3;
+    r.fighter[1].wins = 3;
+    r.count = 3;
+    r.fighter[2].wins = 4;
+    CHECK(r.winner() == 2);   // the most wins at the target, wherever the tie is in the list
 }
 
 TEST(matchresult_skips_a_slot_outside_ram_and_caps_the_fighters)

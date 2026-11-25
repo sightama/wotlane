@@ -50,7 +50,7 @@ function watchResult({ button, cell, setTimer, clearTimer }) {
 
 // Makes and delivers the card for the score now: 'none' when there is nothing to save, else deliver's answer
 async function saveCard({ cell, capture, makeCanvas, draw, deliver }) {
-  const result = R.readResult(cell);
+  const result = R.readStable(cell);
   if (!R.resultAvailable(result)) return 'none';
   const frame = await capture();
   const canvas = makeCanvas();

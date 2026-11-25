@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
-const { CELLS, readResult, resultAvailable, cardLayout, drawCard, isBlankFrame, monsterName, CARD } = createRequire(import.meta.url)('./match_result.js');
+const { CELLS, readStable, readResult, resultAvailable, cardLayout, drawCard, isBlankFrame, monsterName, CARD } = createRequire(import.meta.url)('./match_result.js');
 
 // cells as native/wotm_matchresult.hpp publishes them: session, fighters, target, rounds, winner, then type and wins per fighter
 const cells = (session, count, target, rounds, winner, fighters) => {
@@ -138,4 +138,20 @@ test('each fighter gets a bar as long as its share of the wins target, the leade
   assert.ok(Math.abs(leadFill[3] / leadTrack[3] - 3 / 4) < 1e-9 && Math.abs(otherFill[3] / otherTrack[3] - 1 / 4) < 1e-9);
   assert.equal(leadFill[0], '#e0592a');
   assert.notEqual(otherFill[0], '#e0592a');
+});
+
+test('with no wins target nobody is marked the leader: elimination decides by who is left, not by wins', () => {
+  const l = cardLayout(read(cells(1, 2, 0, 5, -1, [[5, 2], [1, 1]])));
+  assert.deepEqual(l.rows.map((r) => r.lead), [false, false]);
+  assert.equal(l.title, 'The match so far');
+});
+
+test('readStable reads again when the cells changed under it and gives the read that agreed twice', () => {
+  const states = [cells(1, 2, 3, 4, -1, [[5, 2], [1, 1]]), cells(1, 2, 3, 4, 0, [[5, 3], [1, 1]]), cells(1, 2, 3, 4, 0, [[5, 3], [1, 1]])];
+  let pass = 0;
+  const flaky = (i) => { if (i === 0) pass++; return states[Math.min(pass, states.length) - 1][i]; };   // each read of the score starts at cell 0
+  const r = readStable(flaky);
+  assert.equal(r.winner, 0);
+  assert.equal(r.fighters[0].wins, 3);
+  assert.equal(pass, 3, 'two reads disagreed, so it read a third time');
 });

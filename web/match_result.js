@@ -24,6 +24,17 @@ function readResult(cell) {
   };
 }
 
+// The score as two reads in a row agree on it: the game publishes its cells one by one, so a read can land between two of them
+function readStable(cell, tries = 4) {
+  let last = readResult(cell);
+  for (let i = 1; i < tries; i++) {
+    const next = readResult(cell);
+    if (JSON.stringify(next) === JSON.stringify(last)) return next;
+    last = next;
+  }
+  return last;
+}
+
 // a card is worth offering once two or more fight in a session and a round has been won
 function resultAvailable(r) {
   return r.session && r.fighters.length >= 2 && r.fighters.reduce((sum, f) => sum + f.wins, 0) >= 1;
@@ -36,7 +47,7 @@ const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 function cardLayout(r) {
   const top = Math.max(0, ...r.fighters.map((f) => f.wins));
   const sameMonster = (type) => r.fighters.filter((f) => f.type === type).length > 1;
-  const rows = r.fighters.map((f, slot) => ({ name: monsterName(f.type) + (sameMonster(f.type) ? ` (${slot + 1})` : ''), wins: f.wins, lead: f.wins === top, slot }))
+  const rows = r.fighters.map((f, slot) => ({ name: monsterName(f.type) + (sameMonster(f.type) ? ` (${slot + 1})` : ''), wins: f.wins, lead: r.target > 0 && f.wins === top, slot }))
     .sort((a, b) => b.wins - a.wins || a.slot - b.slot)
     .map(({ slot, ...row }) => row);
   let title;
@@ -120,5 +131,5 @@ function isBlankFrame(imageData) {
   return true;
 }
 
-if (typeof module !== 'undefined' && module.exports) module.exports = { CELLS, CARD, monsterName, readResult, resultAvailable, cardLayout, drawCard, isBlankFrame };
-else Object.assign(globalThis, { wotmResult: { CELLS, CARD, monsterName, readResult, resultAvailable, cardLayout, drawCard, isBlankFrame } });
+if (typeof module !== 'undefined' && module.exports) module.exports = { CELLS, CARD, monsterName, readStable, readResult, resultAvailable, cardLayout, drawCard, isBlankFrame };
+else Object.assign(globalThis, { wotmResult: { CELLS, CARD, monsterName, readStable, readResult, resultAvailable, cardLayout, drawCard, isBlankFrame } });

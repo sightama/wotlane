@@ -48,15 +48,14 @@ struct Result
     int winner() const
     {
         if (target <= 0) return -1;
-        int best = -1;
+        int best = -1, top = 0, atTop = 0;
         for (int i = 0; i < count; ++i)
         {
             if (fighter[i].wins < target) continue;
-            if (best == -1 || fighter[i].wins > fighter[best].wins) best = i;
-            else if (fighter[i].wins == fighter[best].wins) best = -2;
-            if (best == -2) break;
+            if (fighter[i].wins > top) { top = fighter[i].wins; best = i; atTop = 1; }
+            else if (fighter[i].wins == top) ++atTop;
         }
-        return best;
+        return atTop > 1 ? -2 : best;
     }
 };
 
