@@ -31,8 +31,8 @@ The margin only changes the delay when the path falls within 3 ms of a frame bou
 Without the margin, delay plus waits per press is about 7 ms lower (from the stage means). But the match spends two and a half times
 as much of its time waiting (the means of the wait shares) and runs at 56 instead of 58 game frames a second, which fits inputs
 arriving just after the frame that needs them; for a player that would likely read as stutter and slow motion. With the margin the
-delay moved between 4 and 5 frames, consistent with a fall needing the 0.2 frames to spare, and its delay stage sits between the two. The rule's other slack (the 4/5 level and rounding up to whole frames) trades the same
-way, delay for waits.
+delay moved between 4 and 5 frames, consistent with a fall needing the 0.2 frames to spare, and its delay stage sits between the two.
+The rule's other slack (the 4/5 level and rounding up to whole frames) trades the same way, delay for waits.
 
 The 6 rows are 3 runs of 2 players on one machine, not 6 independent samples, though the wait shares do not overlap. The tabs were
 headless and presented at about 10 fps with software GL, so the present stage and the totals are not meaningful here. The delay, waits
