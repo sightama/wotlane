@@ -92,9 +92,9 @@ players' highest pings in one run (34 and 40 ms), (34 + 40) / 2 + 3 = 40 ms is 2
    the local 120 Hz runs measured, so the model is not confirmed by these runs either.
 3. **Waits (8%).** Late packets: jitter on the path, and on this Mac two browsers plus the harness, which may inflate it compared with
    players on their own machines (not measured).
-4. **Sample and sim (5%).** Already small: the sample waits for the next game frame (half a frame on average) and the frame is captured
-   right after it is computed.
+4. **Sample and sim (5% live, 17 to 19% locally).** Each under a frame: the sample waits for the next game frame (half a frame on
+   average) and the frame is captured right after it is computed.
 
 So the largest remaining chunk is the input delay. Within lockstep, the next thing to look at is what raises the ping level above the
 median (the spikes); server placement helps players far from us-east1; the margin and the rounding are worth under a frame each, and
-the page stages (present the largest, 1.3 frames live) about a frame each.
+of the page stages present is about a frame (1.3 live) and the rest less.
