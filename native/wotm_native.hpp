@@ -1610,12 +1610,10 @@ public:
         if (wantGpu) {
             ProfScope ps(DrawProf::ShadowTex);
             rlDrawRenderBatchActive();
-            gpuSil_.render(silJobs_.size(), kShadowRes, [&](size_t i) {
-                return std::pair<const RenderTexture2D &, const std::vector<float> &>(shadowCache_[silJobs_[i].entry].rt, silJobs_[i].xy);
-            });
-            view.restore();
-            // the receivers draw with the scene's shader, as on the CPU path (render left raylib's default one)
-            if (shaderOn_) rlSetShader(alphaShader_.id, alphaShader_.locs);
+            if (!silJobs_.empty())   // every silhouette reused: nothing to draw
+                gpuSil_.render(silJobs_.size(), kShadowRes, [&](size_t i) {
+                    return std::pair<const RenderTexture2D &, const std::vector<float> &>(shadowCache_[silJobs_[i].entry].rt, silJobs_[i].xy);
+                });
             static const bool silCheck = std::getenv("WOTM_SILCHECK") != nullptr;
             if (silCheck)   // diagnostics: each GPU silhouette against the CPU one from the same corners (texels off by more than 2 levels)
                 for (const SilJob &j : silJobs_) {
@@ -1648,6 +1646,10 @@ public:
                     ExportImage(img, name);
                     UnloadImage(img);
                 }
+            // after the diagnostics' read backs: on WebGL, LoadImageFromTexture leaves the window's framebuffer bound
+            view.restore();
+            // the receivers draw with the scene's shader, as on the CPU path (render left raylib's default one)
+            if (shaderOn_) rlSetShader(alphaShader_.id, alphaShader_.locs);
         }
 
         rlDrawRenderBatchActive();
