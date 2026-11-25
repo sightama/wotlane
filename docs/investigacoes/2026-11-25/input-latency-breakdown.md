@@ -2,9 +2,9 @@
 
 The coordinator asked, after the present-phase deploy (#210, build id wl-7e3c4e8e1dc25fd4), to break the ~131 ms press-to-screen latency
 of a live 1 vs 1 into its stages, to pick what to attack next. Short answer, from a small live sample (4 presses) and local runs with ~70
-presses each that agree on the order: **the lockstep input delay is the largest stage by far** (live 96.3 of a 131 ms median total, 73%; local
-~50 of 78 to 87 ms, 57 to 64%); everything the page and the game thread do is the rest. The delay is set by the players' ping level,
-and the live match's 5 frames (3 at its median pings) were most likely set by ping spikes (inferred, below).
+presses each that agree on the order: **the lockstep input delay is the largest stage by far** (live 96.3 of a 131 ms median total,
+73%; local ~50 of 78 to 87 ms, 57 to 64%); everything the page and the game thread do is the rest. The delay is set by the players'
+ping level, and the live match's 5 frames (3 at its median pings) were most likely set by ping spikes (inferred, below).
 
 ## The stages (what the diag measures, `docs/ONLINE.md` "Diagnostics")
 
@@ -74,9 +74,9 @@ players' highest pings in one run (34 and 40 ms), (34 + 40) / 2 + 3 = 40 ms is 2
 
 1. **The input delay (70% of the live stage sum).** Each frame of delay is 16.7 ms for every press. It is set by the ping level, so
    the levers are:
-   - *Ping spikes*: live, the spikes rather than the median pings most likely set 5 frames instead of 3 (inferred, above). Where they come from (the path,
-     the server, or this Mac running two browsers and the harness) is not measured; the server's journal and `match_diag.sh` per-report
-     pings over a few real matches would tell.
+   - *Ping spikes*: live, the spikes rather than the median pings most likely set 5 frames instead of 3 (inferred, above). Where
+     they come from (the path, the server, or this Mac running two browsers and the harness) is not measured; the server's journal and
+     `match_diag.sh` per-report pings over a few real matches would tell.
    - *Server placement*: the round trip to us-east1 sets the delay; players far from it pay more frames. A second region, or picking
      the region by the lobby's players, cuts frames for them.
    - *The delay rule*: #199 already tightened the margin before the delay falls (0.5 to 0.2 frames); the remaining slack is the 3 ms
