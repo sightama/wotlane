@@ -1,14 +1,15 @@
-// ABOUTME: Versioned builds (/b/<build id>/, #187): the newest retained build of a simulation id from /b/index.json, and the address a
+// ABOUTME: Versioned builds (/b/<page id>/, #187): the newest retained build of a simulation id from /b/index.json, and the address a
 // ABOUTME: page moves to when a lobby runs another build, so a deploy mid-session doesn't turn its players away. Page module.
 
 const BUILD_ID = /^wl-[0-9a-f]{16}$/;
 
-// the newest build in the index (`{builds: [{full, sim, time}]}`, written by the deploy) whose simulation id is `sim`, or null
+// the page id (version.json's `page`: its folder under b/) of the newest build in the index (`{builds: [{page, sim, time}]}`, written by
+// the deploy) whose simulation id is `sim`, or null
 export function buildForSim(index, sim) {
   const builds = Array.isArray(index?.builds) ? index.builds : [];
-  const same = builds.filter((b) => b && b.sim === sim && BUILD_ID.test(b.full ?? ''));
+  const same = builds.filter((b) => b && b.sim === sim && BUILD_ID.test(b.page ?? ''));
   same.sort((a, b) => String(b.time).localeCompare(String(a.time)));
-  return same[0]?.full ?? null;
+  return same[0]?.page ?? null;
 }
 
 // the site's own root above a build's address: /b/<id>/ (or /b/<id>/index.html) is /, /play/b/<id>/ is /play/
@@ -22,10 +23,10 @@ export function siteRoot(pathname) {
 export function lobbyBuildUrl(error, code, index, location) {
   const m = /^build differs from the lobby's \((wl-[0-9a-f]{16})\)/.exec(error ?? '');
   if (!m || !code) return null;
-  const full = buildForSim(index, m[1]);
-  if (!full) return null;
+  const page = buildForSim(index, m[1]);
+  if (!page) return null;
   const root = siteRoot(location.pathname);
-  const path = `${root}b/${full}/`;
+  const path = `${root}b/${page}/`;
   if (location.pathname === path || location.pathname === `${path}index.html`) return null;
   const params = new URLSearchParams(location.search ?? '');
   params.set('join', code);

@@ -19,20 +19,20 @@ const out = arg('--out', mkdtempSync(join(tmpdir(), 'versioned_builds_')));
 let fails = 0;
 const check = (what, ok, detail = '') => { console.log(`${ok ? 'ok    ' : 'FAILED'} ${what}${ok || !detail ? '' : `: ${detail}`}`); if (!ok) fails++; };
 
-// the site: build A is the dist as built, build B the same files with another full and simulation id (a later deploy)
+// the site: build A is the dist as built, build B the same files with another page, full and simulation id (a later deploy)
 const root = join(out, 'site');
 const versionA = JSON.parse(readFileSync(join(dist, 'version.json'), 'utf8'));
-const a = versionA.build, b = 'wl-bbbbbbbbbbbbbbbb';
+const a = versionA.page, b = 'wl-bbbbbbbbbbbbbbbb';   // page ids: each build's folder under b/
 const simB = 'wl-5bbbbbbbbbbbbbbb';
 mkdirSync(join(root, 'b'), { recursive: true });
 cpSync(dist, join(root, 'b', a), { recursive: true });
 cpSync(dist, join(root, 'b', b), { recursive: true });
-writeFileSync(join(root, 'b', b, 'version.json'), JSON.stringify({ ...versionA, build: b, sim: simB }) + '\n');
+writeFileSync(join(root, 'b', b, 'version.json'), JSON.stringify({ ...versionA, build: 'wl-fbbbbbbbbbbbbbbb', sim: simB, page: b }) + '\n');
 cpSync(join(dist, 'entry.html'), join(root, 'index.html'));
 cpSync(join(dist, 'version.json'), join(root, 'version.json'));   // the live root keeps the current build's (the deploy checks read it)
 writeFileSync(join(root, 'b', 'index.json'), JSON.stringify({ builds: [
-  { full: a, sim: versionA.sim, time: '2026-11-25T10:00:00Z' },
-  { full: b, sim: simB, time: '2026-11-25T11:00:00Z' },
+  { page: a, sim: versionA.sim, time: '2026-11-25T10:00:00Z' },
+  { page: b, sim: simB, time: '2026-11-25T11:00:00Z' },
 ] }) + '\n');
 
 const target = await startLocal({ site: root, data, server, outDir: out });

@@ -5,9 +5,9 @@ import assert from 'node:assert/strict';
 import { buildForSim, lobbyBuildUrl, siteRoot } from './builds.js';
 
 const index = { builds: [
-  { full: 'wl-aaaa000000000001', sim: 'wl-5111111111111111', time: '2026-11-24T10:00:00Z' },
-  { full: 'wl-aaaa000000000002', sim: 'wl-5111111111111111', time: '2026-11-25T10:00:00Z' },
-  { full: 'wl-bbbb000000000001', sim: 'wl-5222222222222222', time: '2026-11-25T11:00:00Z' },
+  { page: 'wl-aaaa000000000001', sim: 'wl-5111111111111111', time: '2026-11-24T10:00:00Z' },
+  { page: 'wl-aaaa000000000002', sim: 'wl-5111111111111111', time: '2026-11-25T10:00:00Z' },
+  { page: 'wl-bbbb000000000001', sim: 'wl-5222222222222222', time: '2026-11-25T11:00:00Z' },
 ] };
 
 test('the newest retained build with a simulation id', () => {
