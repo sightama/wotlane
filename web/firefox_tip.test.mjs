@@ -25,7 +25,7 @@ test('Firefox on a computer gets the tip, naming the pref and the restart', () =
   assert.match(tip, /every website/, 'the pref is browser-wide: the player should know');
   assert.match(tip, /undo/);
   assert.match(tip, /8 monsters/, 'where it helps, as measured');
-  assert.match(tip, /1 vs 1/, 'and where it does not, so nobody flips a browser-wide setting for nothing');
+  assert.match(tip, /little or none in smaller ones/, 'and where it does not, so nobody flips a browser-wide setting for nothing');
 });
 
 test('Firefox on Android gets the tip with the caveat that about:config opens only in Beta or Nightly there', () => {
