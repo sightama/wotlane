@@ -1,15 +1,18 @@
 # ABOUTME: Builds the package for friends who own the disc: launcher, wotm.exe with its DLLs, wotm_server, the repo's mods and a setup
-# ABOUTME: that extracts the ELF from each one's ISO. No disc file goes in. Output: dist\wotlane-<buildid>\ and .zip (dist\ not in git).
+# ABOUTME: that extracts the ELF from each one's ISO. No disc file goes in. Output: dist\wotlane-<full id>\ and .zip (dist\ not in git).
 #
 # Usage: powershell -File tools\package_friends.ps1. Prints the package folder path on the last line. Test: tools\package_check.ps1.
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
 $runtime = (Get-Content (Join-Path $repo '.wotm_recomp_dir') -TotalCount 1).Trim()
 $bin = Join-Path $runtime 'build_dev\ps2xRuntime'
-foreach ($f in 'wotm.exe', 'wotm.buildid') { if (-not (Test-Path (Join-Path $bin $f))) { throw "missing $bin\$f (build_runtime.bat)" } }
-$id = (Get-Content (Join-Path $bin 'wotm.buildid')).Trim()
+foreach ($f in 'wotm.exe', 'wotm.buildid', 'wotm.fullid') {
+    if (-not (Test-Path (Join-Path $bin $f))) { throw "missing $bin\$f (build_runtime.bat)" }
+}
+# the full id (tools\build_id.py --full): the package is named by it, so two builds that differ only in drawing don't share a name
+$id = (Get-Content (Join-Path $bin 'wotm.fullid')).Trim()
 # the exe must be built from the current code: the server rejects different builds, and the package would be from another commit
-$now = (& python (Join-Path $PSScriptRoot 'build_id.py') | Select-Object -Last 1).Trim()
+$now = (& python (Join-Path $PSScriptRoot 'build_id.py') --full | Select-Object -Last 1).Trim()
 if ($now -ne $id) { throw "wotm.exe is from other code ($id; current is $now): run build_runtime.bat" }
 
 & cmd /c "`"$repo\tools\build_net.bat`" notest" | Out-Null
@@ -46,7 +49,9 @@ foreach ($m in Get-ChildItem (Join-Path $repo 'mods') -Directory) {
     Copy-Item $m.FullName (Join-Path $out 'mods') -Recurse
 }
 Set-Content (Join-Path $out 'ISO\PUT_YOUR_ISO_HERE.txt') 'Put your own War of the Monsters (USA) .iso in this folder, then run Setup.bat.' -Encoding ascii
-Set-Content (Join-Path $out 'BUILD.txt') "wotlane build $id, commit $(git -C $repo rev-parse --short HEAD)" -Encoding ascii
+# plays with: the simulation id the server compares (packages with the same one join each other's games)
+$plays = (Get-Content (Join-Path $bin 'wotm.buildid')).Trim()
+Set-Content (Join-Path $out 'BUILD.txt') "wotlane build $id, commit $(git -C $repo rev-parse --short HEAD)`r`nplays with: $plays" -Encoding ascii
 
 $bad = @(Get-ChildItem $out -Recurse -File | Where-Object { $_.Name -match '^SCUS|\.(iso|elf|rom)$' })
 if ($bad.Count) { throw "disc file in the package: $($bad.FullName -join ', ')" }

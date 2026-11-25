@@ -37,6 +37,12 @@ bad() { printf 'FAILED  %s\n' "$1"; failed=1; }
 ditto -x -k "$zip" "$work"
 app=$(find "$work" -maxdepth 2 -name '*.app' | head -1)
 [ -n "$app" ] || fail "no .app in $zip"
+# BUILD.txt: the full id (the package's name) and the simulation id its players compare ("plays with")
+info=$(find "$work" -maxdepth 2 -name BUILD.txt | head -1)
+full=$(sed -n 's/^wotlane build \(wl-[0-9a-f]*\),.*/\1/p' "$info" 2>/dev/null | head -1)
+[ -n "$full" ] && [ "$(basename "$zip")" = "wotlane-mac-$full.zip" ] && ok "BUILD.txt names the package's full id ($full)" || bad "BUILD.txt's build id vs $zip"
+sim=$(tr -d '\r\n' <"$app/Contents/Resources/game/wotm.buildid")
+grep -qx "plays with: $sim" "$info" 2>/dev/null && ok "BUILD.txt plays with $sim" || bad "BUILD.txt's plays with line (want $sim)"
 codesign --verify --deep --strict "$app" && ok "signature valid" || bad "signature"
 left=$(otool -L "$app/Contents/Resources/game/wotm" | grep -E '/opt/homebrew|/usr/local' || true)
 [ -z "$left" ] && ok "no libraries from Homebrew" || bad "libraries outside the app: $left"

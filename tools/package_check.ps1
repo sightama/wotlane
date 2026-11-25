@@ -22,6 +22,11 @@ foreach ($f in 'WotM_Launcher.exe', 'Setup.bat', 'setup.ps1', 'README.txt', 'nat
     Check (Test-Path (Join-Path $pkg $f)) "has $f"
 }
 Check ((Get-Content (Join-Path $pkg 'runtime\build_dev\ps2xRuntime\wotm.buildid')).Trim() -eq $id) "buildid $id"
+# BUILD.txt: the full id (the package's name) and the simulation id its players compare ("plays with")
+$info = Get-Content (Join-Path $pkg 'BUILD.txt')
+$full = if ($info[0] -match '^wotlane build (wl-[0-9a-f]+),') { $Matches[1] } else { '' }
+Check ($full -and (Split-Path $pkg -Leaf) -eq "wotlane-$full") "BUILD.txt names the package's full id ($full)"
+Check (($info | Where-Object { $_ -eq "plays with: $id" }).Count -eq 1) "BUILD.txt plays with $id"
 $disco = @(Get-ChildItem $pkg -Recurse -File | Where-Object { $_.Name -match '^SCUS|\.(iso|elf|bin|rom|pdb|map)$' })
 Check ($disco.Count -eq 0) "no disc file or symbol file ($($disco.Name -join ', '))"
 foreach ($m in Get-ChildItem (Join-Path $repo 'mods') -Directory | Where-Object { -not $_.Name.StartsWith('_') -and -not $_.Name.StartsWith('.') }) {

@@ -43,7 +43,8 @@ If something goes wrong
 -----------------------
 The launcher says what's wrong in plain words at the bottom. The usual ones:
 - "Can't reach the host": check your internet connection and the code; ask the host for a new code.
-- "Your game version doesn't match the host's": everyone needs the same package (compare BUILD.txt).
+- "Your game version doesn't match the host's": everyone needs a package that plays with the host's (compare the
+  "plays with" line of BUILD.txt).
 - "Your game files or mods differ from the host's": use the package as it came (don't change the mods folder).
 Anything else: send the host runtime\live.err.log (the host also has wotm_server.log next to the launcher).
 More options (passwords, public server list, AI opponents): the "Advanced" button in the launcher.

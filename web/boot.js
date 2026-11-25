@@ -183,7 +183,7 @@
   Promise.all([discWarm, wasmWarm]).then(() => window.wotmGamePrefetch?.start(out));
 
   // loads the game once (front.js calls it for single player, or with a lobby's match environment); `build` is version.json's
-  // build id, which the server compares with the lobby's
+  // simulation id (sim), which the server compares with the lobby's
   let started = false;
   window.wotmStart = function (matchEnv, build, { otherNames = [] } = {}) {
     if (started) return;

@@ -307,6 +307,14 @@ test('a report from the front page: the last report of the match, this device, t
   assert.equal(none, 'DIAG v=1 why=report build=wl-abc123 name=Ana ua=Chrome-131 note=x');
 });
 
+test('a report names the full build next to the simulation id, so two builds that differ only in drawing are told apart', () => {
+  const line = diagLine(reportFields({ saved: null, device: [['ua', 'Chrome-131']], lobby: '', name: 'Ana', build: 'wl-abc123', full: 'wl-def456' }), 'x');
+  assert.equal(line, 'DIAG v=1 why=report build=wl-abc123 full=wl-def456 name=Ana ua=Chrome-131 note=x');
+  const saved = { lobby: 'QZXW', fields: [['full', 'wl-old999'], ['fps', '41.0']] };   // the match's own full id is not repeated
+  const again = diagLine(reportFields({ saved, device: [], lobby: '', name: 'Ana', build: 'wl-abc123', full: 'wl-def456' }), 'x');
+  assert.equal(again, 'DIAG v=1 why=report build=wl-abc123 full=wl-def456 lobby=QZXW name=Ana fps=41.0 note=x');
+});
+
 test('frames: the median interval tells the display rate the page really gets (a 30 fps power-saving cap shows as ~33 ms)', () => {
   const callbacks = [];
   const watch = new FrameWatch({ raf: (cb) => callbacks.push(cb) });

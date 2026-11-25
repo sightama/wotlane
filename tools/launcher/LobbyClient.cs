@@ -363,7 +363,7 @@ class LobbyClient : IDisposable
         if (e.Contains("no answer") || e.Contains("closed the connection"))
             return "Can't reach the host. Check the invite, or ask the host to check that the game is hosting.";
         if (e.Contains("protocol") || e.Contains("build differs") || e.Contains("another version"))
-            return "Your game version doesn't match the host's. Both of you need the same package (see BUILD.txt).";
+            return "Your game version doesn't match the host's. Both of you need packages that play together (the \"plays with\" line of BUILD.txt).";
         if (e.Contains("configuration differs"))
             return "Your game files or mods differ from the host's. Use the package as it came.";
         if (e.Contains("no such lobby")) return "That invite is no longer open. Ask the host for a new one.";

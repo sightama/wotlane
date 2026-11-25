@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # ABOUTME: Tests for tools/build_id.py (the build identity the netcode compares): the same input in different folders gives the same id,
 # ABOUTME: any change of code changes it, and the compiler doesn't. Run: python tools/test_build_id.py
+import re
 import sys
 import tempfile
 import unittest
@@ -97,6 +98,83 @@ class BuildIdTest(unittest.TestCase):
             for rel in sorted(('README.md', 'ps2recomp.patch', 'a-c.txt', 'a/b.txt')):
                 h.update(rel.encode() + b'\0' + build_id.text_digest(root / rel).encode() + b'\n')
             self.assertEqual(build_id.tree_digest(root), h.hexdigest())
+
+
+class SimulationIdTest(unittest.TestCase):
+    """The simulation id leaves out the files that only draw or present (build_id.PRESENTATION): two builds that differ only there
+    compute the same states and may share a lobby; the full id still tells them apart (it picks the build a page loads)."""
+
+    def ids(self, repo, runtime):
+        return (build_id.compute(repo, runtime, 'build_dev', ps2recomp_commit='2c5fbb9', simulation=True),
+                build_id.compute(repo, runtime, 'build_dev', ps2recomp_commit='2c5fbb9'))
+
+    def test_a_presentation_change_leaves_the_simulation_id(self):
+        with tempfile.TemporaryDirectory() as a:
+            repo, runtime = make_tree(Path(a))
+            (repo / 'native' / 'wotm_native.hpp').write_text('// draw\n')
+            (repo / 'native' / 'assets' / 'font.ttf').parent.mkdir(parents=True)
+            (repo / 'native' / 'assets' / 'font.ttf').write_text('glyphs\n')
+            sim, full = self.ids(repo, runtime)
+            (repo / 'native' / 'wotm_native.hpp').write_text('// draw it another way\n')
+            (repo / 'native' / 'assets' / 'font.ttf').write_text('other glyphs\n')
+            sim2, full2 = self.ids(repo, runtime)
+            self.assertEqual(sim, sim2)
+            self.assertNotEqual(full, full2)
+            self.assertRegex(sim, r'^wl-[0-9a-f]{16}$')
+
+    def test_a_simulation_change_moves_the_simulation_id(self):
+        with tempfile.TemporaryDirectory() as a:
+            repo, runtime = make_tree(Path(a))
+            sim, _ = self.ids(repo, runtime)
+            (repo / 'native' / 'runtime' / 'b.inc').write_text('void g();\n')
+            self.assertNotEqual(sim, self.ids(repo, runtime)[0])
+            (repo / 'tools' / 'runtime_patch' / 'wotm-runtime.patch').write_text('+y\n')
+            self.assertNotEqual(sim, self.ids(repo, runtime)[0])
+
+    def test_the_simulation_id_differs_from_the_full_id(self):
+        # a page compares one and loads by the other: they must never be mistaken for each other
+        with tempfile.TemporaryDirectory() as a:
+            sim, full = self.ids(*make_tree(Path(a)))
+            self.assertNotEqual(sim, full)
+
+    def test_write_puts_both_ids_next_to_the_exe(self):
+        # wotm.buildid (sent and compared by lobbies) holds the simulation id, wotm.fullid the full one; the CLI prints either
+        with tempfile.TemporaryDirectory() as a:
+            repo, runtime = make_tree(Path(a))
+            out = runtime / 'build_dev' / 'ps2xRuntime'
+            out.mkdir(parents=True)
+            sim, full = self.ids(repo, runtime)
+            build_id.write_ids(runtime, 'build_dev', sim, full)
+            self.assertEqual((out / 'wotm.buildid').read_text(), sim + '\n')
+            self.assertEqual((out / 'wotm.fullid').read_text(), full + '\n')
+
+    def test_the_core_simulation_files_are_never_presentation(self):
+        core = ('native/runtime/wotm_sync.inc', 'native/runtime/wotm_overrides.cpp', 'native/runtime/wotm_live.inc', 'native/net',
+                'native/runtime/wotm_snd.inc', 'native/runtime/wotm_rollback.inc', 'native/wotm_detmath.cpp', 'native/wotm_lockon.hpp',
+                'native/runtime/wotm_creator.inc', 'native/wotm_model.hpp', 'native/wotm_tint.hpp', 'native/runtime/wotm_mapedit_view.inc',
+                'native/runtime/wotm_trainview.inc', 'native/runtime/wotm_orbit.inc', 'native/runtime/wotm_pad.inc',
+                'native/runtime/wotm_modifiers.inc')
+        for rel in core:
+            self.assertFalse(any(rel == p or rel.startswith(p + '/') or p.startswith(rel + '/') for p in build_id.PRESENTATION), rel)
+
+    def test_every_presentation_entry_exists(self):
+        for rel in build_id.PRESENTATION:
+            self.assertTrue((build_id.REPO / rel).exists(), f'{rel}: listed as presentation but not in the repo')
+
+    def test_presentation_files_do_not_write_game_state(self):
+        # the ways code here changes what the game computes: the EE's memory or context, a hook it registers, a host global the
+        # game's hooks read (g_wotm*); a pattern check, so a listed file that does any of them fails
+        writes = re.compile(r'rdram\[|rdram \+|rdram\)|uint8_t \*rdram|const_cast<uint8_t|R5900Context|ctx->|runtime->|PS2Runtime &|'
+                            r'registerFunction|hostLeaf|ps2_stubs::|setReturn|setReg|'
+                            r'g_wotm\w*\s*(=[^=]|\|=|&=|\+=|-=)|\+\+g_wotm|g_wotm\w*\+\+|\bg_\w+\.(store|fetch_\w+|exchange)\(')
+        for rel in build_id.PRESENTATION:
+            root = build_id.REPO / rel
+            files = [root] if root.is_file() else [p for p in root.rglob('*') if p.suffix in ('.hpp', '.h', '.cpp', '.inc')]
+            if rel.startswith('native/tests'):
+                continue   # tests are not in the game
+            for p in files:
+                found = writes.search(p.read_text(errors='replace'))
+                self.assertIsNone(found, f'{p.relative_to(build_id.REPO)} looks like simulation code')
 
 
 def make_clang_tree(root, ver, cpu):

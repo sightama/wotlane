@@ -63,7 +63,7 @@ export async function startLocal({ site, data, server, outDir, maxPlayers = 8, d
     wsPort: ws,
     serverLogPath,
     serverLog: () => (existsSync(serverLogPath) ? readFileSync(serverLogPath, 'utf8') : ''),
-    buildId: JSON.parse(readFileSync(join(site, 'version.json'), 'utf8')).build,
+    buildId: simId(JSON.parse(readFileSync(join(site, 'version.json'), 'utf8'))),
     async stop() {
       for (const c of children) c.kill('SIGTERM');
       await sleep(300);
@@ -77,8 +77,11 @@ export async function startLive({ url, password = '' }) {
   const base = url.replace(/\/$/, '');
   const cookies = password ? await loginCookies(base, password) : [];
   const version = await (await fetch(`${base}/version.json`, { headers: { cookie: cookies.map((c) => `${c.name}=${c.value}`).join('; ') } })).json();
-  return { kind: 'live', pageUrl: `${base}/`, cookies, serverLog: () => '', buildId: version.build, async stop() {} };
+  return { kind: 'live', pageUrl: `${base}/`, cookies, serverLog: () => '', buildId: simId(version), async stop() {} };
 }
+
+// the id the page sends and the server logs (version.json's sim, tools/build_id.py); an older version.json has only its full id
+const simId = (version) => version.sim || version.build;
 
 async function loginCookies(base, password) {
   const login = await fetch(`${base}/login`, {

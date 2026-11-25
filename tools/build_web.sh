@@ -47,6 +47,8 @@ python3 "$REPO/tools/web_mods.py" "$REPO/mods" "$dist/mods" || fail "web_mods.py
 cp "$bdir/ps2xRuntime/wotm.js" "$bdir/ps2xRuntime/wotm.wasm" "$dist/"
 if command -v shasum >/dev/null 2>&1; then wasm_sha=$(shasum -a 256 "$dist/wotm.wasm" | cut -d' ' -f1)
 else wasm_sha=$(sha256sum "$dist/wotm.wasm" | cut -d' ' -f1); fi
-build_id=$(cat "$bdir/ps2xRuntime/wotm.buildid" 2>/dev/null || echo "")
-printf '{"wasm": "%s", "build": "%s"}\n' "$wasm_sha" "$build_id" >"$dist/version.json"
+# build: the full id (which build this is); sim: the simulation id (tools/build_id.py), the one the page sends and lobbies compare
+full_id=$(cat "$bdir/ps2xRuntime/wotm.fullid" 2>/dev/null || echo "")
+sim_id=$(cat "$bdir/ps2xRuntime/wotm.buildid" 2>/dev/null || echo "")
+printf '{"wasm": "%s", "build": "%s", "sim": "%s"}\n' "$wasm_sha" "$full_id" "$sim_id" >"$dist/version.json"
 echo "web_dist: $dist ($(du -sh "$dist" | cut -f1))"

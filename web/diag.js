@@ -404,9 +404,9 @@ export const joinFields = (base, device) => [['v', SCHEMA], ['why', 'join'], ...
 
 // The report a player sends by hand (Send report): the last report of the match they just played (kept by the reporter), this
 // device and the lobby and name it was under. `saved`: what the reporter stored, or null
-export function reportFields({ saved, device, lobby, name, build }) {
-  const own = new Set([...device.map(([k]) => k), 'v', 'why', 'seq', 'build', 'lobby', 'name']);
-  return [['v', SCHEMA], ['why', 'report'], ['build', build], ['lobby', saved?.lobby || lobby], ['name', name],
+export function reportFields({ saved, device, lobby, name, build, full }) {
+  const own = new Set([...device.map(([k]) => k), 'v', 'why', 'seq', 'build', 'full', 'lobby', 'name']);
+  return [['v', SCHEMA], ['why', 'report'], ['build', build], ['full', full], ['lobby', saved?.lobby || lobby], ['name', name],
     ...(saved?.fields ?? []).filter(([k]) => !own.has(k)), ...device];
 }
 
