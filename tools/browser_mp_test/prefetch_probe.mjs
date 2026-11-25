@@ -14,11 +14,13 @@ const HELP = `Usage: node tools/browser_mp_test/prefetch_probe.mjs [options]
   --fight M,M,S   the direct fight measured (WOTM_MATCH, default 5,7,8: neither the boot's chunks nor a lobby's)
   --live <url>    measure on a public site instead (e.g. https://playwotm.com): its caching headers are the real ones; the local
                   server sends the page with no-store, so there every visit downloads the wasm again
-  --flow probe|page|fps  probe (default): this script fetches the whole-game set itself, as a page could; page: the page's own
+  --flow probe|page|fps|visits  probe (default): this script fetches the whole-game set itself, as a page could; page: the page's own
                   background prefetch (web/game_prefetch.js): a fight opened straight away in a fresh profile (is the first load any
                   slower?), then a fresh profile left on the front panel until the page logs how its prefetch ended, and a fight after it;
                   fps: a fight in a fresh profile, every animation frame for --secs (default 40) once it runs, frame times in the seconds
-                  with background downloads against those without (does the prefetch cost frames?)
+                  with background downloads against those without (does the prefetch cost frames?); visits: the same fight --visits
+                  times (default 3) in one profile, each visit's seconds to the game's runtime start and to the fight, and (Chromium)
+                  how wotm.wasm came (network, 304 revalidation or disk cache, bytes): does a visit download or compile the wasm again?
   --timeline      after each fight, the disc channel per 5 s: game downloads, cache hits, game reads started, background downloads
   --headed        a visible window (headless Chromium reports another quota than a real profile)
 Runs on a local server (tools/serve_web.py and wotm_server) or --live, each visit in a fresh browser profile of its own (a disk HTTP
@@ -41,6 +43,7 @@ const headed = args.includes('--headed');
 const live = opt('live', '');
 const flow = opt('flow', 'probe');
 const fpsSecs = Number(opt('secs', '40'));
+const visits = Number(opt('visits', '3'));
 const timeline = args.includes('--timeline');
 if (mbps && browserName === 'firefox') { console.error('error: --mbps needs a Chromium-family browser (Firefox has no network emulation)'); process.exit(2); }
 
@@ -137,6 +140,7 @@ const lines = [`${browserName} on ${live || 'local'}, flow ${flow}${mbps ? `, ${
 try {
   if (flow === 'page') await pageFlow();
   else if (flow === 'fps') await fpsFlow();
+  else if (flow === 'visits') await visitsFlow();
   else await probeFlow();
 } catch (e) {
   lines.push(`error: ${e.message}`);
@@ -147,6 +151,22 @@ try {
   await target.stop();
 }
 console.log(lines.join('\n'));
+
+async function visitsFlow() {
+  const { context, page } = await newPage();
+  for (let v = 1; v <= visits; v++) {
+    const r = await fight(page);
+    // the page log's lines start with the seconds since the page's start ("102.09s [boot] ...")
+    const at = await page.evaluate(() => {
+      const t = (re) => { const l = (window.wotmLog || []).find((x) => re.test(x)); return l ? parseFloat(l) : null; };
+      return { runtime: t(/\[boot\]\s+[\d.]+ s\s+starting the runtime/), fight: t(/\[native\] frame \d+ redraws=/) };
+    });
+    const wasm = page.transfers.filter((x) => /wotm\.wasm$/.test(x.url.replace(/\?.*/, '')))
+      .map((x) => `${x.status}${x.cache ? ' disk cache' : ''} ${MiB(x.bytes)} MiB`).join(', ') || (browserName === 'firefox' ? 'not seen (Firefox)' : 'no request');
+    lines.push(`visit ${v}  runtime at ${at.runtime?.toFixed(1) ?? '?'} s, fight at ${at.fight?.toFixed(1) ?? '?'} s (${r.secs.toFixed(1)} s from opening); wotm.wasm: ${wasm}`);
+  }
+  await context.close();
+}
 
 async function fpsFlow() {
   const { context, page } = await newPage();
