@@ -755,11 +755,14 @@ struct Capture
         // (WOTM_PRESENT_PHASE=0 leaves the grid as it is)
         static const bool on = [] { const char *e = std::getenv("WOTM_PRESENT_PHASE"); return !(e && std::strcmp(e, "0") == 0); }();
         static wotm::framephase::Aim aim;   // the late captures go to the margin (frame times jitter): EE thread only
-        if (on && !wotmWebHidden())       // a hidden tab draws no animation frames to aim at
+        if (on)
         {
             double lastRafMs = 0.0, periodMs = 0.0;
             wotmWebDisplayPhase(lastRafMs, periodMs);
-            aim.add(wotm::framephase::errorMs(now, lastRafMs, periodMs, EeVBlankClock::kPeriod.count() / 1000.0));
+            // a hidden tab draws no animation frames to aim at: a NaN starts the window over, so it comes back without stale errors
+            const double error = wotmWebHidden() ? std::nan("") : wotm::framephase::errorMs(now, lastRafMs, periodMs,
+                                                                                             EeVBlankClock::kPeriod.count() / 1000.0);
+            aim.add(error, periodMs);
             g_wotmVblankSlewUs.store(static_cast<long long>(aim.slewMs() * 1000.0), std::memory_order_relaxed);
         }
 #endif

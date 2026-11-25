@@ -80,25 +80,26 @@ namespace wotm::framephase
         return std::clamp(error, -maxStepMs, maxStepMs);
     }
 
-    // The step that aims this one capture at the target (errorMs, stepFor)
-    inline double slewMs(double captureMs, double lastRafMs, double displayPeriodMs, double gamePeriodMs, double marginMs = 2.0,
-                         double maxStepMs = 0.5, double deadBandMs = 0.25, double staleMs = 1000.0)
-    {
-        return stepFor(errorMs(captureMs, lastRafMs, displayPeriodMs, gamePeriodMs, marginMs, staleMs), maxStepMs, deadBandMs);
-    }
-
     // Aims the late captures instead of the middle one: a frame time that jitters by a few ms leaves half the frames past an animation
-    // frame when the median is aimed (each then waits a whole display frame). The step comes from the 10th percentile of the last 32
-    // captures' errors (the latest captures), once 8 have counted; a NaN error (no lock, a hidden tab) is left out. Each step taken
-    // moves the remembered errors with it (a boundary moved later by s makes every capture's error s smaller), so the window does not
-    // keep pushing for 32 frames after the grid got there
+    // frame when the median is aimed (each then waits a whole display frame). The step comes from a low percentile (the 10th: the
+    // latest captures) of the last 32 captures' errors, once 8 have counted. Each step taken moves the remembered errors with it (a
+    // boundary moved later by s makes every capture's error s smaller), so the window does not keep pushing for 32 frames after the grid
+    // got there. No step when the window's spread (90th minus 10th percentile, unwrapped around the newest) passes half a display
+    // frame: the errors then look uniform, there is no phase to aim at, and stepping would change the game's pace without end. A NaN
+    // error (no lock, a hidden tab) or a display period that changed by over 1% starts the window over (what it held is stale)
     class Aim
     {
     public:
-        void add(double error)
+        explicit Aim(double percentile = 0.1) : percentile_(percentile) {}
+        void add(double error, double displayPeriodMs)
         {
-            if (std::isnan(error))
-                return;
+            if (std::isnan(error) || std::fabs(displayPeriodMs - period_) > 0.01 * displayPeriodMs)
+            {
+                count_ = next_ = 0;
+                period_ = std::isnan(error) ? 0.0 : displayPeriodMs;
+                if (std::isnan(error))
+                    return;
+            }
             errors_[next_] = error;
             next_ = (next_ + 1) % errors_.size();
             count_ = std::min(count_ + 1, errors_.size());
@@ -107,11 +108,17 @@ namespace wotm::framephase
         {
             if (count_ < 8)
                 return 0.0;
+            // the errors unwrapped around the newest one, so captures that cluster where the wrap falls (opposite the target) read as
+            // the one cluster they are, not as a spread of a whole display frame
+            const double ref = errors_[(next_ + errors_.size() - 1) % errors_.size()];
             std::array<double, 32> v{};
-            std::copy(errors_.begin(), errors_.begin() + count_, v.begin());
-            const std::size_t k = count_ / 10;
-            std::nth_element(v.begin(), v.begin() + k, v.begin() + count_);
-            const double step = stepFor(v[k], maxStepMs, deadBandMs);
+            for (std::size_t i = 0; i < count_; ++i)
+                v[i] = ref + std::remainder(errors_[i] - ref, period_);
+            std::sort(v.begin(), v.begin() + count_);
+            const double low = v[count_ / 10], high = v[count_ - 1 - count_ / 10];
+            if (high - low > period_ / 2)
+                return 0.0;
+            const double step = stepFor(v[static_cast<std::size_t>(percentile_ * (count_ - 1))], maxStepMs, deadBandMs);
             for (std::size_t i = 0; i < count_; ++i)
                 errors_[i] -= step;
             return step;
@@ -120,5 +127,6 @@ namespace wotm::framephase
     private:
         std::array<double, 32> errors_{};
         std::size_t next_ = 0, count_ = 0;
+        double period_ = 0.0, percentile_;
     };
 }

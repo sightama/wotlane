@@ -124,9 +124,11 @@ For online play start `wotm_server --ws-port <port>`; a page opened from `localh
   clock (`performance.timeOrigin` plus the frame's timestamp) and the display's period (the median of the last 16 intervals,
   `wotmWebDisplayPhase`); each capture then slews the vblank grid by at most 0.5 ms (once per capture: every other vblank at 30 Hz)
   so that the latest of the recent captures (the 10th percentile of the last 32 errors, `framephase::Aim`: frame times jitter) lands
-  2 ms before an animation frame (`native/wotm_framephase.hpp`, `EeVBlankClock::fire`); a hidden tab is not aimed. Only displays whose
-  period divides the game's are aimed at (60, 120, 240 Hz; not 75, 144, 165); the slew never adds or drops a vblank, so game time and
-  lockstep are untouched. `WOTM_PRESENT_PHASE=0` (also from the address) keeps the grid's phase as it is.
+  2 ms before an animation frame (`native/wotm_framephase.hpp`, `EeVBlankClock::fire`). There is no slew while the window's spread
+  passes half a display frame (frame times jittering by that much give no phase to aim at), and a hidden tab or a change of display
+  period starts the window over. Only displays whose period divides the game's are aimed at (60, 120, 240 Hz; not 75, 144, 165). The
+  slew never adds or drops a vblank, so game time, frame count and lockstep are untouched; only the wall time of the next vblank moves,
+  by a little each frame while the grid is being aimed. `WOTM_PRESENT_PHASE=0` (also from the address) keeps the grid's phase as it is.
 - **High frame rate:** the game logic always runs at 60, online and offline; only the drawing follows the display. Before the game starts
   the page measures the display's refresh rate from 60 animation frames (`web/display.js` `measureRefresh`: the median of 4-frame spans,
   snapped to a common rate within 4%; a hidden tab gives up after 2 s and the game assumes 60) and passes it as `WOTM_DISPLAY_HZ`, which

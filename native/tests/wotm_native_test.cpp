@@ -5703,21 +5703,21 @@ TEST(framephase_locks_only_to_displays_whose_period_divides_the_game_period)
     CHECK(!fp::locks(game, 0.0));              // no display period measured yet
 }
 
-// The slew moves the next frame boundary so the capture lands the margin before an animation frame, at most maxStep a frame
+// One capture's step moves the next frame boundary so it lands the margin before an animation frame, at most maxStep a frame
 TEST(framephase_slew_aims_the_capture_just_before_an_animation_frame)
 {
     namespace fp = wotm::framephase;
     const double game = 1000.0 / 60.0, d60 = 1000.0 / 60.0;
     // animation frames at 1000 + k * d60; the target is 2 ms before one
-    CHECK(fp::slewMs(1000.0 + d60 - 2.0, 1000.0, d60, game) == 0.0);           // on target
-    CHECK(fp::slewMs(1000.0 + d60 - 2.1, 1000.0, d60, game) == 0.0);           // within the dead band
-    CHECK(fp::slewMs(1000.0 + d60 - 7.0, 1000.0, d60, game) == 0.5);           // 5 ms early: later, by the step at most
-    CHECK(fp::slewMs(1000.0 + d60 - 1.0, 1000.0, d60, game) == -0.5);          // 1 ms past the target: earlier
-    CHECK(fp::slewMs(1000.0 + 0.5, 1000.0, d60, game) == -0.5);                // just after an animation frame: aim at the one it missed
-    CHECK(fp::slewMs(1000.0 + 5 * d60 - 7.0, 1000.0, d60, game) == 0.5);       // any later animation frame of the same grid
-    CHECK(fp::slewMs(1000.0 + d60 - 7.0, 1000.0, 1000.0 / 144.0, game) == 0.0); // a display that does not lock: nothing
-    CHECK(fp::slewMs(3000.0, 1000.0, d60, game) == 0.0);                       // no animation frame for 2 s (hidden tab): nothing
-    CHECK(fp::slewMs(1000.0 + d60 - 7.0, 1000.0, 0.0, game) == 0.0);           // no display period yet: nothing
+    CHECK(fp::stepFor(fp::errorMs(1000.0 + d60 - 2.0, 1000.0, d60, game)) == 0.0);           // on target
+    CHECK(fp::stepFor(fp::errorMs(1000.0 + d60 - 2.1, 1000.0, d60, game)) == 0.0);           // within the dead band
+    CHECK(fp::stepFor(fp::errorMs(1000.0 + d60 - 7.0, 1000.0, d60, game)) == 0.5);           // 5 ms early: later, by the step at most
+    CHECK(fp::stepFor(fp::errorMs(1000.0 + d60 - 1.0, 1000.0, d60, game)) == -0.5);          // 1 ms past the target: earlier
+    CHECK(fp::stepFor(fp::errorMs(1000.0 + 0.5, 1000.0, d60, game)) == -0.5);                // just after an animation frame: aim at the one it missed
+    CHECK(fp::stepFor(fp::errorMs(1000.0 + 5 * d60 - 7.0, 1000.0, d60, game)) == 0.5);       // any later animation frame of the same grid
+    CHECK(fp::stepFor(fp::errorMs(1000.0 + d60 - 7.0, 1000.0, 1000.0 / 144.0, game)) == 0.0); // a display that does not lock: nothing
+    CHECK(fp::stepFor(fp::errorMs(3000.0, 1000.0, d60, game)) == 0.0);                       // no animation frame for 2 s (hidden tab): nothing
+    CHECK(fp::stepFor(fp::errorMs(1000.0 + d60 - 7.0, 1000.0, 0.0, game)) == 0.0);           // no display period yet: nothing
 }
 
 // The display's period is the median of its recent animation frames' intervals, and follows a change of display mid-match
@@ -5745,6 +5745,7 @@ TEST(framephase_closed_loop_brings_the_wait_for_the_display_down_to_the_margin)
     const double game = 1000.0 / 60.0;
     // waitAfter: the mean wait from capture to the next animation frame over the last 120 of `frames` frames
     auto run = [&](double displayHz, double switchHz, int frames, double &slewed) {
+        fp::Aim aim;
         double boundary = 3.7, waits = 0.0, rafOrigin = 0.0, period = 1000.0 / displayHz;
         int counted = 0;
         slewed = 0.0;
@@ -5763,7 +5764,8 @@ TEST(framephase_closed_loop_brings_the_wait_for_the_display_down_to_the_margin)
                 waits += period - since;
                 ++counted;
             }
-            const double s = fp::slewMs(capture, lastRaf, period, game);
+            aim.add(fp::errorMs(capture, lastRaf, period, game), period);
+            const double s = aim.slewMs();
             slewed += std::fabs(s);
             boundary += game + s;
         }
@@ -5780,13 +5782,14 @@ TEST(framephase_closed_loop_brings_the_wait_for_the_display_down_to_the_margin)
 
 // With a frame time that jitters by several ms, aiming one capture (the median) at the margin leaves many frames just past an animation
 // frame, each waiting a whole display frame; Aim moves the latest of the recent captures (their 10th percentile error) to the margin,
-// so the mean wait stays below the unslewed one (averaged over the grid's starting phases: a player's phase is random) at 60 Hz
+// so the mean wait stays below the unslewed one (averaged over the grid's starting phases: a player's phase is random) at 60 Hz, and
+// below aiming the median capture (the 50th percentile, as a one-capture step would)
 TEST(framephase_aim_keeps_jittery_frames_ahead_of_the_display)
 {
     namespace fp = wotm::framephase;
     const double game = 1000.0 / 60.0, display = 1000.0 / 60.0;
     auto meanWait = [&](bool slew, bool aimLate, double start) {
-        fp::Aim aim;
+        fp::Aim aim(aimLate ? 0.1 : 0.5);
         double boundary = start, waits = 0.0;
         int counted = 0;
         for (int f = 0; f < 1200; ++f)
@@ -5799,13 +5802,11 @@ TEST(framephase_aim_keeps_jittery_frames_ahead_of_the_display)
                 ++counted;
             }
             double s = 0.0;
-            if (slew && aimLate)
+            if (slew)
             {
-                aim.add(fp::errorMs(capture, capture - since, display, game));
+                aim.add(fp::errorMs(capture, capture - since, display, game), display);
                 s = aim.slewMs();
             }
-            else if (slew)
-                s = fp::slewMs(capture, capture - since, display, game);
             boundary += game + s;
         }
         return waits / counted;
@@ -5823,26 +5824,58 @@ TEST(framephase_aim_keeps_jittery_frames_ahead_of_the_display)
 }
 
 // Aim: no slew before a few captures or with a non-locking display (errorMs gives NaN), the dead band and the step as slewMs
-TEST(framephase_aim_waits_for_enough_captures_and_skips_unlocked_ones)
+TEST(framephase_aim_waits_for_enough_captures_and_starts_over_when_stale)
 {
     namespace fp = wotm::framephase;
+    const double d60 = 1000.0 / 60.0;
     fp::Aim aim;
-    aim.add(5.0);
+    aim.add(5.0, d60);
     CHECK(aim.slewMs() == 0.0);   // one capture is not enough
     for (int i = 0; i < 8; ++i)
-        aim.add(5.0);
+        aim.add(5.0, d60);
     CHECK(aim.slewMs() == 0.5);   // all early: later, by the step
     CHECK(aim.slewMs() == 0.5);   // the window moved with the step: 4.5 early still steps 0.5
     for (int i = 0; i < 20; ++i)
         aim.slewMs();
     CHECK(aim.slewMs() == 0.0);   // after steps that add up to its error the window says on target, no overshoot
     for (int i = 0; i < 40; ++i)
-        aim.add(-2.0);
+        aim.add(-2.0, d60);
     CHECK(aim.slewMs() == -0.5);   // late: earlier
-    aim.add(std::nan(""));           // a capture that does not count leaves the window as it was
+    aim.add(std::nan(""), d60);      // no lock or a hidden tab: what the window held is stale, it starts over
+    CHECK(aim.slewMs() == 0.0);
+    for (int i = 0; i < 10; ++i)
+        aim.add(-2.0, d60);
     CHECK(aim.slewMs() == -0.5);
+    aim.add(-2.0, 1000.0 / 120.0);  // the display's period changed: the window starts over
+    CHECK(aim.slewMs() == 0.0);
     CHECK(std::isnan(fp::errorMs(1000.0, 990.0, 1000.0 / 144.0, 1000.0 / 60.0)));
     CHECK(std::isnan(fp::errorMs(3000.0, 1000.0, 1000.0 / 60.0, 1000.0 / 60.0)));
+}
+
+// Frame times that jitter by a large part of the display's frame give no phase to aim at (the wrapped errors look uniform, and shifting
+// them would step the same way forever, changing the game's pace): Aim then does not slew at all, on 120 and 240 Hz
+TEST(framephase_aim_does_not_drift_when_jitter_is_wide_against_the_display)
+{
+    namespace fp = wotm::framephase;
+    const double game = 1000.0 / 60.0;
+    auto netSlew = [&](double displayHz, double jitterMs) {
+        const double display = 1000.0 / displayHz;
+        fp::Aim aim;
+        double boundary = 2.3, net = 0.0;
+        for (int f = 0; f < 3000; ++f)
+        {
+            const double capture = boundary + 6.0 + ((f * 37) % 13) * (jitterMs / 12.0);
+            aim.add(fp::errorMs(capture, capture - std::fmod(capture, display), display, game), display);
+            const double s = aim.slewMs();
+            net += s;
+            boundary += game + s;
+        }
+        return net;
+    };
+    CHECK(std::fabs(netSlew(120.0, 6.0)) < 5.0);
+    CHECK(std::fabs(netSlew(120.0, 10.0)) < 5.0);
+    CHECK(std::fabs(netSlew(240.0, 4.0)) < 5.0);
+    CHECK(std::fabs(netSlew(60.0, 10.0)) < 5.0);
 }
 
 // The present that draws a frame is the first one after the draw took it: a capture that arrives after the draw waits for the next present
