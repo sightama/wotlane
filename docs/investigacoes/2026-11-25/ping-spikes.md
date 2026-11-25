@@ -2,9 +2,9 @@
 
 The input-latency breakdown (`input-latency-breakdown.md`, same folder) found that the live smoke's 5 frames of input delay were most
 likely set by ping spikes, not the median ping. The coordinator asked where the spikes come from: the player's path, the server, or the
-Mac the smokes run on. Short answer: **this Mac's home internet link, while a match runs on it** (idle, its spikes are rare: below). wotm_server, Caddy and
-Cloudflare add no spikes; real players on other networks have a rise level within 0 to 6 ms of their median round trip, so spikes cost
-them about nothing. **Live smokes from this Mac overstate the input delay**: they are not what players see, and the delay rule is judged
+Mac the smokes run on. Short answer: **this Mac's home internet link, while a match runs on it** (idle, its spikes are rare: below).
+wotm_server, Caddy and Cloudflare add no spikes; real players on other networks have a rise level within 0 to 6 ms of their median round
+trip, so spikes cost them about nothing. **Live smokes from this Mac overstate the input delay**: they are not what players see, and the delay rule is judged
 with the local lag proxy or from another network instead.
 
 ## Method
