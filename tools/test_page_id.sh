@@ -10,6 +10,8 @@ trap 'chmod -R u+rwx "$tmp" 2>/dev/null; rm -rf "$tmp"' EXIT   # the permission 
 fails=0
 check() { if [ "$2" = "$3" ]; then echo "ok     $1"; else echo "FAILED $1: got \"$2\", wanted \"$3\""; fails=$((fails + 1)); fi; }
 page_id() { sh "$here/page_id.sh" "$tmp/dist" "${1:-wl-1111111111111111}" "${2:-wl-5111111111111111}"; }
+# refused: nothing on the output and a failing status (build_web.sh writes whatever it prints into version.json)
+refused() { out=$(sh "$here/page_id.sh" "$@" 2>/dev/null) && echo "exit 0: $out" || { [ -z "$out" ] && echo refused || echo "printed: $out"; }; }
 
 mkdir -p "$tmp/dist/mods/a b"
 echo page >"$tmp/dist/index.html"
@@ -58,13 +60,16 @@ page_id >/dev/null 2>&1 || rc=$?
 check "a symbolic link in the dist is an error" "$rc" 1
 rm "$tmp/dist/link.js"
 check "and without it the first id again" "$(page_id)" "$first"
+# a name with a newline would read as two names (./index.html and ./front.js here, so its own content would be left out)
+nl=$(printf 'index.html\nfront.js')
+echo odd >"$tmp/dist/$nl"
+check "a file name with a newline is refused" "$(refused "$tmp/dist" wl-1111111111111111 wl-5111111111111111)" refused
+rm "$tmp/dist/$nl"
 mkfifo "$tmp/dist/pipe"
 rc=0
 page_id >/dev/null 2>&1 || rc=$?
 check "a file that is neither a file nor a folder (a fifo) is an error" "$rc" 1
 rm "$tmp/dist/pipe"
-# refused: nothing on the output and a failing status (build_web.sh writes whatever it prints into version.json)
-refused() { out=$(sh "$here/page_id.sh" "$@" 2>/dev/null) && echo "exit 0: $out" || { [ -z "$out" ] && echo refused || echo "printed: $out"; }; }
 check "no arguments" "$(refused)" refused
 check "an empty dist argument" "$(refused "" wl-1111111111111111 wl-5111111111111111)" refused
 check "an id that is not wl- and 16 hex" "$(refused "$tmp/dist" 'wl-1111111111111111

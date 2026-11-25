@@ -18,10 +18,12 @@ sorted=$(mktemp)
 trap 'rm -f "$list" "$files" "$sorted"' EXIT
 # one line a file, '<sha256> <path>', in a fixed order, after the ids. Anything that would leave content out of the id stops it (the id
 # would then name another dist): a folder that cannot be listed, a file that cannot be hashed, anything but files and folders (a link:
-# the site serves what it points at; a fifo or a device), no files at all. find and sort write to files, not pipes, so their failures
-# are seen
-(cd "$1" && find . ! -type f ! -type d) >"$files" || { echo "error: cannot list every file of $1" >&2; exit 1; }
-[ ! -s "$files" ] || { echo "error: $1 holds what is neither a file nor a folder (the id would not cover it): $(head -1 "$files")" >&2
+# the site serves what it points at; a fifo or a device), a name with a newline (it would read as two names), no files at all. find
+# and sort write to files, not pipes, so their failures are seen
+(cd "$1" && find . \( ! -type f ! -type d \) -o -name '*
+*') >"$files" || { echo "error: cannot list every file of $1" >&2; exit 1; }
+[ ! -s "$files" ] || { echo "error: $1 holds what the id would not cover (not a file or a folder, or a name with a newline):" \
+    "$(head -1 "$files")" >&2
     exit 1; }
 (cd "$1" && find . -type f) >"$files" || { echo "error: cannot list every file of $1" >&2; exit 1; }
 [ -s "$files" ] || { echo "error: $1 holds no files" >&2; exit 1; }
