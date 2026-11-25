@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
-const { wholeGameChunks, createGameWarmer } = createRequire(import.meta.url)('./game_prefetch.js');
+const { wholeGameChunks, createGameWarmer, prefetchAllowed } = createRequire(import.meta.url)('./game_prefetch.js');
 
 const TABLE = {
   stages: { 1: [10, 11], 4: [11, 12] },
@@ -137,4 +137,17 @@ test('a missing chunk table means no prefetch', async () => {
   w.opts.files = async () => { throw new Error('match_chunks.json: HTTP 404'); };
   assert.equal(await createGameWarmer(w.opts).start(), 'no table (match_chunks.json: HTTP 404)');
   assert.deepEqual(w.calls, []);
+});
+
+test('a phone\'s data plan: no prefetch with Save-Data or on a cellular link; a touch device that does not say waits for a first game', () => {
+  const at = (connection, coarse, gameStarted = false) => prefetchAllowed({ connection, coarse, gameStarted });
+  assert.equal(at({ saveData: true, type: 'wifi' }, false), 'no', 'Save-Data, even on Wi-Fi');
+  assert.equal(at({ type: 'cellular' }, true, true), 'no', 'a cellular link, even after a game');
+  assert.equal(at({ type: 'wifi' }, true), 'yes', 'a phone on Wi-Fi');
+  assert.equal(at({ type: 'ethernet' }, false), 'yes');
+  assert.equal(at(undefined, false), 'yes', 'a desktop browser that does not say (Firefox, Safari)');
+  assert.equal(at({ effectiveType: '4g' }, false), 'yes', 'Chrome on a desktop: no type, a pointer');
+  assert.equal(at(undefined, true), 'later', 'a touch device that does not say: maybe a phone on a data plan');
+  assert.equal(at({ effectiveType: '4g' }, true), 'later');
+  assert.equal(at(undefined, true, true), 'yes', 'once its player has started a game');
 });
