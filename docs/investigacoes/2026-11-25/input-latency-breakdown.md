@@ -39,7 +39,7 @@ and 53), input delay 2 rising to 5 frames as the server measured the round trip,
 | **median of the per-press totals (4 presses)** | **131.0** | |
 
 Each stage is a median over the presses, so the stages need not add up to the median total. `match_diag.sh J7XR --all`. Only one diag
-window had presses (the smoke's scripted taps), so this is a small sample.
+window had presses (the smoke's scripted taps), all from player 1, the headless Chrome tab, so this is a small sample from one browser.
 
 The window reported an input delay of 5 frames, 83 ms at 60 Hz, yet `lat_dl_ms` is 96.3 ms (5.8 frames). The game ran at ~57 frames a
 second in that window (5 frames of ~17.5 ms are ~88 ms), which explains part of it; the rest is not explained by these numbers (the delay
@@ -48,7 +48,7 @@ runs' 5.5 ms; with one headless tab and 4 presses this is not looked into furthe
 
 ## Local: `latency.mjs`, 1 vs 1, round trip 20 ms (2026-11-24/25, present phase on, headed Chrome, 120 Hz display)
 
-| stage | median ms (4 tabs over 2 runs) |
+| stage | median ms (4 tabs over 2 runs, 68 to 70 presses per tab) |
 |---|---|
 | sample | 8.1 to 10.6 |
 | delay | 49.3 to 50.1 |
@@ -68,15 +68,16 @@ each player's round trip would suggest was not measured here (the lag proxy adds
      its cost is re-simulating frames.
    - *Server placement*: the round trip to us-east1 sets the delay; players far from it pay more frames. A second region, or picking
      the region by the lobby's players, cuts frames for them.
-   - *The delay rule's margin*: #199 already lowered how slowly the delay falls; the rounding to whole frames and the 4/5 level are the
-     remaining slack, each worth at most a frame and paid for in more waits.
+   - *The delay rule's margin*: #199 already tightened the margin before the delay falls (0.5 to 0.2 frames); the rounding to whole
+     frames and the 4/5 level are the remaining slack, each worth at most a frame and paid for in more waits.
 2. **The present (16% live, 21.4 ms).** This smoke's Chrome tab was headless (animation frames not tied to a display), so its present
    is not the #210 case. With a real 60 Hz display the model after #210 is ~18.7 ms (2 ms margin + one display frame); before it,
-   ~25 ms on average (half a display frame of waiting for the next one, plus one display frame). Neither is measured at 60 Hz yet. The rest is one display frame by construction (the draw happens on an animation frame and shows on the next).
+   ~25 ms on average (half a display frame of waiting for the next one, plus one display frame). Neither is measured at 60 Hz yet.
+   The display frame in both is there by construction: the draw happens on an animation frame and shows on the next.
 3. **Waits (8%).** Late packets: jitter on the path, and on this Mac two browsers plus the harness, which may inflate it compared with
    players on their own machines (not measured).
 4. **Sample and sim (5%).** Already small: the sample waits for the next game frame (half a frame on average) and the frame is captured
    right after it is computed.
 
-So the largest remaining chunk is the input delay, and the candidate that would remove most of it is rollback; the other levers are worth
-about a frame or less each.
+So the largest remaining chunk is the input delay, and the candidate that could remove much of it is rollback (unmeasured; it trades
+delay for re-simulation and visible corrections); the other levers are worth about a frame or less each.
