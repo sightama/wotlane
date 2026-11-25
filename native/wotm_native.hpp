@@ -1583,7 +1583,7 @@ public:
         float inten = ram.f32(addr::psShadowIntens);   // 80 in psVarInit (GS scale: 0x80 = 1.0)
         inten = (inten > 0.f && inten < 1000.f) ? std::min(1.f, inten / 128.f) : 0.625f;
 
-        // every blocker's silhouette first: on the GPU (WOTM_GPUSIL=1) they are drawn together in their own targets, with one switch away
+        // every blocker's silhouette first: on the GPU (WOTM_GPUSIL=1) they are drawn together (two shared atlases, then each into its own target), with one switch away
         // from the view's framebuffer and back; on the CPU each is rasterized here
         static const bool wantGpu = [] { const char *v = std::getenv("WOTM_GPUSIL"); return v && v[0] == '1'; }();
         // the view's framebuffer, before any render texture is made: LoadRenderTexture ends by binding the window's
@@ -1610,7 +1610,9 @@ public:
         if (wantGpu) {
             ProfScope ps(DrawProf::ShadowTex);
             rlDrawRenderBatchActive();
-            for (const SilJob &j : silJobs_) gpuSil_.render(shadowCache_[j.entry].rt, j.xy, kShadowRes);
+            gpuSil_.render(silJobs_.size(), kShadowRes, [&](size_t i) {
+                return std::pair<const RenderTexture2D &, const std::vector<float> &>(shadowCache_[silJobs_[i].entry].rt, silJobs_[i].xy);
+            });
             view.restore();
             // the receivers draw with the scene's shader, as on the CPU path (render left raylib's default one)
             if (shaderOn_) rlSetShader(alphaShader_.id, alphaShader_.locs);
