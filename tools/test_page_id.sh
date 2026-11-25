@@ -58,6 +58,17 @@ page_id >/dev/null 2>&1 || rc=$?
 check "a symbolic link in the dist is an error" "$rc" 1
 rm "$tmp/dist/link.js"
 check "and without it the first id again" "$(page_id)" "$first"
+mkfifo "$tmp/dist/pipe"
+rc=0
+page_id >/dev/null 2>&1 || rc=$?
+check "a file that is neither a file nor a folder (a fifo) is an error" "$rc" 1
+rm "$tmp/dist/pipe"
+# refused: nothing on the output and a failing status (build_web.sh writes whatever it prints into version.json)
+refused() { out=$(sh "$here/page_id.sh" "$@" 2>/dev/null) && echo "exit 0: $out" || { [ -z "$out" ] && echo refused || echo "printed: $out"; }; }
+check "no arguments" "$(refused)" refused
+check "an empty dist argument" "$(refused "" wl-1111111111111111 wl-5111111111111111)" refused
+check "an id that is not wl- and 16 hex" "$(refused "$tmp/dist" 'wl-1111111111111111
+x' wl-5111111111111111)" refused
 mkdir -p "$tmp/empty"
 rc=0
 sh "$here/page_id.sh" "$tmp/empty" wl-1111111111111111 wl-5111111111111111 >/dev/null 2>&1 || rc=$?
