@@ -50,7 +50,8 @@ Why 5 frames: with the median pings (38 and 53 ms) the rule gives (38 + 53) / 2 
 needs a ping level averaging over ~64 ms per player (path over 4 frames), and once there the delay holds at 5 while the fall level
 averages over ~60 ms (path plus the 0.2 frame margin over 4 frames). Both are above the medians and below the maxima (97 and 108 ms, which
 may span the whole match rather than this window); the level is the 4/5 point of the last 8 s, so spikes that come often enough raise
-it. That spikes set the 5 is inferred from these numbers; the per-sample pings, and so the level itself, were not looked at.
+it. That spikes set the 5 is inferred from these numbers; the per-sample pings, and so the level itself, were not looked at. The
+follow-up (`ping-spikes.md`) found the spikes come from this Mac's home link while a match runs on it, not from the game or the server.
 
 The window reported that delay of 5 frames, 83 ms at 60 Hz, yet `lat_dl_ms` is 96.3 ms (5.8 frames). `lat_dl_ms` leaves out the
 waits, so the ~57 game fps (which includes them) does not explain the ~13 ms gap. It is not explained here. A delay that changed within
