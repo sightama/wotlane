@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
-# ABOUTME: Tests for the WebSocket ping probe (tools/ws_ping.py): frame encoding and parsing, and a run against a local wotm_server's
-# ABOUTME: WebSocket port and against stubs (one line per pong, nothing lost; a refused path, a wrong accept key or a reset is an
-# ABOUTME: error, after the summary). Run: python3 tools/test_ws_ping.py
+# ABOUTME: Tests for tools/ws_ping.py: framing, runs against a local wotm_server (a pong per ping, none lost) and against stubs (a refused
+# ABOUTME: path, a wrong accept key or a reset is an error, after the summary). Run: python3 tools/test_ws_ping.py
 import socket
 import struct
 import subprocess
