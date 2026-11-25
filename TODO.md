@@ -38,6 +38,7 @@ How it works today: `docs/passos/MODS.md` ("Skins", "Custom monsters").
 - **Online holdback, short freezes that keep coming:** a member whose game freezes about 2 s every 6 s (a tab throttled or collecting garbage) slows a match to about 20 of 30 frames a second without being alone at the back in 60% of the samples, so `wotm_net_holdback.hpp` never names it. Judge by the share of the window lost to that member's freezes, with a test next to `holdback_names_freezes_that_keep_coming_and_long_ones`.
 
 ## Ongoing
+- **Rollback hybrid (#30):** a delay floor plus a rollback window each device sizes from its own redo cost, behind `WOTM_ROLLBACK` (off by default). Spec: `docs/superpowers/specs/2026-11-25-rollback-hybrid-design.md`; costs and the snapshot: `docs/investigacoes/2026-11-18/rollback-synctest/`.
 - **Off the critical path:** an oracle for functions with calls; coverage with gameplay to feed back into `boot_coverage_asm.csv` (`57d4afd:docs/investigacoes/2026-10-19/pendencias_oracle_cobertura.md`, sections 2 and 3).
 
 ## Out of order (until the owner chooses)
@@ -58,6 +59,5 @@ How it works today: `docs/passos/MODS.md` ("Skins", "Custom monsters").
 - A panel option to pin the LOD.
 - Player frames of the native selection in 2D outside the big screen (they look better on the big screen).
 - Entering training mode from the launcher (the menu's TRAINING line and `WOTM_TRAINING=1` are enough).
-- Our own netcode (rollback): it would require proving that the logic always gives the same result from the same inputs.
 - Making Goliath Prime or other bosses work in full (CPU, collision, animations that ASSBOSS does not have): custom monsters are mods/experimental.
 - Online time sync (a leading player stretches its frames instead of waiting): it can't remove the lockstep waits (`docs/investigacoes/2026-11-24/time-sync/README.md`).
