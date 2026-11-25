@@ -1,12 +1,12 @@
 #!/bin/sh
 # ABOUTME: Checks tools/page_id.sh: a dist's page id (its folder under the site's b/, #187) is the same for the same files and ids, and
-# ABOUTME: changes with any file's content or name, an added file, the full id or the simulation id.
+# ABOUTME: changes with any file's content or name, an added file or either id; an unreadable file or folder, a link or no files is an error.
 set -eu
 
 case ${1:-} in -h|--help) echo "usage: sh tools/test_page_id.sh"; exit 0 ;; esac
 here=$(cd "$(dirname "$0")" && pwd)
 tmp=$(mktemp -d)
-trap 'rm -rf "$tmp"' EXIT
+trap 'chmod -R u+rwx "$tmp" 2>/dev/null; rm -rf "$tmp"' EXIT   # the permission checks may be cut short
 fails=0
 check() { if [ "$2" = "$3" ]; then echo "ok     $1"; else echo "FAILED $1: got \"$2\", wanted \"$3\""; fails=$((fails + 1)); fi; }
 page_id() { sh "$here/page_id.sh" "$tmp/dist" "${1:-wl-1111111111111111}" "${2:-wl-5111111111111111}"; }
@@ -48,6 +48,19 @@ if [ "$(id -u)" != 0 ]; then   # root reads any file
     page_id >/dev/null 2>&1 || rc=$?
     check "a folder it cannot list is an error, not an id without its files" "$rc" 1
     chmod 755 "$tmp/dist/mods/a b"
+else
+    echo "skip   the unreadable file and folder checks (root reads them all)"
 fi
+# a link is not hashed through: the site would serve what it points at, outside the id
+ln -s front.js "$tmp/dist/link.js"
+rc=0
+page_id >/dev/null 2>&1 || rc=$?
+check "a symbolic link in the dist is an error" "$rc" 1
+rm "$tmp/dist/link.js"
+check "and without it the first id again" "$(page_id)" "$first"
+mkdir -p "$tmp/empty"
+rc=0
+sh "$here/page_id.sh" "$tmp/empty" wl-1111111111111111 wl-5111111111111111 >/dev/null 2>&1 || rc=$?
+check "a dist with no files is an error" "$rc" 1
 
 if [ $fails -eq 0 ]; then echo PASSED; else echo "FAILED ($fails)"; exit 1; fi
