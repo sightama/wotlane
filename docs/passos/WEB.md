@@ -74,7 +74,10 @@ For online play start `wotm_server --ws-port <port>`; a page opened from `localh
   `wotlane-disc` channel, from `cachingFetch`'s `onRead` and the Firefox XHR path: a slow read is no quiet disc), the first before the cache is asked, so a load the cache serves pauses it too (it wants
   the page's thread); a download goes on the channel as it ends (a number) and a cache hit as `{hit}`; the prefetch's own downloads
   go as `{prefetch: bytes}`, which the loading text, the streaming note and the diag leave out. It stops for good when an online
-  match starts (the bandwidth is the match's), does nothing with Save-Data on or without a version (ETag) for a disc file, asks
+  match starts (the bandwidth is the match's), spares a phone's data plan where it can tell (`prefetchAllowed`: nothing with Save-Data on or on a
+  cellular or wimax link, which `navigator.connection` gives on Chrome for Android; a touch-first device that does not say what link
+  it is on, as Firefox and Safari do, waits until its player starts a single-player game, and then downloads the game even on a
+  data plan), does nothing without a version (ETag) for a disc file, asks
   before every pass for room under 90% of the quota (the HTTP cache's copies of the chunk files count there too), and ends when a
   pass that asked for chunks left as many missing (the network keeps failing them, or the cache keeps nothing). In a fight it runs
   once the disc is quiet; its cost is the SHA-256 and the store of each chunk on the page's thread, which `prefetch_probe.mjs

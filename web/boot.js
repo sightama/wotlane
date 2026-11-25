@@ -218,7 +218,10 @@
     const match = matchEnv && window.wotmMatchPrefetch?.matchOfEnv(matchEnv.WOTM_MATCH);
     // an online match's bandwidth is the match's: the whole-game prefetch ends here; otherwise it waits while the game's wasm comes down
     if (isOnline) window.wotmGamePrefetch?.stop();
-    else window.wotmGamePrefetch?.hold();
+    else {
+      window.wotmGamePrefetch?.start(out, { gameStarted: true });   // a touch device that waited for a first game
+      window.wotmGamePrefetch?.hold();
+    }
     if (match) window.wotmMatchPrefetch.warmer.want(match.stage, match.members, 0);
     if (isOnline) {
       // once frame 1 is reached, the fight is on screen: stop match prefetch, clear the loading overlay, and mark Running

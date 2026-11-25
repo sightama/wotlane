@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 
-const { wholeGameChunks, createGameWarmer } = createRequire(import.meta.url)('./game_prefetch.js');
+const { wholeGameChunks, createGameWarmer, prefetchAllowed } = createRequire(import.meta.url)('./game_prefetch.js');
 
 const TABLE = {
   stages: { 1: [10, 11], 4: [11, 12] },
@@ -137,4 +137,66 @@ test('a missing chunk table means no prefetch', async () => {
   w.opts.files = async () => { throw new Error('match_chunks.json: HTTP 404'); };
   assert.equal(await createGameWarmer(w.opts).start(), 'no table (match_chunks.json: HTTP 404)');
   assert.deepEqual(w.calls, []);
+});
+
+test('a phone\'s data plan: no prefetch with Save-Data or on a cellular link; a touch device that does not say waits for a first game', () => {
+  const at = (connection, coarse, gameStarted = false) => prefetchAllowed({ connection, coarse, gameStarted });
+  assert.equal(at({ saveData: true, type: 'wifi' }, false), 'no', 'Save-Data, even on Wi-Fi');
+  assert.equal(at({ type: 'cellular' }, true, true), 'no', 'a cellular link, even after a game');
+  assert.equal(at({ type: 'wifi' }, true), 'yes', 'a phone on Wi-Fi');
+  assert.equal(at({ type: 'ethernet' }, false), 'yes');
+  assert.equal(at(undefined, false), 'yes', 'a desktop browser that does not say (Firefox, Safari)');
+  assert.equal(at({ effectiveType: '4g' }, false), 'yes', 'Chrome on a desktop: no type, a pointer');
+  assert.equal(at(undefined, true), 'later', 'a touch device that does not say: maybe a phone on a data plan');
+  assert.equal(at({ effectiveType: '4g' }, true), 'later');
+  assert.equal(at(undefined, true, true), 'yes', 'once its player has started a game');
+  assert.equal(at({ type: 'wimax' }, false), 'no', 'mobile broadband');
+  for (const type of ['unknown', 'other', 'mixed', 'bluetooth']) {
+    assert.equal(at({ type }, true), 'later', `'${type}' says nothing about the link: a touch device waits`);
+    assert.equal(at({ type }, false), 'yes', `'${type}' on a desktop`);
+  }
+  assert.equal(at({ type: 'none' }, true), 'yes', 'offline: nothing will download anyway');
+});
+
+// The page's wiring (the window block), loaded in a fresh context with a stand-in window: a touch device that does not say what
+// link it is on starts nothing from the front panel and starts on its first game; a cellular device says so once
+async function pageWiring({ connection, coarse }) {
+  const vm = await import('node:vm');
+  const { readFileSync } = await import('node:fs');
+  const fetched = [];
+  const ctx = {
+    console, setTimeout, clearTimeout, performance,
+    fetch: async (url) => { fetched.push(String(url)); return new Response('{}', { status: 200, headers: { etag: '"v1"' } }); },
+    BroadcastChannel: class { postMessage() {} },
+    navigator: { connection, storage: null },
+    caches: { keys: async () => [], open: async () => ({ keys: async () => [] }) },
+  };
+  ctx.window = ctx;
+  ctx.matchMedia = (q) => ({ matches: q === '(pointer: coarse)' && coarse });
+  ctx.wotmDiscCache = { cachedChunks: async () => new Set(), prefetch: async () => 0 };
+  ctx.canKeepChunks = async () => true;
+  vm.runInNewContext(readFileSync(new URL('./game_prefetch.js', import.meta.url), 'utf8'), ctx);
+  return { gp: ctx.wotmGamePrefetch, fetched };
+}
+
+test('the page wiring: a touch device that does not say waits for its first game, then starts', async () => {
+  const { gp, fetched } = await pageWiring({ connection: undefined, coarse: true });
+  const logs = [];
+  gp.start((l) => logs.push(l));
+  await new Promise((r) => setTimeout(r, 10));
+  assert.deepEqual(fetched, [], 'nothing from the front panel');
+  gp.start((l) => logs.push(l), { gameStarted: true });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.ok(fetched.includes('match_chunks.json'), `started on the first game (fetched ${fetched})`);
+  gp.stop();
+});
+
+test('the page wiring: Save-Data or a cellular link starts nothing and says so once', async () => {
+  const { gp, fetched } = await pageWiring({ connection: { type: 'cellular' }, coarse: true });
+  const logs = [];
+  gp.start((l) => logs.push(l));
+  gp.start((l) => logs.push(l), { gameStarted: true });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.deepEqual(fetched, []);
+  assert.equal(logs.filter((l) => /whole-game prefetch: off/.test(l)).length, 1);
 });

@@ -77,16 +77,33 @@ function createGameWarmer({ files, missing, canKeep, prefetch, now, sleep, quiet
   };
 }
 
-if (typeof module !== 'undefined' && module.exports) module.exports = { wholeGameChunks, createGameWarmer };
+// Whether the whole game may come down on this device now, for a phone's data plan: 'no' with Save-Data or on a mobile link
+// (navigator.connection.type cellular or wimax, which Chrome on Android fills in), 'later' on a touch-first device that does not say
+// what link it is on (no type, as in Firefox and Safari, or unknown, other, mixed, bluetooth: maybe a phone on a data plan) until
+// its player has started a game, else 'yes'
+const FIXED_LINKS = ['wifi', 'ethernet', 'none'];
+function prefetchAllowed({ connection, coarse, gameStarted }) {
+  if (connection?.saveData || ['cellular', 'wimax'].includes(connection?.type)) return 'no';
+  if (FIXED_LINKS.includes(connection?.type) || !coarse || gameStarted) return 'yes';
+  return 'later';
+}
+
+if (typeof module !== 'undefined' && module.exports) module.exports = { wholeGameChunks, createGameWarmer, prefetchAllowed };
 if (typeof window !== 'undefined') {
-  // the page's one whole-game warmer: boot.js starts it once the boot's own downloads are done, holds it from the game's start until
-  // its runtime is up and stops it when an online match starts
-  let gameWarmer = null, gameWarmerStopped = false, gameWarmerHeld = false;
+  // the page's one whole-game warmer: boot.js starts it once the boot's own downloads are done (and again when a single-player game
+  // starts, for a device prefetchAllowed says 'later' to), holds it from the game's start until its runtime is up and stops it when an
+  // online match starts
+  let gameWarmer = null, gameWarmerStopped = false, gameWarmerHeld = false, gameWarmerRefused = false;
   window.wotmGamePrefetch = {
-    start(log) {
+    start(log, { gameStarted = false } = {}) {
       const dc = window.wotmDiscCache;
-      // Save-Data asks sites not to download what nobody asked for
-      if (gameWarmer || gameWarmerStopped || !dc?.cachedChunks || !window.caches || navigator.connection?.saveData) return;
+      if (gameWarmer || gameWarmerStopped || !dc?.cachedChunks || !window.caches) return;
+      const allowed = prefetchAllowed({ connection: navigator.connection, coarse: window.matchMedia?.('(pointer: coarse)').matches, gameStarted });
+      if (allowed !== 'yes') {
+        if (allowed === 'no' && !gameWarmerRefused) log('[web] whole-game prefetch: off (Save-Data or a mobile link)');
+        gameWarmerRefused ||= allowed === 'no';
+        return;
+      }
       const etags = {};
       const json = async (name) => {
         const r = await fetch(name);
