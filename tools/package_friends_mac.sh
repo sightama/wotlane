@@ -10,10 +10,11 @@ esac
 need dylibbundler codesign ditto python3
 rt=$(runtime_dir)
 bin=$rt/build_dev/ps2xRuntime
-[ -x "$bin/wotm" ] && [ -f "$bin/wotm.buildid" ] || fail "missing $bin/wotm or wotm.buildid (sh tools/build_runtime.sh)"
-id=$(tr -d '\r\n' <"$bin/wotm.buildid")
-# the exe must be built from the current code: the server rejects different builds, and the package would be from another commit
-now=$(python3 "$REPO/tools/build_id.py" --runtime "$rt" | tail -1)
+[ -x "$bin/wotm" ] && [ -f "$bin/wotm.buildid" ] && [ -f "$bin/wotm.fullid" ] || fail "missing $bin/wotm, wotm.buildid or wotm.fullid (sh tools/build_runtime.sh)"
+# the full id (tools/build_id.py --full): the package is named by it, so two builds that differ only in drawing don't share a name
+id=$(tr -d '\r\n' <"$bin/wotm.fullid")
+# the exe must be built from the current code, drawing included: the package would otherwise be from another commit
+now=$(python3 "$REPO/tools/build_id.py" --runtime "$rt" --full | tail -1)
 [ "$now" = "$id" ] || fail "wotm is from other code ($id; current is $now): run sh tools/build_runtime.sh"
 sh "$REPO/tools/test_net.sh" notest   # wotm_lobby
 lobby=$REPO/native/net/build/wotm_lobby

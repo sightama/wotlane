@@ -6,10 +6,11 @@ $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
 $runtime = (Get-Content (Join-Path $repo '.wotm_recomp_dir') -TotalCount 1).Trim()
 $bin = Join-Path $runtime 'build_dev\ps2xRuntime'
-foreach ($f in 'wotm.exe', 'wotm.buildid') { if (-not (Test-Path (Join-Path $bin $f))) { throw "missing $bin\$f (build_runtime.bat)" } }
-$id = (Get-Content (Join-Path $bin 'wotm.buildid')).Trim()
+foreach ($f in 'wotm.exe', 'wotm.buildid', 'wotm.fullid') { if (-not (Test-Path (Join-Path $bin $f))) { throw "missing $bin\$f (build_runtime.bat)" } }
+# the full id (tools\build_id.py --full): the package is named by it, so two builds that differ only in drawing don't share a name
+$id = (Get-Content (Join-Path $bin 'wotm.fullid')).Trim()
 # the exe must be built from the current code: the server rejects different builds, and the package would be from another commit
-$now = (& python (Join-Path $PSScriptRoot 'build_id.py') | Select-Object -Last 1).Trim()
+$now = (& python (Join-Path $PSScriptRoot 'build_id.py') --full | Select-Object -Last 1).Trim()
 if ($now -ne $id) { throw "wotm.exe is from other code ($id; current is $now): run build_runtime.bat" }
 
 & cmd /c "`"$repo\tools\build_net.bat`" notest" | Out-Null
