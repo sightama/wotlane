@@ -30,8 +30,8 @@ REPO = Path(__file__).resolve().parent.parent
 PRESENTATION = (
     # drawing: Scene (reads guest RAM through the read-only Ram) and what only it includes
     'native/wotm_native.hpp', 'native/wotm_fx.hpp', 'native/wotm_gs.hpp', 'native/wotm_glsl.hpp', 'native/wotm_interp.hpp',
-    'native/wotm_msaa.hpp', 'native/wotm_preview.hpp', 'native/wotm_model.hpp', 'native/wotm_flame.hpp', 'native/wotm_tint.hpp',
-    'native/wotm_texmods.hpp', 'native/wotm_glad_web.cpp',
+    'native/wotm_msaa.hpp', 'native/wotm_preview.hpp', 'native/wotm_flame.hpp', 'native/wotm_texmods.hpp', 'native/wotm_glad_web.cpp',
+    # (not wotm_model.hpp or wotm_tint.hpp: the creator makes the skins' PNGs with them, and mods are in the config hash)
     # presenting and measuring: the present phase, the window, the pause view, the latency probes
     'native/wotm_framephase.hpp', 'native/wotm_windowfit.hpp', 'native/wotm_pauseview.hpp', 'native/wotm_latency.hpp',
     # drawn screens: the menu font, the legend and prompts, the training view (not the map editor's view: it hands the pad to the
@@ -108,6 +108,13 @@ def compute(repo, runtime, build, ps2recomp_commit=None, simulation=False):
     return 'wl-' + hashlib.sha256(json.dumps(parts, sort_keys=True).encode()).hexdigest()[:16]
 
 
+def write_ids(runtime, build, sim, full):
+    """wotm.buildid (the simulation id, which the exe sends and lobbies compare) and wotm.fullid next to the build's exe."""
+    out = runtime / build / 'ps2xRuntime'
+    (out / 'wotm.buildid').write_text(sim + '\n')
+    (out / 'wotm.fullid').write_text(full + '\n')
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--runtime', default=None)
@@ -119,9 +126,7 @@ def main():
     runtime = Path(a.runtime) if a.runtime else (Path(saved.read_text().splitlines()[0].strip()) if saved.exists() else REPO / 'runtime')
     sim, full = compute(REPO, runtime, a.build, simulation=True), compute(REPO, runtime, a.build)
     if a.write:
-        out = runtime / a.build / 'ps2xRuntime'
-        (out / 'wotm.buildid').write_text(sim + '\n')
-        (out / 'wotm.fullid').write_text(full + '\n')
+        write_ids(runtime, a.build, sim, full)
     print(full if a.full else sim)
     return 0
 

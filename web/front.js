@@ -47,12 +47,16 @@ function serverUrl(path) {
   return override ? override.replace(/\/$/, '') + path : lobbySocketUrl(location, path);
 }
 
+// the full id of this page's build (version.json's build), which diagnostics carry next to the simulation id; set by buildId()
+let fullBuild;
+
 async function buildId() {
   try {
     const r = await fetch('version.json', { cache: 'no-store' });
     // the simulation id: builds that compute alike share a lobby (tools/build_id.py); a version.json without one (an older page's,
     // from a cache) gives its full id, which no other build shares
     const v = await r.json();
+    fullBuild = v.build || undefined;
     return v.sim || v.build || 'sem-buildid';
   } catch {
     return 'sem-buildid';   // the sentinel netBuildId uses when it has none (wotm_sync.inc)
@@ -217,7 +221,7 @@ function startDiag(client, socket, match, build) {
   const rate = new RateMemory({ get: (k) => localStorage.getItem(k), set: (k, v) => localStorage.setItem(k, v) });
   diagReporter = new DiagReporter({
     send: (line) => { try { client.diag(line); } catch { /* the connection is gone: the report is lost, the match goes on */ } },
-    base: [['build', build], ['lobby', match.lobby], ['name', myName], ['hz', 60 / Number(match.step)], ['players', match.players]],
+    base: [['build', build], ...(fullBuild ? [['full', fullBuild]] : []), ['lobby', match.lobby], ['name', myName], ['hz', 60 / Number(match.step)], ['players', match.players]],
     now: () => performance.now(),
     setTimer: (fn, ms) => setInterval(fn, ms),
     clearTimer: (id) => clearInterval(id),
@@ -255,7 +259,7 @@ function lastDiag() {
 // the hand-sent report: the last match's numbers, this device, the lobby and the name, and the player's note
 async function sendReport(note) {
   const build = await buildId();
-  const line = diagLine(reportFields({ saved: lastDiag(), device: deviceFields(window), lobby: lobby?.code ?? '', name: cleanName($('name').value), build }), note);
+  const line = diagLine(reportFields({ saved: lastDiag(), device: deviceFields(window), lobby: lobby?.code ?? '', name: cleanName($('name').value), build, full: fullBuild }), note);
   return deliverReport({
     line, lobby,
     connect: async () => {
@@ -443,7 +447,8 @@ async function enterLobby(enter, rematch = false) {
     // what the last match showed of this device, and whether it draws in software, for the other members
     const health = healthLine(rememberedHealth(localStorage), readSoftwareGl(window) === 1);
     if (health) lobby.health(health);
-    lobby.diag(diagLine(joinFields([['build', build], ['lobby', lobby.code], ['name', myName]], deviceFields(window))));
+    lobby.diag(diagLine(joinFields([['build', build], ...(fullBuild ? [['full', fullBuild]] : []), ['lobby', lobby.code], ['name', myName]],
+      deviceFields(window))));
     return true;
   } catch (e) {
     say(friendlyError(e.message));

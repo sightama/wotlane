@@ -1,12 +1,14 @@
 # ABOUTME: Builds the package for friends who own the disc: launcher, wotm.exe with its DLLs, wotm_server, the repo's mods and a setup
-# ABOUTME: that extracts the ELF from each one's ISO. No disc file goes in. Output: dist\wotlane-<buildid>\ and .zip (dist\ not in git).
+# ABOUTME: that extracts the ELF from each one's ISO. No disc file goes in. Output: dist\wotlane-<full id>\ and .zip (dist\ not in git).
 #
 # Usage: powershell -File tools\package_friends.ps1. Prints the package folder path on the last line. Test: tools\package_check.ps1.
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
 $runtime = (Get-Content (Join-Path $repo '.wotm_recomp_dir') -TotalCount 1).Trim()
 $bin = Join-Path $runtime 'build_dev\ps2xRuntime'
-foreach ($f in 'wotm.exe', 'wotm.buildid', 'wotm.fullid') { if (-not (Test-Path (Join-Path $bin $f))) { throw "missing $bin\$f (build_runtime.bat)" } }
+foreach ($f in 'wotm.exe', 'wotm.buildid', 'wotm.fullid') {
+    if (-not (Test-Path (Join-Path $bin $f))) { throw "missing $bin\$f (build_runtime.bat)" }
+}
 # the full id (tools\build_id.py --full): the package is named by it, so two builds that differ only in drawing don't share a name
 $id = (Get-Content (Join-Path $bin 'wotm.fullid')).Trim()
 # the exe must be built from the current code: the server rejects different builds, and the package would be from another commit

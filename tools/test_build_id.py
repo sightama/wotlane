@@ -137,9 +137,21 @@ class SimulationIdTest(unittest.TestCase):
             sim, full = self.ids(*make_tree(Path(a)))
             self.assertNotEqual(sim, full)
 
+    def test_write_puts_both_ids_next_to_the_exe(self):
+        # wotm.buildid (sent and compared by lobbies) holds the simulation id, wotm.fullid the full one; the CLI prints either
+        with tempfile.TemporaryDirectory() as a:
+            repo, runtime = make_tree(Path(a))
+            out = runtime / 'build_dev' / 'ps2xRuntime'
+            out.mkdir(parents=True)
+            sim, full = self.ids(repo, runtime)
+            build_id.write_ids(runtime, 'build_dev', sim, full)
+            self.assertEqual((out / 'wotm.buildid').read_text(), sim + '\n')
+            self.assertEqual((out / 'wotm.fullid').read_text(), full + '\n')
+
     def test_the_core_simulation_files_are_never_presentation(self):
         core = ('native/runtime/wotm_sync.inc', 'native/runtime/wotm_overrides.cpp', 'native/runtime/wotm_live.inc', 'native/net',
-                'native/runtime/wotm_snd.inc', 'native/runtime/wotm_rollback.inc', 'native/wotm_detmath.cpp', 'native/wotm_lockon.hpp')
+                'native/runtime/wotm_snd.inc', 'native/runtime/wotm_rollback.inc', 'native/wotm_detmath.cpp', 'native/wotm_lockon.hpp',
+                'native/runtime/wotm_creator.inc', 'native/wotm_model.hpp', 'native/wotm_tint.hpp', 'native/runtime/wotm_mapedit_view.inc')
         for rel in core:
             self.assertFalse(any(rel == p or rel.startswith(p + '/') or p.startswith(rel + '/') for p in build_id.PRESENTATION), rel)
 
@@ -151,7 +163,8 @@ class SimulationIdTest(unittest.TestCase):
         # the ways code here changes what the game computes: the EE's memory or context, a hook it registers, a host global the
         # game's hooks read (g_wotm*); a pattern check, so a listed file that does any of them fails
         writes = re.compile(r'rdram\[|rdram \+|rdram\)|uint8_t \*rdram|const_cast<uint8_t|R5900Context|ctx->|runtime->|PS2Runtime &|'
-                            r'registerFunction|hostLeaf|g_wotm[A-Za-z]*\s*=[^=]')
+                            r'registerFunction|hostLeaf|ps2_stubs::|setReturn|setReg|'
+                            r'g_wotm\w*\s*(=[^=]|\|=|&=|\+=|-=)|\+\+g_wotm|g_wotm\w*\+\+|g_wotm\w*\.(store|fetch_add|fetch_sub|exchange)\(')
         for rel in build_id.PRESENTATION:
             root = build_id.REPO / rel
             files = [root] if root.is_file() else [p for p in root.rglob('*') if p.suffix in ('.hpp', '.h', '.cpp', '.inc')]

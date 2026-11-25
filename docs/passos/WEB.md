@@ -259,8 +259,7 @@ and `installAudioWatch`, which adds an `audioprocess` listener to each `ScriptPr
 page loads; a callback later than 1.5 buffers counts as a dropped buffer; a page whose audio doesn't use script processors reports no
 `au_` fields). Nothing here writes to the game, so determinism is untouched; the wasm change adds counters and an export, and changes
 the build ids like any change under `native/` outside the drawing-only files. `LobbyClient.diag()` sends a line and stops sending
-once the server answers `ERROR
-unknown command: DIAG`; `sendDiag()` resolves once a `LIST` sent after the line is answered, which is how the page knows the server
+once the server answers `ERROR unknown command: DIAG`; `sendDiag()` resolves once a `LIST` sent after the line is answered, which is how the page knows the server
 read it.
 
 **Send report** (`web/report_ui.js`): the card the front panel's Send report button (shown after a match; the page keeps the last report in

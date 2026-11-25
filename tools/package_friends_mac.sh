@@ -5,7 +5,7 @@ set -eu
 . "$(dirname "$0")/posix_env.sh"
 
 case ${1-} in
-    -h|--help) echo "usage: sh tools/package_friends_mac.sh   (output: dist/wotlane-mac-<buildid>/ and .zip; check: sh tools/package_check_mac.sh)"; exit 0 ;;
+    -h|--help) echo "usage: sh tools/package_friends_mac.sh   (output: dist/wotlane-mac-<full id>/ and .zip; check: sh tools/package_check_mac.sh)"; exit 0 ;;
 esac
 need dylibbundler codesign ditto python3
 rt=$(runtime_dir)
