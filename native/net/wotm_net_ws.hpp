@@ -84,7 +84,20 @@ namespace wotm_net::ws
         std::string path, key;
         std::string userAgent;   // the browser's User-Agent (empty when it sent none)
         std::string clientAddress;   // the client's address as a proxy says it (CF-Connecting-IP, else X-Forwarded-For's first hop); empty if none
+        std::string country;         // the client's country as Cloudflare says it (CF-IPCountry, upper case); empty if none
     };
+
+    // a CF-IPCountry value: two letters or digits (a country code, XX for unknown, T1 for Tor), upper case; empty otherwise
+    inline std::string cleanCountry(std::string_view s)
+    {
+        std::string out;
+        for (char ch : s)
+            if (std::isalnum(static_cast<unsigned char>(ch)))
+                out += static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+            else
+                return std::string();
+        return out.size() == 2 ? out : std::string();
+    }
 
     // text that can be an IPv4 or IPv6 address (hex digits, . and :, up to 45 characters): all a proxy header is trusted to hold
     inline bool plausibleAddress(std::string_view s)
@@ -156,7 +169,9 @@ namespace wotm_net::ws
             address = cleanAddress(*cf);   // present: it is the answer, valid or not (X-Forwarded-For would be Cloudflare's own edge)
         else if (const auto xff = header(request, "X-Forwarded-For"))
             address = cleanAddress(xff->substr(0, xff->find(',')));
-        return Handshake{std::string(request.substr(4, pathEnd - 4)), *key, ua ? *ua : std::string(), address};
+        const auto country = header(request, "CF-IPCountry");
+        return Handshake{std::string(request.substr(4, pathEnd - 4)), *key, ua ? *ua : std::string(), address,
+                         country ? cleanCountry(*country) : std::string()};
     }
 
     inline std::string handshakeAnswer(std::string_view clientKey)

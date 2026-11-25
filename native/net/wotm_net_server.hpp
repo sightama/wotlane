@@ -90,6 +90,7 @@ namespace wotm_net
             int lobby = -1;
             std::string name;
             std::string address;   // where it connects from (proto::clientAddress), "" if unknown; never logged or sent
+            std::string country;   // its country as Cloudflare says it (a browser's CF-IPCountry), "" if unknown; logged in the diag's join
             proto::Pick pick;   // monster and skin for the next match
             Clock::time_point chatWindow{};   // start of the current chat window and the lines sent in it
             int chatLines = 0;
@@ -185,7 +186,7 @@ namespace wotm_net
 
         void log(const char *fmt, ...);
         void acceptAndReadLobby();
-        void addConn(std::unique_ptr<LineLink> link, bool halfRate = false, std::string address = {});   // halfRate: a phone (its WebSocket User-Agent)
+        void addConn(std::unique_ptr<LineLink> link, bool halfRate = false, std::string address = {}, std::string country = {});   // halfRate: a phone (its WebSocket User-Agent)
         void handleLine(int c, const std::string &line);
         void createLobby(int c, const std::vector<std::string> &w);
         void joinLobby(int c, const std::vector<std::string> &w);

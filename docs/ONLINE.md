@@ -249,7 +249,8 @@ cause can be read afterwards without asking anyone to copy logs.
   `rtt_high_ms`, `rtt_level_ms` (the round trip the delay covers: what the ping stays at or under 4/5 of the last 8 s), `in_pkts`
   (input packets since the last line), `in_gap_avg_ms` and `in_gap_max_ms` (how far apart the player's input packets arrived),
   `behind_max` and `behind_avg` (frames the player's inputs trailed the player furthest ahead, sampled every 100 ms; in lockstep this
-  is who the others wait for) and `away`. Events: `join` (with `half_rate`), `match_start`, `start`, `delay` (each
+  is who the others wait for) and `away`. Events: `join` (with `half_rate`, and `country`: a browser's country as Cloudflare's
+  `CF-IPCountry` gives it, `-` for none; never an address), `match_start`, `start`, `delay` (each
   delay change, with the `rtt_level_ms` it covers), `away`, `left`, `desync`, `match_over`.
 - **Where it goes.** Every line is journaled (`journalctl -u wotlane-server`, lines starting `[diag]`). With `--diag-dir <folder>`
   (the live server uses `/var/log/wotlane`) each line is also appended, with a UTC time, to that lobby's file: `<UTC time>-<code>-lobby.log`

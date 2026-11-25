@@ -82,6 +82,8 @@ namespace wotm_net
         const std::string &userAgent() const { return userAgent_; }
         // the client's address from the handshake's proxy headers (empty when there are none); only meaningful when the TCP peer is the proxy
         const std::string &forwardedAddress() const { return forwardedAddress_; }
+        // the client's country from the handshake (Cloudflare's CF-IPCountry; empty when there is none)
+        const std::string &country() const { return country_; }
         // server side: the TCP peer's address, kept for the server's own use
         void setPeerIp(std::string ip) { peerIp_ = std::move(ip); }
         const std::string &peerIp() const { return peerIp_; }
@@ -115,6 +117,7 @@ namespace wotm_net
                 path_ = h->path;
                 userAgent_ = h->userAgent;
                 forwardedAddress_ = h->clientAddress;
+                country_ = h->country;
                 ready_ = true;
                 const std::string rest = head_.substr(end + 4);
                 head_.clear();
@@ -235,7 +238,7 @@ namespace wotm_net
         LineSocket sock_;
         bool server_ = false, ready_ = false;
         ws::FrameParser parser_{false};
-        std::string head_, path_, userAgent_, forwardedAddress_, peerIp_;
+        std::string head_, path_, userAgent_, forwardedAddress_, country_, peerIp_;
         std::deque<std::string> lines_;
         std::deque<std::vector<uint8_t>> packets_;
         uint32_t rttMs_ = 0;
