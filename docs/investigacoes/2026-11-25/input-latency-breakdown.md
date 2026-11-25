@@ -82,7 +82,8 @@ At a 20 ms round trip the delay is still ~60% of the total: these runs settled a
 2. **The present (16% live, 21.4 ms).** This smoke's Chrome tab was headless, whose animation frames are presumably not tied to a
    display's refresh (inferred, not checked), so its present is likely not the #210 case. With a real 60 Hz display the model after
    #210 is ~18.7 ms (2 ms margin + one display frame); before it, ~25 ms on average (half a display frame of waiting for the next one,
-   plus one display frame). Neither is measured at 60 Hz yet. The display frame in both is there by construction: the draw happens on an animation frame and shows on the next.
+   plus one display frame). Neither is measured at 60 Hz yet. The display frame in both is there by construction:
+   the draw happens on an animation frame and shows on the next.
 3. **Waits (8%).** Late packets: jitter on the path, and on this Mac two browsers plus the harness, which may inflate it compared with
    players on their own machines (not measured).
 4. **Sample and sim (5%).** Already small: the sample waits for the next game frame (half a frame on average) and the frame is captured
