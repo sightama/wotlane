@@ -16,8 +16,8 @@ The margin only changes the delay when the path falls within 3 ms of a frame bou
 - Two `wotm_server` builds of wip/browser 1aad89ef (the server deployed 2026-11-25 05:49Z): `kDelayMarginMs` 3.0 (as shipped) and 0.0.
 - Three runs of each, alternating. Each run started once this Mac's 1-minute load was under 4; sampled every 5 s, it peaked at 9.2
   to 10.8 during the runs.
-  The stages (`lat_dl_ms`, `lat_st_ms`) are latency.mjs's per-player summary (the diag windows' medians averaged by presses); the wait share and game rate come from
-  `python3 tools/diag_waits.py <run dir>`, over the steady windows.
+  The stages (`lat_dl_ms`, `lat_st_ms`) are latency.mjs's per-player summary (the diag windows' medians averaged by presses); the
+  wait share and game rate come from `python3 tools/diag_waits.py <run dir>`, over the steady windows.
 
 ## Result (6 player rows per variant)
 
