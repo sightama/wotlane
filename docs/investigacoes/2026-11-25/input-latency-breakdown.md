@@ -3,8 +3,9 @@
 The coordinator asked, after the present-phase deploy (#210, build id wl-7e3c4e8e1dc25fd4), to break the ~131 ms press-to-screen latency
 of a live 1 vs 1 into its stages, to pick what to attack next. Short answer, from a small live sample (4 presses) and local runs with ~70
 presses each that agree on the order: **the lockstep input delay is the largest stage by far** (live median 96.3 against a 131 ms median
-total, 74%; local ~50 of 78 to 87 ms, 57 to 64%); everything the page and the game thread do is the rest. The delay is set by the players'
-ping level, and the live match's 5 frames (3 at its median pings) were most likely set by ping spikes (inferred, below).
+total, 74%, or 70% of the stage medians' sum; local ~50 of 78 to 87 ms, 57 to 64%); everything the page and the game thread do is
+the rest. The delay is set by the players' ping level, and the live match's 5 frames (3 at its median pings) were most likely set by
+ping spikes (inferred, below).
 
 ## The stages (what the diag measures, `docs/ONLINE.md` "Diagnostics")
 
@@ -52,8 +53,9 @@ may span the whole match rather than this window); the level is the 4/5 point of
 it. That spikes set the 5 is inferred from these numbers; the per-sample pings, and so the level itself, were not looked at.
 
 The window reported that delay of 5 frames, 83 ms at 60 Hz, yet `lat_dl_ms` is 96.3 ms (5.8 frames). `lat_dl_ms` leaves out the
-waits, so the ~57 game fps (which includes them) does not explain the ~13 ms gap. It is not explained here: the delay may have changed
-within the window (the diag reports its value at the window's end), and 4 presses is a small sample. The live sim (0.4 ms)
+waits, so the ~57 game fps (which includes them) does not explain the ~13 ms gap. It is not explained here. A delay that changed within
+the window would explain it only if it was above 5 earlier and fell, which the rise from 2 to 5 does not suggest; the local runs'
+delay stage matches their 3 frames (49.3 to 50.1 ms against 50), so the excess is a real gap, on 4 presses. The live sim (0.4 ms)
 is also far below the local runs' 5.5 ms; with one headless tab and 4 presses this is not looked into further here.
 
 ## Local: `latency.mjs`, 1 vs 1, round trip 20 ms (2026-11-24/25, present phase on, headed Chrome, 120 Hz display)
