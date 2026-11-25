@@ -46,6 +46,8 @@ test('no move: another error, a build not kept, the page already there, or no co
   assert.equal(lobbyBuildUrl("build differs from the lobby's (wl-5333333333333333); everyone", 'QZ2W', index, at), null);
   const there = { pathname: '/b/wl-aaaa000000000002/', origin: 'https://x.example' };
   assert.equal(lobbyBuildUrl("build differs from the lobby's (wl-5111111111111111); everyone", 'QZ2W', index, there), null);
+  const thereByName = { pathname: '/b/wl-aaaa000000000002/index.html', origin: 'https://x.example' };
+  assert.equal(lobbyBuildUrl("build differs from the lobby's (wl-5111111111111111); everyone", 'QZ2W', index, thereByName), null);
   assert.equal(lobbyBuildUrl("build differs from the lobby's (wl-5111111111111111); everyone", '', index, at), null);
   // a build id is only letters, digits and dashes: anything else in the message is not followed
   assert.equal(lobbyBuildUrl("build differs from the lobby's (../x); everyone", 'QZ2W', index, at), null);

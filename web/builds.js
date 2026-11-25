@@ -26,7 +26,7 @@ export function lobbyBuildUrl(error, code, index, location) {
   if (!full) return null;
   const root = siteRoot(location.pathname);
   const path = `${root}b/${full}/`;
-  if (location.pathname === path) return null;
+  if (location.pathname === path || location.pathname === `${path}index.html`) return null;
   const params = new URLSearchParams(location.search ?? '');
   params.set('join', code);
   return `${location.origin}${path}?${params}`;
