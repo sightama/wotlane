@@ -186,7 +186,6 @@ test('the page wiring: a touch device that does not say waits for its first game
   await new Promise((r) => setTimeout(r, 10));
   assert.deepEqual(fetched, [], 'nothing from the front panel');
   gp.start((l) => logs.push(l), { gameStarted: true });
-  gp.hold();
   await new Promise((r) => setTimeout(r, 10));
   assert.ok(fetched.includes('match_chunks.json'), `started on the first game (fetched ${fetched})`);
   gp.stop();
