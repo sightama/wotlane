@@ -440,7 +440,7 @@ async function followLobbyBuild(message, code) {
     const url = lobbyBuildUrl(message, code, await r.json(), location);
     if (!url) return false;
     say('That lobby runs another version of the game: opening it...');
-    location.assign(url);
+    location.replace(url);   // Back skips this page, whose panel stays disabled while it moves
     return true;
   } catch {
     return false;   // no index (a local server, an older site): the refusal stays on screen

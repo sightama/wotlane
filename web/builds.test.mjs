@@ -21,6 +21,7 @@ test('the newest retained build with a simulation id', () => {
 test('the site root above a build address', () => {
   assert.equal(siteRoot('/b/wl-aaaa000000000002/'), '/');
   assert.equal(siteRoot('/play/b/wl-aaaa000000000002/'), '/play/');
+  assert.equal(siteRoot('/b/wl-aaaa000000000002/index.html'), '/');
   assert.equal(siteRoot('/'), '/');
   assert.equal(siteRoot('/play/'), '/play/');
   assert.equal(siteRoot('/web/foo/'), '/web/foo/');   // only a whole b/<id>/ segment

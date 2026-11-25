@@ -48,8 +48,8 @@ cp "$bdir/ps2xRuntime/wotm.js" "$bdir/ps2xRuntime/wotm.wasm" "$dist/"
 if command -v shasum >/dev/null 2>&1; then wasm_sha=$(shasum -a 256 "$dist/wotm.wasm" | cut -d' ' -f1)
 else wasm_sha=$(sha256sum "$dist/wotm.wasm" | cut -d' ' -f1); fi
 # build: the full id (which build this is); sim: the simulation id (tools/build_id.py), the one the page sends and lobbies compare
-full_id=$(cat "$bdir/ps2xRuntime/wotm.fullid" 2>/dev/null || echo "")
-sim_id=$(cat "$bdir/ps2xRuntime/wotm.buildid" 2>/dev/null || echo "")
+full_id=$(cat "$bdir/ps2xRuntime/wotm.fullid" 2>/dev/null || true)
+sim_id=$(cat "$bdir/ps2xRuntime/wotm.buildid" 2>/dev/null || true)
 printf '{"wasm": "%s", "build": "%s", "sim": "%s"}\n' "$wasm_sha" "$full_id" "$sim_id" >"$dist/version.json"
 [ -n "$full_id" ] && [ -n "$sim_id" ] || fail "no wotm.fullid or wotm.buildid in $bdir/ps2xRuntime (tools/build_id.py --write runs in the build)"
 # the site's entry page (/, by deploy_web.sh): the build lives at b/<full id>/ (#187), and this page only sends the browser there with
