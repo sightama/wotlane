@@ -640,7 +640,11 @@ namespace wotm_rollback
                 return;
             const uint32_t frame = wotm_sync::g_index;
             if (frame < g_presentFrame)
+            {
                 g_skipSamples += g_presentFrame - frame;
+                std::fprintf(stderr, "[rollback] the redo from frame %u reached a lockstep point at frame %u, %u frame(s) before frame %u: it ends there\n",
+                             g_redoFrom, frame, g_presentFrame - frame, g_presentFrame);
+            }
             g_redo = false;
             if (frame < g_redoFrom)
                 return;
@@ -786,6 +790,8 @@ namespace wotm_rollback
         hybrid::waitThrough(wotm_sync::g_index);
         // restored: the unwind reaches the entry of timerWaitForMinUpdateRate, where resume() goes straight on
         hybrid::g_resume = hybrid::correct(wotm_sync::g_index);
+        if (hybrid::g_resume)
+            std::fprintf(stderr, "[rollback] dialog frame %u: back to frame %u through the unwind\n", g_presentFrame, hybrid::g_redoFrom);
         return hybrid::g_resume;
     }
 
