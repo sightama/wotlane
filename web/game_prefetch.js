@@ -116,8 +116,8 @@ if (typeof window !== 'undefined') {
           const all = wholeGameChunks(await json('match_chunks.json'), await json('boot_chunks.json'));
           // the version each file's chunks are kept under (disc_cache.js names a cache by it, and keeps nothing without one)
           for (const file of Object.keys(all)) {
-            etags[file] = (await fetch('data/' + file, { method: 'HEAD' })).headers.get('etag');
-            if (!etags[file]) throw new Error(`data/${file} has no version (ETag): the cache would keep nothing`);
+            etags[file] = (await fetch('/data/' + file, { method: 'HEAD' })).headers.get('etag');
+            if (!etags[file]) throw new Error(`/data/${file} has no version (ETag): the cache would keep nothing`);
           }
           return all;
         },
@@ -129,7 +129,7 @@ if (typeof window !== 'undefined') {
         canKeep: (count) => canKeepChunks({ caches: window.caches, estimate: storage?.estimate ? () => storage.estimate() : null }, count),
         // two 2 MiB runs at a time: a game read that starts meanwhile waits behind at most four chunk files. Where the game runs on the
         // page's thread (support.js mainThreadFiles: Firefox), one 1 MiB chunk at a time, so each chunk's hash and store is spread out
-        prefetch: (file, chunks, { stop }) => dc.prefetch(fetch, 'data/' + file, chunks, { ...(window.wotmMainThreadFiles?.() ? { maxRun: 1, concurrency: 1 } : { maxRun: 2, concurrency: 2 }), stop, background: true }),
+        prefetch: (file, chunks, { stop }) => dc.prefetch(fetch, '/data/' + file, chunks, { ...(window.wotmMainThreadFiles?.() ? { maxRun: 1, concurrency: 1 } : { maxRun: 2, concurrency: 2 }), stop, background: true }),
         now: () => performance.now(),
         sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
       });

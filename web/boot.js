@@ -171,10 +171,10 @@
     if (!dc) return;
     try {
       const files = ['SCUS_971.97', 'game.iso'];
-      const heads = await Promise.all(files.map((f) => fetch('data/' + f, { method: 'HEAD' })));
+      const heads = await Promise.all(files.map((f) => fetch('/data/' + f, { method: 'HEAD' })));
       if (window.caches) await dc.evictOld(window.caches, Object.fromEntries(files.map((f, i) => [f, heads[i].headers.get('etag')])));
       const list = await (await fetch('boot_chunks.json')).json();
-      await Promise.all(files.map((f) => dc.prefetch(fetch, 'data/' + f, list[f] || [])));
+      await Promise.all(files.map((f) => dc.prefetch(fetch, '/data/' + f, list[f] || [])));
     } catch (e) {
       out('[web] disc prefetch skipped: ' + e.message);
     }
@@ -262,14 +262,14 @@
     env.WOTM_SAVE_MEMORY = '1';
     try {
       const sizes = await Promise.all(['SCUS_971.97', 'game.iso'].map(async (name) => {
-        const r = await fetch('data/' + name, { method: 'HEAD' });
-        if (!r.ok) throw new Error(`data/${name}: HTTP ${r.status}`);
+        const r = await fetch('/data/' + name, { method: 'HEAD' });
+        if (!r.ok) throw new Error(`/data/${name}: HTTP ${r.status}`);
         let size = window.wotmFileSize(r.headers.get('content-length'), null);
         if (size === null) {   // a server that sends no length on HEAD: one byte's range carries the total
-          const p = await fetch('data/' + name, { headers: { Range: 'bytes=0-0' } });
+          const p = await fetch('/data/' + name, { headers: { Range: 'bytes=0-0' } });
           size = window.wotmFileSize(null, p.headers.get('content-range'));
         }
-        if (size === null) throw new Error(`data/${name}: no size`);
+        if (size === null) throw new Error(`/data/${name}: no size`);
         return `${name}:${size}`;
       }));
       env.WOTM_DISC_SIZES = sizes.join(',');   // copied into the game's environment when it loads (preRun)

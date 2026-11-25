@@ -252,6 +252,9 @@ test('leave() is refused with the server reason', async () => {
 test('inviteLink gives the page address with only the lobby code', () => {
   assert.equal(inviteLink({ origin: 'https://x.example', pathname: '/' }, 'ABCD'), 'https://x.example/?join=ABCD');
   assert.equal(inviteLink({ origin: 'https://x.example', pathname: '/play/' }, 'QZ2W'), 'https://x.example/play/?join=QZ2W');
+  // from a build's own address (/b/<build id>/), the link names the site's entry page, which loads the newest build
+  assert.equal(inviteLink({ origin: 'https://x.example', pathname: '/b/wl-0123abcd4567ef89/' }, 'QZ2W'), 'https://x.example/?join=QZ2W');
+  assert.equal(inviteLink({ origin: 'https://x.example', pathname: '/play/b/wl-0123abcd4567ef89/' }, 'QZ2W'), 'https://x.example/play/?join=QZ2W');
 });
 
 test('LobbyClient.list reads a lobby with no owner and no names', async () => {

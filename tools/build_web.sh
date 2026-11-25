@@ -51,4 +51,13 @@ else wasm_sha=$(sha256sum "$dist/wotm.wasm" | cut -d' ' -f1); fi
 full_id=$(cat "$bdir/ps2xRuntime/wotm.fullid" 2>/dev/null || echo "")
 sim_id=$(cat "$bdir/ps2xRuntime/wotm.buildid" 2>/dev/null || echo "")
 printf '{"wasm": "%s", "build": "%s", "sim": "%s"}\n' "$wasm_sha" "$full_id" "$sim_id" >"$dist/version.json"
+# the site's entry page (/, by deploy_web.sh): the build lives at b/<full id>/ (#187), and this page only sends the browser there with
+# its query (an invite's ?join=) and hash; inline, so the extra step costs one small request
+cat >"$dist/entry.html" <<EOF
+<!doctype html>
+<meta charset="utf-8">
+<title>War of the Monsters</title>
+<script>location.replace('b/$full_id/' + location.search + location.hash);</script>
+<noscript><a href="b/$full_id/">War of the Monsters</a></noscript>
+EOF
 echo "web_dist: $dist ($(du -sh "$dist" | cut -f1))"

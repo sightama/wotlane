@@ -150,7 +150,7 @@ bool wotmWebMountRangeDisc(const char *dir, const char *const *names, const uint
     {
         // the C API's backend_t names the same object as wasmfs::backend_t (WASMFS's own C functions pass it across the same way)
         const backend_t b = reinterpret_cast<backend_t>(
-            wasmfs::wasmFS.addBackend(std::make_unique<RangeBackend>(std::string("data/") + names[i], sizes[i])));
+            wasmfs::wasmFS.addBackend(std::make_unique<RangeBackend>(std::string("/data/") + names[i], sizes[i])));
         const std::string path = std::string(dir) + "/" + names[i];
         if (wasmfs_create_file(path.c_str(), 0444, b) < 0)
             return false;

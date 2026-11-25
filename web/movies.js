@@ -73,7 +73,7 @@ export function holdGamepads(nav) {
 // Plays the startup movies in `overlay`'s `video`, one after the other. Resolves to what happened to each ('ended', 'skipped',
 // 'failed'), or to 'off' (nothing was fetched) or 'unavailable' (no movie files on the server). Never rejects.
 export async function playStartupMovies({
-  mode, base = 'data/movies/', fetchImpl = (...a) => fetch(...a), overlay, video, hint, win = window, nav = win.navigator,
+  mode, base = '/data/movies/', fetchImpl = (...a) => fetch(...a), overlay, video, hint, win = window, nav = win.navigator,
   audio, log = () => {}, startTimeoutMs = 15000, stallTimeoutMs = 20000,
 }) {
   mode = normalizeMode(mode);
