@@ -17,6 +17,7 @@ investigation that uses it is docs/investigacoes/2026-11-25/ping-spikes.md.
 """
 import argparse
 import base64
+import hashlib
 import os
 import select
 import socket
@@ -27,6 +28,11 @@ import time
 import urllib.parse
 
 LOST_AFTER_S = 2.0
+
+
+def accept_key(key):
+    """The Sec-WebSocket-Accept a server must answer `key` with (RFC 6455, 4.2.2)."""
+    return base64.b64encode(hashlib.sha1((key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').encode()).digest()).decode()
 
 
 def client_frame(opcode, payload):
@@ -81,9 +87,13 @@ def connect(url, connect_to=None, insecure=False):
             head += chunk
     except OSError as e:
         raise SystemExit(f'error: {url}: {e}')
-    status = head.split(b'\r\n', 1)[0].decode(errors='replace')
+    lines = head.split(b'\r\n\r\n', 1)[0].decode(errors='replace').split('\r\n')
+    status = lines[0]
     if ' 101 ' not in status + ' ':
         raise SystemExit(f'error: {url}: handshake refused ({status or "connection closed"})')
+    headers = {k.strip().lower(): v.strip() for k, _, v in (line.partition(':') for line in lines[1:])}
+    if headers.get('sec-websocket-accept') != accept_key(key):
+        raise SystemExit(f'error: {url}: the handshake answer is not a WebSocket server\'s (Sec-WebSocket-Accept)')
     return s, head.split(b'\r\n\r\n', 1)[1]
 
 
@@ -99,35 +109,41 @@ def run(url, secs, every_ms, connect_to=None, insecure=False, out=sys.stdout):
     s, buf = connect(url, connect_to, insecure)
     s.setblocking(False)
     sent, seq, lost = {}, 0, 0
-    end = time.time() + secs
+    end = time.perf_counter() + secs
     next_ping = time.perf_counter()
-    while time.time() < end:
-        if time.perf_counter() >= next_ping:
-            sent[seq] = time.perf_counter()
-            send_all(s, client_frame(0x9, struct.pack('>Q', seq)))
-            seq += 1
-            next_ping += every_ms / 1000
-        pending = isinstance(s, ssl.SSLSocket) and s.pending()
-        if pending or select.select([s], [], [], max(0.0, min(next_ping - time.perf_counter(), 0.01)))[0]:
-            try:
-                chunk = s.recv(65536)
-                if not chunk:
+    try:
+        # pings until `secs` are up, then the pongs still on their way (up to LOST_AFTER_S)
+        while time.perf_counter() < end or (sent and time.perf_counter() < end + LOST_AFTER_S):
+            sending = time.perf_counter() < end
+            if sending and time.perf_counter() >= next_ping:
+                sent[seq] = time.perf_counter()
+                send_all(s, client_frame(0x9, struct.pack('>Q', seq)))
+                seq += 1
+                next_ping += every_ms / 1000
+            wait = max(0.0, min(next_ping - time.perf_counter(), 0.01)) if sending else 0.01
+            if (isinstance(s, ssl.SSLSocket) and s.pending()) or select.select([s], [], [], wait)[0]:
+                try:
+                    chunk = s.recv(65536)
+                    if not chunk:
+                        raise SystemExit(f'error: {url}: closed by the server')
+                    buf += chunk
+                except (ssl.SSLWantReadError, BlockingIOError):
+                    pass
+            frames, buf = server_frames(buf)
+            for op, payload in frames:
+                if op == 0xA and len(payload) == 8:
+                    t0 = sent.pop(struct.unpack('>Q', payload)[0], None)
+                    if t0 is not None:
+                        print(f'{time.time():.3f} {(time.perf_counter() - t0) * 1000:.1f}', file=out, flush=True)
+                elif op == 0x8:
                     raise SystemExit(f'error: {url}: closed by the server')
-                buf += chunk
-            except (ssl.SSLWantReadError, BlockingIOError):
-                pass
-        frames, buf = server_frames(buf)
-        for op, payload in frames:
-            if op == 0xA and len(payload) == 8:
-                t0 = sent.pop(struct.unpack('>Q', payload)[0], None)
-                if t0 is not None:
-                    print(f'{time.time():.3f} {(time.perf_counter() - t0) * 1000:.1f}', file=out, flush=True)
-            elif op == 0x8:
-                raise SystemExit(f'error: {url}: closed by the server')
-        for k in [k for k, t in sent.items() if time.perf_counter() - t > LOST_AFTER_S]:
-            del sent[k]
-            lost += 1
-    print(f'# sent {seq} lost {lost + len(sent)}', file=sys.stderr)
+            for k in [k for k, t in sent.items() if time.perf_counter() - t > LOST_AFTER_S]:
+                del sent[k]
+                lost += 1
+    except OSError as e:
+        raise SystemExit(f'error: {url}: {e}')
+    finally:
+        print(f'# sent {seq} lost {lost + len(sent)}', file=sys.stderr)
 
 
 def main():

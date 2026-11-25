@@ -35,6 +35,9 @@ class FrameTest(unittest.TestCase):
         self.assertEqual(frames, [])
         self.assertEqual(rest, bytes([0x82, 127, 0, 0]))
 
+    def test_the_accept_header_is_the_rfc_example(self):
+        self.assertEqual(ws_ping.accept_key('dGhlIHNhbXBsZSBub25jZQ=='), 's3pPLMBiTxaQ9kYGzzhZRbK+xOo=')
+
 
 def free_port():
     with socket.socket() as s:
@@ -75,6 +78,19 @@ class ServerTest(unittest.TestCase):
             self.assertAlmostEqual(float(t), time.time(), delta=30)
             self.assertLess(float(rtt), 50)
         self.assertIn('lost 0', r.stderr)
+
+    def test_pings_still_in_flight_at_the_end_are_waited_for(self):
+        r = subprocess.run([sys.executable, str(PROBE), f'ws://127.0.0.1:{self.port}/lobby', '--secs', '1', '--every', '1'],
+                           capture_output=True, text=True, timeout=20)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn('lost 0', r.stderr)
+
+    def test_no_server_is_an_error(self):
+        r = subprocess.run([sys.executable, str(PROBE), f'ws://127.0.0.1:{free_port()}/lobby', '--secs', '1'],
+                           capture_output=True, text=True, timeout=20)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn('error:', r.stderr)
+        self.assertNotIn('Traceback', r.stderr)
 
     def test_a_refused_path_is_an_error(self):
         r = subprocess.run([sys.executable, str(PROBE), f'ws://127.0.0.1:{self.port}/nope', '--secs', '1'],
