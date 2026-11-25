@@ -54,7 +54,7 @@ For online play start `wotm_server --ws-port <port>`; a page opened from `localh
   (`StreamActivity`; the count starts over after 10 s without a chunk). The chunks come from the disc channel: the fetch path's and, in
   Firefox, the game worker's synchronous reads (`syncChunkReader`'s `onBytes`). Two game tabs of one site share the channel, so a
   download in one shows the note in the other.
-- **Disc cache:** `web/disc_cache.js` (loaded by the page with a script tag and, in the game's workers, by `data_retry.js`; it is not in the `--pre-js` list, so a change to it leaves the build id alone) keeps the disc's
+- **Disc cache:** `web/disc_cache.js` (loaded by the page with a script tag and, in the game's workers, by `data_retry.js`; it is not in the `--pre-js` list, so a change to it leaves both build ids alone) keeps the disc's
   1 MiB chunks in the browser's Cache API, one cache per disc file and version (its ETag), each chunk stored with its SHA-256 and checked
   before use; a chunk missing or failing the check comes from the network. Nothing is stored when the Cache API is missing, the HEAD
   gave no ETag or storage is 90% full. From the page's load, while the player is on the front panel, `web/boot.js` drops the caches

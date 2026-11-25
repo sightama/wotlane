@@ -152,7 +152,8 @@ class SimulationIdTest(unittest.TestCase):
         core = ('native/runtime/wotm_sync.inc', 'native/runtime/wotm_overrides.cpp', 'native/runtime/wotm_live.inc', 'native/net',
                 'native/runtime/wotm_snd.inc', 'native/runtime/wotm_rollback.inc', 'native/wotm_detmath.cpp', 'native/wotm_lockon.hpp',
                 'native/runtime/wotm_creator.inc', 'native/wotm_model.hpp', 'native/wotm_tint.hpp', 'native/runtime/wotm_mapedit_view.inc',
-                'native/runtime/wotm_trainview.inc')
+                'native/runtime/wotm_trainview.inc', 'native/runtime/wotm_orbit.inc', 'native/runtime/wotm_pad.inc',
+                'native/runtime/wotm_modifiers.inc')
         for rel in core:
             self.assertFalse(any(rel == p or rel.startswith(p + '/') or p.startswith(rel + '/') for p in build_id.PRESENTATION), rel)
 

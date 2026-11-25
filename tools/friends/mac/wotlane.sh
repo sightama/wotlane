@@ -147,7 +147,7 @@ elif [ "$action" = join ]; then
         why=$(sed -n 's/^error: //p' "$logs/lobby.log")
         case $why in
             *"no such lobby"*) fail "There is no game $code right now. Ask your friend for a new code." ;;
-            *"build differs"*|*protocol*) fail "Your copy of the game is a different version from your friend's. Both of you need the same download." ;;
+            *"build differs"*|*protocol*) fail "Your copy of the game is a different version from your friend's. Both of you need downloads that play together (the \"plays with\" line of BUILD.txt)." ;;
             *"costume"*) fail "Someone in that game already has that monster. Open the app again and pick another one." ;;
             *) fail "Couldn't join game $code: $why" ;;
         esac
