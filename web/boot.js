@@ -50,29 +50,32 @@
   const params = new URLSearchParams(location.search);
   const fixed = { ...env };   // pageEnv() keeps these over anything from the address or an online match
 
-  // the text over the game while the disc streams in (data_retry.js reports each chunk from the worker that fetches it)
+  // the loading screen over the game while the disc streams in (data_retry.js reports each chunk from the worker that fetches it)
   function showLoading(expectedBytes, initial) {
     const loadingEl = document.getElementById('loading');
     const progress = new LoadingProgress(expectedBytes, { initial });
+    const screen = wotmLoadingScreen(loadingEl);
     const channel = new BroadcastChannel('wotlane-disc');
     channel.onmessage = (e) => {
       if (typeof e.data === 'number') progress.add(e.data, performance.now());
       else if (e.data?.hit) progress.addCacheHit(e.data.hit, performance.now());
     };
-    loadingEl.textContent = progress.text(performance.now());
+    screen.render(progress.view(performance.now()));
     loadingEl.hidden = false;
     let finished = false;
     const finish = () => {
       if (finished) return;
       finished = true;
       progress.finish();
+      const hadFocus = loadingEl.contains(document.activeElement);
       loadingEl.hidden = true;
+      if (hadFocus) canvas.focus();   // the Another tip button went away: the keyboard goes back to the game
       clearInterval(timer);
       showStreaming(channel);
     };
     const timer = setInterval(() => {
-      const text = progress.text(performance.now());
-      if (text) return void (loadingEl.textContent = text);
+      const view = progress.view(performance.now());
+      if (view) return void screen.render(view);
       finish();
     }, 250);
     return finish;

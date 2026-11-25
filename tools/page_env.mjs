@@ -47,6 +47,22 @@ export async function webkitDevices() {
   return (await loadPlaywright()).devices;
 }
 
+// Puts the loading screen over the page in one of its states, drawn from a LoadingProgress as web/boot.js does (the game is never
+// started): 'start' (nothing arrived yet), 'download' (9 of 27 MB at 2 MB/s) or 'cache' (a hit from the disc cache)
+export async function showLoadingScreen(page, kind) {
+  await page.evaluate((kind) => {
+    document.getElementById('front').hidden = true;
+    document.getElementById('stage').inert = false;
+    const el = document.getElementById('loading');
+    el.hidden = false;
+    const screen = wotmLoadingScreen(el, { random: () => 0.3 });
+    const progress = new LoadingProgress(27 << 20);
+    if (kind === 'download') for (let i = 0; i <= 8; i++) progress.add(1 << 20, 1000 + i * 500);
+    if (kind === 'cache') progress.addCacheHit(1 << 20, 1000);
+    screen.render(progress.view(kind === 'download' ? 5000 : 1000));
+  }, kind);
+}
+
 export function argv(usage) {
   const arg = (name, fallback) => {
     const i = process.argv.indexOf(`--${name}`);

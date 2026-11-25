@@ -40,7 +40,7 @@ test('installGameInput leaves Tab to the page\'s own overlay (the stall prompt\'
   const win = fakeWindow();
   installGameInput({ win, canvas: fakeCanvas(), running: () => true, idleCursor: false });
   const press = (target) => { const e = { key: 'Tab', target, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } }; win.fire('keydown', e); return e.defaultPrevented; };
-  assert.equal(press({ closest: (sel) => (sel === '#stall' ? {} : null) }), false);   // a button inside #stall
+  assert.equal(press({ closest: (sel) => (sel === '#stall, #loading' ? {} : null) }), false);   // a button inside #stall
   assert.equal(press({ closest: () => null }), true);                                  // the canvas
   assert.equal(press(undefined), true);
 });
@@ -106,4 +106,20 @@ test('installGameInput starts the idle cursor on a desktop', () => {
   const win = Object.assign(fakeWindow(), { matchMedia: () => ({ matches: false }), setTimeout: timers.set, clearTimeout: timers.clear });
   installGameInput({ win, canvas, running: () => true });
   assert.equal(timers.pending.size, 1);
+});
+
+test('while the loading screen is up, Tab from the game moves focus to its button, and Tab inside it is left alone', () => {
+  let focused = 0;
+  const button = { focus: () => { focused++; } };
+  const win = fakeWindow();
+  win.document = { querySelector: (sel) => (sel === '#loading:not([hidden]) button' ? button : null) };
+  installGameInput({ win, canvas: fakeCanvas(), running: () => true, idleCursor: false });
+  const press = (target) => { const e = { key: 'Tab', target, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } }; win.fire('keydown', e); return e.defaultPrevented; };
+  assert.equal(press({ closest: () => null }), true);   // from the canvas: the browser does not move focus itself
+  assert.equal(focused, 1);                              // the page puts it on the screen's button
+  assert.equal(press({ closest: (sel) => (sel === '#stall, #loading' ? {} : null) }), false);   // from the button: on to the next control
+  assert.equal(focused, 1);
+  win.document = { querySelector: () => null };           // the screen is gone: Tab is the game's again
+  assert.equal(press({ closest: () => null }), true);
+  assert.equal(focused, 1);
 });

@@ -151,3 +151,123 @@ test('BootStatus locks terminal log errors and aborts against later updates', ()
   assert.equal(a.onAbort('oom'), 'Stopped: oom');
   assert.equal(a.onFrame(1), null);
 });
+
+// ---- the loading screen's numbers: time left, the view the screen draws, and the tips
+
+const { formatEta, loadingTips } = createRequire(import.meta.url)('./loading.js');
+const { CONTROLS, keyLabel } = createRequire(import.meta.url)('./controls.js');
+
+test('no time left until the downloads have gone on for a second', () => {
+  const p = new LoadingProgress(20 * MB);
+  assert.equal(p.secondsLeft(0), null);
+  p.add(MB, 1000);
+  assert.equal(p.secondsLeft(1200), null);   // one sample, no span to measure a rate over
+  p.add(MB, 1500);
+  assert.equal(p.secondsLeft(1600), null);   // half a second of samples
+});
+
+test('time left is what remains over the rate of the last few seconds', () => {
+  const p = new LoadingProgress(20 * MB);
+  for (let i = 0; i <= 4; i++) p.add(MB, 1000 + i * 500);   // 5 MB over 2 s of samples
+  // 4 MB between the first and last sample (the first only starts the window): 2 MB/s, 15 MB left
+  assert.equal(Math.round(p.secondsLeft(3000)), 8);
+});
+
+test('the rate forgets what came down more than the window ago', () => {
+  const p = new LoadingProgress(100 * MB, { rateWindowMs: 4000 });
+  p.add(40 * MB, 0);
+  p.add(MB, 10000);
+  p.add(MB, 11000);
+  p.add(MB, 12000);   // the burst at 0 is out of the window: 2 MB over 2 s
+  assert.equal(Math.round(p.secondsLeft(12000)), 57);   // 57 MB left at 1 MB/s
+});
+
+test('no time left once the expected download is in, or from the cache', () => {
+  const p = new LoadingProgress(4 * MB);
+  p.add(2 * MB, 0);
+  p.add(2 * MB, 2000);
+  assert.equal(p.secondsLeft(2000), null);
+  const c = new LoadingProgress(4 * MB);
+  c.addCacheHit(MB, 0);
+  c.addCacheHit(MB, 2000);
+  assert.equal(c.secondsLeft(2000), null);
+});
+
+test('formatEta says almost done, seconds in fives, then minutes', () => {
+  assert.equal(formatEta(2), 'almost done');
+  assert.equal(formatEta(8), 'about 10 s left');
+  assert.equal(formatEta(59), 'about 60 s left');
+  assert.equal(formatEta(61), 'about 2 min left');
+  assert.equal(formatEta(600), 'about 10 min left');
+});
+
+test('the view carries what the screen draws, with the same words as the text', () => {
+  const p = new LoadingProgress(10 * MB);
+  assert.deepEqual(p.view(0), { percent: null, headline: 'Starting...', amount: '', eta: '', note: '' });
+  p.add(3 * MB, 100);
+  p.add(MB / 2, 1300);
+  const v = p.view(1400);
+  assert.equal(v.percent, 35);
+  assert.equal(v.headline, 'Downloading game data');
+  assert.equal(v.amount, '3 of 10 MB');
+  assert.equal(v.note, 'Only the first visit downloads this much.');
+  assert.match(v.eta, /left$|almost done$/);
+  assert.equal(p.text(1400), `${v.headline} ${v.percent}% (${v.amount}).${' ' + v.note}`);
+});
+
+test('from the cache the view says so and promises nothing about time', () => {
+  const p = new LoadingProgress(10 * MB);
+  p.addCacheHit(MB, 100);
+  assert.deepEqual(p.view(200), { percent: null, headline: 'Loading from cache...', amount: '', eta: '', note: 'Later visits load faster: this is already on your device.' });
+  assert.equal(p.text(200), 'Loading from cache...');
+});
+
+test('the view is null once loading is over', () => {
+  const p = new LoadingProgress(10 * MB);
+  p.finish();
+  assert.equal(p.view(0), null);
+});
+
+test('every control tip names the keys the controls table lists for that action', () => {
+  const tips = loadingTips(CONTROLS, keyLabel);
+  const keysOf = (bind) => CONTROLS.find((c) => c.bind === bind).keys.map(keyLabel);
+  for (const [bind, word] of [['BLOCK', /block/i], ['LOCK', /lock on/i], ['CIRCLE', /grab/i], ['SELECT', /taunt/i]]) {
+    const tip = tips.find((t) => word.test(t));
+    assert.ok(tip, `a tip about ${bind}`);
+    for (const k of keysOf(bind)) assert.ok(tip.includes(k), `${tip} names ${k}`);
+  }
+});
+
+test('the tips cover controls, rules and game night, and read cleanly', () => {
+  const tips = loadingTips(CONTROLS, keyLabel);
+  assert.ok(tips.length >= 8);
+  assert.equal(new Set(tips).size, tips.length);
+  for (const word of [/Jump, Fast and Turbo/, /invite/i, /rematch/i, /8 players/]) assert.ok(tips.some((t) => word.test(t)), `a tip matching ${word}`);
+  for (const t of tips) {
+    assert.ok(t.length > 20 && t.length <= 140, `short enough to read at a glance: ${t}`);
+    assert.doesNotMatch(t, /[\u2013\u2014]/, 'no em or en dashes');
+    assert.match(t, /[.!]$/);
+  }
+});
+
+test('a tip list that lacks an action in the controls skips that tip instead of printing undefined', () => {
+  const tips = loadingTips(CONTROLS.filter((c) => c.bind !== 'BLOCK'), keyLabel);
+  assert.ok(!tips.some((t) => /undefined/.test(t)));
+  assert.ok(!tips.some((t) => /^Hold /.test(t)));
+});
+
+test('time left grows while chunks stop coming', () => {
+  const p = new LoadingProgress(20 * MB);
+  for (let i = 0; i <= 4; i++) p.add(MB, 1000 + i * 500);
+  assert.equal(p.secondsLeft(3000), (20 * MB - 5 * MB) / (2 * MB));   // 15 MB at 2 MB/s
+  assert.equal(p.secondsLeft(5000), 15);                              // 2 s of nothing: 4 MB over 4 s is 1 MB/s
+});
+
+test('once part of the data came from the cache, the view promises no time left', () => {
+  const p = new LoadingProgress(20 * MB);
+  p.addCacheHit(10 * MB, 0);
+  for (let i = 0; i <= 4; i++) p.add(MB, 1000 + i * 500);
+  const v = p.view(3000);
+  assert.equal(v.eta, '');
+  assert.equal(v.percent, 25);
+});

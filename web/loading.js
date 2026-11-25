@@ -4,19 +4,24 @@
 
 class LoadingProgress {
   // `expectedBytes`: what a first visit downloads before the game is on screen (measured: about 27 MB to the title, 57 MB to a fight)
-  constructor(expectedBytes, { quietMs = 1500, initial = 'Starting...' } = {}) {
+  // `rateWindowMs`: how far back the download rate looks, for the time left
+  constructor(expectedBytes, { quietMs = 1500, initial = 'Starting...', rateWindowMs = 5000 } = {}) {
     this.expectedBytes = expectedBytes;
     this.quietMs = quietMs;
     this.initial = initial;
+    this.rateWindowMs = rateWindowMs;
     this.bytes = 0;
     this.cacheBytes = 0;
     this.lastChunkAt = null;
     this.done = false;
+    this.samples = [];   // [time, bytes so far] after each network chunk, the last rateWindowMs only
   }
 
   add(bytes, now) {
     this.bytes += bytes;
     this.lastChunkAt = now;
+    this.samples.push([now, this.bytes]);
+    while (this.samples.length > 1 && now - this.samples[0][0] > this.rateWindowMs) this.samples.shift();
   }
 
   addCacheHit(bytes, now) {
@@ -28,18 +33,73 @@ class LoadingProgress {
     this.done = true;
   }
 
-  // the text to show at `now`, or null once the downloads went quiet (and from then on)
-  text(now) {
+  // seconds until the expected download is in at the recent rate (a stall since the last chunk lowers it), or null: under a second of
+  // samples, nothing left, or no network bytes
+  secondsLeft(now) {
+    if (this.samples.length < 2 || this.bytes >= this.expectedBytes) return null;
+    const [t0, b0] = this.samples[0];
+    const [t1, b1] = this.samples[this.samples.length - 1];
+    if (t1 - t0 < 1000 || b1 <= b0) return null;
+    return (this.expectedBytes - this.bytes) / ((b1 - b0) / ((Math.max(t1, now) - t0) / 1000));
+  }
+
+  // what the loading screen draws at `now`, or null once the downloads went quiet (and from then on): `percent` is null until there is
+  // one to show; `amount`, `eta` and `note` are '' when they have nothing to say
+  view(now) {
     if (this.lastChunkAt !== null && now - this.lastChunkAt > this.quietMs) this.done = true;
     if (this.done) return null;
-    if (this.bytes === 0) return this.cacheBytes > 0 ? 'Loading from cache...' : this.initial;
+    if (this.bytes === 0) {
+      if (this.cacheBytes > 0) return { percent: null, headline: 'Loading from cache...', amount: '', eta: '', note: 'Later visits load faster: this is already on your device.' };
+      return { percent: null, headline: this.initial, amount: '', eta: '', note: '' };
+    }
     const MB = 1 << 20;
     const raw = Math.floor((this.bytes / this.expectedBytes) * 100);
     const total = Math.floor(this.expectedBytes / MB);
     const mb = Math.min(total, Math.floor(this.bytes / MB));
-    const firstVisit = raw < 100 ? ' Only the first visit downloads this much.' : '';
-    return `Downloading game data ${Math.min(99, raw)}% (${mb} of ${total} MB).${firstVisit}`;
+    const left = this.cacheBytes > 0 ? null : this.secondsLeft(now);   // part of the data is already here: the network rate says nothing about what is left
+    return {
+      percent: Math.min(99, raw),
+      headline: 'Downloading game data',
+      amount: `${mb} of ${total} MB`,
+      eta: left === null ? '' : formatEta(left),
+      note: raw < 100 ? 'Only the first visit downloads this much.' : '',
+    };
   }
+
+  // the view as one line (the status text the page showed before the loading screen)
+  text(now) {
+    const v = this.view(now);
+    if (!v) return null;
+    if (v.percent === null) return v.headline;
+    return `${v.headline} ${v.percent}% (${v.amount}).${v.note ? ' ' + v.note : ''}`;
+  }
+}
+
+// "about 10 s left": seconds in fives up to a minute, then whole minutes
+function formatEta(seconds) {
+  if (seconds <= 5) return 'almost done';
+  if (seconds <= 60) return `about ${Math.ceil(seconds / 5) * 5} s left`;
+  return `about ${Math.ceil(seconds / 60)} min left`;
+}
+
+// Tips for the loading screen, from the game's own controls table so they cannot drift from it. `controls` is controls.js CONTROLS and
+// `label` its keyLabel; a tip about an action the table lacks is left out. The rest is about what the page itself does.
+function loadingTips(controls, label) {
+  const keys = (bind) => controls.find((c) => c.bind === bind)?.keys.map(label).join(' or ');
+  const tips = [];
+  const control = (bind, make) => { const k = keys(bind); if (k) tips.push(make(k)); };
+  control('BLOCK', (k) => `Hold ${k} to block. Blocking is the best answer to a heavy hitter.`);
+  control('LOCK', (k) => `Press ${k} to lock on to an enemy, then strafe around them.`);
+  control('CIRCLE', (k) => `Press ${k} to grab. A grab gets through a block.`);
+  control('SELECT', (k) => `Press ${k} to taunt. It does nothing but it feels great.`);
+  tips.push(
+    'Jump, Fast and Turbo are rules the host switches on in the lobby.',
+    'Game night: the host copies the invite link and friends join with one click.',
+    'A lobby holds up to 8 players, so bring everyone.',
+    'After a match the lobby stays open for a rematch, so keep the crew together.',
+    'Back up your memory card saves from Settings, as a zip.',
+  );
+  return tips;
 }
 
 // After boot: a stage or monster that isn't in the cache yet streams in while the game waits on it, on a black screen. A burst of
@@ -136,9 +196,11 @@ class BootStatus {
   }
 }
 
-if (typeof module !== 'undefined' && module.exports) module.exports = { LoadingProgress, StreamActivity, BootStatus };
+if (typeof module !== 'undefined' && module.exports) module.exports = { LoadingProgress, StreamActivity, BootStatus, formatEta, loadingTips };
 else {
   globalThis.LoadingProgress = LoadingProgress;
   globalThis.StreamActivity = StreamActivity;
   globalThis.BootStatus = BootStatus;
+  globalThis.formatEta = formatEta;
+  globalThis.loadingTips = loadingTips;
 }

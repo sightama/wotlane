@@ -2,7 +2,7 @@
 // ABOUTME: runs a local wotm_server for a real lobby, prints a table of checks and saves screenshots. Exit 1 when a check fails.
 import { join } from 'node:path';
 import { REPO, loadPlaywright } from './browser_mp_test/lib/infra.mjs';
-import { BROWSERS, argv, launchBrowser, sleep, startPageEnv } from './page_env.mjs';
+import { BROWSERS, argv, launchBrowser, showLoadingScreen, sleep, startPageEnv } from './page_env.mjs';
 
 const USAGE = `usage: node tools/page_check.mjs [--browser chrome|brave|chromium|firefox|webkit] [--site <web folder>] [--out <folder>] [--label <name>]
   --site   the page to check (default: web/ in this repo); point it at a copy of an older web/ to see what the checks say before a fix
@@ -507,6 +507,61 @@ for (const [w, h] of [[844, 390], [568, 320]]) {
     expect(await page.evaluate(() => document.getElementById('touchpad').classList.contains('editing')), 'no editing class');
   });
   await shot(page, `touchpanel-${w}x${h}`);
+  await ctx.close();
+}
+// ---- the loading screen: the parts, contrast over its art, the button, and motion only where the player allows it
+for (const [view, viewport, opts, min] of [['phone', { width: 844, height: 390 }, { isMobile: true, hasTouch: true }, 44], ['small phone', { width: 568, height: 320 }, { isMobile: true, hasTouch: true }, 44], ['desktop', { width: 1280, height: 800 }, {}, 24]]) {
+  const { ctx, page } = await openPage(viewport, opts, { refuseFullscreen: true });   // Firefox's window grows to the screen in fullscreen
+  await showLoadingScreen(page, 'download');
+  await check(`[${view}] the loading screen shows progress, bytes, time left, a note and a tip`, async () => {
+    const t = await page.evaluate(() => Object.fromEntries(['loadHeadline', 'loadAmount', 'loadEta', 'loadNote', 'loadTip'].map((id) => [id, document.getElementById(id).textContent])));
+    expect(t.loadHeadline === 'Downloading game data' && t.loadAmount === '9 of 27 MB' && /left$/.test(t.loadEta) && /first visit/.test(t.loadNote) && t.loadTip.length > 20, JSON.stringify(t));
+    const bar = await page.evaluate(() => { const b = document.getElementById('loadBar'); return [b.value, b.max, b.getAttribute('aria-valuetext')]; });
+    expect(bar[0] === 33 && bar[1] === 100 && /9 of 27 MB/.test(bar[2]), JSON.stringify(bar));
+  });
+  await check(`[${view}] loading screen text is at least 4.5:1 on its card, over the brightest part of its backdrop`, async () => {
+    const low = await page.evaluate(() => {
+      const parse = (c) => c.match(/[\d.]+/g).map(Number);
+      const lum = (rgb) => { const [r, g, b] = rgb.map((v) => { const s = v / 255; return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4; }); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+      const ratio = (a, b) => { const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x); return (hi + 0.05) / (lo + 0.05); };
+      const [r, g, b, a = 1] = parse(getComputedStyle(document.querySelector('.loadcard')).backgroundColor);
+      const worst = [122, 42, 14];   // the brightest colour of the backdrop's gradient
+      const card = [r, g, b].map((v, i) => v * a + worst[i] * (1 - a));
+      return ['loadHeadline', 'loadAmount', 'loadEta', 'loadNote', 'loadTip', 'loadNextTip'].map((id) => [id, ratio(parse(getComputedStyle(document.getElementById(id)).color).slice(0, 3), card)]).filter(([, q]) => q < 4.5).map(([id, q]) => `${id} ${q.toFixed(2)}`);
+    });
+    expect(low.length === 0, low.join(', '));
+  });
+  await check(`[${view}] Another tip is at least ${min}px, reachable by keyboard, and changes the tip`, async () => {
+    const box = await page.locator('#loadNextTip').boundingBox();
+    expect(box.height >= min - 0.5 && box.width >= min - 0.5, `${Math.round(box.width)}x${Math.round(box.height)}px`);
+    const before = await page.locator('#loadTip').innerText();
+    await page.focus('#loadNextTip');
+    await page.keyboard.press('Enter');
+    expect(await page.locator('#loadTip').innerText() !== before, 'the tip stayed');
+  });
+  if (view === 'phone') await check('[phone] no touch button covers Another tip', async () => {
+    await page.waitForSelector('#touchpad .tp-ctl', { state: 'attached' });
+    const covered = await page.evaluate(() => {
+      const b = document.getElementById('loadNextTip').getBoundingClientRect();
+      return [...document.querySelectorAll('#touchpad .tp-ctl')].filter((e) => e.offsetParent !== null).map((e) => [e.dataset.id, e.getBoundingClientRect()])
+        .filter(([, r]) => r.left < b.right && r.right > b.left && r.top < b.bottom && r.bottom > b.top).map(([id]) => id);
+    });
+    expect(covered.length === 0, `covered by ${covered}`);
+  });
+  await check(`[${view}] the screen's box stays inside the window`, async () => {
+    const [w, h] = await page.evaluate(() => [innerWidth, innerHeight]);
+    expect(w === viewport.width && h === viewport.height, `the window is ${w}x${h}, not ${viewport.width}x${viewport.height}`);
+    const box = await page.locator('.loadcard').boundingBox();
+    expect(box.x >= 0 && box.y >= 0 && box.x + box.width <= viewport.width && box.y + box.height <= viewport.height, JSON.stringify(box));
+  });
+  await check(`[${view}] the card rises in only for players who have not asked for less motion`, async () => {
+    const name = () => page.evaluate(() => getComputedStyle(document.querySelector('.loadcard')).animationName);
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    const reduced = await name();
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
+    const normal = await name();
+    expect(reduced === 'none' && normal === 'rise', `reduce: ${reduced}, no-preference: ${normal}`);
+  });
   await ctx.close();
 }
 await finish();

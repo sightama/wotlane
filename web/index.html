@@ -66,7 +66,7 @@ setTimeout(() => { const m = pending(); if (m && !m.classList.contains('problem'
 <link rel="modulepreload" href="rematch.js">
 <link rel="modulepreload" href="builds.js">
 <style>
-  :root { color-scheme: dark; --bg: #0b0b0d; --panel: #16161a; --fg: #d8d8dc; --dim: #8b8b94; --accent: #e0592a; --accent-fill: #c8461a; --accent-fill-hover: #b83f15; --field-line: #6a6a74; --target: 24px; --line: #2a2a30; --good: #3fb950; --warn: #d29922; --bad: #f85149; }
+  :root { color-scheme: dark; --bg: #0b0b0d; --panel: #16161a; --fg: #d8d8dc; --dim: #8b8b94; --accent: #e0592a; --accent-fill: #c8461a; --accent-fill-hover: #b83f15; --field-line: #6a6a74; --target: 24px; --line: #2a2a30; --good: #3fb950; --warn: #d29922; --bad: #f85149; --bar-fill: #e0592a; --bar-track: #2e2e36; }
   @media (pointer: coarse), (any-pointer: coarse) { :root { --target: 44px; } }
   * { box-sizing: border-box; }
   [hidden] { display: none !important; }
@@ -75,7 +75,64 @@ setTimeout(() => { const m = pending(); if (m && !m.classList.contains('problem'
   #stage { position: fixed; inset: 0; }
   #canvas { display: block; width: 100%; height: 100%; background: #000; outline: none; }
   #screen { position: absolute; inset: 0; }
-  #loading { position: absolute; inset: 0; display: grid; place-items: center; color: var(--fg); font-size: 18px; pointer-events: none; }
+  /* the loading screen: over the canvas while the disc streams in; the card takes presses (Another tip), the rest of it none */
+  #loading { position: absolute; inset: 0; display: grid; padding: 16px; overflow: hidden auto; color: var(--fg); pointer-events: none;
+             background: radial-gradient(120% 70% at 50% 108%, #5a1d0c 0%, #1d0e0e 45%, var(--bg) 78%); }
+  #loading > .art { position: absolute; inset: auto 0 0 0; width: 100%; height: min(46%, 360px); }
+  .loadcard { position: relative; margin: auto; width: min(460px, 100%); display: grid; gap: 12px; padding: 20px; border: 1px solid var(--line); border-radius: 12px;
+              background: rgba(11, 11, 13, .86); box-shadow: 0 0 60px rgba(224, 89, 42, .18); pointer-events: auto; }
+  .kicker { margin: 0; color: var(--accent); font-size: 12px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; }
+  #loadHeadline { margin: 0; font-size: 20px; font-weight: 600; }
+  .loadmeta { display: flex; justify-content: space-between; gap: 12px; margin: 0; color: var(--dim); font-size: 13px; font-variant-numeric: tabular-nums; }
+  #loadNote { margin: 0; color: var(--dim); font-size: 13px; }
+  #loadNote:empty { display: none; }
+  .loadtip { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; border-top: 1px solid var(--line); padding-top: 12px; }
+  .loadtip p { margin: 0; font-size: 14px; }
+  .loadtip .label { margin-bottom: 2px; }
+  /* a phone held sideways: the touch buttons take the two sides, so the card keeps to the middle between them */
+  @media (pointer: coarse) and (orientation: landscape) { .loadcard { width: min(380px, max(240px, 100% - 440px)); } }
+  /* a short screen (a phone held sideways): a tighter card, so all of it fits */
+  @media (max-height: 420px) {
+    .loadcard { gap: 6px; padding: 12px; }
+    .kicker { display: none; }
+    #loadHeadline { font-size: 16px; }
+    .loadmeta, #loadNote, .loadtip p { font-size: 12px; }
+    .loadtip { gap: 6px; padding-top: 6px; }
+  }
+  #loadNextTip { flex: none; border-radius: 8px; padding: 6px 12px; min-height: var(--target); min-width: var(--target); }
+  progress { --progress-bar-radius: 1e5px; appearance: none; border: 0 solid; overflow: clip; width: 100%; height: 12px; border-radius: var(--progress-bar-radius);
+             background: var(--bar-track); box-shadow: inset 0 1px 2px rgba(0, 0, 0, .4);
+             container-type: inline-size; --progress-bar-indeterminate-size: 30%; --progress-bar-indeterminate-animation-duration: 1.5s; }
+  @media (prefers-reduced-motion: reduce) { progress { --progress-bar-indeterminate-animation-duration: 10s; } }
+  progress::-webkit-progress-bar { background: transparent; }
+  progress::-webkit-progress-value { background: var(--bar-fill); border-radius: var(--progress-bar-radius); animation: var(--progress-bar-animation, revert-rule); }
+  progress::-moz-progress-bar { background: var(--bar-fill); border-radius: var(--progress-bar-radius); animation: var(--progress-bar-animation, revert-rule); }
+  progress:indeterminate { --progress-bar-animation: progress-bar-indeterminate var(--progress-bar-indeterminate-animation-duration) infinite linear; }
+  progress:indeterminate:dir(rtl) { --progress-bar-animation: progress-bar-indeterminate var(--progress-bar-indeterminate-animation-duration) infinite linear reverse; }
+  @keyframes progress-bar-indeterminate {
+    from, to { inline-size: var(--progress-bar-indeterminate-size); margin-right: auto; }
+    from { translate: -100%; }
+    to { translate: 100cqi; }
+  }
+  /* the drawing in the page: the city and the shape behind it, drawn once in the sprite at the top of the body */
+  .art { display: block; }
+  #front > .backdrop { position: fixed; inset: auto 0 0 0; width: 100%; height: min(40%, 320px); pointer-events: none; }
+  #front > .card { position: relative; }
+  .banner { position: relative; height: 96px; margin: -20px -20px 0; overflow: hidden; border-radius: 8px 8px 0 0;
+            background: radial-gradient(90% 120% at 70% 130%, #7a2a0e 0%, #2a1210 50%, #16161a 85%); }
+  .banner > .art { position: absolute; inset: auto 0 0 0; width: 100%; height: 100%; }
+  #front { background: radial-gradient(110% 60% at 50% 105%, rgba(122, 42, 14, .55) 0%, rgba(11, 11, 13, .94) 70%), rgba(11, 11, 13, .94); }
+  #home h1 { font-size: 28px; letter-spacing: .01em; line-height: 1.1; }
+  #home .tagline { margin: -8px 0 0; color: var(--dim); font-size: 13px; }
+  .card { box-shadow: 0 0 0 1px rgba(224, 89, 42, .08), 0 18px 50px rgba(0, 0, 0, .5); }
+  @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes rise { from { opacity: 0; translate: 0 12px; } to { opacity: 1; translate: 0 0; } }
+  @media (prefers-reduced-motion: no-preference) {
+    progress::-webkit-progress-value { transition: inline-size .3s; }
+    progress::-moz-progress-bar { transition: inline-size .3s; }
+    .loadcard { animation: rise .5s ease-out both; }
+    #home { animation: fade .4s ease-out both; }
+  }
   /* the middle of the screen, which is black while the game waits on a load; over the touch controls (z-index 5), which take the edges */
   #streaming { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 6; padding: 6px 10px; border-radius: 6px; background: rgba(11, 11, 13, .75); color: var(--fg);
                font-size: 13px; pointer-events: none; }
@@ -196,8 +253,43 @@ setTimeout(() => { const m = pending(); if (m && !m.classList.contains('problem'
 </style>
 </head>
 <body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <linearGradient id="kaiju" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#4d1d12"/><stop offset="1" stop-color="#1d0f10"/></linearGradient>
+    <pattern id="windows" width="9" height="11" patternUnits="userSpaceOnUse"><rect x="2" y="3" width="3" height="4" fill="#ffb347" opacity=".5"/></pattern>
+    <g id="nearShapes">
+      <rect x="0" y="150" width="54" height="50"/><rect x="62" y="132" width="40" height="68"/><rect x="112" y="156" width="70" height="44"/>
+      <rect x="170" y="116" width="34" height="84"/><rect x="214" y="150" width="58" height="50"/><rect x="282" y="132" width="44" height="68"/>
+      <rect x="336" y="158" width="76" height="42"/><rect x="420" y="146" width="40" height="54"/><rect x="470" y="164" width="60" height="36"/>
+      <rect x="540" y="140" width="46" height="60"/><rect x="596" y="160" width="70" height="40"/><rect x="676" y="124" width="38" height="76"/>
+      <rect x="722" y="152" width="78" height="48"/>
+    </g>
+  </defs>
+  <symbol id="skyline" viewBox="0 0 800 200" preserveAspectRatio="xMidYMax slice">
+    <path fill="url(#kaiju)" d="M500 200L508 150L530 112L522 92L498 84L470 88L452 80L470 70L500 64L520 52L540 30L552 46L566 22L576 52L596 30L602 64L634 62L652 38L664 70L690 56L698 92L730 100L744 80L760 112L790 118L800 200Z"/>
+    <path fill="none" stroke="#c8461a" stroke-opacity=".55" stroke-width="1.5" stroke-linejoin="round" d="M470 70L500 64L520 52L540 30L552 46L566 22L576 52L596 30L602 64L634 62L652 38L664 70L690 56L698 92"/>
+    <circle cx="515" cy="74" r="3.5" fill="#ff8a3d"/>
+    <g fill="#1d0f10">
+      <rect x="20" y="120" width="60" height="80"/><rect x="96" y="96" width="44" height="104"/><rect x="190" y="130" width="70" height="70"/>
+      <rect x="300" y="104" width="50" height="96"/><rect x="380" y="140" width="64" height="60"/><rect x="560" y="126" width="56" height="74"/>
+      <rect x="640" y="108" width="48" height="92"/><rect x="730" y="132" width="60" height="68"/>
+    </g>
+    <use href="#nearShapes" fill="#0b0b0d"/>
+    <use href="#nearShapes" fill="url(#windows)"/>
+  </symbol>
+</svg>
 <div id="stage" inert>
-  <div id="screen"><canvas id="canvas" tabindex="-1" oncontextmenu="event.preventDefault()"></canvas><div id="loading" hidden></div><div id="streaming" hidden role="status" aria-live="off"></div>
+  <div id="screen"><canvas id="canvas" tabindex="-1" oncontextmenu="event.preventDefault()"></canvas><div id="loading" hidden>
+    <svg class="art" aria-hidden="true" focusable="false"><use href="#skyline"/></svg>
+    <div class="loadcard">
+      <p class="kicker">War of the Monsters</p>
+      <p id="loadHeadline" role="status">Starting...</p>
+      <progress id="loadBar" max="100" aria-labelledby="loadHeadline"></progress>
+      <p class="loadmeta"><span id="loadAmount"></span><span id="loadEta"></span></p>
+      <p id="loadNote"></p>
+      <div class="loadtip"><div><span class="label">Tip</span><p id="loadTip"></p></div><button id="loadNextTip" type="button">Another tip</button></div>
+    </div>
+  </div><div id="streaming" hidden role="status" aria-live="off"></div>
     <div id="movie" hidden><video id="movieVideo" playsinline></video><p id="movieHint">Esc, Space, Enter or a tap skips</p></div>
     <div id="stall" hidden><p id="stallText"></p><p id="stallNote">The match is paused until they are back.</p>
       <div class="row"><button id="keepWaiting" class="main">Keep waiting</button><button id="leaveMatch">Leave the match</button></div></div></div>
@@ -205,8 +297,11 @@ setTimeout(() => { const m = pending(); if (m && !m.classList.contains('problem'
     <button id="logToggle" title="Show the log">L</button></div>
 </div>
 <main id="front">
+  <svg class="art backdrop" aria-hidden="true" focusable="false"><use href="#skyline"/></svg>
   <div id="home" class="card">
+    <div class="banner" aria-hidden="true"><svg class="art" aria-hidden="true" focusable="false"><use href="#skyline"/></svg></div>
     <h1>War of the Monsters</h1>
+    <p class="tagline">A fan-made browser port. Up to 8 players online.</p>
     <div id="profile" class="fields">
       <label>Name <input id="name" maxlength="16" autocomplete="nickname"></label>
       <label>Monster <select id="monster"></select></label>
@@ -335,6 +430,7 @@ setTimeout(() => { const m = pending(); if (m && !m.classList.contains('problem'
 <script src="touch.js"></script>
 <script src="gameinput.js"></script>
 <script src="log_status.js"></script>
+<script src="loading_screen.js"></script>
 <script src="boot.js"></script>
 <script type="module" src="front.js"></script>
 </body>
