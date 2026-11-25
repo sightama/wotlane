@@ -2,13 +2,13 @@
 // ABOUTME: lobby with two players, settings, controls and the touch layout panel, on a phone and a desktop. Used for before and after.
 import { join } from 'node:path';
 import { REPO } from './browser_mp_test/lib/infra.mjs';
-import { BROWSERS, argv, launchBrowser, sleep, startPageEnv } from './page_env.mjs';
+import { BROWSERS, argv, launchBrowser, showLoadingScreen, sleep, startPageEnv } from './page_env.mjs';
 
 const USAGE = `usage: node tools/page_shots.mjs --out <folder> [--browser firefox|chrome|brave|chromium|webkit] [--site <web folder>] [--label <name>]
   --out      where the PNGs go (created); files are <label>-<browser>-<device>-<view>.png
   --site     the page to shoot (default: web/ in this repo); pass an older copy of web/ for the "before" set
   --label    name prefix (default: shot)
-  Views: home, lobby (host with one guest), settings, controls (settings tab), and on the phone held sideways the touch layout panel
+  Views: home, loading (starting, downloading, from cache: the screen over the game, drawn from a LoadingProgress, no game loaded), lobby (host with one guest), settings, controls (settings tab), and on the phone held sideways the touch layout panel
   and its Move buttons mode. WebKit shoots the home view only, and the game's "can't run here" message on an iPhone.
   Needs wotm_server (sh tools/test_net.sh notest) and playwright. Chrome, Brave and Firefox start muted; WebKit has no mute switch and
   nothing here makes a sound: the game is never started.`;
@@ -28,7 +28,7 @@ const DEVICES = {
   desktop: { viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1 },
 };
 const file = (device, view) => join(out, `${label}-${browserName}-${device}-${view}.png`);
-const shot = async (page, device, view, opts = {}) => { await sleep(300); await page.screenshot({ path: file(device, view), ...opts }); };
+const shot = async (page, device, view, { settle = 300, ...opts } = {}) => { await sleep(settle); await page.screenshot({ path: file(device, view), ...opts }); };
 
 async function open(ctxOpts, name) {
   const ctx = await browser.newContext(ctxOpts);
@@ -38,6 +38,14 @@ async function open(ctxOpts, name) {
   if (browserName !== 'webkit') await page.waitForFunction(() => !document.getElementById('single').disabled);   // WebKit's page says the game cannot run, so the buttons stay off
   if (name) await page.fill('#name', name);
   return { ctx, page };
+}
+
+// the loading screen over the game in three states (the phone held sideways, as it is when a game runs)
+async function loadingView(device, kind) {
+  const { ctx, page } = await open(device === 'phone' ? { ...DEVICES.phone, viewport: { width: 844, height: 390 } } : DEVICES[device]);
+  await showLoadingScreen(page, kind);
+  await shot(page, device, 'loading-' + kind, { settle: 800 });
+  await ctx.close();
 }
 
 if (browserName === 'webkit') {
@@ -56,7 +64,8 @@ if (browserName === 'webkit') {
 } else {
   for (const device of ['phone', 'desktop']) {
     const { ctx, page } = await open(DEVICES[device]);
-    await shot(page, device, 'home');
+    await shot(page, device, 'home', { settle: 800 });
+    for (const kind of ['start', 'download', 'cache']) await loadingView(device, kind);
     await page.fill('#name', 'Lane');
     await page.click('#host');
     await page.waitForSelector('#inLobby:not([hidden]) #code:not(:empty)', { timeout: 10000 });

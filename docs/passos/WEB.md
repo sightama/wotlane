@@ -378,6 +378,22 @@ again in the same profile (warm), to the title (the front panel's Single player)
 each kind of request (page, mods, wasm, disc). The `[boot] disc: LSN ...` lines give each disc read's time. A load's 512 KB reads are about 19 ms apart: the stage unzip runs in
 host code (`native/wotm_zip.hpp`), so the game does not decompress between reads, in the browser and natively alike.
 
+## The loading screen and the look of the front page
+While the disc streams in, `#loading` (over the canvas, under the boot movie and the streaming note) shows a card: the headline, a
+native `<progress>` (indeterminate until the first network chunk), the bytes (`9 of 27 MB`), the time left, the first-visit sentence and a tip.
+`LoadingProgress` (`web/loading.js`) holds the numbers: `view(now)` is what the screen draws, `text(now)` the same as one line, and
+`secondsLeft()` is what remains of the expected download at the rate of the last 5 s (null under a second of samples, when the expected
+size is in, and from the cache, where it says "Later visits load faster: this is already on your device"). `web/loading_screen.js` draws
+a view into the card and picks the tip; `loadingTips` builds the control tips from `web/controls.js` so the keys cannot drift from the table.
+
+The art is one inline SVG sprite at the top of `web/index.html` (`#skyline`: a city and a monster's silhouette, drawn for this page),
+used by the loading screen, the front card's banner and the front page's backdrop. No picture file or game asset is involved.
+
+Motion is opt-in: the card's rise and the front card's fade run only under `prefers-reduced-motion: no-preference`, and play once. Nothing
+rotates by itself (the tip changes when the player presses Another tip), and the only looping animation is the progress bar's
+indeterminate state, slowed to 10 s under reduced motion. `tools/page_check.mjs` checks the screen's parts, contrast, the 44 px button,
+that no touch button covers it and the reduced-motion switch in Chrome, Brave and Firefox; `tools/page_shots.mjs` takes the screenshots.
+
 ## The public site
 The live site is https://playwotm.com/ (Cloudflare in front of Caddy on the GCP VM; the old https://35-185-58-174.sslip.io/ redirects to it with a 301).
 Everything that serves and deploys it lives in the private coord repo (`scripts/deploy_web.sh`, `web/Caddyfile`, notes in its README).
