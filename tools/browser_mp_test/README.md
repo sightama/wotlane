@@ -71,7 +71,8 @@ locally the server's DESYNC lines). A case `A+B` runs lobbies of A and B at the 
 jump,fast,turbo` apply to every lobby; `--target live` needs no password on the open site. A problem with no state difference at a host
 load over twice the cores is `OVERLOAD` (inconclusive), not a failure. Results: `results.md` and `results.json` in `--out`, with each trial's stage and
 seed. In `away` and `pause_away` (and `mix`) the server takes the hidden player out if it held everyone back for over 3 s in the background
-(`native/net/wotm_net_holdback.hpp`): it then leaves the comparison, and otherwise it must reach the win screen in step like the others;
+(`native/net/wotm_net_holdback.hpp`): it then leaves the win screen and the comparison of the frames after it went, and otherwise it
+must reach the win screen in step like the others;
 any other stop fails the trial. Run it under `caffeinate -dis` (display sleep freezes tabs),
 from the tree the `web_dist` was built from. See
 `docs/investigacoes/2026-11-16/desync-matrix/`.
