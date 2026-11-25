@@ -53,8 +53,8 @@ it. That spikes set the 5 is inferred from these numbers; the per-sample pings, 
 
 The window reported that delay of 5 frames, 83 ms at 60 Hz, yet `lat_dl_ms` is 96.3 ms (5.8 frames). `lat_dl_ms` leaves out the
 waits, so the ~57 game fps (which includes them) does not explain the ~13 ms gap. It is not explained here: the delay may have changed
-within the window (the diag reports its value at the window's end), and 4 presses is a small sample. The live sim (0.4 ms) is also far below the local
-runs' 5.5 ms; with one headless tab and 4 presses this is not looked into further here.
+within the window (the diag reports its value at the window's end), and 4 presses is a small sample. The live sim (0.4 ms)
+is also far below the local runs' 5.5 ms; with one headless tab and 4 presses this is not looked into further here.
 
 ## Local: `latency.mjs`, 1 vs 1, round trip 20 ms (2026-11-24/25, present phase on, headed Chrome, 120 Hz display)
 
