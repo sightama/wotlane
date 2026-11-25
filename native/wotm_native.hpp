@@ -36,6 +36,7 @@
 #include "wotm_mods.hpp"   // .RTX palettes: mods/ wins over the disc (loadResources)
 #include "wotm_disc.hpp"   // disc files from the extracted root or the ISO (readDisc)
 #include "wotm_texmods.hpp"   // mod textures as PNG (textureId, residentTexture)
+#include "wotm_matchresult.hpp"   // the score for the page's result card (takeSnapshot publishes it)
 
 namespace wotm {
 
@@ -2143,6 +2144,7 @@ public:
         sn.shadows = shadows;
         sn.lights = lights_;
         sn.fog = fog_;
+        matchresult::publish(matchresult::read(ram));   // read-only: the page's result card (wotm_web_result)
         sn.cam = readGameCamera(ram, vctx.view);
         sn.vctx = vctx;
         sn.culled = culled;
