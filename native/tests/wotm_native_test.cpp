@@ -18,6 +18,7 @@
 #include "wotm_pace.hpp"
 #include "wotm_pad_clock.hpp"
 #include "wotm_latency.hpp"
+#include "wotm_framephase.hpp"
 #include "wotm_trig_goldens.hpp"
 #include "net/wotm_modifiers.hpp"
 #include "wotm_tint.hpp"
@@ -5684,6 +5685,97 @@ TEST(latency_press_is_split_into_its_stages)
     CHECK(w.total == 83.0 && w.p95 == 83.0 && w.max == 83.0);
     CHECK(w.sample == 4.0 && w.delay == 60.0 && w.stall == 6.0 && w.sim == 5.0 && w.present == 8.0 && w.blend == 0.0);
     CHECK(t.take().n == 0u);   // a window is taken once
+}
+
+// Present phase (wotm_framephase.hpp): the game's frame grid only locks to displays whose period divides the game period
+TEST(framephase_locks_only_to_displays_whose_period_divides_the_game_period)
+{
+    namespace fp = wotm::framephase;
+    const double game = 1000.0 / 60.0;
+    CHECK(fp::locks(game, 1000.0 / 60.0));
+    CHECK(fp::locks(game, 1000.0 / 120.0));
+    CHECK(fp::locks(game, 1000.0 / 240.0));
+    CHECK(fp::locks(game, 1000.0 / 59.94));    // a 59.94 Hz display: close enough, it drifts slower than the slew
+    CHECK(!fp::locks(game, 1000.0 / 144.0));
+    CHECK(!fp::locks(game, 1000.0 / 165.0));
+    CHECK(!fp::locks(game, 1000.0 / 75.0));
+    CHECK(!fp::locks(game, 1000.0 / 30.0));    // half the game frames never shown: no single phase to aim at
+    CHECK(!fp::locks(game, 0.0));              // no display period measured yet
+}
+
+// The slew moves the next frame boundary so the capture lands the margin before an animation frame, at most maxStep a frame
+TEST(framephase_slew_aims_the_capture_just_before_an_animation_frame)
+{
+    namespace fp = wotm::framephase;
+    const double game = 1000.0 / 60.0, d60 = 1000.0 / 60.0;
+    // animation frames at 1000 + k * d60; the target is 2 ms before one
+    CHECK(fp::slewMs(1000.0 + d60 - 2.0, 1000.0, d60, game) == 0.0);           // on target
+    CHECK(fp::slewMs(1000.0 + d60 - 2.1, 1000.0, d60, game) == 0.0);           // within the dead band
+    CHECK(fp::slewMs(1000.0 + d60 - 7.0, 1000.0, d60, game) == 0.5);           // 5 ms early: later, by the step at most
+    CHECK(fp::slewMs(1000.0 + d60 - 1.0, 1000.0, d60, game) == -0.5);          // 1 ms past the target: earlier
+    CHECK(fp::slewMs(1000.0 + 0.5, 1000.0, d60, game) == -0.5);                // just after an animation frame: aim at the one it missed
+    CHECK(fp::slewMs(1000.0 + 5 * d60 - 7.0, 1000.0, d60, game) == 0.5);       // any later animation frame of the same grid
+    CHECK(fp::slewMs(1000.0 + d60 - 7.0, 1000.0, 1000.0 / 144.0, game) == 0.0); // a display that does not lock: nothing
+    CHECK(fp::slewMs(3000.0, 1000.0, d60, game) == 0.0);                       // no animation frame for 2 s (hidden tab): nothing
+    CHECK(fp::slewMs(1000.0 + d60 - 7.0, 1000.0, 0.0, game) == 0.0);           // no display period yet: nothing
+}
+
+// The display's period is the median of its recent animation frames' intervals, and follows a change of display mid-match
+TEST(framephase_display_period_follows_the_animation_frames)
+{
+    namespace fp = wotm::framephase;
+    fp::Display d;
+    CHECK(d.periodMs() == 0.0);
+    double t = 100.0;
+    for (int i = 0; i < 20; ++i, t += (i == 10 ? 40.0 : 1000.0 / 60.0))   // one late frame among them does not move the median
+        d.raf(t);
+    CHECK(std::fabs(d.periodMs() - 1000.0 / 60.0) < 0.01);
+    CHECK(d.lastMs() == t - 1000.0 / 60.0);
+    for (int i = 0; i < 20; ++i, t += 1000.0 / 120.0)                     // the window moves to a 120 Hz display
+        d.raf(t);
+    CHECK(std::fabs(d.periodMs() - 1000.0 / 120.0) < 0.01);
+}
+
+// Closed loop: frames start on the grid (moved by each slew), take a busy time with jitter, and the wait from capture to the next
+// animation frame falls from about half a display period to about the margin, on 60 and 120 Hz and through a change between them;
+// a 144 Hz display is never slewed
+TEST(framephase_closed_loop_brings_the_wait_for_the_display_down_to_the_margin)
+{
+    namespace fp = wotm::framephase;
+    const double game = 1000.0 / 60.0;
+    // waitAfter: the mean wait from capture to the next animation frame over the last 120 of `frames` frames
+    auto run = [&](double displayHz, double switchHz, int frames, double &slewed) {
+        double boundary = 3.7, waits = 0.0, rafOrigin = 0.0, period = 1000.0 / displayHz;
+        int counted = 0;
+        slewed = 0.0;
+        for (int f = 0; f < frames; ++f)
+        {
+            if (f == frames / 2 && switchHz > 0)
+            {
+                rafOrigin = boundary + 1.3;   // the new display's grid has a phase of its own
+                period = 1000.0 / switchHz;
+            }
+            const double capture = boundary + 6.0 + ((f * 7) % 5) * 0.3;   // 6 to 7.2 ms of work
+            const double since = std::fmod(capture - rafOrigin, period);
+            const double lastRaf = capture - since;
+            if (f >= frames - 120)
+            {
+                waits += period - since;
+                ++counted;
+            }
+            const double s = fp::slewMs(capture, lastRaf, period, game);
+            slewed += std::fabs(s);
+            boundary += game + s;
+        }
+        return waits / counted;
+    };
+    double slewed = 0.0;
+    CHECK(run(60.0, 0.0, 600, slewed) < 3.0);
+    CHECK(run(120.0, 0.0, 600, slewed) < 3.0);
+    CHECK(run(60.0, 120.0, 1200, slewed) < 3.0);
+    CHECK(run(120.0, 60.0, 1200, slewed) < 3.0);
+    const double untouched = run(144.0, 0.0, 600, slewed);
+    CHECK(slewed == 0.0 && untouched > 0.0);
 }
 
 // The present that draws a frame is the first one after the draw took it: a capture that arrives after the draw waits for the next present
