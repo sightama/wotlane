@@ -19,6 +19,10 @@ void wotmWebSaveSync();
 // waits for the browser's next animation frame, so the page stays responsive and the frame reaches the screen
 void wotmWebPresent();
 
+// the display's frames as the present saw them: the last animation frame's time (emscripten_get_now's clock) and the display's period
+// (ms; 0 until a few frames were seen), for aiming the game's frame capture just before one (native/wotm_framephase.hpp); any thread
+void wotmWebDisplayPhase(double &lastRafMs, double &periodMs);
+
 // the page's tab is hidden (boot.js passes visibilitychange to wotm_web_set_hidden); any thread
 bool wotmWebHidden();
 

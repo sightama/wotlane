@@ -291,6 +291,13 @@ static void wotmBootPresent(uint32_t eePc, uint64_t vsync)
 #include "wotm_cheats.h"   // debug menu (F1)
 #include "wotm_netstatus.h"   // network match: on-screen message, debug keys off
 #include "wotm_latency.hpp"   // network match: input latency probes (a capture and the present that takes it)
+#ifdef __EMSCRIPTEN__
+#include "wotm_framephase.hpp"   // the capture aims just before the display's next frame (the vblank grid's slew)
+#include "wotm_web.h"
+#include "runtime/ee_vblank_clock.h"   // its period (the game frame's grid)
+#include <cstring>
+extern std::atomic<long long> g_wotmVblankSlewUs;   // EeSchedulerGame.cpp's timer thread moves the next vblank by it
+#endif
 bool wotmHoldGame(bool hold);  // wotm_foto.inc: holds the EE thread at the frame boundary (interpolation self-test)
 #include <chrono>
 #include <deque>
@@ -740,7 +747,21 @@ struct Capture
     {
         snap = std::move(s);
         fresh = true;
-        wotm::latency::tracker().captured(wotm::latency::nowMs());
+        const double now = wotm::latency::nowMs();
+        wotm::latency::tracker().captured(now);
+#ifdef __EMSCRIPTEN__
+        // the browser draws the newest capture on its next animation frame: a capture that lands just before one is shown at once
+        // instead of waiting about half a display frame. The vblank grid's phase is slewed toward that, a little each frame
+        // (WOTM_PRESENT_PHASE=0 leaves the grid as it is)
+        static const bool aim = [] { const char *e = std::getenv("WOTM_PRESENT_PHASE"); return !(e && std::strcmp(e, "0") == 0); }();
+        if (aim)
+        {
+            double lastRafMs = 0.0, periodMs = 0.0;
+            wotmWebDisplayPhase(lastRafMs, periodMs);
+            const double slew = wotm::framephase::slewMs(now, lastRafMs, periodMs, EeVBlankClock::kPeriod.count() / 1000.0);
+            g_wotmVblankSlewUs.store(static_cast<long long>(slew * 1000.0), std::memory_order_relaxed);
+        }
+#endif
     }
     void drop() { fresh = false; }   // with m locked
     std::atomic<bool> on{false};   // the present draws natively (turned on by the first call to wotmDrawNative)
