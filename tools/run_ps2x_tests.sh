@@ -1,7 +1,8 @@
 #!/bin/sh
 # Builds and runs PS2Recomp's own test suite (ps2xTest, target ps2x_tests) against the patched clone (macOS/Linux).
 # Use it after changing the runtime patch, e.g. ps2_runtime_macros.h or a ps2xTest case the patch adds. The game build
-# (build_dev) turns the suite off, so it gets its own folder, <runtime>/build_tests. Prints the totals and the names of the
+# (build_dev) turns the suite off, so it gets its own folder, <runtime>/build_tests (the suite runs from <clone>/ps2x_tests_run,
+# see below). Prints the totals and the names of the
 # failing tests; the full output is in <runtime>/logs/ps2x_tests.log.
 set -eu
 . "$(dirname "$0")/posix_env.sh"
