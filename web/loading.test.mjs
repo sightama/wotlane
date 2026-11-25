@@ -262,3 +262,12 @@ test('time left grows while chunks stop coming', () => {
   assert.equal(p.secondsLeft(3000), (20 * MB - 5 * MB) / (2 * MB));   // 15 MB at 2 MB/s
   assert.equal(p.secondsLeft(5000), 15);                              // 2 s of nothing: 4 MB over 4 s is 1 MB/s
 });
+
+test('once part of the data came from the cache, the view promises no time left', () => {
+  const p = new LoadingProgress(20 * MB);
+  p.addCacheHit(10 * MB, 0);
+  for (let i = 0; i <= 4; i++) p.add(MB, 1000 + i * 500);
+  const v = p.view(3000);
+  assert.equal(v.eta, '');
+  assert.equal(v.percent, 25);
+});

@@ -87,3 +87,9 @@ test('the front card has a banner of the art above the title, hidden from assist
   assert.match(home, /<div class="banner" aria-hidden="true">/);
   assert.ok(home.indexOf('class="banner"') < home.indexOf('<h1>'));
 });
+
+test('the bar\'s fill slides to a new value only where motion is allowed', () => {
+  const plain = css.replace(/@media \(prefers-reduced-motion: no-preference\) \{(?:[^{}]|\{[^{}]*\})*\}/g, '');
+  assert.doesNotMatch(plain, /transition:/);
+  assert.match(css, /no-preference\) \{\s*progress::-webkit-progress-value \{ transition: inline-size/);
+});

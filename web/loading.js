@@ -56,7 +56,7 @@ class LoadingProgress {
     const raw = Math.floor((this.bytes / this.expectedBytes) * 100);
     const total = Math.floor(this.expectedBytes / MB);
     const mb = Math.min(total, Math.floor(this.bytes / MB));
-    const left = this.secondsLeft(now);
+    const left = this.cacheBytes > 0 ? null : this.secondsLeft(now);   // part of the data is already here: the network rate says nothing about what is left
     return {
       percent: Math.min(99, raw),
       headline: 'Downloading game data',
@@ -92,7 +92,6 @@ function loadingTips(controls, label) {
   control('LOCK', (k) => `Press ${k} to lock on to an enemy, then strafe around them.`);
   control('CIRCLE', (k) => `Press ${k} to grab. A grab gets through a block.`);
   control('SELECT', (k) => `Press ${k} to taunt. It does nothing but it feels great.`);
-  control('START', (k) => `Press ${k} to pause and open the options.`);
   tips.push(
     'Jump, Fast and Turbo are rules the host switches on in the lobby.',
     'Game night: the host copies the invite link and friends join with one click.',

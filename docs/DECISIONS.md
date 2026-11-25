@@ -11,3 +11,6 @@ Choices made without asking, with the reason. Newest last.
 - **Tab reaches Another tip while the screen is up.** Tab is the game's pause key and the page swallows it, so `web/gameinput.js` moves focus to the screen's button on Tab while `#loading` is visible (nothing can be paused then) and leaves Tab alone inside it.
 - **The progress bar's indeterminate sweep slows to 10 s under reduced motion instead of stopping.** A stopped bar reads as a hang and the sweep ends with the first chunk; it is status, not decoration.
 - **A short screen gets a tighter card.** On a phone held sideways at 568x320 the full card was 368 px tall; the kicker goes and the type and gaps shrink.
+- **No time left once any data came from the cache.** The network rate says nothing about what remains then. The first-visit sentence stays (its #64 wording and tests).
+- **The START tip is left out.** Tab is START by default and the loading screen gives Tab to its button.
+- **`LoadingProgress.text()` stays.** It is the old one-line form with its tests; the screen uses `view()`.
