@@ -94,7 +94,10 @@ a fight opened straight away (the prefetch must not slow the first load: compare
 the front panel until the page logs how its prefetch ended, and a fight after it (0 MiB from the network once it is done). `--mbps`
 throttles a Chromium page's network (DevTools emulation), `--timeline` prints the disc channel per 5 s (game downloads, cache hits,
 game reads started, background downloads), and each fight line counts the chunk file requests seen. `--flow fps --secs 60 --headed`
-opens a fight and compares the frame times of the seconds with background downloads against those without. `--flow probe` fetches the
+opens a fight and compares the frame times of the seconds with background downloads against those without. `--flow visits
+--visits 3 --live https://playwotm.com` opens the same fight in one profile again and again: each visit's seconds to the game's
+runtime start and to the fight (the seconds count from boot.js's start), and in Chromium how `wotm.wasm` came (a 200 of 0 bytes
+came from a browser cache, memory or disk; Firefox's requests are not seen). `--flow probe` fetches the
 whole set from the script instead, and reports the storage quota and what `persist()` answers. The local server sends the page with
 `no-store`, so locally every visit downloads the wasm again; `--live` gives the real caching. Muted like every check here.
 
