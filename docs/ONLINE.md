@@ -204,11 +204,13 @@ from before it), so the wire changes only by adding, and every addition is negot
 - `kWire`, the additive level, moves when a message or an optional field is added. A client says its level in `HELLO` (`wire=<n>`;
   none means 0, every build from before levels) and the server keeps it per connection.
 - The server never sends a member what its level does not know: a new message or field is sent only to members at or above the level
-  that added it, and what goes to a whole lobby uses only the lobby's lowest level (`lowestWire`). Level 1 adds the server's own level
-  to `WELCOME` (`WELCOME <lobbies> wire=<n>`); a level 0 client gets `WELCOME <lobbies>` as always.
-- The page says its level in `web/lobby.js` (`WIRE`, kept equal to `kWire` by `web/lobby.test.mjs`); the native lobby clients say none
-  yet, so they get only level 0 lines.
-- A match message added later follows the same rule: the server takes the level of the member's lobby connection.
+  that added it, and a line that goes to a whole lobby may use only the lowest level among its members. Level 1 adds the server's own
+  level to `WELCOME` (`WELCOME <lobbies> wire=<n>`); a level 0 client gets `WELCOME <lobbies>` as always.
+- The page says its level in `web/lobby.js` (`WIRE`, kept equal to `kWire` by `web/lobby.test.mjs`). The native lobby clients
+  (`wotm_lobby_client.cpp`, the launcher, `net_lobby.py`) say none yet, so they get only level 0 lines; one must send `wire=` before
+  it can get anything newer, since the server cannot tell a client that does not know a level from one that did not say it.
+- Match messages travel on the match connection (ENet or `/match`), which does not carry a level today: the first change that adds a
+  match message also maps each match connection to its member's lobby level, and sends the new message only at or above it.
 - Lobbies compare the simulation id (`tools/build_id.py`): builds that compute alike play together whatever their wire level.
 
 ## Diagnostics

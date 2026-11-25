@@ -892,25 +892,21 @@ namespace
         return c;
     }
 
-    // whoever creates a lobby is its host: the server hands out a 4-letter code, and the list shows name, host, slots and whether it
-    // has a password; the others join by code (upper or lower case); only the host changes the stage and wins (SETTINGS reaches
-    // everyone) and starts; the MATCH line carries the code and the wins
     // Wire changes are additive (docs/ONLINE.md "Wire versions"): a client says its wire level in HELLO (wire=<n>, none = 0) and the
-    // server sends a member only what that level knows. Level 1 adds the server's own level to WELCOME; a client without it (an older
-    // retained build) gets the WELCOME it always did
-    TEST(wire_level_withholds_what_an_older_member_does_not_know)
+    // server sends a member only what that level knows. Level 1 adds the server's own level to WELCOME, the only level 1 field so far;
+    // a client without it (an older retained build) gets the WELCOME it always did
+    TEST(wire_level_welcome_carries_the_level_only_to_clients_that_know_it)
     {
         ServerConfig cfg = testConfig();
         RunningServer rs(cfg);
-        LineSocket old, cur;
+        LineSocket old, cur, low;
         CHECK(hello(old, cfg.port) == "WELCOME 0");
         CHECK(hello(cur, cfg.port, "b1", "wire=" + std::to_string(p::kWire)) == "WELCOME 0 wire=" + std::to_string(p::kWire));
-        CHECK(p::kWire >= 1);
-        LineSocket low;
         CHECK(hello(low, cfg.port, "b1", "wire=0") == "WELCOME 0");
     }
 
-    // an older retained build (no wire level) and the newest build share a lobby and start a match on the newest server
+    // an older retained build (no wire level) and the newest build share a lobby and start a match on the newest server, and nothing
+    // the older one gets on the way carries a field of a later level
     TEST(wire_level_an_older_member_joins_a_newer_members_lobby)
     {
         ServerConfig cfg = testConfig();
@@ -921,24 +917,40 @@ namespace
         CHECK(code.size() == 4u);
         CHECK(hello(old, cfg.port) == "WELCOME 1");
         old.sendLine("JOIN " + code + " Bia 1");
-        CHECK(readUntil(old, "JOINED") == "JOINED " + code);
+        std::vector<std::string> seen;
+        std::string line;
+        while (old.readLine(line, 2000))
+        {
+            seen.push_back(line);
+            if (line.rfind("JOINED", 0) == 0)
+                break;
+        }
         host.sendLine("START");
-        CHECK(readUntil(old, "MATCH").rfind("MATCH ", 0) == 0);
+        while (old.readLine(line, 5000))
+        {
+            seen.push_back(line);
+            if (line.rfind("MATCH ", 0) == 0)
+                break;
+        }
+        CHECK(!seen.empty() && seen.back().rfind("MATCH ", 0) == 0);
+        for (const std::string &l : seen)
+            CHECK(l.find("wire=") == std::string::npos);
         CHECK(readUntil(host, "MATCH").rfind("MATCH ", 0) == 0);
     }
 
-    // the level a lobby can use for what everyone in it must know: its lowest member's
-    TEST(wire_level_of_a_lobby_is_its_lowest_member)
+    // a HELLO's level: absent, or anything that is not a small number, is 0
+    TEST(wire_level_of_a_hello)
     {
-        CHECK(p::lowestWire({}) == p::kWire);
-        CHECK(p::lowestWire({p::kWire, 0, p::kWire}) == 0);
-        CHECK(p::lowestWire({p::kWire}) == p::kWire);
         CHECK(p::wireOf(p::keyValues(p::words("HELLO 5 b1 hz=30"))) == 0);
         CHECK(p::wireOf(p::keyValues(p::words("HELLO 5 b1 wire=1"))) == 1);
         CHECK(p::wireOf(p::keyValues(p::words("HELLO 5 b1 wire=junk"))) == 0);
         CHECK(p::wireOf(p::keyValues(p::words("HELLO 5 b1 wire=-3"))) == 0);
+        CHECK(p::wireOf(p::keyValues(p::words("HELLO 5 b1 wire=99999"))) == 0);
     }
 
+    // whoever creates a lobby is its host: the server hands out a 4-letter code, and the list shows name, host, slots and whether it
+    // has a password; the others join by code (upper or lower case); only the host changes the stage and wins (SETTINGS reaches
+    // everyone) and starts; the MATCH line carries the code and the wins
     TEST(lobby_create_join_by_code_settings_and_start)
     {
         ServerConfig cfg = testConfig();

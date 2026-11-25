@@ -588,15 +588,6 @@ namespace wotm_net::proto
         return std::stoi(it->second);
     }
 
-    // the level everyone in a lobby knows (what goes to all of them may use only that): the lowest member's; kWire when empty
-    inline int lowestWire(const std::vector<int> &levels)
-    {
-        int low = kWire;
-        for (int v : levels)
-            low = std::min(low, v);
-        return low;
-    }
-
     // player name: letters, digits, '_' and '-', up to 16
     inline std::string cleanName(const std::string &s)
     {
