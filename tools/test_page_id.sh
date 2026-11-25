@@ -37,5 +37,12 @@ check "another simulation id changes it" "$( [ "$(id wl-1111111111111111 wl-5222
 rc=0
 sh "$here/page_id.sh" "$tmp/nothing" wl-1111111111111111 wl-5111111111111111 >/dev/null 2>&1 || rc=$?
 check "a missing dist is an error" "$rc" 1
+if [ "$(id -u)" != 0 ]; then   # root reads any file
+    chmod 000 "$tmp/dist/front.js"
+    rc=0
+    id >/dev/null 2>&1 || rc=$?
+    check "a file it cannot read is an error, not an id without it" "$rc" 1
+    chmod 644 "$tmp/dist/front.js"
+fi
 
 if [ $fails -eq 0 ]; then echo PASSED; else echo "FAILED ($fails)"; exit 1; fi
