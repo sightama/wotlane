@@ -50,7 +50,10 @@ function serverUrl(path) {
 async function buildId() {
   try {
     const r = await fetch('version.json', { cache: 'no-store' });
-    return (await r.json()).sim || 'sem-buildid';   // the simulation id: builds that compute alike share a lobby (tools/build_id.py)
+    // the simulation id: builds that compute alike share a lobby (tools/build_id.py); a version.json without one (an older page's,
+    // from a cache) gives its full id, which no other build shares
+    const v = await r.json();
+    return v.sim || v.build || 'sem-buildid';
   } catch {
     return 'sem-buildid';   // the sentinel netBuildId uses when it has none (wotm_sync.inc)
   }

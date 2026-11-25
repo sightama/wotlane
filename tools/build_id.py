@@ -8,9 +8,11 @@ and the page send to the server and lobbies compare) and wotm.fullid (which pick
 
 Two machines only simulate identically with the same code. The simulation id leaves out PRESENTATION, the files that only draw or
 present (a drawing-only change keeps it, so players on either build share a lobby); every other file counts, and a file that mixes
-drawing with game hooks stays in. If a file is ever misfiled, the server's per-frame state hash still stops the match (desync). The compiler is left out: game code builds with strict FP, so MSVC on
-Windows and clang on the Mac produce the same states, and the server's per-frame state hash stops any match where they don't. Paths,
-dates and file line endings (CRLF or LF) are left out, so two clones in different folders with the same code give the same id.
+drawing with game hooks stays in. If a file is ever misfiled, the server's per-frame state hash still stops the match (desync).
+
+The compiler is left out: game code builds with strict FP, so MSVC on Windows and clang on the Mac produce the same states, and
+the server's per-frame state hash stops any match where they don't. Paths, dates and file line endings (CRLF or LF) are left out,
+so two clones in different folders with the same code give the same id.
 Called by tools/build_runtime.ps1 after every build; wotm.exe reads wotm.buildid and sends it to the server (wotm_sync.inc).
 """
 import argparse
@@ -23,7 +25,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 
 # Files and folders (relative to the repo) that only draw, present or measure, or are not part of the game: the simulation id leaves
-# them out. tools/test_build_id.py checks each exists and none touches the EE's memory or context or installs a hook.
+# them out. tools/test_build_id.py checks each exists, that none matches the ways code here changes the game (the EE's memory or
+# context, a hook it registers, a g_wotm* global it sets: a pattern check, not a proof) and that the core simulation files are not here.
 PRESENTATION = (
     # drawing: Scene (reads guest RAM through the read-only Ram) and what only it includes
     'native/wotm_native.hpp', 'native/wotm_fx.hpp', 'native/wotm_gs.hpp', 'native/wotm_glsl.hpp', 'native/wotm_interp.hpp',
@@ -31,9 +34,10 @@ PRESENTATION = (
     'native/wotm_texmods.hpp', 'native/wotm_glad_web.cpp',
     # presenting and measuring: the present phase, the window, the pause view, the latency probes
     'native/wotm_framephase.hpp', 'native/wotm_windowfit.hpp', 'native/wotm_pauseview.hpp', 'native/wotm_latency.hpp',
-    # drawn screens: the menu font, the legend and prompts, the training and map editor views
+    # drawn screens: the menu font, the legend and prompts, the training view (not the map editor's view: it hands the pad to the
+    # free camera)
     'native/runtime/wotm_menufont.inc', 'native/runtime/wotm_legend.inc', 'native/runtime/wotm_prompts.inc',
-    'native/runtime/wotm_trainview.inc', 'native/runtime/wotm_mapedit_view.inc',
+    'native/runtime/wotm_trainview.inc',
     # not in the game: the standalone viewers and players, tests, art, the Windows resources and build script
     'native/fmvplay.cpp', 'native/monview.cpp', 'native/sndplay.cpp', 'native/viewer.cpp', 'native/tests', 'native/assets',
     'native/build.bat', 'native/wotm.ico', 'native/wotm.rc',
@@ -47,8 +51,9 @@ def text_digest(path):
 
 def tree_digest(root, skip_dirs=(), skip=()):
     """sha256 of the files in a folder: each one's relative path and contents, in order; folders named in skip_dirs (at any
-    level) are left out, and so are the paths in skip (relative to root: a file, or a folder and everything in it). Files go in the order of their relative path strings: Path objects sort differently on Windows
-    (case-insensitive) and POSIX (by parts), which would give the same files a different id on each OS."""
+    level) are left out, and so are the paths in skip (relative to root: a file, or a folder and everything in it). Files go in
+    the order of their relative path strings: Path objects sort differently on Windows (case-insensitive) and POSIX (by parts),
+    which would give the same files a different id on each OS."""
     h = hashlib.sha256()
     if root.exists():
         for rel, p in sorted((p.relative_to(root).as_posix(), p) for p in root.rglob('*')):

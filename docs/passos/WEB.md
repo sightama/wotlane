@@ -97,7 +97,7 @@ For online play start `wotm_server --ws-port <port>`; a page opened from `localh
   `/data/<digest>/<n>.bin` (a plain 200, the last chunk shorter, cacheable for good because a new disc is a new digest). The game, the
   fetch backend and `native/wotm_webdisc.cpp` know nothing of this: they still send HEAD and Range requests for `data/<file>`, and
   `web/disc_chunks.js` (a script tag in the page; the workers import it from `disc_cache.js`; like it, it is outside the `--pre-js` list, so
-  the build id stays) answers them: a HEAD from the index (the size, `Accept-Ranges` and an ETag of `"<digest>"`), a range GET from the
+  the build ids stay) answers them: a HEAD from the index (the size, `Accept-Ranges` and an ETag of `"<digest>"`), a range GET from the
   chunk files that cover it, fetched in parallel (12 at a time in a thread) and each checked against `sha256[n]` before use. A chunk that
   fails its check, or comes the wrong length, is asked for again from `<n>.bin?retry=1` (another URL, so a bad copy kept by the edge or
   the HTTP cache is not served twice), three tries in all, and then the read fails. The Cache API layer above keeps its caches by the
@@ -220,8 +220,8 @@ For online play start `wotm_server --ws-port <port>`; a page opened from `localh
 ## Online
 The front panel (`web/front.js`, `web/lobby.js`) speaks the lobby protocol over a WebSocket at `/lobby` (one line per text frame):
 Host creates a lobby and shows its code, Join takes one, the owner sets stage, wins and modifiers and starts. A `MATCH` line becomes the
-game's environment with the same mapping as `tools/net_lobby.py` `match_env`, with `WOTM_NET` the WebSocket at `/match`, and the build id
-from `version.json` in `WOTM_BUILDID`.
+game's environment with the same mapping as `tools/net_lobby.py` `match_env`, with `WOTM_NET` the WebSocket at `/match`, and the
+simulation id from `version.json` (`sim`) in `WOTM_BUILDID`.
 
 **Invite link:** in a lobby, Copy invite link puts `<page>/?join=CODE` on the clipboard (a page that may not use the clipboard shows the link selected instead). A page opened with `?join=CODE` (`web/pageenv.js` `inviteCode`: only a valid 4-character lobby code counts, and it never reaches the game's environment) fills the code in and removes it from the address; a browser that remembers a name joins at once, any other asks for a name first. The site has no password prompt (https://playwotm.com), so the link opens the page directly.
 
@@ -258,7 +258,8 @@ keydown time in `boot.js` and each pad button press in `touch.js` through `wotm_
 and `installAudioWatch`, which adds an `audioprocess` listener to each `ScriptProcessorNode` the game's audio makes (installed when the
 page loads; a callback later than 1.5 buffers counts as a dropped buffer; a page whose audio doesn't use script processors reports no
 `au_` fields). Nothing here writes to the game, so determinism is untouched; the wasm change adds counters and an export, and changes
-the build id like any change under `native/`. `LobbyClient.diag()` sends a line and stops sending once the server answers `ERROR
+the build ids like any change under `native/` outside the drawing-only files. `LobbyClient.diag()` sends a line and stops sending
+once the server answers `ERROR
 unknown command: DIAG`; `sendDiag()` resolves once a `LIST` sent after the line is answered, which is how the page knows the server
 read it.
 
@@ -293,8 +294,8 @@ trip stays at or under 4/5 of the last 8 s (`RttWindow` riseLevel: up to 3 high 
 wait instead of raising everyone's delay; the delay falls only for fallLevel, which leaves out one), plus 3 ms. With everyone at a
 steady 20, 60 and 120 ms that is 2, 4 and 8 frames in a 1 vs 1 (60 Hz) and 1, 2 and 4 frames with 3 to 8 players (30 Hz); jitter adds
 to it. A match starts at the largest player's delay, and at least 2.
-A Mac or Windows build that plays the site must be built from `wip/browser`: its simulation id (a hash of `native/` less the drawing-only files, `tools/build_id.py`) differs from `wotlane/mac`'s, and the
-server refuses a different build.
+A Mac or Windows build that plays the site must be built from `wip/browser`: its simulation id (a hash of `native/` less the
+drawing-only files, `tools/build_id.py`) differs from `wotlane/mac`'s, and the server refuses a different build.
 
 During a match:
 - a hidden tab sends `Away` (and its return); the others' "Waiting for" message adds "(their game tab is in the background)";
@@ -311,7 +312,7 @@ During a match:
 
 ## Phones, touch and gamepads
 The game reads pads through raylib's web platform: `navigator.getGamepads()` in the standard layout, four slots, player n is the n-th
-connected pad. Everything that feeds it lives in the page (`web/pads.js`, `web/touch.js`), so none of it changes the wasm or the build id.
+connected pad. Everything that feeds it lives in the page (`web/pads.js`, `web/touch.js`), so none of it changes the wasm or the build ids.
 
 - **Pad hub (`web/pads.js`):** `installPads` replaces `navigator.getGamepads` with the hub's answer: four slots, each a pad in the standard
   layout. A real pad keeps its slot while it stays; a fifth pad is ignored. The browser's own `gamepadconnected` and `gamepaddisconnected`

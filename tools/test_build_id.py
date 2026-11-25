@@ -137,20 +137,29 @@ class SimulationIdTest(unittest.TestCase):
             sim, full = self.ids(*make_tree(Path(a)))
             self.assertNotEqual(sim, full)
 
+    def test_the_core_simulation_files_are_never_presentation(self):
+        core = ('native/runtime/wotm_sync.inc', 'native/runtime/wotm_overrides.cpp', 'native/runtime/wotm_live.inc', 'native/net',
+                'native/runtime/wotm_snd.inc', 'native/runtime/wotm_rollback.inc', 'native/wotm_detmath.cpp', 'native/wotm_lockon.hpp')
+        for rel in core:
+            self.assertFalse(any(rel == p or rel.startswith(p + '/') or p.startswith(rel + '/') for p in build_id.PRESENTATION), rel)
+
     def test_every_presentation_entry_exists(self):
         for rel in build_id.PRESENTATION:
             self.assertTrue((build_id.REPO / rel).exists(), f'{rel}: listed as presentation but not in the repo')
 
     def test_presentation_files_do_not_write_game_state(self):
-        # a file that touches the EE's memory or context, or installs a hook, can change what the game computes
-        writes = re.compile(r'rdram\[|rdram \+|uint8_t \*rdram|R5900Context|ctx->|runtime->|PS2Runtime &|hostLeaf|setFunction')
+        # the ways code here changes what the game computes: the EE's memory or context, a hook it registers, a host global the
+        # game's hooks read (g_wotm*); a pattern check, so a listed file that does any of them fails
+        writes = re.compile(r'rdram\[|rdram \+|rdram\)|uint8_t \*rdram|const_cast<uint8_t|R5900Context|ctx->|runtime->|PS2Runtime &|'
+                            r'registerFunction|hostLeaf|g_wotm[A-Za-z]*\s*=[^=]')
         for rel in build_id.PRESENTATION:
             root = build_id.REPO / rel
             files = [root] if root.is_file() else [p for p in root.rglob('*') if p.suffix in ('.hpp', '.h', '.cpp', '.inc')]
             if rel.startswith('native/tests'):
                 continue   # tests are not in the game
             for p in files:
-                self.assertIsNone(writes.search(p.read_text(errors='replace')), f'{p.relative_to(build_id.REPO)} looks like simulation code')
+                found = writes.search(p.read_text(errors='replace'))
+                self.assertIsNone(found, f'{p.relative_to(build_id.REPO)} looks like simulation code')
 
 
 def make_clang_tree(root, ver, cpu):
