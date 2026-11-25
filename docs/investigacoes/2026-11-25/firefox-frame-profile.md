@@ -5,7 +5,7 @@ an 8-monster fight, to find the hotspots by self time and whether any is cheaply
 device can't hold the match rate. Short answer: **no single cheap fix.**
 - On this Mac (M1 Max), Firefox's game thread works 28% of the time with 4 monsters and 43% with 8, at the 30 Hz of a 3-or-more-player
   match. The draw on the page's thread works 36% and 44%.
-- The cost is spread over the game's own code: hierarchy traversal, collision, animation and VU0. The two pieces of our own code that
+- The cost is spread over the game's own code: hierarchy traversal, collision and VU0. The two pieces of our own code that
   stand out are both already cached or locked by design: the CPU-rasterized shadow and dust textures on the draw, and the sound mix on
   the game thread.
 
@@ -30,7 +30,7 @@ device can't hold the match rate. Short answer: **no single cheap fix.**
 | VU0 microprograms (`vu0_*` and `executeVU0Microprogram`, self) | 15.8% | 15.9% |
 | collision (`hdSphereVsPoly*`, `hdTraversePath`, `hdTestNode`, `collisTestEnvironmentCollisions`, self) | 6.4% | 6.8% |
 | sound mix (`snd::Engine::render`, `Voice::refill`, self) | 4.1% | 7.2% |
-| guest dispatch (`dispatchGuestBranch`, `lookupFunction`, self) | 2.9% | 3.6% |
+| guest dispatch (`dispatchGuestBranch`, `lookupFunction`, `pushDispatchPc`, self) | 2.9% | 3.6% |
 | `EeScheduler::checkpointDue` | 1.8% | 1.1% |
 
 - The VU0 programs are already native (#193). `__restrict__` on their generated code measured no gain (`tools/vu0bench.sh --ref`, the
