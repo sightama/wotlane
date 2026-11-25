@@ -85,6 +85,7 @@ for the loop to read it. That is in every browser round trip the delay rule uses
   `latency.mjs`) or another network instead.
 - The rule's slack (the 4/5 level, the 3 ms margin, the rounding) is measured locally with recorded jitter: for players on other
   networks, spikes are not what sets their delay.
-- Server placement: kero and ko show distant players exist. The server is to log each member's country (Cloudflare's `CF-IPCountry`,
-  no addresses) in the match diag, so placement is decided on data.
-- The server's loop is to wait on its WebSocket sockets too, which takes the 0 to 5 ms out of every browser's round trip and input.
+- Server placement: kero and ko show distant players exist. #215 logs each member's country (Cloudflare's `CF-IPCountry`, no
+  addresses) in the match diag, so placement is decided on data.
+- #214 makes the server's loop wait on its WebSocket sockets too, which takes the 0 to 5 ms out of every browser's round trip and
+  input.

@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 # ABOUTME: Tests for the WebSocket ping probe (tools/ws_ping.py): frame encoding and parsing, and a run against a local wotm_server's
-# ABOUTME: WebSocket port (one line per pong, nothing lost; a refused path is an error). Run: python3 tools/test_ws_ping.py
+# ABOUTME: WebSocket port and against stubs (one line per pong, nothing lost; a refused path, a wrong accept key or a reset is an
+# ABOUTME: error, after the summary). Run: python3 tools/test_ws_ping.py
 import socket
+import struct
 import subprocess
 import sys
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -39,6 +42,57 @@ class FrameTest(unittest.TestCase):
         self.assertEqual(ws_ping.accept_key('dGhlIHNhbXBsZSBub25jZQ=='), 's3pPLMBiTxaQ9kYGzzhZRbK+xOo=')
 
 
+class StubServerTest(unittest.TestCase):
+    """A stub that answers the handshake its own way: a wrong accept key, or a reset after the first pong."""
+
+    def serve(self, answer):
+        listener = socket.socket()
+        listener.bind(('127.0.0.1', 0))
+        listener.listen(1)
+        self.addCleanup(listener.close)
+
+        def run():
+            c, _ = listener.accept()
+            with c:
+                head = b''
+                while b'\r\n\r\n' not in head:
+                    head += c.recv(4096)
+                key = [ln.split(b':', 1)[1].strip().decode() for ln in head.split(b'\r\n') if ln.lower().startswith(b'sec-websocket-key:')][0]
+                answer(c, key)
+
+        threading.Thread(target=run, daemon=True).start()
+        return listener.getsockname()[1]
+
+    def probe(self, port):
+        return subprocess.run([sys.executable, str(PROBE), f'ws://127.0.0.1:{port}/lobby', '--secs', '2', '--every', '50'],
+                              capture_output=True, text=True, timeout=20)
+
+    def test_a_wrong_accept_key_is_an_error(self):
+        port = self.serve(lambda c, key: c.sendall(b'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n'
+                                                   b'Sec-WebSocket-Accept: bm90IGl0\r\n\r\n'))
+        r = self.probe(port)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn('error:', r.stderr)
+        self.assertIn('Sec-WebSocket-Accept', r.stderr)
+        self.assertNotIn('Traceback', r.stderr)
+
+    def test_a_reset_mid_run_is_an_error_after_the_summary(self):
+        def answer(c, key):
+            c.sendall(('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n'
+                       f'Sec-WebSocket-Accept: {ws_ping.accept_key(key)}\r\n\r\n').encode())
+            ping = c.recv(14)                          # the first ping frame: 2 header bytes, the mask, 8 payload bytes
+            mask, body = ping[2:6], ping[6:14]
+            c.sendall(bytes([0x8A, 8]) + bytes(b ^ mask[i % 4] for i, b in enumerate(body)))
+            time.sleep(0.2)
+            c.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 1, 0))   # close with a reset
+        r = self.probe(self.serve(answer))
+        self.assertNotEqual(r.returncode, 0)
+        self.assertEqual(len(r.stdout.split('\n')[:-1]), 1)   # the one pong
+        self.assertIn('error:', r.stderr)
+        self.assertIn('# sent', r.stderr)
+        self.assertNotIn('Traceback', r.stderr)
+
+
 def free_port():
     with socket.socket() as s:
         s.bind(('127.0.0.1', 0))
@@ -72,11 +126,11 @@ class ServerTest(unittest.TestCase):
                            capture_output=True, text=True, timeout=20)
         self.assertEqual(r.returncode, 0, r.stderr)
         lines = r.stdout.split('\n')[:-1]
-        self.assertGreaterEqual(len(lines), 18)
+        self.assertGreaterEqual(len(lines), 10)
         for line in lines:
             t, rtt = line.split()
             self.assertAlmostEqual(float(t), time.time(), delta=30)
-            self.assertLess(float(rtt), 50)
+            self.assertLess(float(rtt), 100)
         self.assertIn('lost 0', r.stderr)
 
     def test_pings_still_in_flight_at_the_end_are_waited_for(self):

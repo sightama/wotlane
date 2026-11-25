@@ -12,8 +12,7 @@
 
 Prints `<unix s> <rtt ms>` per pong on stdout and `# sent N lost M` on stderr (a ping with no pong within 2 s is lost). The server answers
 ping frames itself (native/net/wotm_net_wslink.hpp), so the round trip is the path plus the server's loop, as the server's own pings of a
-browser measure it. Exit 1 with `error:` when the connection or the handshake fails. A series is investigated with any tool; the
-investigation that uses it is docs/investigacoes/2026-11-25/ping-spikes.md.
+browser measure it. Exit 1 with `error:` when the connection or the handshake fails or the connection drops.
 """
 import argparse
 import base64
