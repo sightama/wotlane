@@ -249,7 +249,8 @@ cause can be read afterwards without asking anyone to copy logs.
   `rtt_high_ms`, `rtt_level_ms` (the round trip the delay covers: what the ping stays at or under 4/5 of the last 8 s), `in_pkts`
   (input packets since the last line), `in_gap_avg_ms` and `in_gap_max_ms` (how far apart the player's input packets arrived),
   `behind_max` and `behind_avg` (frames the player's inputs trailed the player furthest ahead, sampled every 100 ms; in lockstep this
-  is who the others wait for) and `away`. Events: `join` (with `half_rate`), `match_start`, `start`, `delay` (each
+  is who the others wait for) and `away`. Events: `join` (with `half_rate`, and `country`: a browser's country as Cloudflare's
+  `CF-IPCountry` gives it, `-` for none; never an address), `match_start`, `start`, `delay` (each
   delay change, with the `rtt_level_ms` it covers), `away`, `left`, `desync`, `match_over`.
 - **Where it goes.** Every line is journaled (`journalctl -u wotlane-server`, lines starting `[diag]`). With `--diag-dir <folder>`
   (the live server uses `/var/log/wotlane`) each line is also appended, with a UTC time, to that lobby's file: `<UTC time>-<code>-lobby.log`
@@ -286,6 +287,10 @@ cause can be read afterwards without asking anyone to copy logs.
 - "no answer from the server": the server is not running, the port is not forwarded (TCP and UDP), or a firewall blocks it.
   `native/net/build/wotm_net_probe <host>[:7777]` (built with the server) checks a server from any PC without the game: two clients
   form a lobby over TCP and play a short match over UDP; it says which step fails.
+- A browser's ping spikes: `python3 tools/ws_ping.py <ws or wss URL>` prints a WebSocket round trip every 100 ms (the server's own
+  pings of a browser). Run at the same time from the player's PC (`wss://<site>/lobby`, and `--connect-to <origin IP> --insecure` to
+  leave Cloudflare out) and on the server's machine (`ws://127.0.0.1:<ws port>/lobby`, and through the web server in front), the
+  series tell the player's own link from Cloudflare, the web server and wotm_server's loop.
 - Test everything on one PC: `powershell -File tools\net_check.ps1` starts a server and two games and checks that both stay identical;
   `powershell -File tools\net_checks.ps1` runs the online checks (per-PC settings, mouse, photo mode, pause, wins target, mods).
   On macOS and Linux (and on Windows too) the same checks are `python3 tools/net_check.py` and `python3 tools/net_checks.py [--only

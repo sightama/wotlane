@@ -2289,6 +2289,22 @@ namespace
         CHECK(p::clientAddress("203.0.113.5", "") == "203.0.113.5");
     }
 
+    // Cloudflare's country of the client (CF-IPCountry: two letters, or XX and T1): kept upper case, anything else is no country
+    TEST(handshake_reads_the_clients_country_from_cloudflare)
+    {
+        const auto country = [](const std::string &headers) {
+            const auto h = wotm_net::ws::parseHandshake("GET /lobby HTTP/1.1\r\nUpgrade: websocket\r\nSec-WebSocket-Key: k\r\n" + headers + "\r\n");
+            return h ? h->country : std::string("<refused>");
+        };
+        CHECK(country("") == "");
+        CHECK(country("CF-IPCountry: BR\r\n") == "BR");
+        CHECK(country("cf-ipcountry: jp\r\n") == "JP");
+        CHECK(country("CF-IPCountry: T1\r\n") == "T1");
+        CHECK(country("CF-IPCountry: USA\r\n") == "");
+        CHECK(country("CF-IPCountry: <s>\r\n") == "");
+        CHECK(country("CF-IPCountry: \r\n") == "");
+    }
+
     // a phone or tablet's browser (its lobby WebSocket's User-Agent) plays online at 30 Hz, whatever its page says
     TEST(half_rate_user_agents_are_phones_and_tablets)
     {
@@ -3238,6 +3254,29 @@ namespace
         CHECK(all.find("Mallory") == std::string::npos && all.find("ZZZZ") == std::string::npos);
         CHECK(all.find("secret") == std::string::npos);
         CHECK(all.size() > 21u && all[4] == '-' && all[10] == 'T' && all[19] == 'Z' && all[20] == ' ');   // each line starts with an ISO UTC time
+    }
+
+    // a member's join names their country as Cloudflare saw it (for where players are; never their address), "-" when nobody said
+    TEST(diag_join_names_the_members_country)
+    {
+        const fs::path dir = tempDir("country");
+        ServerConfig cfg = wsTestConfig();
+        cfg.diagDir = dir.string();
+        RunningServer rs(cfg);
+        LineSocket a;
+        CHECK(hello(a, cfg.port) == "WELCOME 0");
+        const std::string code = createLobby(a, "Lobby", "Ana", 3);
+        wotm_net::WsLink b;
+        std::string err;
+        CHECK(b.connect(wsUrl(cfg, "/lobby"), 2000, err, "CF-Connecting-IP: 198.51.100.7\r\nCF-IPCountry: BR\r\n"));
+        b.sendLine("HELLO " + std::to_string(p::kProtocol) + " b1");
+        CHECK(readUntil(b, "WELCOME") == "WELCOME 1");
+        b.sendLine("JOIN " + code + " Bia 1");
+        CHECK(readUntil(b, "JOINED") == "JOINED " + code);
+        const std::string all = waitForDiag(dir, "player=Bia");
+        CHECK(all.find("event=join player=Ana transport=tcp half_rate=0 country=- members=1") != std::string::npos);
+        CHECK(all.find("event=join player=Bia transport=ws half_rate=0 country=BR members=2") != std::string::npos);
+        CHECK(all.find("198.51.100.7") == std::string::npos);
     }
 
     // After a match the page is back on its front panel, with no lobby connection: its report says which lobby and who it was. Nothing
