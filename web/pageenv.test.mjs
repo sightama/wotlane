@@ -56,8 +56,15 @@ test('WOTM_BUILDID comes only from the build id', () => {
   assert.equal('WOTM_BUILDID' in pageEnv(params('WOTM_BUILDID=wl-address'), fixed, { WOTM_BUILDID: 'wl-match' }, null), false);
 });
 
-test('the allowlist is the six test switches', () => {
-  assert.deepEqual([...FROM_ADDRESS].sort(), ['PS2X_STATS', 'WOTM_AIVSAI', 'WOTM_MAPEDIT', 'WOTM_MATCH', 'WOTM_PRESENT_PHASE', 'WOTM_VBLANK_SPIN']);
+test('WOTM_ROLLBACK from the address reaches an online match (timing only: PCs with and without it play together)', () => {
+  const env = pageEnv(params('WOTM_ROLLBACK=2&WOTM_ROLLBACK_WINDOW=1'), fixed, { WOTM_NET: 'wss://x/match', WOTM_FIXEDSTEP: '1' }, 'wl-x');
+  assert.equal(env.WOTM_ROLLBACK, '2');
+  assert.equal(env.WOTM_ROLLBACK_WINDOW, '1');
+});
+
+test('the allowlist is the eight test switches', () => {
+  assert.deepEqual([...FROM_ADDRESS].sort(), ['PS2X_STATS', 'WOTM_AIVSAI', 'WOTM_MAPEDIT', 'WOTM_MATCH', 'WOTM_PRESENT_PHASE', 'WOTM_ROLLBACK',
+    'WOTM_ROLLBACK_WINDOW', 'WOTM_VBLANK_SPIN']);
 });
 
 test('an invite link names a lobby by its 4-character code, in any case', () => {

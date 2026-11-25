@@ -197,7 +197,7 @@ to the console) and starts once that many players are in; `--code <code> --name 
 
 ## Rollback
 
-Off by default; `WOTM_ROLLBACK=<n>` (n = 1 to 3) turns it on for one PC (`docs/superpowers/specs/2026-11-25-rollback-hybrid-design.md`
+Off by default; `WOTM_ROLLBACK=<n>` (n = 1 to 3; in the browser `?WOTM_ROLLBACK=<n>` in the page address) turns it on for one PC (`docs/superpowers/specs/2026-11-25-rollback-hybrid-design.md`
 has the design and its decisions).
 
 - **What it changes:** a PC with rollback runs up to its **window** of frames past the newest input that arrived from the others,
