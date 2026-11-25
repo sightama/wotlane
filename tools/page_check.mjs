@@ -564,4 +564,88 @@ for (const [view, viewport, opts, min] of [['phone', { width: 844, height: 390 }
   });
   await ctx.close();
 }
+// ---- the result card: the button, the frame copy of a real WebGL canvas, and the PNG that comes out
+for (const [view, viewport, opts, min] of [['phone', { width: 844, height: 390 }, { isMobile: true, hasTouch: true }, 44], ['desktop', { width: 1280, height: 800 }, {}, 24]]) {
+  const { ctx, page } = await openPage(viewport, opts, { refuseFullscreen: true });
+  // the game's score cells: a Preytor 3, Congar 1 match to 3 wins that Preytor has taken
+  const cells = [1, 2, 3, 4, 0, 5, 3, 1, 1];
+  await page.evaluate((cells) => {
+    document.getElementById('front').hidden = true;
+    document.getElementById('stage').inert = false;
+    window.cellsNow = cells;
+    wotmResultUi.watchResult({ button: document.getElementById('resultSave'), cell: (i) => window.cellsNow[i] ?? 0, setTimer: setInterval, clearTimer: clearInterval });
+  }, cells);
+  await page.waitForSelector('#resultSave:not([hidden])', { timeout: 3000 });
+  await check(`[${view}] the Save button shows with a result, is at least ${min}px, and stays inside the window`, async () => {
+    const box = await page.locator('#resultSave').boundingBox();
+    expect(box.height >= min - 0.5 && box.width >= min - 0.5, `${Math.round(box.width)}x${Math.round(box.height)}px`);
+    expect(box.x >= 0 && box.x + box.width <= viewport.width && box.y >= 0 && box.y + box.height <= viewport.height, JSON.stringify(box));
+    const bar = await page.locator('#bar').boundingBox();   // null where the bar is not drawn
+    expect(!bar || box.x + box.width <= bar.x || bar.x + bar.width <= box.x || box.y + box.height <= bar.y || bar.y + bar.height <= box.y, 'it overlaps the status bar');
+  });
+  await check(`[${view}] the button hides again when the game is back in the menus`, async () => {
+    await page.evaluate(() => { window.cellsNow = [0]; });
+    await page.waitForSelector('#resultSave[hidden]', { state: 'attached', timeout: 3000 });
+    await page.evaluate((cells) => { window.cellsNow = cells; }, cells);
+    await page.waitForSelector('#resultSave:not([hidden])', { timeout: 3000 });
+  });
+  await check(`[${view}] the frame copy of a WebGL canvas in the page holds the frame drawn just before it`, async () => {
+    const r = await page.evaluate(async () => {
+      const gl = document.createElement('canvas');
+      gl.width = 64; gl.height = 36;
+      document.body.appendChild(gl);   // in the page, so its frames are presented like the game's
+      const g = gl.getContext('webgl2');
+      const raf = () => new Promise((resolve) => requestAnimationFrame(resolve));
+      const make = () => document.createElement('canvas');
+      let stop = false;
+      const loop = () => {   // the game's frame loop: draws in its animation frame callback, then asks for the next
+        g.clearColor(1, 0, 0, 1);
+        g.clear(g.COLOR_BUFFER_BIT);
+        if (!stop) requestAnimationFrame(loop);
+      };
+      loop();
+      await raf(); await raf();
+      // the Save press: a callback asked for between frames runs after the loop's, in the same frame, before the buffer is presented
+      const same = await wotmResultUi.captureFrame(gl, { raf: (cb) => requestAnimationFrame(cb), makeCanvas: make });
+      // a copy a task later reads the buffer after it was presented
+      stop = true;
+      await raf();
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const taskLater = await new Promise((resolve) => setTimeout(() => resolve(wotmResultUi.captureFrame(gl, { raf: (cb) => cb(), makeCanvas: make })), 0));
+      gl.remove();
+      return [same !== null, taskLater === null];
+    });
+    expect(r[0], 'the copy of the frame drawn just before it was blank');
+    return `a copy outside the frame callback reads ${r[1] ? 'blank (so the copy is made inside it)' : 'pixels'}`;
+  });
+  await check(`[${view}] the card is a 1200x630 PNG, saved as a download, with the picture`, async () => {
+    const [download] = await Promise.all([
+      page.waitForEvent('download', { timeout: 8000 }),
+      page.evaluate(async () => {
+        const frame = document.createElement('canvas');
+        frame.width = 640; frame.height = 360;
+        const f = frame.getContext('2d');
+        f.fillStyle = '#2a6'; f.fillRect(0, 0, 640, 360);
+        const R = wotmResult;
+        const canvas = document.createElement('canvas');
+        await wotmResultUi.saveCard({
+          cell: (i) => window.cellsNow[i] ?? 0, makeCanvas: () => canvas, draw: R.drawCard, capture: async () => frame,
+          deliver: (blob) => wotmResultUi.deliverPng(blob, { nav: {}, makeFile: (b, n) => b, download: (b, name) => {
+            const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(b), download: name });
+            a.click();
+          } }),
+        });
+      }),
+    ]);
+    expect(download.suggestedFilename() === 'war-of-the-monsters-result.png', download.suggestedFilename());
+    const path = join(out, `card-${browserName}-${view}.png`);
+    await download.saveAs(path);
+    const bytes = (await import('node:fs')).readFileSync(path);
+    const [w, h] = [bytes.readUInt32BE(16), bytes.readUInt32BE(20)];
+    expect(bytes.subarray(1, 4).toString() === 'PNG' && w === 1200 && h === 630, `${w}x${h}`);
+    return `${bytes.length} bytes`;
+  });
+  await shot(page, `result-button-${view}`);
+  await ctx.close();
+}
 await finish();

@@ -31,7 +31,7 @@ function resultAvailable(r) {
 
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
-// The card's words as data: { title, subtitle, rows: [{ name, wins, lead }] }. Rows go by wins, then slot; fighters of one monster are
+// The card's words as data: { title, subtitle, rows: [{ name, wins, lead }], scale } (scale: the wins a full bar stands for). Rows go by wins, then slot; fighters of one monster are
 // numbered by slot. Everything comes from the score, so two clients reading one score lay out one card.
 function cardLayout(r) {
   const top = Math.max(0, ...r.fighters.map((f) => f.wins));
@@ -46,7 +46,7 @@ function cardLayout(r) {
   const parts = [];
   if (r.target > 0 && !title.startsWith('First to')) parts.push(`First to ${plural(r.target, 'win')}`);
   if (r.rounds > 0) parts.push(`${plural(r.rounds, 'round')} played`);
-  return { title, subtitle: parts.join(', '), rows };
+  return { title, subtitle: parts.join(', '), rows, scale: Math.max(r.target, top, 1) };
 }
 
 // Draws the card on `ctx` (a CARD.width x CARD.height 2D context). `frame`: anything drawImage takes with width and height (the
@@ -94,7 +94,7 @@ function drawCard(ctx, layout, frame) {
   font(30, 400);
   if (layout.subtitle) ctx.fillText(layout.subtitle, x, 232);
   let y = 320;
-  const rowH = Math.min(70, Math.floor(280 / Math.max(1, layout.rows.length)));
+  const rowH = Math.min(70, Math.floor(240 / Math.max(1, layout.rows.length)));
   for (const row of layout.rows) {
     ctx.fillStyle = row.lead ? '#ffffff' : '#b4b4bc';
     font(Math.round(rowH * 0.56), row.lead ? 700 : 400);
@@ -103,7 +103,12 @@ function drawCard(ctx, layout, frame) {
     ctx.textAlign = 'right';
     ctx.fillStyle = row.lead ? '#e0592a' : '#b4b4bc';
     ctx.fillText(String(row.wins), x + textWidth * 0.8, y);
-    y += rowH;
+    const barW = textWidth * 0.8 - 70;
+    ctx.fillStyle = '#2e2e36';
+    ctx.fillRect(x, y + 14, barW, 12);
+    ctx.fillStyle = row.lead ? '#e0592a' : '#8b8b94';
+    ctx.fillRect(x, y + 14, barW * Math.min(1, row.wins / layout.scale), 12);
+    y += rowH + 12;
   }
 }
 

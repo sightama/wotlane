@@ -118,3 +118,24 @@ test('a frame whose pixels are all transparent is blank (a WebGL canvas read aft
   assert.equal(isBlankFrame({ data: new Uint8ClampedArray(16 * 4) }), true);
   assert.equal(isBlankFrame({ data: new Uint8ClampedArray([0, 0, 0, 255, 0, 0, 0, 0]) }), false);   // an opaque black pixel is a real frame
 });
+
+test('each fighter gets a bar as long as its share of the wins target, the leader\'s in the accent colour', () => {
+  const l = cardLayout(read(cells(1, 2, 4, 5, -1, [[5, 3], [1, 1]])));
+  const fills = [];
+  const proxy = {
+    fillStyle: '',
+    fillRect(...a) { fills.push([this.fillStyle, ...a]); },
+    measureText: (text) => ({ width: String(text).length * 10 }),
+    createLinearGradient: () => ({ addColorStop() {} }),
+    createRadialGradient: () => ({ addColorStop() {} }),
+    fillText() {},
+  };
+  drawCard(proxy, l, null);
+  const bars = fills.filter(([, , , , h]) => h === 12);
+  assert.equal(bars.length, 4, 'a track and a fill for each of the two fighters');
+  const [leadTrack, leadFill, otherTrack, otherFill] = bars;
+  assert.equal(leadTrack[3], otherTrack[3]);
+  assert.ok(Math.abs(leadFill[3] / leadTrack[3] - 3 / 4) < 1e-9 && Math.abs(otherFill[3] / otherTrack[3] - 1 / 4) < 1e-9);
+  assert.equal(leadFill[0], '#e0592a');
+  assert.notEqual(otherFill[0], '#e0592a');
+});
