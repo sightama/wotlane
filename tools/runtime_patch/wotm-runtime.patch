@@ -1208,15 +1208,16 @@ index f247ff9..5568b05 100644
      EeKernelSnapshot m_snapshot;
 diff --git a/ps2xRuntime/include/runtime/ee_vblank_clock.h b/ps2xRuntime/include/runtime/ee_vblank_clock.h
 new file mode 100644
-index 0000000..9c16a84
+index 0000000..732ddd3
 --- /dev/null
 +++ b/ps2xRuntime/include/runtime/ee_vblank_clock.h
-@@ -0,0 +1,89 @@
+@@ -0,0 +1,95 @@
 +#pragma once
 +// WoTM: the vblank clock of the game executable's scheduler (EeSchedulerGame.cpp): a fixed 16.667 ms grid on the host, kept by a
 +// host thread that counts the vblanks that fell due for the EE to apply. Header-only so ps2xTest can test it without the game
 +// scheduler (which only links into wotm). The caller holds the scheduler's event mutex around every call.
 +
++#include <algorithm>
 +#include <chrono>
 +#include <cstdint>
 +
@@ -1280,15 +1281,20 @@ index 0000000..9c16a84
 +            oversleep = late;
 +    }
 +
-+    // Timer thread, woken at or after `next`: counts one vblank and moves the grid on. After a stall of more than 4 vblanks the grid
-+    // restarts from now, so the EE applies one vblank instead of a burst of late ones. False when woken early.
-+    bool fire(Clock::time_point now)
++    // A slew moves the grid's phase by at most this much a vblank (the browser aims the frame's capture just before the display's
++    // next frame: native/wotm_framephase.hpp)
++    static constexpr std::chrono::microseconds kMaxSlew{1000};
++
++    // Timer thread, woken at or after `next`: counts one vblank and moves the grid on, by one period plus `slew` (held to kMaxSlew; the
++    // count of vblanks never changes, only when the next one falls). After a stall of more than 4 vblanks the grid restarts from now,
++    // so the EE applies one vblank instead of a burst of late ones. False when woken early.
++    bool fire(Clock::time_point now, std::chrono::microseconds slew = {})
 +    {
 +        if (now < next)
 +            return false;
 +        if (now - next > 4 * kPeriod)
 +            next = now;
-+        next += kPeriod;
++        next += kPeriod + std::clamp(slew, -kMaxSlew, kMaxSlew);
 +        ++due;
 +        return true;
 +    }
@@ -1535,7 +1541,7 @@ index 67c8184..c8310ea 100644
  
  #endif
 diff --git a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
-index c5e31c4..4aa9f53 100644
+index c5e31c4..75e5440 100644
 --- a/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
 +++ b/ps2xRuntime/src/lib/Kernel/EeScheduler.cpp
 @@ -4,10 +4,55 @@
@@ -1801,12 +1807,13 @@ index c5e31c4..4aa9f53 100644
                                EeEvent{EeEventType::VBlankStart, 0, 0});
              }
              processEvent(scheduled.event);
-@@ -1994,8 +2075,14 @@ void EeScheduler::writeGuestU32(uint32_t address, uint32_t value)
+@@ -1994,8 +2075,15 @@ void EeScheduler::writeGuestU32(uint32_t address, uint32_t value)
      std::memcpy(m_rdram + physical, &value, sizeof(value));
  }
  
 +std::atomic<unsigned long long> g_wotmIdleUs{0}, g_wotmIdleCalls{0};
 +std::atomic<unsigned long long> g_wotmVblankWakes{0}, g_wotmVblankLateUs{0}, g_wotmVblankSlowWakes{0};   // counted by EeSchedulerGame.cpp only
++std::atomic<long long> g_wotmVblankSlewUs{0};   // read by EeSchedulerGame.cpp only
 +std::atomic<uint32_t> g_wotmInvocations[8];   // counted by EeSchedulerGame.cpp only (rollback's synctest reports them)
 +std::atomic<uint32_t> g_wotmLastInvocationPc{0};
  void EeScheduler::waitForEvent()
@@ -1816,7 +1823,7 @@ index c5e31c4..4aa9f53 100644
      std::unique_lock lock(m_eventMutex);
      if (!m_events.empty() || m_stopRequested.load(std::memory_order_acquire))
      {
-@@ -2010,48 +2097,54 @@ void EeScheduler::waitForEvent()
+@@ -2010,48 +2098,54 @@ void EeScheduler::waitForEvent()
          return;
      }
  
@@ -1898,7 +1905,7 @@ index c5e31c4..4aa9f53 100644
  }
  
  void EeScheduler::scheduleEvent(uint64_t deadlineCycle,
-@@ -2068,21 +2161,17 @@ void EeScheduler::scheduleEvent(uint64_t deadlineCycle,
+@@ -2068,21 +2162,17 @@ void EeScheduler::scheduleEvent(uint64_t deadlineCycle,
  
  void EeScheduler::updateNextDeadline()
  {
@@ -1929,10 +1936,10 @@ index c5e31c4..4aa9f53 100644
  bool EeScheduler::hasReadyAtOrAbovePriority(int priority) const
 diff --git a/ps2xRuntime/src/lib/Kernel/EeSchedulerGame.cpp b/ps2xRuntime/src/lib/Kernel/EeSchedulerGame.cpp
 new file mode 100644
-index 0000000..062a672
+index 0000000..ff1d60c
 --- /dev/null
 +++ b/ps2xRuntime/src/lib/Kernel/EeSchedulerGame.cpp
-@@ -0,0 +1,1367 @@
+@@ -0,0 +1,1373 @@
 +// WoTM (step 10 of docs/passos/FRONTEIRA.md in the WoTM repo): EeScheduler for the game executable (wotm), replacing EeScheduler.cpp.
 +// Measured in step 8: WotM uses a single thread (the main one), no INTC handler, one DMAC handler (hierSetDmaIntHandler,
 +// channel 1) and the vblank (sceGsSyncV); no semaphore, event flag, sleep or alarm in use. So there is no ready queue, time
@@ -1972,6 +1979,9 @@ index 0000000..062a672
 +// the vblank timer thread's wakes: how many, how far past their target in all (µs) and how many over half a vblank late (a coarse system
 +// timer shows here: the page's diagnostics report, wotm_sync.inc netPace)
 +std::atomic<unsigned long long> g_wotmVblankWakes{0}, g_wotmVblankLateUs{0}, g_wotmVblankSlowWakes{0};
++// the slew (µs) not applied yet: the browser's captures add theirs to aim the frame just before the display's next frame (wotm_live.inc,
++// native/wotm_framephase.hpp), each vblank's fire applies up to EeVBlankClock::kMaxSlew of it and takes that much away; 0 everywhere else
++std::atomic<long long> g_wotmVblankSlewUs{0};
 +bool g_wotmCycleProf = false;
 +uint32_t g_wotmFreeSpinPc = 0;            // main.cpp (PS2X_NO_VU1): particleDraw's busy-wait on the missing VU1...
 +uint32_t g_wotmFreeSpinZero[2] = {0, 0};  // ...ends right away: these RDRAM words are cleared when the checkpoint lands on it
@@ -2193,8 +2203,11 @@ index 0000000..062a672
 +            if (m_stopRequested.load(std::memory_order_acquire))
 +                break;
 +            const Clock::time_point now = Clock::now();
-+            if (!G.vblank.fire(now))   // a slice before the vblank, or woke early
++            const long long slewUs = std::clamp(g_wotmVblankSlewUs.load(std::memory_order_relaxed), -EeVBlankClock::kMaxSlew.count(),
++                                                EeVBlankClock::kMaxSlew.count());
++            if (!G.vblank.fire(now, std::chrono::microseconds(slewUs)))   // a slice before the vblank, or woke early
 +                continue;
++            g_wotmVblankSlewUs.fetch_sub(slewUs, std::memory_order_relaxed);   // what was applied; a slew added meanwhile stays
 +            const auto lateUs = std::chrono::duration_cast<std::chrono::microseconds>(now - target).count();
 +            g_wotmVblankWakes.fetch_add(1, std::memory_order_relaxed);
 +            g_wotmVblankLateUs.fetch_add(static_cast<unsigned long long>(lateUs), std::memory_order_relaxed);
@@ -6834,7 +6847,7 @@ index 4f979be..03042b7 100644
 +    });
  }
 diff --git a/ps2xTest/src/ps2_runtime_kernel_tests.cpp b/ps2xTest/src/ps2_runtime_kernel_tests.cpp
-index 63b12d9..1ee44e6 100644
+index 63b12d9..e001558 100644
 --- a/ps2xTest/src/ps2_runtime_kernel_tests.cpp
 +++ b/ps2xTest/src/ps2_runtime_kernel_tests.cpp
 @@ -4,6 +4,7 @@
@@ -6857,7 +6870,7 @@ index 63b12d9..1ee44e6 100644
              constexpr uint32_t kMainGp = 0x0036A7F0u;
  
              env.ctx.pc = 0x00100000u;
-@@ -1564,4 +1565,106 @@ void register_ps2_runtime_kernel_tests()
+@@ -1564,4 +1565,117 @@ void register_ps2_runtime_kernel_tests()
                       "GetEntryAddress should read and return the handler address from the table");
          });
      });
@@ -6881,6 +6894,17 @@ index 63b12d9..1ee44e6 100644
 +            vb.resume();
 +            t.IsTrue(vb.next - now <= C::kPeriod, "the next vblank should fall due within one period of the resume");
 +            t.Equals(vb.due, 0u, "the vblanks counted during the pause should not fire on resume");
++        });
++
++        tc.Run("a slew moves the next vblank by its amount, at most 1 ms, and never adds or drops a vblank", [&](TestCase &t)
++        {
++            C vb;
++            vb.start(t0);
++            t.IsTrue(vb.fire(t0 + C::kPeriod, std::chrono::microseconds(500)), "a slewed fire still counts its vblank");
++            t.IsTrue(vb.next == t0 + 2 * C::kPeriod + std::chrono::microseconds(500), "the next vblank moves later by the slew");
++            t.IsTrue(vb.fire(vb.next, std::chrono::microseconds(-30000)), "an earlier slew counts its vblank too");
++            t.IsTrue(vb.next == t0 + 3 * C::kPeriod + std::chrono::microseconds(500 - 1000), "a slew past 1 ms is held to 1 ms");
++            t.Equals(vb.due, 2u, "two fires, two vblanks");
 +        });
 +
 +        tc.Run("the grid fires once per period and restarts after a long stall", [&](TestCase &t)

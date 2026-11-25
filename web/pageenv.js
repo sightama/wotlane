@@ -3,8 +3,9 @@
 'use strict';
 
 // harmless switches for tests and direct matches (?WOTM_MATCH=5,1,9&WOTM_AIVSAI=1); nothing that names a file, a server or a cheat.
-// WOTM_VBLANK_SPIN=0 is pacing only (the vblank timer thread sleeps instead of spinning), so it can differ between the players of a match
-const FROM_ADDRESS = ['WOTM_MATCH', 'WOTM_AIVSAI', 'PS2X_STATS', 'WOTM_MAPEDIT', 'WOTM_VBLANK_SPIN'];
+// WOTM_VBLANK_SPIN=0 and WOTM_PRESENT_PHASE=0 are pacing and presentation only (the vblank timer thread sleeps instead of spinning; the
+// grid keeps its phase against the display), so they can differ between the players of a match
+const FROM_ADDRESS = ['WOTM_MATCH', 'WOTM_AIVSAI', 'PS2X_STATS', 'WOTM_MAPEDIT', 'WOTM_VBLANK_SPIN', 'WOTM_PRESENT_PHASE'];
 
 // `searchParams`: the address's URLSearchParams; `fixed`: values nothing may override; `matchEnv`: what an online match adds (or
 // null); `build`: the build id, the only source of WOTM_BUILDID

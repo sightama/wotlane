@@ -4,6 +4,7 @@
 #include "wotm_web.h"
 #include "wotm_discchunks.hpp"
 #include "wotm_latency.hpp"
+#include "wotm_framephase.hpp"
 
 #include <emscripten.h>
 #include <emscripten/wasmfs.h>
@@ -25,19 +26,23 @@ namespace
     std::atomic<double> g_netStats[13];
     std::atomic<double> g_inputAt{0};   // the earliest button or key down not taken yet (wotm_web_input_at, 0: none)
     wotm::latency::Window g_latency;    // the window the page took last (wotm_web_latency_take); main thread only
+    wotm::framephase::Display g_display;   // main thread only (the present)
+    std::atomic<double> g_rafLastMs{0}, g_rafPeriodMs{0};   // g_display's, for any thread
     std::mutex g_stallMu;
     std::string g_stallText;
 }
 
-// globalThis.wotmFrames: frames presented, time spent in the loop's own work and time waiting for the browser (the page shows the rate)
-EM_ASYNC_JS(void, wotm_web_wait_frame, (), {
+// globalThis.wotmFrames: frames presented, time spent in the loop's own work and time waiting for the browser (the page shows the rate).
+// Returns the animation frame's own time on emscripten_get_now's clock (performance.timeOrigin + performance.now(), as boot.js gives key times)
+EM_ASYNC_JS(double, wotm_web_wait_frame, (), {
     const s = globalThis.wotmFrames = globalThis.wotmFrames || {frames: 0, workMs: 0, waitMs: 0, last: performance.now()};
     const t0 = performance.now();
     s.workMs += t0 - s.last;
-    await new Promise(resolve => requestAnimationFrame(resolve));
+    const at = await new Promise(resolve => requestAnimationFrame(resolve));
     s.last = performance.now();
     s.waitMs += s.last - t0;
     s.frames++;
+    return performance.timeOrigin + at;
 });
 
 void wotmWebPresent()
@@ -45,8 +50,17 @@ void wotmWebPresent()
     static unsigned frames = 0;
     if (++frames % 60 == 0)
         wotmWebSaveSync();   // every 60 frames, what the game saved goes to the browser's storage (WOTM_SAVE_MEMORY)
-    wotm_web_wait_frame();
+    const double rafMs = wotm_web_wait_frame();
     wotm::latency::tracker().presented(wotm::latency::nowMs());   // the frame drawn before this animation frame is on its way out
+    g_display.raf(rafMs);
+    g_rafPeriodMs.store(g_display.periodMs(), std::memory_order_relaxed);
+    g_rafLastMs.store(rafMs, std::memory_order_relaxed);
+}
+
+void wotmWebDisplayPhase(double &lastRafMs, double &periodMs)
+{
+    lastRafMs = g_rafLastMs.load(std::memory_order_relaxed);
+    periodMs = g_rafPeriodMs.load(std::memory_order_relaxed);
 }
 
 double wotmWebTakeInputAt() { return g_inputAt.exchange(0); }
