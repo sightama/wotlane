@@ -13,7 +13,8 @@ Firefox on a computer are supported (Edge works too); Safari is not a goal.
 FFmpeg), builds `wotm` and assembles `<runtime>/web_dist`:
 - `index.html` and the `web/*.js` scripts;
 - `wotm.js` and `wotm.wasm` (about 40 MB, about 4 MB brotli);
-- `version.json`: the wasm's SHA-256 and the build id (`tools/build_id.py`, the same id as `build_dev` for the same sources);
+- `version.json`: the wasm's SHA-256, the full build id (`build`) and the simulation id (`sim`, which the page sends and lobbies compare)
+  (`tools/build_id.py`, the same ids as `build_dev` for the same sources);
 - `mods/`: the repo's enabled mods and `mods/manifest.json` (file list and hash), from `tools/web_mods.py`.
 
 It needs Emscripten (`EMSDK`, default `~/emsdk`) and the translated game (`sh tools/setup_runtime.sh`). The link options (JSPI, WASMFS,
@@ -292,7 +293,8 @@ trip stays at or under 4/5 of the last 8 s (`RttWindow` riseLevel: up to 3 high 
 wait instead of raising everyone's delay; the delay falls only for fallLevel, which leaves out one), plus 3 ms. With everyone at a
 steady 20, 60 and 120 ms that is 2, 4 and 8 frames in a 1 vs 1 (60 Hz) and 1, 2 and 4 frames with 3 to 8 players (30 Hz); jitter adds
 to it. A match starts at the largest player's delay, and at least 2.
-A Mac or Windows build that plays the site must be built from `wip/browser`: its build id (a hash of `native/`) differs from `wotlane/mac`'s, and the server refuses a different build.
+A Mac or Windows build that plays the site must be built from `wip/browser`: its simulation id (a hash of `native/` less the drawing-only files, `tools/build_id.py`) differs from `wotlane/mac`'s, and the
+server refuses a different build.
 
 During a match:
 - a hidden tab sends `Away` (and its return); the others' "Waiting for" message adds "(their game tab is in the background)";
