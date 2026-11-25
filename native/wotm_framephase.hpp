@@ -42,14 +42,15 @@ namespace wotm::framephase
         double last_ = 0.0;
     };
 
-    // Whether the game's frame grid can hold one phase against the display: the display period divides the game period (60, 120,
-    // 240 Hz for a 60 Hz game, within 1%); on 144 or 165 Hz the next animation frame after a capture moves every frame
+    // Whether the game's frame grid is aimed at the display: the game period is one or two display periods (60 or 120 Hz for a 60 Hz
+    // game, within 1%). On 144 or 165 Hz the next animation frame after a capture moves every frame; on 240 Hz the margin would be half
+    // a display frame, more than an unaimed capture waits there on average
     inline bool locks(double gamePeriodMs, double displayPeriodMs)
     {
-        if (displayPeriodMs <= 0.0 || gamePeriodMs < displayPeriodMs * 0.99)
+        if (displayPeriodMs <= 0.0)
             return false;
         const double ratio = gamePeriodMs / displayPeriodMs;
-        return std::fabs(ratio - std::round(ratio)) < 0.01 * ratio;
+        return std::fabs(ratio - 1.0) < 0.01 || std::fabs(ratio - 2.0) < 0.02;
     }
 
     // How far (ms) a capture at captureMs is from the target marginMs before an animation frame of the grid lastRafMs + k *
@@ -82,9 +83,9 @@ namespace wotm::framephase
 
     // Aims the late captures instead of the middle one: a frame time that jitters by a few ms leaves half the frames past an animation
     // frame when the median is aimed (each then waits a whole display frame). The step comes from a low percentile (the 10th: the
-    // latest captures) of the last 32 captures' errors, once 8 have counted. Each step taken moves the remembered errors with it (a
+    // latest captures) of the last 32 captures' errors, once 16 have counted. Each step taken moves the remembered errors with it (a
     // boundary moved later by s makes every capture's error s smaller), so the window does not keep pushing for 32 frames after the grid
-    // got there. No step when the window's spread (90th minus 10th percentile, unwrapped around the newest) passes half a display
+    // got there. No step when the window's spread (90th minus 10th percentile, unwrapped around its circular mean) passes half a display
     // frame: the errors then look uniform, there is no phase to aim at, and stepping would change the game's pace without end. A NaN
     // error (no lock, a hidden tab) or a display period that changed by over 1% starts the window over (what it held is stale)
     class Aim
@@ -106,11 +107,18 @@ namespace wotm::framephase
         }
         double slewMs(double maxStepMs = 0.5, double deadBandMs = 0.25)
         {
-            if (count_ < 8)
+            if (count_ < 16)
                 return 0.0;
-            // the errors unwrapped around the newest one, so captures that cluster where the wrap falls (opposite the target) read as
-            // the one cluster they are, not as a spread of a whole display frame
-            const double ref = errors_[(next_ + errors_.size() - 1) % errors_.size()];
+            // the errors unwrapped around their circular mean, so captures that cluster where the wrap falls (opposite the target) read
+            // as the one cluster they are, not as a spread of a whole display frame, and one outlier does not move the window's frame
+            double sumSin = 0.0, sumCos = 0.0;
+            for (std::size_t i = 0; i < count_; ++i)
+            {
+                const double a = errors_[i] * (2.0 * 3.14159265358979323846 / period_);
+                sumSin += std::sin(a);
+                sumCos += std::cos(a);
+            }
+            const double ref = std::atan2(sumSin, sumCos) * (period_ / (2.0 * 3.14159265358979323846));
             std::array<double, 32> v{};
             for (std::size_t i = 0; i < count_; ++i)
                 v[i] = ref + std::remainder(errors_[i] - ref, period_);

@@ -5687,14 +5687,15 @@ TEST(latency_press_is_split_into_its_stages)
     CHECK(t.take().n == 0u);   // a window is taken once
 }
 
-// Present phase (wotm_framephase.hpp): the game's frame grid only locks to displays whose period divides the game period
-TEST(framephase_locks_only_to_displays_whose_period_divides_the_game_period)
+// Present phase (wotm_framephase.hpp): the game's frame grid locks to 60 and 120 Hz displays (the display period divides the game's,
+// and the 2 ms margin is a small part of its frame)
+TEST(framephase_locks_only_to_60_and_120_hz_displays)
 {
     namespace fp = wotm::framephase;
     const double game = 1000.0 / 60.0;
     CHECK(fp::locks(game, 1000.0 / 60.0));
     CHECK(fp::locks(game, 1000.0 / 120.0));
-    CHECK(fp::locks(game, 1000.0 / 240.0));
+    CHECK(!fp::locks(game, 1000.0 / 240.0));   // the margin would be half its frame: off already waits ~2 ms there
     CHECK(fp::locks(game, 1000.0 / 59.94));    // a 59.94 Hz display: close enough, it drifts slower than the slew
     CHECK(!fp::locks(game, 1000.0 / 144.0));
     CHECK(!fp::locks(game, 1000.0 / 165.0));
@@ -5823,7 +5824,8 @@ TEST(framephase_aim_keeps_jittery_frames_ahead_of_the_display)
     CHECK(late < 2.0 + 6.0 / 2 + 1.0);   // the margin, half the jitter and a little
 }
 
-// Aim: no slew before a few captures or with a non-locking display (errorMs gives NaN), the dead band and the step as slewMs
+// Aim: no slew before 16 captures or with a non-locking display (errorMs gives NaN); the step, the window moving with it; a stale
+// window starts over
 TEST(framephase_aim_waits_for_enough_captures_and_starts_over_when_stale)
 {
     namespace fp = wotm::framephase;
@@ -5831,8 +5833,10 @@ TEST(framephase_aim_waits_for_enough_captures_and_starts_over_when_stale)
     fp::Aim aim;
     aim.add(5.0, d60);
     CHECK(aim.slewMs() == 0.0);   // one capture is not enough
-    for (int i = 0; i < 8; ++i)
+    for (int i = 0; i < 14; ++i)
         aim.add(5.0, d60);
+    CHECK(aim.slewMs() == 0.0);   // nor 15
+    aim.add(5.0, d60);
     CHECK(aim.slewMs() == 0.5);   // all early: later, by the step
     CHECK(aim.slewMs() == 0.5);   // the window moved with the step: 4.5 early still steps 0.5
     for (int i = 0; i < 20; ++i)
@@ -5843,7 +5847,7 @@ TEST(framephase_aim_waits_for_enough_captures_and_starts_over_when_stale)
     CHECK(aim.slewMs() == -0.5);   // late: earlier
     aim.add(std::nan(""), d60);      // no lock or a hidden tab: what the window held is stale, it starts over
     CHECK(aim.slewMs() == 0.0);
-    for (int i = 0; i < 10; ++i)
+    for (int i = 0; i < 16; ++i)
         aim.add(-2.0, d60);
     CHECK(aim.slewMs() == -0.5);
     aim.add(-2.0, 1000.0 / 120.0);  // the display's period changed: the window starts over
@@ -5852,8 +5856,30 @@ TEST(framephase_aim_waits_for_enough_captures_and_starts_over_when_stale)
     CHECK(std::isnan(fp::errorMs(3000.0, 1000.0, 1000.0 / 60.0, 1000.0 / 60.0)));
 }
 
+// One outlier, newest or not, does not turn the window's step around: 31 captures 3 ms late and one 6 ms early still step earlier
+TEST(framephase_aim_is_not_turned_by_one_outlier)
+{
+    namespace fp = wotm::framephase;
+    const double d60 = 1000.0 / 60.0;
+    fp::Aim newest;
+    for (int i = 0; i < 31; ++i)
+        newest.add(-3.0, d60);
+    newest.add(6.0, d60);
+    CHECK(newest.slewMs() == -0.5);
+    fp::Aim first;
+    first.add(6.0, d60);
+    for (int i = 0; i < 31; ++i)
+        first.add(-3.0, d60);
+    CHECK(first.slewMs() == -0.5);
+    fp::Aim wrap;   // a cluster where the wrap falls (opposite the target), its newest capture on the other side of it
+    for (int i = 0; i < 31; ++i)
+        wrap.add(i % 2 ? 8.2 : -8.2, d60);
+    wrap.add(8.3, d60);
+    CHECK(std::fabs(wrap.slewMs()) == 0.5);   // one cluster: it steps (either way is the same distance), the guard does not freeze it
+}
+
 // Frame times that jitter by a large part of the display's frame give no phase to aim at (the wrapped errors look uniform, and shifting
-// them would step the same way forever, changing the game's pace): Aim then does not slew at all, on 120 and 240 Hz
+// them would step the same way forever, changing the game's pace): Aim then does not slew at all, on 60 and 120 Hz
 TEST(framephase_aim_does_not_drift_when_jitter_is_wide_against_the_display)
 {
     namespace fp = wotm::framephase;
@@ -5874,7 +5900,6 @@ TEST(framephase_aim_does_not_drift_when_jitter_is_wide_against_the_display)
     };
     CHECK(std::fabs(netSlew(120.0, 6.0)) < 5.0);
     CHECK(std::fabs(netSlew(120.0, 10.0)) < 5.0);
-    CHECK(std::fabs(netSlew(240.0, 4.0)) < 5.0);
     CHECK(std::fabs(netSlew(60.0, 10.0)) < 5.0);
 }
 

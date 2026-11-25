@@ -763,7 +763,8 @@ struct Capture
             const double error = wotmWebHidden() ? std::nan("") : wotm::framephase::errorMs(now, lastRafMs, periodMs,
                                                                                              EeVBlankClock::kPeriod.count() / 1000.0);
             aim.add(error, periodMs);
-            g_wotmVblankSlewUs.store(static_cast<long long>(aim.slewMs() * 1000.0), std::memory_order_relaxed);
+            // added, not stored: two captures before one vblank both count (Aim already moved its window by each)
+            g_wotmVblankSlewUs.fetch_add(static_cast<long long>(aim.slewMs() * 1000.0), std::memory_order_relaxed);
         }
 #endif
     }

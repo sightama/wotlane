@@ -56,7 +56,7 @@ test('WOTM_BUILDID comes only from the build id', () => {
   assert.equal('WOTM_BUILDID' in pageEnv(params('WOTM_BUILDID=wl-address'), fixed, { WOTM_BUILDID: 'wl-match' }, null), false);
 });
 
-test('the allowlist is the five test switches', () => {
+test('the allowlist is the six test switches', () => {
   assert.deepEqual([...FROM_ADDRESS].sort(), ['PS2X_STATS', 'WOTM_AIVSAI', 'WOTM_MAPEDIT', 'WOTM_MATCH', 'WOTM_PRESENT_PHASE', 'WOTM_VBLANK_SPIN']);
 });
 

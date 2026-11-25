@@ -1936,7 +1936,7 @@ index c5e31c4..75e5440 100644
  bool EeScheduler::hasReadyAtOrAbovePriority(int priority) const
 diff --git a/ps2xRuntime/src/lib/Kernel/EeSchedulerGame.cpp b/ps2xRuntime/src/lib/Kernel/EeSchedulerGame.cpp
 new file mode 100644
-index 0000000..fa238b9
+index 0000000..ff1d60c
 --- /dev/null
 +++ b/ps2xRuntime/src/lib/Kernel/EeSchedulerGame.cpp
 @@ -0,0 +1,1373 @@
@@ -1979,8 +1979,8 @@ index 0000000..fa238b9
 +// the vblank timer thread's wakes: how many, how far past their target in all (µs) and how many over half a vblank late (a coarse system
 +// timer shows here: the page's diagnostics report, wotm_sync.inc netPace)
 +std::atomic<unsigned long long> g_wotmVblankWakes{0}, g_wotmVblankLateUs{0}, g_wotmVblankSlowWakes{0};
-+// the slew (µs) the next vblank's fire moves the grid by: the browser's capture posts it to aim the frame just before the display's
-+// next frame (wotm_live.inc, native/wotm_framephase.hpp); 0 everywhere else
++// the slew (µs) not applied yet: the browser's captures add theirs to aim the frame just before the display's next frame (wotm_live.inc,
++// native/wotm_framephase.hpp), each vblank's fire applies up to EeVBlankClock::kMaxSlew of it and takes that much away; 0 everywhere else
 +std::atomic<long long> g_wotmVblankSlewUs{0};
 +bool g_wotmCycleProf = false;
 +uint32_t g_wotmFreeSpinPc = 0;            // main.cpp (PS2X_NO_VU1): particleDraw's busy-wait on the missing VU1...
@@ -2203,11 +2203,11 @@ index 0000000..fa238b9
 +            if (m_stopRequested.load(std::memory_order_acquire))
 +                break;
 +            const Clock::time_point now = Clock::now();
-+            long long slewUs = g_wotmVblankSlewUs.load(std::memory_order_relaxed);
++            const long long slewUs = std::clamp(g_wotmVblankSlewUs.load(std::memory_order_relaxed), -EeVBlankClock::kMaxSlew.count(),
++                                                EeVBlankClock::kMaxSlew.count());
 +            if (!G.vblank.fire(now, std::chrono::microseconds(slewUs)))   // a slice before the vblank, or woke early
 +                continue;
-+            // a newer slew posted meanwhile stays (an equal one is taken as this one: one frame of correction at most)
-+            g_wotmVblankSlewUs.compare_exchange_strong(slewUs, 0, std::memory_order_relaxed);
++            g_wotmVblankSlewUs.fetch_sub(slewUs, std::memory_order_relaxed);   // what was applied; a slew added meanwhile stays
 +            const auto lateUs = std::chrono::duration_cast<std::chrono::microseconds>(now - target).count();
 +            g_wotmVblankWakes.fetch_add(1, std::memory_order_relaxed);
 +            g_wotmVblankLateUs.fetch_add(static_cast<unsigned long long>(lateUs), std::memory_order_relaxed);
