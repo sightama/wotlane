@@ -10,6 +10,20 @@ import { hashes, compareHashes, desyncs, gameFps, lastWaits, serverLobbyLines, n
 const count = (text, re) => [...text.matchAll(re)].length;
 const frames = (p) => hashes(p.logText).size;
 const CRASH = /\[CRASH\]|\[watchdog\] FROZE/;
+// the server takes a player out of a running match when its game has been in the background over 3 s while it was the one holding
+// everyone back (native/net/wotm_net_holdback.hpp); a hidden tab that keeps up stays in
+const AWAY_KICK = /taken out of the match: your game was in the background/;
+
+// After a player's tab comes back from hidden: if the server took it out for being away, it leaves the comparison like one that
+// closed its tab; otherwise it is still in the match and must reach the win screen in step (any other stop is a failure). Returns
+// what happened, for the note.
+async function settleAway(p, gone) {
+  await sleep(1000);   // the server's refusal may still be on its way
+  await p.pollLog();
+  if (!AWAY_KICK.test(stopped(p) ?? '')) return 'stayed in the match';
+  gone.add(p.name);
+  return 'taken out by the server for being away';
+}
 
 // Waits until every given tab has printed more hash lines than before (the match is moving), or the timeout; returns whether it moved
 async function moved(players, timeoutMs) {
@@ -53,7 +67,8 @@ async function resume(players, pauser, other) {
   return `${other.name} pressed Start, ${pauser.name} chose CONTINUE`;
 }
 
-// Each script gets {players, n, note}: note(text) records what it did. Scripts run after the warm-up.
+// Each script gets {players, n, note, gone}: note(text) records what it did; a player in gone is left out of the win screen and the
+// comparison of the frames after it went. Scripts run after the warm-up.
 export const SCRIPTS = {
   baseline: async () => {},
   // the #35 suspect: different players pause for everyone in turn, another player resumes, with personal menus in between
@@ -75,31 +90,33 @@ export const SCRIPTS = {
     }
     note('personal menus opened and closed by every player in turn');
   },
-  // a pause for everyone and, while it is open, another player's tab goes hidden (Away) and comes back
-  pause_away: async ({ players, n, note }) => {
+  // a pause for everyone and, while it is open, another player's tab goes hidden (Away) and comes back (settleAway: taken out or not)
+  pause_away: async ({ players, n, note, gone }) => {
     const pauser = players[1 % n], away = players[n - 1];
     await playWhile(players, pauser, 3000, () => pauseEveryone(pauser));
     await away.hide();
     await sleep(8000);
     await away.show();
-    note(`${pauser.name} paused for everyone; ${away.name} hidden for 8 s inside it; resumed by ${await resume(players, pauser, players[0])}`);
+    const what = await settleAway(away, gone);
+    note(`${pauser.name} paused for everyone; ${away.name} hidden for 8 s inside it (${what}); resumed by ${await resume(players, pauser, players[0])}`);
   },
-  away: async ({ players, n, note }) => {
+  // a player's tab hidden 12 s (settleAway: taken out or not), then the match plays on
+  away: async ({ players, n, note, gone }) => {
     const v = players[n - 1];
     const how = await v.hide();
     await sleep(12000);
     await v.show();
-    note(`${v.name} hidden 12 s (${how})`);
-    await Promise.all(players.map((p) => p.play(5000)));
+    note(`${v.name} hidden 12 s (${how}; ${await settleAway(v, gone)})`);
+    await Promise.all(players.filter((p) => !gone.has(p.name)).map((p) => p.play(5000)));
   },
   // a held network for a few seconds, then everything delivered in order
-  stall: async ({ players, n, note }) => {
+  stall: async ({ players, n, note, gone }) => {
     const v = players[1 % n];
     await v.freezeNetwork();
     await sleep(6000);
     await v.unfreezeNetwork();
     note(`${v.name}'s network held 6 s`);
-    await Promise.all(players.map((p) => p.play(5000)));
+    await Promise.all(players.filter((p) => !gone.has(p.name)).map((p) => p.play(5000)));
   },
   refresh: async ({ players, n, note, gone }) => {
     const v = players[n - 1];
@@ -108,14 +125,14 @@ export const SCRIPTS = {
     gone.add(v.name);
     note(`${v.name} reloaded its tab mid-match`);
   },
-  leave: async ({ players, n, note, gone }) => {
-    const v = players[n - 1];
-    await Promise.all(players.map((p) => (p === v ? sleep(1) : p.play(5000))));
+  leave: async ({ players, note, gone }) => {
+    const v = players.findLast((p) => !gone.has(p.name));   // the last one still in the match
+    await Promise.all(players.filter((p) => !gone.has(p.name)).map((p) => (p === v ? sleep(1) : p.play(5000))));
     await v.close();
     gone.add(v.name);
     note(`${v.name} closed its tab mid-match`);
   },
-  // everything in one match: a pause, an Away, a stall, then a player leaves
+  // everything in one match: a pause, an Away, a stall, then a player still in the match leaves
   mix: async (ctx) => {
     await SCRIPTS.pause({ ...ctx, note: ctx.note });
     await SCRIPTS.away(ctx);
