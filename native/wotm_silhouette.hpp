@@ -3,6 +3,7 @@
 #pragma once
 #include "raylib.h"
 #include "rlgl.h"
+#include "raymath.h"
 #include "wotm_glsl.hpp"
 #include <vector>
 
@@ -60,22 +61,23 @@ public:
 
     // Draws one silhouette into `rt`: `xy` holds the triangles in texels (x, y per corner, 6 floats a triangle; y = texture row),
     // covering what they touch except the 1-texel border, then the two box passes. The caller has flushed the batch and saved the
-    // view's target (GlTarget), and puts it back after its last silhouette.
+    // view's target (GlTarget) before making any render texture, and puts it back after its last silhouette, with its own shader
+    // (this leaves raylib's default one on).
     void render(RenderTexture2D &rt, const std::vector<float> &xy, int n) {
         auto into = [&](const RenderTexture2D &t) {
             rlEnableFramebuffer(t.id);
             rlViewport(0, 0, n, n);
         };
-        rlMatrixMode(RL_PROJECTION);
-        rlPushMatrix();
-        rlLoadIdentity();
-        rlOrtho(0, n, 0, n, -1, 1);   // y up: row 0 of the texture is y = 0, as in the CPU array
-        rlMatrixMode(RL_MODELVIEW);
-        rlPushMatrix();
-        rlLoadIdentity();
+        // the view's matrices are kept aside and put back as they were: rlPushMatrix on the modelview only switches to rlgl's per-vertex
+        // transform, the camera's matrix stays in the modelview the batch draws with
+        const Matrix viewProj = rlGetMatrixProjection(), viewModel = rlGetMatrixModelview();
+        rlSetMatrixProjection(MatrixOrtho(0, n, 0, n, -1, 1));   // y up: row 0 of the texture is y = 0, as in the CPU array
+        rlSetMatrixModelview(MatrixIdentity());
         rlDisableDepthTest();
         rlDisableColorBlend();   // coverage and the passes replace, they don't blend
+        rlDisableBackfaceCulling();   // the silhouette takes every triangle, whichever way it faces
 
+        rlSetShader(rlGetShaderIdDefault(), rlGetShaderLocsDefault());   // the view's draw may have its own on
         into(rt);
         rlClearColor(0, 0, 0, 0);
         rlClearScreenBuffers();
@@ -110,12 +112,10 @@ public:
         pass(tmp_, rt);
 
         rlEnableColorBlend();
+        rlEnableBackfaceCulling();
         rlEnableDepthTest();
-        rlMatrixMode(RL_MODELVIEW);
-        rlPopMatrix();
-        rlMatrixMode(RL_PROJECTION);
-        rlPopMatrix();
-        rlMatrixMode(RL_MODELVIEW);
+        rlSetMatrixProjection(viewProj);
+        rlSetMatrixModelview(viewModel);
     }
 
 private:

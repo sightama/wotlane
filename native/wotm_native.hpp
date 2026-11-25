@@ -1586,6 +1586,9 @@ public:
         // every blocker's silhouette first: on the GPU (WOTM_GPUSIL=1) they are drawn together in their own targets, with one switch away
         // from the view's framebuffer and back; on the CPU each is rasterized here
         static const bool wantGpu = [] { const char *v = std::getenv("WOTM_GPUSIL"); return v && v[0] == '1'; }();
+        // the view's framebuffer, before any render texture is made: LoadRenderTexture ends by binding the window's
+        GlTarget view;
+        if (wantGpu) { rlDrawRenderBatchActive(); view = GlTarget::current(); }
         gpuSilOn_ = wantGpu && gpuSil_.ready(kShadowRes);
         silJobs_.clear();
         std::vector<unsigned> texs(shadows.size(), 0);
@@ -1604,12 +1607,13 @@ public:
             ProfScope ps(DrawProf::ShadowTex);
             texs[k] = shadowTexture(ram, k, b, R, U);
         }
-        if (!silJobs_.empty()) {
+        if (wantGpu) {
             ProfScope ps(DrawProf::ShadowTex);
             rlDrawRenderBatchActive();
-            const GlTarget view = GlTarget::current();
             for (const SilJob &j : silJobs_) gpuSil_.render(shadowCache_[j.entry].rt, j.xy, kShadowRes);
             view.restore();
+            // the receivers draw with the scene's shader, as on the CPU path (render left raylib's default one)
+            if (shaderOn_) rlSetShader(alphaShader_.id, alphaShader_.locs);
             static const bool silCheck = std::getenv("WOTM_SILCHECK") != nullptr;
             if (silCheck)   // diagnostics: each GPU silhouette against the CPU one from the same corners (texels off by more than 2 levels)
                 for (const SilJob &j : silJobs_) {
@@ -3364,6 +3368,7 @@ public:
         ViewScope vs(vctx);
         if (drawProfOn()) ++drawProf().views;
         const bool useShader = beginShader(ram, wire);
+        shaderOn_ = useShader;
         rlDisableDepthTest();   // the sky is drawn first, without depth
         {
             ProfScope ps(DrawProf::Sky);
@@ -4319,6 +4324,7 @@ private:
     static constexpr size_t kShadowCacheN = 48;
     GpuSilhouette gpuSil_;
     bool gpuSilOn_ = false;   // this drawShadows makes its silhouettes on the GPU
+    bool shaderOn_ = false;   // draw() turned the GS shader on (beginShader)
     struct SilJob { size_t entry, slot; std::vector<float> xy; };   // a silhouette shadowTexture queued for drawShadows to draw
     std::vector<SilJob> silJobs_;
     static constexpr float kShadowTol = 1.5f;   // world units (the silhouette has ~2 per texel)
