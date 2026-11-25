@@ -801,7 +801,7 @@ export async function moviesSession(run) {
     await page.click('#closeSettings');
   };
   try {
-    const probe = await fetch(new URL('data/movies/movies.json', run.target.pageUrl));
+    const probe = await fetch(new URL('/data/movies/movies.json', run.target.pageUrl));
     if (!probe.ok) return R.add(1, 'movies', 'skip', 'no data/movies/movies.json (python3 tools/web_movies.py --iso <game.iso> --out <data>/movies)');
 
     // skippable, the default

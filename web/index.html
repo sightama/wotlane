@@ -9,8 +9,8 @@
 <meta name="description" content="Play War of the Monsters in your browser: a fan-made port for preservation and play, with online lobbies for up to 8 players. Nothing to install.">
 <meta name="theme-color" content="#e0592a">
 <link rel="canonical" href="https://playwotm.com/">
-<link rel="manifest" href="manifest.webmanifest">
-<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="War of the Monsters in the browser">
 <meta property="og:title" content="War of the Monsters">
@@ -64,6 +64,7 @@ setTimeout(() => { const m = pending(); if (m && !m.classList.contains('problem'
 <link rel="modulepreload" href="device_notice.js">
 <link rel="modulepreload" href="firefox_tip.js">
 <link rel="modulepreload" href="rematch.js">
+<link rel="modulepreload" href="builds.js">
 <style>
   :root { color-scheme: dark; --bg: #0b0b0d; --panel: #16161a; --fg: #d8d8dc; --dim: #8b8b94; --accent: #e0592a; --accent-fill: #c8461a; --accent-fill-hover: #b83f15; --field-line: #6a6a74; --target: 24px; --line: #2a2a30; --good: #3fb950; --warn: #d29922; --bad: #f85149; }
   @media (pointer: coarse), (any-pointer: coarse) { :root { --target: 44px; } }

@@ -31,8 +31,8 @@ test('the head has a description, social tags and a manifest', () => {
   assert.match(html, /<meta name="twitter:card" content="summary_large_image">/);
   assert.match(html, /<meta name="twitter:image" content="https:\/\/playwotm\.com\/og\.png">/);
   assert.match(html, /<link rel="canonical" href="https:\/\/playwotm\.com\/">/);
-  assert.match(html, /<link rel="manifest" href="manifest\.webmanifest">/);
-  assert.match(html, /<link rel="apple-touch-icon" href="apple-touch-icon\.png">/);
+  assert.match(html, /<link rel="manifest" href="\/manifest\.webmanifest">/);
+  assert.match(html, /<link rel="apple-touch-icon" href="\/apple-touch-icon\.png">/);
 });
 
 test('the JSON-LD describes a free VideoGame and parses', () => {

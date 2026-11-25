@@ -2,6 +2,7 @@
 // ABOUTME: MATCH line (the same mapping as tools/net_lobby.py's match_env, with the match WebSocket as WOTM_NET).
 
 import { rememberedSlow } from './rate.js';
+import { siteRoot } from './builds.js';
 
 export const PROTOCOL = 5;   // native/net/wotm_net_proto.hpp kProtocol (5: map ids as the stage, <monster>:<skin> members)
 // the additive wire level this page knows (kWire, docs/ONLINE.md "Wire versions"): the server sends it nothing newer
@@ -100,8 +101,9 @@ export function parseChat(parsed) {
 }
 
 // the address a friend opens to land in the lobby `code`: this page with only the code
+// a build's own address (/b/<build id>/) gives the site's entry page instead, which loads the newest build (web/builds.js)
 export function inviteLink(location, code) {
-  return `${location.origin}${location.pathname}?join=${code}`;
+  return `${location.origin}${siteRoot(location.pathname)}?join=${code}`;
 }
 
 // A phone or tablet can't compute 60 game frames a second, and an online match counts every frame as 1/60 s of game time, so at 60 Hz

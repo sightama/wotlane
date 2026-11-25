@@ -12,6 +12,7 @@ import { RateMemory, healthLine, rememberedHealth } from './rate.js';
 import { lobbyWarnings, memberStatus } from './lobby_status.js';
 import { frontNotice } from './device_notice.js';
 import { dismissFirefoxTip, firefoxTip } from './firefox_tip.js';
+import { lobbyBuildUrl, siteRoot } from './builds.js';
 import { clearRejoin, isInMatchError, isRejoinTokenError, leavingPage, peekRejoin, retryRejoin, storeRejoin } from './rematch.js';
 
 const MONSTERS = [[1, 'Congar'], [2, 'Robo-47'], [3, 'Togera'], [4, 'Ultra V'], [5, 'Preytor'], [7, 'Kineticlops'], [8, 'Magmo'],
@@ -423,14 +424,33 @@ async function hostOrJoin(join) {
       }
     }
     return { code: await l.join(code, name, monster), isOwner: false };
-  });
+  }, false, join ? code : '');
   if (entered && !join) await sendSettings();
   if (entered && rejoined && owner) showLobbySettings(lobby.settings);
 }
 
+// a lobby on another build (the server's "build differs from the lobby's (<simulation id>)"): when the site keeps that build
+// (/b/index.json, web/builds.js), the page opens it with the lobby code, so a deploy mid-session doesn't turn its players away;
+// `code`: the joined lobby's (none for a host or a rejoin: nothing to follow)
+async function followLobbyBuild(message, code) {
+  if (!code) return false;
+  try {
+    const r = await fetch(`${siteRoot(location.pathname)}b/index.json`, { cache: 'no-store' });
+    if (!r.ok) return false;
+    const url = lobbyBuildUrl(message, code, await r.json(), location);
+    if (!url) return false;
+    say('That lobby runs another version of the game: opening it...');
+    location.replace(url);   // Back skips this page, whose panel stays disabled while it moves
+    return true;
+  } catch {
+    return false;   // no index (a local server, an older site): the refusal stays on screen
+  }
+}
+
 // connects and runs `enter` (create, join or rejoin, resolving with the lobby's code and whether this player owns it), then shows
-// the lobby; `rematch` as in showLobby. False, with the Host/Join choice back and the server's reason on the panel, when it fails
-async function enterLobby(enter, rematch = false) {
+// the lobby; `rematch` as in showLobby; `joinCode`: the code a join asks for (a refusal for another build follows it there). False,
+// with the Host/Join choice back and the server's reason on the panel, when it fails
+async function enterLobby(enter, rematch = false, joinCode = '') {
   pings = {};
   healths = {};
   $('chatLog').replaceChildren();
@@ -451,9 +471,10 @@ async function enterLobby(enter, rematch = false) {
       deviceFields(window))));
     return true;
   } catch (e) {
-    say(friendlyError(e.message));
     lobby?.close();
     lobby = null;
+    if (await followLobbyBuild(e.message, joinCode)) return false;   // the page leaves for the lobby's build
+    say(friendlyError(e.message));
     for (const b of buttons) b.disabled = false;
     startWatchingLobbies();
     return false;

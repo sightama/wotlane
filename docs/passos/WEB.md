@@ -15,7 +15,20 @@ FFmpeg), builds `wotm` and assembles `<runtime>/web_dist`:
 - `wotm.js` and `wotm.wasm` (about 40 MB, about 4 MB brotli);
 - `version.json`: the wasm's SHA-256, the full build id (`build`) and the simulation id (`sim`, which the page sends and lobbies compare)
   (`tools/build_id.py`, the same ids as `build_dev` for the same sources);
-- `mods/`: the repo's enabled mods and `mods/manifest.json` (file list and hash), from `tools/web_mods.py`.
+- `mods/`: the repo's enabled mods and `mods/manifest.json` (file list and hash), from `tools/web_mods.py`;
+- `entry.html`: the site's entry page (below).
+
+**Versioned builds.** The site serves each build at its own address, `/b/<full id>/`: the whole dist, `index.html` included, whose
+references are relative, so a build's scripts and wasm never change at their address and a browser or the edge can keep them. The
+site's `/` is the build's `entry.html`, an inline page that only sends the browser on to `b/<full id>/` with the address's query (an
+invite's `?join=`) and hash; it costs one small request (`node tools/browser_mp_test/versioned_builds.mjs --measure N --rtt ms`
+times it). The site is served at its origin's root: the disc is shared by every build at `/data/`, which the page and the game
+(`native/wotm_webdisc.cpp`) name from there, and so are the public files (`/manifest.webmanifest`, the icons). Invite links name the site's root (`web/lobby.js` `inviteLink`),
+so they open the newest build. `/b/index.json` lists the builds the site keeps (`{builds: [{full, sim, time}]}`): when a lobby runs
+another build, the server refuses the join with that build's simulation id, and the page opens the newest kept build with it and the
+lobby code (`web/builds.js`), so a deploy during a session doesn't turn players away. localStorage, the private file system (saves,
+settings, creations) and the Cache API belong to the origin, so every build has them. `node tools/browser_mp_test/versioned_builds.mjs`
+checks all of it on a local site laid out the same way.
 
 It needs Emscripten (`EMSDK`, default `~/emsdk`) and the translated game (`sh tools/setup_runtime.sh`). The link options (JSPI, WASMFS,
 pthreads, WebGL2, `web/data_retry.js` as a `--pre-js`) live in the PS2Recomp seam (`tools/runtime_patch/wotm-runtime.patch`).

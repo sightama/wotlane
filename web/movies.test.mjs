@@ -92,10 +92,10 @@ test('both movies play in order, the overlay shows meanwhile and the audio is he
   await tick();
   assert.equal(env.overlay.hidden, false);
   assert.equal(env.hint.hidden, false);
-  assert.deepEqual(env.video.srcs, ['data/movies/intro_m.webm']);
+  assert.deepEqual(env.video.srcs, ['/data/movies/intro_m.webm']);
   env.video.fire('ended');
   await tick();
-  assert.equal(env.video.src, 'data/movies/int_main.webm');
+  assert.equal(env.video.src, '/data/movies/int_main.webm');
   env.video.fire('ended');
   assert.deepEqual(await run, ['ended', 'ended']);
   assert.equal(env.overlay.hidden, true);
@@ -215,7 +215,7 @@ test('a refused play() of a movie already skipped does not mute or disturb the n
   await tick();
   env.win.dispatchEvent(key('keydown', 'Escape'));   // skipped while the first play() is still pending
   await tick();
-  assert.equal(env.video.src, 'data/movies/int_main.webm');
+  assert.equal(env.video.src, '/data/movies/int_main.webm');
   rejectFirst(new DOMException('aborted', 'AbortError'));
   await tick();
   assert.equal(env.video.muted, false);

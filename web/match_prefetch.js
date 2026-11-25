@@ -92,7 +92,7 @@ if (typeof window !== 'undefined') {
     prefetch: async (chunks, opts) => {
       const storage = navigator.storage;
       if (await canKeepChunks({ caches: window.caches, estimate: storage?.estimate ? () => storage.estimate() : null }, chunks.length))
-        await window.wotmDiscCache?.prefetch(fetch, 'data/game.iso', chunks, opts);
+        await window.wotmDiscCache?.prefetch(fetch, '/data/game.iso', chunks, opts);
     },
   });
   window.wotmMatchPrefetch = { warmer, matchOfEnv };
