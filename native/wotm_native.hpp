@@ -1610,6 +1610,26 @@ public:
             const GlTarget view = GlTarget::current();
             for (const SilJob &j : silJobs_) gpuSil_.render(shadowCache_[j.entry].rt, j.xy, kShadowRes);
             view.restore();
+            static const bool silCheck = std::getenv("WOTM_SILCHECK") != nullptr;
+            if (silCheck)   // diagnostics: each GPU silhouette against the CPU one from the same corners (texels off by more than 2 levels)
+                for (const SilJob &j : silJobs_) {
+                    Image img = LoadImageFromTexture(shadowCache_[j.entry].rt.texture);
+                    ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
+                    std::vector<uint32_t> cpu;
+                    rasterSilhouette(j.xy, cpu);
+                    const auto *q = static_cast<const uint32_t *>(img.data);
+                    int worst = 0, over = 0;
+                    double sum = 0;
+                    for (int i = 0; i < img.width * img.height && size_t(i) < cpu.size(); ++i) {
+                        const int d = std::abs(int(q[i] >> 24) - int(cpu[size_t(i)] >> 24));
+                        worst = std::max(worst, d);
+                        over += d > 2;
+                        sum += cpu[size_t(i)] >> 24;
+                    }
+                    std::fprintf(stderr, "[silcheck] blocker %d: %zu tris, coverage %.0f, worst %d levels, %d texels over 2\n", shadows[j.slot].index,
+                                 j.xy.size() / 6, sum / 255.0, worst, over);
+                    UnloadImage(img);
+                }
             static const bool slogTex = std::getenv("WOTM_SHADOWLOG") != nullptr;
             if (slogTex)   // diagnostics: as the CPU path, shadow_<slot>.png (white = shadow), read back from the GPU
                 for (const SilJob &j : silJobs_) {
@@ -1820,6 +1840,61 @@ public:
         return true;
     }
 
+    // The blocker's casting triangles in silhouette texels (x, y per corner, 6 floats a triangle; y = texture row), degenerate ones out
+    std::vector<float> shadowCorners(const Ram &ram, const ShadowBlocker &b, const float R[3], const float U[3]) {
+        constexpr int N = kShadowRes;
+        const float E = b.extent;
+        std::vector<float> xy;
+        for (const DrawItem &it : b.casters)
+            forEachTriPos(ram, it, [&](const float p[3][3]) {
+                float x[3], y[3];
+                for (int i = 0; i < 3; ++i) {
+                    const float d[3] = {p[i][0] - b.origin[0], p[i][1] - b.origin[1], p[i][2] - b.origin[2]};
+                    x[i] = ((d[0] * R[0] + d[1] * R[1] + d[2] * R[2]) / E * 0.5f + 0.5f) * N;
+                    y[i] = ((d[0] * U[0] + d[1] * U[1] + d[2] * U[2]) / E * 0.5f + 0.5f) * N;
+                }
+                const float area = (x[1] - x[0]) * (y[2] - y[0]) - (x[2] - x[0]) * (y[1] - y[0]);
+                if (!(std::fabs(area) > 1e-6f)) return;
+                for (int i = 0; i < 3; ++i) { xy.push_back(x[i]); xy.push_back(y[i]); }
+            });
+        return xy;
+    }
+
+    // The CPU silhouette from those corners: every texel whose center is inside a triangle (not the 1-texel border), then a 3x3 box
+    // twice (retail filters with sprites); out as black with alpha = coverage. GpuSilhouette::render draws the same on the GPU.
+    void rasterSilhouette(const std::vector<float> &xy, std::vector<uint32_t> &px) {
+        constexpr int N = kShadowRes;
+        std::vector<float> &cov = shadowCov_;
+        cov.assign(size_t(N * N), 0.f);
+        for (size_t k = 0; k + 6 <= xy.size(); k += 6) {
+            const float x[3] = {xy[k], xy[k + 2], xy[k + 4]}, y[3] = {xy[k + 1], xy[k + 3], xy[k + 5]};
+            const int x0 = std::max(1, int(std::floor(std::min({x[0], x[1], x[2]})))), x1 = std::min(N - 2, int(std::ceil(std::max({x[0], x[1], x[2]}))));
+            const int y0 = std::max(1, int(std::floor(std::min({y[0], y[1], y[2]})))), y1 = std::min(N - 2, int(std::ceil(std::max({y[0], y[1], y[2]}))));
+            for (int py = y0; py <= y1; ++py)
+                for (int px = x0; px <= x1; ++px) {
+                    const float cx = px + 0.5f, cy = py + 0.5f;
+                    const float w0 = (x[1] - cx) * (y[2] - cy) - (x[2] - cx) * (y[1] - cy);
+                    const float w1 = (x[2] - cx) * (y[0] - cy) - (x[0] - cx) * (y[2] - cy);
+                    const float w2 = (x[0] - cx) * (y[1] - cy) - (x[1] - cx) * (y[0] - cy);
+                    if ((w0 >= 0 && w1 >= 0 && w2 >= 0) || (w0 <= 0 && w1 <= 0 && w2 <= 0)) cov[size_t(py * N + px)] = 1.f;
+                }
+        }
+        for (int pass = 0; pass < 2; ++pass) {   // 3x3 box twice; the border stays at 0 (CLAMP doesn't extend the shadow)
+            std::vector<float> &o = shadowTmp_;
+            o.assign(cov.size(), 0.f);
+            for (int y = 1; y < N - 1; ++y)
+                for (int x = 1; x < N - 1; ++x) {
+                    float s = 0;
+                    for (int dy = -1; dy <= 1; ++dy)
+                        for (int dx = -1; dx <= 1; ++dx) s += cov[size_t((y + dy) * N + x + dx)];
+                    o[size_t(y * N + x)] = s / 9.f;
+                }
+            cov.swap(o);
+        }
+        px.resize(cov.size());
+        for (size_t i = 0; i < cov.size(); ++i) px[i] = uint32_t(std::min(1.f, cov[i]) * 255.f) << 24;
+    }
+
     // Entry for a silhouette about to be made: the least recently used (at most kShadowCacheN; 10 blockers x 4 views fit), with what
     // shadowKey and shadowNear compare
     ShadowCacheEntry &shadowEntry(bool cacheable, uint64_t key, const ShadowBlocker &b, const float R[3]) {
@@ -1877,66 +1952,16 @@ public:
             }
             std::fprintf(stderr, "\n");
         }
-        const float E = b.extent;
-        if (gpuSilOn_) {   // the same corners in texels (y = texture row), drawn by drawShadows with the others (GpuSilhouette::render)
-            std::vector<float> xy;
-            for (const DrawItem &it : b.casters)
-                forEachTriPos(ram, it, [&](const float p[3][3]) {
-                    float x[3], y[3];
-                    for (int i = 0; i < 3; ++i) {
-                        const float d[3] = {p[i][0] - b.origin[0], p[i][1] - b.origin[1], p[i][2] - b.origin[2]};
-                        x[i] = ((d[0] * R[0] + d[1] * R[1] + d[2] * R[2]) / E * 0.5f + 0.5f) * N;
-                        y[i] = ((d[0] * U[0] + d[1] * U[1] + d[2] * U[2]) / E * 0.5f + 0.5f) * N;
-                    }
-                    const float area = (x[1] - x[0]) * (y[2] - y[0]) - (x[2] - x[0]) * (y[1] - y[0]);
-                    if (!(std::fabs(area) > 1e-6f)) return;
-                    for (int i = 0; i < 3; ++i) { xy.push_back(x[i]); xy.push_back(y[i]); }
-                });
+        std::vector<float> xy = shadowCorners(ram, b, R, U);
+        if (gpuSilOn_) {   // drawn by drawShadows with the other blockers' (GpuSilhouette::render)
             ShadowCacheEntry &e = shadowEntry(cacheable, key, b, R);
             if (!e.rt.id) e.rt = GpuSilhouette::make(N);
             if (!e.rt.id) return 0;
             silJobs_.push_back({size_t(&e - shadowCache_.data()), slot, std::move(xy)});
             return e.rt.texture.id;
         }
-        std::vector<float> &cov = shadowCov_;
-        cov.assign(size_t(N * N), 0.f);
-        for (const DrawItem &it : b.casters) {
-            forEachTriPos(ram, it, [&](const float p[3][3]) {
-                float x[3], y[3];
-                for (int i = 0; i < 3; ++i) {
-                    const float d[3] = {p[i][0] - b.origin[0], p[i][1] - b.origin[1], p[i][2] - b.origin[2]};
-                    x[i] = ((d[0] * R[0] + d[1] * R[1] + d[2] * R[2]) / E * 0.5f + 0.5f) * N;
-                    y[i] = ((d[0] * U[0] + d[1] * U[1] + d[2] * U[2]) / E * 0.5f + 0.5f) * N;
-                }
-                const float area = (x[1] - x[0]) * (y[2] - y[0]) - (x[2] - x[0]) * (y[1] - y[0]);
-                if (!(std::fabs(area) > 1e-6f)) return;
-                const int x0 = std::max(1, int(std::floor(std::min({x[0], x[1], x[2]})))), x1 = std::min(N - 2, int(std::ceil(std::max({x[0], x[1], x[2]}))));
-                const int y0 = std::max(1, int(std::floor(std::min({y[0], y[1], y[2]})))), y1 = std::min(N - 2, int(std::ceil(std::max({y[0], y[1], y[2]}))));
-                for (int py = y0; py <= y1; ++py)
-                    for (int px = x0; px <= x1; ++px) {
-                        const float cx = px + 0.5f, cy = py + 0.5f;
-                        const float w0 = (x[1] - cx) * (y[2] - cy) - (x[2] - cx) * (y[1] - cy);
-                        const float w1 = (x[2] - cx) * (y[0] - cy) - (x[0] - cx) * (y[2] - cy);
-                        const float w2 = (x[0] - cx) * (y[1] - cy) - (x[1] - cx) * (y[0] - cy);
-                        if ((w0 >= 0 && w1 >= 0 && w2 >= 0) || (w0 <= 0 && w1 <= 0 && w2 <= 0)) cov[size_t(py * N + px)] = 1.f;
-                    }
-            });
-        }
-        for (int pass = 0; pass < 2; ++pass) {   // 3x3 box twice; the border stays at 0 (CLAMP doesn't extend the shadow)
-            std::vector<float> &o = shadowTmp_;
-            o.assign(cov.size(), 0.f);
-            for (int y = 1; y < N - 1; ++y)
-                for (int x = 1; x < N - 1; ++x) {
-                    float s = 0;
-                    for (int dy = -1; dy <= 1; ++dy)
-                        for (int dx = -1; dx <= 1; ++dx) s += cov[size_t((y + dy) * N + x + dx)];
-                    o[size_t(y * N + x)] = s / 9.f;
-                }
-            cov.swap(o);
-        }
         std::vector<uint32_t> &px = shadowPx_;
-        px.resize(cov.size());
-        for (size_t i = 0; i < cov.size(); ++i) px[i] = uint32_t(std::min(1.f, cov[i]) * 255.f) << 24;
+        rasterSilhouette(xy, px);
         if (slogTex) {   // diagnostics: silhouette in shadow_<slot>.png (white = shadow) in the current directory
             std::vector<uint32_t> vis(px.size());
             for (size_t i = 0; i < px.size(); ++i) { const uint32_t a = px[i] >> 24; vis[i] = 0xFF000000u | a | (a << 8) | (a << 16); }
