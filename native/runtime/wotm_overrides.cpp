@@ -38,6 +38,7 @@
 #include "net/wotm_camsettings.hpp"  // each player's camera settings in their input (wotm_sync.inc packs, wotm_orbit.inc applies)
 #include "net/wotm_monsters.hpp"     // monsters and costumes present on the disc (WOTM_MATCH)
 #include "net/wotm_net_client.hpp"   // network match client (wotm_sync.inc)
+#include "net/wotm_prediction.hpp"   // rollback: predictions and the window a PC can afford (wotm_rollback.inc)
 #include "wotm_netstatus.h"          // on-screen network message and disabled debug keys (wotm_live.inc)
 #include "wotm_latency.hpp"          // input latency probes for the page's diagnostics report (wotm_sync.inc, wotm_live.inc)
 #include "wotm_rollback.hpp"         // snapshots of the game state and the synctest schedule (wotm_rollback.inc)
@@ -74,6 +75,7 @@ extern uint64_t g_wotmProfCyc[4096];
 extern uint32_t g_wotmFreeSpinPc;
 extern void (*g_wotmCallTrace)(const R5900Context *ctx, uint32_t targetPc);   // ps2_runtime.cpp (dispatchGuestBranch), WOTM_CALLTRACE
 void wotmCaptureFrame(const uint8_t *rdram);   // wotm_live.inc: copies the finished frame for native drawing
+void wotmCaptureDrop();   // wotm_live.inc: drops what the hooks queued for the frame being built (a rollback goes back over it)
 void wotmCaptureScene(const uint8_t *rdram, int view);   // wotm_live.inc: scene (objects, palettes, camera) on exit from hier(v, 0)
 void wotmVu1SceneExit(const uint8_t *rdram);   // wotm_vu1check.inc: the snapshot's 'S' record, at the same point
 void wotmFlareCapture(const uint8_t *rdram);   // wotm_live.inc: lens flare, projected and occlusion-tested
@@ -240,7 +242,18 @@ namespace
     namespace wotm_rollback   // wotm_rollback.inc (after the state it saves)
     {
         bool resimulating();   // a frame run again by a rollback: no drawing capture, pacing wait, sound output or input sampling
+        bool hidden();         // a redone frame before the last one of its redo: none of its drawing is shown
         void boundary(uint8_t *rdram, R5900Context *ctx);   // rtMain's frame boundary, right before wotm_sync::frame
+        // the hybrid netcode (WOTM_ROLLBACK): on in this match; the input a frame runs with (predicted when it hasn't arrived); the entry
+        // of timerWaitForMinUpdateRate (true: it resumes a restored state); a dialog frame (true: it restored, the callers unwind); a
+        // sample to skip; wotm_sync::frame after the index advanced; a present frame's cost after its pacing wait
+        bool on();
+        wotm_net::PadState input(int controller, uint32_t frame);
+        bool resume(uint8_t *rdram, R5900Context *ctx);
+        bool lockstepBoundary(uint8_t *rdram, R5900Context *ctx);
+        bool skipSample();
+        void netFrame(uint8_t *rdram, uint32_t index, bool redo);
+        void played();
         void barrier(const char *why);   // a point the state can't be rolled back across
         void init(PS2Runtime &runtime);
         void installRedoSkips(PS2Runtime &runtime);   // WOTM_SYNCTEST_REDO_SKIP: after every other hook
@@ -261,7 +274,7 @@ namespace
         const uint32_t ra = GPR_U32(ctx, 31), now = wotm_sync::g_fixedStep ? wotm_sync::callTics() : gameHostTics();
         SET_GPR_U32(ctx, 2, now);
         ctx->pc = ra;
-        if (ra == kFrameStartRa[0] || ra == kFrameStartRa[1])   // the game resets T1 there: start of the frame
+        if ((ra == kFrameStartRa[0] || ra == kFrameStartRa[1]) && !wotm_rollback::resimulating())   // the game resets T1 there: start of the frame
         {
             g_t1Zero = now;
             g_frameStartVsync = runtime->eeScheduler().currentVSyncTick();
@@ -633,8 +646,9 @@ namespace
     constexpr uint32_t kMonsterUpdate = wotm::fn::update__7Monster, kSetCloakOn = wotm::fn::setCloakOn__7Monster,
                        kTakeDamage = wotm::fn::takeDamage__7MonsterfbP7Monster;
     PS2Runtime::RecompiledFunction g_origMonsterUpdate = nullptr, g_setCloakOn = nullptr, g_origTakeDamage = nullptr;
-    uint32_t g_godApplied = 0;
-    int g_autoWinSecs = 0;   // WOTM_CHEATS=vencer=N   // bits of the player slots where m_godMode was turned on from here (so only those get turned off)
+    uint32_t g_godApplied = 0;   // bits of the player slots where m_godMode was turned on from here (so only those get turned off)
+    int g_autoWinSecs = 0;       // WOTM_CHEATS=vencer=N
+    uint32_t g_autoWinLast = 0;  // the g_frame of the last automatic win (0: none yet); game state, kept in a rollback's snapshot
 
     bool isPlayerMonster(uint8_t *rdram, uint32_t m, int *slot = nullptr)
     {
@@ -794,13 +808,12 @@ namespace
             }
             if (slot == 0 && g_autoWinSecs > 0)
             {   // WOTM_CHEATS=vencer=N: every N seconds of game time (60 g_frame frames per second), the same request as key 6
-                static uint32_t last = 0;
                 const uint32_t f = READ32(wotm::sym::g_frame);
-                if (last == 0 || f < last)
-                    last = f;
-                else if (f - last >= static_cast<uint32_t>(g_autoWinSecs) * 60u)
+                if (g_autoWinLast == 0 || f < g_autoWinLast)
+                    g_autoWinLast = f;
+                else if (f - g_autoWinLast >= static_cast<uint32_t>(g_autoWinSecs) * 60u)
                 {
-                    last = f;
+                    g_autoWinLast = f;
                     g_wotmCheatWin = true;
                 }
             }
@@ -908,19 +921,20 @@ namespace
                 }
                 ++g_syncVCalls;
             }
-            if (ra == kDialogLoopSyncVRa && GPR_U32(ctx, 17) == 0u)
+            // a dialog frame is a lockstep point for a rollback (WOTM_ROLLBACK): a wrong prediction before it restores a fight frame, and
+            // the hook returns without the vsync: the recompiled callers unwind and the EE resumes at the restored pc (wotm_rollback.inc)
+            if (ra == kDialogLoopSyncVRa && wotm_sync::g_fixedStep && wotm_rollback::lockstepBoundary(rdram, ctx))
+                return;
+            if (ra == kDialogLoopSyncVRa && GPR_U32(ctx, 17) == 0u && !wotm_rollback::resimulating())
                 wotmCaptureFrame(rdram);
             // each pass of the dialog loop is one fixed-step frame: it reads the pad (inputUpdate) and waits for vsync without going through
             // timerWaitForMinUpdateRate. Without this the frame index stopped and, over the network, every PC read forever the input of the
             // frame where the dialog opened (the menu didn't move). Here the index advances, local input is exchanged and the state goes into the hash
             if (ra == kDialogLoopSyncVRa && wotm_sync::g_fixedStep)
-            {
-                wotm_rollback::barrier("dialog loop");
                 wotm_sync::frame(rdram, kFieldCounter, kFieldCounterAtStart, kFieldsForAverage);
-            }
             else if (ra == kFadeStepSyncVRa[0] || ra == kFadeStepSyncVRa[1])
             {
-                if (!wotm_rollback::resimulating())
+                if (!wotm_rollback::hidden())
                     wotmCaptureFadeStep(rdram);
                 wotmShellFadeStep();
                 fadeRa = ra;
@@ -1047,8 +1061,9 @@ namespace
 
     void waitMinRateByVblanks(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
-        // only on entry: resuming mid-function (after a sceGsSyncV in the loop) already has D_006F8DC0 updated
-        if (ctx->pc == kTimerWaitForMinUpdateRate)
+        // only on entry: resuming mid-function (after a sceGsSyncV in the loop) already has D_006F8DC0 updated. A rollback (WOTM_ROLLBACK)
+        // may restore an earlier frame's state here, or resume one restored at a dialog frame: the game's function then runs from it
+        if (ctx->pc == kTimerWaitForMinUpdateRate && !wotm_rollback::resume(rdram, ctx))
         {
             // a frame run again by a rollback was drawn, logged, paced and stopped on the first time: only its state is redone
             const bool redo = wotm_rollback::resimulating();
@@ -1100,6 +1115,7 @@ namespace
             }
             wotm_rollback::g_paceWaitMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - paceFrom).count();
 #endif
+            wotm_rollback::played();               // the hybrid netcode's frame cost (WOTM_ROLLBACK)
             wotm_rollback::boundary(rdram, ctx);   // snapshot, synctest (WOTM_SYNCTEST)
             wotm_sync::frame(rdram, kFieldCounter, kFieldCounterAtStart, kFieldsForAverage);   // fixed step and state hash (WOTM_FIXEDSTEP, WOTM_STATEHASH)
         }
@@ -1383,7 +1399,7 @@ namespace
     void hierSceneExit(uint8_t *rdram)
     {
         g_hierSceneRa = 0;
-        if (wotm_rollback::resimulating())   // a frame run again by a rollback: drawn the first time
+        if (wotm_rollback::hidden())   // a redone frame that is never shown (the last one of a redo is drawn: a rollback corrects it)
             return;
         wotmCaptureScene(rdram, g_hierSceneView);
         if (g_hierSceneView == 0)

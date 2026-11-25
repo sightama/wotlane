@@ -84,8 +84,10 @@ namespace wotm_sync
 
     wotm_net::PadState inputFor(int controller, uint32_t frame)
     {
-        if (g_net)
-            return g_levelLoaded && controller < g_net->players() ? g_net->input(controller, frame) : wotm_net::PadState{};
+        if (g_net && (!g_levelLoaded || controller >= g_net->players()))
+            return {};
+        if (g_net)   // a rollback (WOTM_ROLLBACK) runs ahead of the inputs that arrived, on predictions
+            return wotm_rollback::on() ? wotm_rollback::input(controller, frame) : g_net->input(controller, frame);
         return g_inputs.get(controller, frame);
     }
 
@@ -207,7 +209,7 @@ namespace wotm_sync
         }
         if (g_net)
         {
-            if (!g_levelLoaded || g_net->status() != wotm_net::MatchClient::Status::Running)
+            if (!g_levelLoaded || g_net->status() != wotm_net::MatchClient::Status::Running || wotm_rollback::skipSample())
                 return;
             wotm_net::PadState s = sampleLocal(0);
             sampleMouse(s, index);   // the mouse is this PC's player's, like game pad 0
@@ -882,6 +884,22 @@ namespace wotm_sync
         sampleInputs(0);
     }
 
+    // WOTM_STATEHASH: the state of frame `index` (the game's 32 MB at `ram`: the live RAM, or a rollback's kept state)
+    void stateHash(const uint8_t *ram, uint32_t index)
+    {
+        if (!g_hashFile)
+            return;
+        FrameHash fh;
+        fh.index = index;
+        fh.gFrame = Ps2FastRead32(ram, wotm::sym::g_frame);
+        for (uint32_t b = 0; b < kBlocks; ++b)
+            fh.blocks[b] = hashBytes(ram + b * kBlockSize, kBlockSize);
+        fh.total = hashBytes(reinterpret_cast<const uint8_t *>(fh.blocks), sizeof fh.blocks);
+        std::fwrite(&fh, sizeof fh, 1, g_hashFile);
+        if ((index & 63u) == 0u)
+            std::fflush(g_hashFile);
+    }
+
     // fieldCounterAtStart/fieldCounter: D_006F8DC0/D_006F8DBC; fieldsForAverage: D_006F8DE4 (fields since timerSetFrameStart)
     void frame(uint8_t *rdram, uint32_t fieldCounter, uint32_t fieldCounterAtStart, uint32_t fieldsForAverage)
     {
@@ -917,20 +935,14 @@ namespace wotm_sync
         }
         const uint32_t index = g_index++;
         if (redo)
-            return;
-        callTraceFrameDone(index);
-        if (g_hashFile)
         {
-            FrameHash fh;
-            fh.index = index;
-            fh.gFrame = Ps2FastRead32(rdram, wotm::sym::g_frame);
-            for (uint32_t b = 0; b < kBlocks; ++b)
-                fh.blocks[b] = hashBytes(rdram + b * kBlockSize, kBlockSize);
-            fh.total = hashBytes(reinterpret_cast<const uint8_t *>(fh.blocks), sizeof fh.blocks);
-            std::fwrite(&fh, sizeof fh, 1, g_hashFile);
-            if ((index & 63u) == 0u)
-                std::fflush(g_hashFile);
+            if (g_net && wotm_rollback::on())
+                wotm_rollback::netFrame(rdram, index, true);
+            return;
         }
+        callTraceFrameDone(index);
+        if (!(g_net && wotm_rollback::on() && g_levelLoaded && g_fixedStep))   // a rollback writes final frames only (wotm_rollback.inc netFrame)
+            stateHash(rdram, index);
         if (!g_ring.empty() && g_levelLoaded)
             ringKeep(rdram, index);
         if (g_dumpAt >= 0 && index == static_cast<uint32_t>(g_dumpAt))
@@ -945,8 +957,13 @@ namespace wotm_sync
         }
         if (g_net && g_levelLoaded && g_fixedStep)
         {
-            netHash(rdram, index);
-            netWaitFrame(g_index);
+            if (wotm_rollback::on())   // hashes final frames only, and runs ahead of the inputs (wotm_rollback.inc netFrame)
+                wotm_rollback::netFrame(rdram, index, false);
+            else
+            {
+                netHash(rdram, index);
+                netWaitFrame(g_index);
+            }
             netPace(g_index);
         }
     }

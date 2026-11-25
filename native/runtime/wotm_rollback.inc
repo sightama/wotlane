@@ -31,11 +31,25 @@ namespace wotm_rollback
     PS2Runtime *g_runtime = nullptr;
     R5900Context *g_ctx = nullptr;   // the context the boundary saw (the fight's thread)
 
-    bool resimulating() { return g_test && g_test->resimulating(); }
+    // the hybrid netcode (WOTM_ROLLBACK, below): a redo is running, back to the present frame
+    bool g_redo = false;
+    uint32_t g_presentFrame = 0;
+    namespace hybrid
+    {
+        void init();
+        void barrier();
+    }
 
-    // the frame the game runs after the last boundary; a redone frame before the last one of a redo is never shown
+    bool resimulating() { return (g_test && g_test->resimulating()) || g_redo; }
+
+    // the frame the game runs after the last boundary (synctest); a redone frame before the last one of a redo is never shown
     uint32_t g_frame = 0;
-    bool hiddenRedo() { return resimulating() && g_frame + 1u < g_test->target(); }
+    bool hidden()
+    {
+        if (g_redo)
+            return wotm_sync::g_index < g_presentFrame;
+        return resimulating() && g_frame + 1u < g_test->target();
+    }
 
     // ---- WOTM_SYNCTEST_REDO_SKIP=<guest address>[,...]: those functions return at once in the hidden redone frames, to find what a
     // redo can leave out without changing the state (a function whose work only feeds the drawing). The hook goes on last, over
@@ -47,7 +61,7 @@ namespace wotm_rollback
 
     template <int I> void redoSkippable(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
-        if (ctx->pc == g_redoSkipAddr[I] && hiddenRedo())
+        if (ctx->pc == g_redoSkipAddr[I] && hidden())
         {
             ++g_redoSkipped[I];
             ctx->pc = GPR_U32(ctx, 31);
@@ -352,6 +366,9 @@ namespace wotm_rollback
         add(rb::memoryPiece("modifiers: gravity", &wotm_modifiers::g_gravityWritten, sizeof wotm_modifiers::g_gravityWritten));
         add(fastClipsPiece());
         add(atomicPiece("intro skip armed", wotm_training::g_introArmed));
+        add(rb::memoryPiece("cheats: god mode applied", &g_godApplied, sizeof g_godApplied));   // WOTM_CHEATS (tests)
+        add(rb::memoryPiece("cheats: last automatic win", &g_autoWinLast, sizeof g_autoWinLast));
+        add(atomicPiece("cheats: win requested", g_wotmCheatWin));
         add(wotmSoundRollbackPiece());
         std::fprintf(stderr, "[synctest] snapshot: %zu pieces:", g_state.size());
         for (size_t i = 0; i < g_state.size(); ++i)
@@ -368,6 +385,8 @@ namespace wotm_rollback
 
     void init(PS2Runtime &runtime)
     {
+        g_runtime = &runtime;
+        hybrid::init();
         const char *e = std::getenv("WOTM_SYNCTEST");
         if (!e || std::atoi(e) <= 0)   // unset or 0: off
             return;
@@ -392,6 +411,7 @@ namespace wotm_rollback
     // A point the state can't be rolled back across (a stage load, a dialog loop's frame)
     void barrier(const char *why)
     {
+        hybrid::barrier();
         if (!g_test)
             return;
         ++g_barriers;
@@ -492,5 +512,322 @@ namespace wotm_rollback
         g_restoreEnd = clk::now();
         g_restore.add(ms(t1, g_restoreEnd));
         g_presentValid = false;
+    }
+
+    // ---- The hybrid netcode (WOTM_ROLLBACK=<cap>, a network match; docs/ONLINE.md "Rollback") ----
+    // This PC runs up to g_window frames past its newest confirmed input, predicting the inputs that haven't arrived (the player's newest
+    // one), and tells the server g_window (MatchClient::setBudget): the server cuts the other players' delays by the smallest budget among
+    // the PCs that receive them (proto::delayCut). At rtMain's frame boundary, before the drawing capture, the predictions are checked
+    // against the inputs that arrived; on a wrong one the state saved after the frame before it comes back and the frames up to the present
+    // run again (hidden: no capture, sound output, pacing or sampling), then the corrected present frame is drawn. A frame is final once
+    // every input up to it arrived and was checked: only final frames go into the desync hash, from the live RAM or from their slot.
+    // A dialog loop's frame (pause, round end) and a frame boundary outside rtMain are lockstep points (lockstepBoundary): they wait for
+    // every input up to them, and a wrong prediction found there restores an rtMain slot through the unwind (the hook returns with the
+    // restored pc: the recompiled callers return and the EE resumes there). No state is kept at a lockstep point.
+    //   WOTM_ROLLBACK_WINDOW=<n>: declare and run with n frames instead of what the measured costs afford (tests).
+    namespace hybrid
+    {
+        constexpr uint32_t kNone = wotm_net::PredictedInputs::kNone;
+        uint32_t g_cap = 0;           // WOTM_ROLLBACK: the most frames this PC may run past its newest confirmed input (0: lockstep)
+        int g_fixedWindow = -1;       // WOTM_ROLLBACK_WINDOW
+        uint32_t g_window = 0;        // the frames it runs past its newest confirmed input now (declared to the server)
+        wotm_net::WindowChooser g_chooser;
+        wotm_net::PredictedInputs g_predicted;
+        std::vector<uint32_t> g_slotFrame;   // the frame whose state each slot holds (kNone: none)
+        uint32_t g_hashed = kNone;           // the newest frame that went into the desync hash
+        bool g_resume = false;               // a slot was just restored: the next boundary entry resumes right after it
+        bool g_lockstep = false;             // this boundary is a lockstep point (a dialog frame, or outside rtMain)
+        uint32_t g_skipSamples = 0;          // a redo that ended early (at a dialog) gave back these frames: their samples are skipped
+
+        // costs of the current measuring window (ms), and the window's counts
+        constexpr uint32_t kWindowFrames = 300u;
+        std::vector<double> g_played, g_saves, g_restores, g_redos;
+        uint32_t g_frames = 0, g_rollbacks = 0, g_redone = 0, g_depthMax = 0;
+        clk::time_point g_frameBegin, g_redoStart;
+        uint32_t g_redoFrom = 0;     // the first frame the running redo runs again
+        bool g_frameValid = false;   // g_frameBegin marks a present frame's start with no rollback since
+
+        bool on() { return g_cap > 0 && wotm_sync::g_net; }
+        uint32_t slot(uint32_t frame) { return frame % static_cast<uint32_t>(g_slotFrame.size()); }
+
+        double median(std::vector<double> &v)
+        {
+            if (v.empty())
+                return 0.0;
+            std::nth_element(v.begin(), v.begin() + static_cast<std::ptrdiff_t>(v.size() / 2), v.end());
+            return v[v.size() / 2];
+        }
+
+        void declare(uint32_t window)
+        {
+            if (window != g_window)
+                std::fprintf(stderr, "[rollback] window %u -> %u frame(s) at frame %u\n", g_window, window, wotm_sync::g_index);
+            g_window = window;
+            wotm_sync::g_net->setBudget(window);
+        }
+
+        void save(uint32_t frame)
+        {
+            const auto t0 = clk::now();
+            g_state.save(g_slots[slot(frame)], frame);
+            g_slotFrame[slot(frame)] = frame;
+            g_saves.push_back(ms(t0, clk::now()));
+        }
+
+        // the state after `frame`'s boundary comes back; false (and the match stops) when it isn't kept
+        bool restore(uint32_t frame)
+        {
+            if (g_slotFrame.empty() || g_slotFrame[slot(frame)] != frame)
+            {
+                wotm_sync::netFail("rollback: the state of frame " + std::to_string(frame) + " is not kept (a bug: please report it)");
+                return false;
+            }
+            const auto t0 = clk::now();
+            if (!g_state.load(g_slots[slot(frame)]))
+            {
+                wotm_sync::netFail("rollback: the state of frame " + std::to_string(frame) + " can't be restored (a bug: please report it)");
+                return false;
+            }
+            g_redoStart = clk::now();
+            g_restores.push_back(ms(t0, g_redoStart));
+            return true;
+        }
+
+        // every input up to `frame` (a lockstep point)
+        void waitThrough(uint32_t frame)
+        {
+            using Status = wotm_net::MatchClient::Status;
+            for (uint32_t next; (next = wotm_sync::g_net->firstMissing()) <= frame && !wotm_sync::stopRequested() &&
+                                wotm_sync::g_net->status() == Status::Running;)
+                wotm_sync::netWaitFrame(next);
+        }
+
+        // Checks the predictions against the inputs that arrived; on a wrong one, restores the state after the frame before it and starts
+        // a redo back to `present`. True when it restored
+        bool correct(uint32_t present)
+        {
+            const uint32_t wrong = g_predicted.firstWrong([](int player, uint32_t frame, wotm_net::PadState &s) {
+                return wotm_sync::g_net->arrived(player, frame, s);
+            });
+            if (wrong == kNone)
+                return false;
+            if (wrong == 0u)   // frames 0 .. delay - 1 are neutral for everyone: never predicted
+            {
+                wotm_sync::netFail("rollback: frame 0 ran on a wrong prediction (a bug: please report it)");
+                return false;
+            }
+            if (!restore(wrong - 1u))
+                return false;
+            wotmCaptureDrop();
+            g_redo = true;
+            g_presentFrame = present;
+            g_redoFrom = wrong;
+            g_frameValid = false;
+            ++g_rollbacks;
+            g_redone += present - wrong + 1u;
+            g_depthMax = std::max(g_depthMax, present - wrong + 1u);
+            return true;
+        }
+
+        // the redo is back at the present (or ended early at a lockstep point: the frames it gave back are not sampled again)
+        void backAtPresent()
+        {
+            if (!g_redo)
+                return;
+            const uint32_t frame = wotm_sync::g_index;
+            if (frame < g_presentFrame)
+                g_skipSamples += g_presentFrame - frame;
+            g_redo = false;
+            if (frame >= g_redoFrom)
+                g_redos.push_back(ms(g_redoStart, clk::now()) / static_cast<double>(frame - g_redoFrom + 1u));
+        }
+
+        // Every kWindowFrames present frames: the costs measured (a save and a restore of the same state now and then when no rollback
+        // measured them) give the window this PC can afford
+        void measure()
+        {
+            if (++g_frames < kWindowFrames)
+                return;
+            if (g_restores.size() < 3u)   // calibration: save and restore the state of now (unchanged: the game carries on the same)
+            {
+                const auto t0 = clk::now();
+                g_state.save(g_live, wotm_sync::g_index);
+                const auto t1 = clk::now();
+                g_state.load(g_live);
+                g_saves.push_back(ms(t0, t1));
+                g_restores.push_back(ms(t1, clk::now()));
+            }
+            const double frameMs = 1000.0 / 60.0 * wotm::modifiers::vsyncsPerFrame(wotm_sync::g_fixedStep, wotm_sync::g_mods);
+            wotm_net::FrameCosts c;
+            c.played = median(g_played);
+            c.save = median(g_saves);
+            c.restore = median(g_restores);
+            c.redo = g_redos.size() >= 10u ? median(g_redos) : c.played;   // until measured: a redone frame costs about a played one
+            const uint32_t affordable = wotm_net::affordableWindow(c, frameMs, g_cap);
+            declare(g_fixedWindow >= 0 ? static_cast<uint32_t>(g_fixedWindow) : g_chooser.update(affordable));
+            std::fprintf(stderr,
+                         "[rollback] frame %u: played %.2f, save %.2f, restore %.2f, redone %.2f%s ms of %.1f; affords %u, window %u; %u "
+                         "rollbacks, %u frames redone, deepest %u\n",
+                         wotm_sync::g_index, c.played, c.save, c.restore, c.redo, g_redos.size() >= 10u ? "" : " (estimate)", frameMs,
+                         affordable, g_window, g_rollbacks, g_redone, g_depthMax);
+            g_played.clear(), g_saves.clear(), g_restores.clear(), g_redos.clear();
+            g_frames = g_rollbacks = g_redone = g_depthMax = 0;
+        }
+
+        void init()
+        {
+            const char *e = std::getenv("WOTM_ROLLBACK");
+            if (!e || std::atoi(e) <= 0)
+                return;
+            if (!wotm_sync::g_net)
+            {
+                std::fprintf(stderr, "[rollback] WOTM_ROLLBACK needs a network match (WOTM_NET): off\n");
+                return;
+            }
+            g_cap = static_cast<uint32_t>(std::clamp(std::atoi(e), 1, 3));
+            if (const char *w = std::getenv("WOTM_ROLLBACK_WINDOW"); w && *w)
+                g_fixedWindow = std::clamp(std::atoi(w), 0, static_cast<int>(g_cap));
+            g_slots.resize(g_cap + 2u);
+            g_slotFrame.assign(g_cap + 2u, kNone);
+            std::fprintf(stderr, "[rollback] on: up to %u frame(s) past the newest confirmed input%s\n", g_cap,
+                         g_fixedWindow >= 0 ? (", fixed at " + std::to_string(g_fixedWindow)).c_str() : "");
+        }
+
+        // a stage load: nothing before it can be rolled back, and the new match's frames are hashed from frame 0
+        void barrier()
+        {
+            g_predicted.clear();
+            std::fill(g_slotFrame.begin(), g_slotFrame.end(), kNone);
+            g_redo = g_resume = false;
+            g_hashed = kNone;
+            g_skipSamples = 0;
+            g_frameValid = false;
+        }
+    }
+
+    bool on() { return hybrid::on(); }
+
+    // the input a frame runs with: the player's when it has arrived, else a prediction (the newest that arrived), recorded for the check
+    wotm_net::PadState input(int controller, uint32_t frame)
+    {
+        wotm_net::PadState s;
+        if (wotm_sync::g_net->arrived(controller, frame, s))
+            return s;
+        s = wotm_sync::g_net->prediction(controller);
+        hybrid::g_predicted.predicted(frame, controller, s);
+        return s;
+    }
+
+    // The entry of timerWaitForMinUpdateRate, before anything else: true when this boundary resumes a restored state (the hook goes
+    // straight to the game's function). Ends a redo back at the present; at the present, corrects the wrong predictions (which restores and
+    // returns true); outside rtMain it is a lockstep point.
+    bool resume(uint8_t *rdram, R5900Context *ctx)
+    {
+        if (!hybrid::on() || !wotm_sync::g_levelLoaded)
+            return false;
+        if (hybrid::g_resume)
+        {
+            hybrid::g_resume = false;
+            return true;
+        }
+        const uint32_t frame = wotm_sync::g_index;
+        hybrid::g_lockstep = GPR_U32(ctx, 31) - kFightLoop >= kFightLoopSize;
+        if (g_redo && frame < g_presentFrame && !hybrid::g_lockstep)
+        {
+            wotmCaptureDrop();   // a hidden redone frame: what its hooks queued is never drawn
+            return false;
+        }
+        const bool redone = g_redo;
+        hybrid::backAtPresent();
+        if (!hybrid::g_lockstep && (g_state.size() == 0 || ctx != g_ctx))
+        {
+            if (g_state.size() != 0)
+                std::fprintf(stderr, "[rollback] the boundary runs on another guest thread's context: the kept states are dropped\n");
+            g_ctx = ctx;
+            g_state = rb::State{};   // the "CPU context" piece points at the context it was built with
+            addPieces(rdram, ctx);
+            std::fill(hybrid::g_slotFrame.begin(), hybrid::g_slotFrame.end(), hybrid::kNone);
+        }
+        if (hybrid::g_lockstep)
+            hybrid::waitThrough(frame);
+        else if (redone)
+            return false;   // one rollback per frame: the next boundary checks what arrived during this redo
+        return hybrid::correct(frame);   // restored: the hook goes straight on from the restored boundary
+    }
+
+    // A dialog loop's frame boundary (wotm_overrides.cpp syncVTapped, before wotm_sync::frame): a lockstep point. True when it restored a
+    // fight frame: the hook returns without calling sceGsSyncV, the recompiled callers unwind and the EE resumes at the restored pc (the
+    // entry of timerWaitForMinUpdateRate, where resume() goes straight on)
+    bool lockstepBoundary(uint8_t *rdram, R5900Context *ctx)
+    {
+        (void)rdram, (void)ctx;
+        if (!hybrid::on())
+        {
+            barrier("dialog loop");
+            return false;
+        }
+        if (!wotm_sync::g_levelLoaded)
+            return false;
+        hybrid::g_lockstep = true;
+        hybrid::backAtPresent();
+        hybrid::waitThrough(wotm_sync::g_index);
+        // restored: the unwind reaches the entry of timerWaitForMinUpdateRate, where resume() goes straight on
+        hybrid::g_resume = hybrid::correct(wotm_sync::g_index);
+        return hybrid::g_resume;
+    }
+
+    // a sample the next present boundary skips (a redo that ended early at a dialog gave back its frames)
+    bool skipSample()
+    {
+        if (hybrid::g_skipSamples == 0u)
+            return false;
+        --hybrid::g_skipSamples;
+        return true;
+    }
+
+    // wotm_sync::frame, right after the frame's index advanced (`index`: the frame that just ended; the state now is the one a slot keeps):
+    // keeps the state when a rollback could need it and puts the final frames into the desync hash; at the present, waits for the inputs
+    // the next frame needs (all of them at a lockstep point, else up to g_window frames fewer)
+    void netFrame(uint8_t *rdram, uint32_t index, bool redo)
+    {
+        using namespace hybrid;
+        wotm_net::MatchClient &net = *wotm_sync::g_net;
+        // a rollback may come back to this state: the next frame runs on a prediction, or this one did and isn't final yet (in a redo too:
+        // a redone frame whose inputs have all arrived is final at once)
+        if (!g_lockstep && g_state.size() != 0 && (net.firstMissing() <= index + 1u || g_predicted.oldest() <= index))
+            save(index);
+        // final: every input up to it arrived (frame 0 is always complete: the first frames are neutral) and no prediction is left unchecked
+        const uint32_t first = net.firstMissing(), oldest = g_predicted.oldest();
+        const uint32_t final = std::min({first == 0u ? 0u : first - 1u, oldest == 0u ? 0u : oldest - 1u, index});
+        for (uint32_t f = g_hashed == kNone ? 0u : g_hashed + 1u; f <= final; ++f)
+        {
+            // the live RAM, or the kept state's (the guest RAM is a snapshot's first piece)
+            const uint8_t *ram = f == index ? rdram : g_slotFrame[slot(f)] == f ? g_slots[slot(f)].bytes.data() : nullptr;
+            if (!ram)
+                return wotm_sync::netFail("rollback: frame " + std::to_string(f) + " is final but its state was not kept (a bug: please report it)");
+            wotm_sync::stateHash(ram, f);
+            wotm_sync::netHash(ram, f);
+            g_hashed = f;
+        }
+        if (redo)
+            return;
+        if (!g_lockstep && g_state.size() != 0)
+            measure();
+        const uint32_t next = wotm_sync::g_index, ahead = g_lockstep ? 0u : g_window;
+        if (next >= ahead)
+            waitThrough(next - ahead);
+        if (g_fixedWindow >= 0 && g_window != static_cast<uint32_t>(g_fixedWindow))
+            declare(static_cast<uint32_t>(g_fixedWindow));
+        g_lockstep = false;
+        g_frameBegin = clk::now();
+        g_frameValid = true;
+    }
+
+    // after the pacing wait of a present rtMain frame (boundary): its played cost, without the wait
+    void played()
+    {
+        if (!hybrid::on() || !hybrid::g_frameValid || hybrid::g_lockstep || g_redo)
+            return;
+        hybrid::g_played.push_back(ms(hybrid::g_frameBegin, clk::now()) - g_paceWaitMs);
     }
 }

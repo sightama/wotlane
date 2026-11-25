@@ -195,6 +195,38 @@ to the console) and starts once that many players are in; `--code <code> --name 
   blocks that differ. Please report it with the message and everyone's `runtime\live.err.log` (each one has that PC's block hashes
   of the moment, so two logs are enough to name what diverged).
 
+## Rollback
+
+Off by default; `WOTM_ROLLBACK=<n>` (n = 1 to 3) turns it on for one PC (`docs/superpowers/specs/2026-11-25-rollback-hybrid-design.md`
+has the design and its decisions).
+
+- **What it changes:** a PC with rollback runs up to its **window** of frames past the newest input that arrived from the others,
+  predicting each missing input as that player's newest one. When the real input arrives and differs, it restores the state saved after
+  the frame before the wrong one and runs the frames up to the present again (no drawing, sound or pacing in between), then draws the
+  corrected frame. The other players see that PC's own inputs as today.
+- **Who gets less delay:** a player's input applied k frames sooner reaches every other PC k frames late, and those PCs redo the frames.
+  So each PC tells the server its window (match message `Window`), and the server takes the smallest window among the *other* players
+  off each player's delay (`proto::delayCut`), never under 1 frame. A PC without rollback (or an older build) counts as 0: nobody's
+  delay is cut against it, and its own delay can still be cut when every other PC has a window.
+- **The window a PC can afford:** every 300 frames it measures a played frame, a save, a restore and a redone frame on the game thread
+  (until a rollback measured one, a redone frame counts as a played one, and a save plus restore of the current state times them) and
+  takes the most frames w with played + save + restore + w redone frames within 90% of a frame (`wotm_prediction.hpp`
+  `affordableWindow`): every frame may roll back while another player moves a stick or the mouse. The window drops at once and rises
+  only after two measuring windows with room.
+- **State:** the snapshot is the synctest's (`docs/investigacoes/2026-11-18/rollback-synctest/README.md`): guest RAM in use,
+  scratchpad, CPU context, VU0, the host state the game reads back (fixed-step clock, orbit camera, modifiers, intro skip, test cheats)
+  and the sound engine. A state is kept only when a rollback could come back to it (the next frame runs on a prediction, or this one did
+  and its inputs are not all in).
+- **Lockstep points:** a dialog loop's frame (pause, round end) and a frame boundary outside the fight loop wait for every input up to
+  them. A wrong prediction found there restores the last fight frame's state through the runtime's unwind (the hook returns with the
+  restored pc and the recompiled callers return); a redo that reaches a dialog earlier than the frame it started from ends there.
+- **Desync check:** only final frames (every input up to them arrived and was checked) go into the hash the server compares, from the
+  live RAM or from the frame's kept state, so PCs with and without rollback compare the same frames. `WOTM_STATEHASH` writes final frames
+  only too.
+- **Checks:** `python3 tools/net_checks.py --only rollback_mouse` (and `rollback_pause`, `rollback_wins`, `rollback_mixed`,
+  `rollback_3p`): two or three native PCs behind a 60 ms round trip, mice that change every 3 frames, state compared on every final
+  frame.
+
 ## Wire versions
 
 Older builds keep playing on the newest `wotm_server` (a deploy during a game night must not refuse a player whose page or package is
@@ -212,6 +244,8 @@ from before it), so the wire changes only by adding, and every addition is negot
   it can get anything newer, since the server cannot tell a client that does not know a level from one that did not say it.
 - Match messages travel on the match connection (ENet or `/match`), which does not carry a level today: the first change that adds a
   match message also maps each match connection to its member's lobby level, and sends the new message only at or above it.
+- A message only clients send needs no level: a server that does not know it ignores it. `Window` (a PC's rollback budget, "Rollback"
+  below) is one.
 - Lobbies compare the simulation id (`tools/build_id.py`): builds that compute alike play together whatever their wire level.
 
 ## Diagnostics

@@ -1423,30 +1423,57 @@ void wotmCaptureFadeStep(const uint8_t *rdram)
 
 void wotmMainMenuLogoFrame(uint8_t *rdram);   // wotm_mainmenu.inc: big-screen logo only on "press start"
 bool wotmInPauseMenu();   // wotm_pausemenu.inc: the fight's pause dialog is up (EE thread)
+namespace wotm_live {
+// What the hooks queued for the frame being built since the last capture: the capture takes it, a rollback drops it (wotmCaptureDrop)
+struct Pending {
+    std::vector<wotm::ScreenRect> rects;   // the enemy bars first, then the fades
+    std::vector<wotm::TextQuad> polys;
+    std::vector<wotm::HudAnchor> anchors;
+    std::vector<wotm::Scene::CsColorAtDraw> csColor;
+    bool haveScene = false;                // this frame's hier(0, 0) scene (g_sceneSnap[0])
+    bool haveView[kMaxViews] = {};         // views 1 to 3 of this frame (split screen)
+};
+static Pending takePending()
+{
+    Pending p;
+    p.rects.swap(g_pendingBars);
+    p.rects.insert(p.rects.end(), g_pendingRects.begin(), g_pendingRects.end());
+    g_pendingRects.clear();
+    g_pendingState.clear();
+    p.polys.swap(g_pendingPolys);
+    p.anchors.swap(g_pendingAnchors);
+    p.csColor.swap(g_pendingCsColor);
+    g_shellFade.store(-1, std::memory_order_relaxed);
+    p.haveScene = g_sceneFresh[0];
+    for (int v = 1; v < kMaxViews; ++v)
+        p.haveView[v] = p.haveScene && g_sceneFresh[v];
+    for (bool &f : g_sceneFresh)
+        f = false;
+    return p;
+}
+}
+
+// A rollback goes back over frames already drawn (wotm_rollback.inc): what the hooks queued for the frame being built is dropped, and
+// the redo's last frame queues it again for the next capture
+void wotmCaptureDrop()
+{
+    wotm::Particles::consumeFlares();
+    (void)wotm_live::takePending();
+}
+
 void wotmCaptureFrame(const uint8_t *rdram)
 {
     wotmMainMenuLogoFrame(const_cast<uint8_t *>(rdram));   // before collection: the frame already comes out without the logo
     // the lens flare copy is valid only for this frame: the next one without particleDraw (menu, LOAD) has no flares
     struct ConsumeFlares { ~ConsumeFlares() { wotm::Particles::consumeFlares(); } } consumeFlares;
     wotm_live::Capture &c = wotm_live::capture();
-    std::vector<wotm::ScreenRect> rects;
-    rects.swap(wotm_live::g_pendingBars);
-    rects.insert(rects.end(), wotm_live::g_pendingRects.begin(), wotm_live::g_pendingRects.end());
-    wotm_live::g_pendingRects.clear();
-    wotm_live::g_pendingState.clear();
-    std::vector<wotm::TextQuad> polys;
-    polys.swap(wotm_live::g_pendingPolys);
-    std::vector<wotm::HudAnchor> anchors;
-    anchors.swap(wotm_live::g_pendingAnchors);
-    std::vector<wotm::Scene::CsColorAtDraw> csColor;
-    csColor.swap(wotm_live::g_pendingCsColor);
-    wotm_live::g_shellFade.store(-1, std::memory_order_relaxed);
-    const bool haveScene = wotm_live::g_sceneFresh[0];
-    bool haveView[wotm_live::kMaxViews] = {};   // views 1 to 3 of this frame (split screen)
-    for (int v = 1; v < wotm_live::kMaxViews; ++v)
-        haveView[v] = haveScene && wotm_live::g_sceneFresh[v];
-    for (bool &f : wotm_live::g_sceneFresh)
-        f = false;
+    wotm_live::Pending pending = wotm_live::takePending();
+    std::vector<wotm::ScreenRect> &rects = pending.rects;
+    std::vector<wotm::TextQuad> &polys = pending.polys;
+    std::vector<wotm::HudAnchor> &anchors = pending.anchors;
+    std::vector<wotm::Scene::CsColorAtDraw> &csColor = pending.csColor;
+    const bool haveScene = pending.haveScene;
+    const bool *haveView = pending.haveView;
     if (!rdram || !c.on.load(std::memory_order_relaxed) || wotm_live::g_loadFreeze.load(std::memory_order_relaxed))
         return;
     const wotm::Ram ram{rdram, PS2_RAM_SIZE};
@@ -2734,6 +2761,7 @@ static std::string resources() { return {}; }
 static bool wotmDrawNative(const uint8_t *) { return false; }
 void wotmDamagePopup(const uint8_t *, const float *, float, int) {}
 void wotmCaptureFrame(const uint8_t *) {}
+void wotmCaptureDrop() {}
 void wotmCaptureScene(const uint8_t *) {}
 void wotmFlareCapture(const uint8_t *) {}
 void wotmFadeView(const uint8_t *, int, uint32_t, bool) {}
