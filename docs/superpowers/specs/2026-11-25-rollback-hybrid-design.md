@@ -20,7 +20,8 @@ opponent can (below).
    (R = 0) facing a fast Chrome (R = 1) gets one frame less delay; the Chrome player keeps its delay. A PC that declares nothing
    (rollback off, or an older build) counts as R = 0, so nobody's delay is cut against it: today's lockstep, unchanged.
 2. **Wire: one additive client-to-server message, `Window {frames}`.** The server already ignores unknown match messages, and it sends
-   nothing new (the cut travels in the existing `Pace`), so no protocol bump. `kWire` moves to 2 to record it (`docs/ONLINE.md`).
+   nothing new (the cut travels in the existing `Pace`), so no protocol bump and no wire level: the level only decides what the server
+   may send a member (`docs/ONLINE.md` "Wire versions").
 3. **Floor 1 frame.** The cut never takes a delay under 1 (a sample is always applied at least one frame later). The budget, not the
    floor, bounds how far behind the truth a PC runs.
 4. **Budget R from measured costs, steady state.** `R = max w <= cap with played + save + restore + w x redo <= 0.9 x frame`. Steady

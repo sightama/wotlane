@@ -67,6 +67,13 @@ namespace wotm_net
         // waits up to `ms` for everyone's inputs for the frame; false if some are missing, or if the match stopped
         bool waitFrame(uint32_t frame, int ms);
         PadState input(int player, uint32_t frame) const;
+        // rollback: true with the player's input for the frame when it has arrived; the input to predict for a frame that hasn't
+        // (the newest that arrived from that player); the first frame some player's input is missing for
+        bool arrived(int player, uint32_t frame, PadState &s) const;
+        PadState prediction(int player) const;
+        uint32_t firstMissing() const;
+        // rollback: this PC's budget (proto::Window), sent to the server when it changes; the server cuts the others' delays by it
+        void setBudget(uint32_t frames);
         // players with no input for the frame (for the "Waiting for ..." message)
         std::vector<int> missing(uint32_t frame) const;
         // state hash of the frame, with the 256 block hashes it came from (optional: the server then names the differing blocks)
@@ -114,6 +121,8 @@ namespace wotm_net
         std::vector<uint32_t> sentAcks_;
         std::vector<proto::Hash> hashQueue_;
         std::vector<proto::Away> awayQueue_;
+        std::vector<proto::Window> windowQueue_;
+        uint32_t budget_ = 0;
         std::vector<bool> away_;                        // per player, from the server's Away messages
         bool dirty_ = false;
         Clock::time_point lastSend_{};

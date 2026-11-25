@@ -133,6 +133,8 @@ namespace wotm_net
             uint32_t lastAckOwn = 0;
             proto::RttWindow rtt;            // recent round trips (sampled every paceMs)
             uint32_t advised = 0;            // the delay last sent to this player (Start or Pace)
+            uint32_t path = 0;               // the delay its round trips call for, before the rollback cut (advised = path less the cut)
+            uint32_t budget = 0;             // rollback: the frames this PC can run past its newest confirmed input (Window; 0: none)
             Clock::time_point lastSend{};
             bool dirty = false;
             // how this player's input packets arrived since the last diagnostics line (Server::diagTick)
@@ -237,6 +239,9 @@ namespace wotm_net
         void diagTick(Match &m, const Lobby &l);
         void sampleBehind(Match &m);
         void holdbackTick(Match &m, const Lobby &l);
+        // the first frame a member's inputs lack, counted as if its delay were not cut by the rollback (a cut of c frames sends inputs for
+        // frames c lower, which is not trailing)
+        static uint32_t reach(const Match &m, size_t slot);
         std::string newCode();
         int lobbyByCode(const std::string &code) const;
         int openLobbies() const;

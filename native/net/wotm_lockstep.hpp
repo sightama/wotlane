@@ -75,6 +75,15 @@ namespace wotm_net
             const Player *p = find(player);
             return p ? p->contiguous : 0u;
         }
+        // first frame some player's input is missing for (every frame before it is complete); a dropped player is complete
+        uint32_t firstMissing() const
+        {
+            uint32_t first = 0xFFFFFFFFu;
+            for (const Player &p : players_)
+                if (p.contiguous < p.dropFrame)
+                    first = std::min(first, p.contiguous);
+            return first;
+        }
 
         void set(int player, uint32_t frame, const PadState &s)
         {

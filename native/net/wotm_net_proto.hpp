@@ -57,6 +57,8 @@ namespace wotm_net::proto
                       // Start delay, which stays in sync either way
         Rtt,          // server -> client: this player's round trip as the server measures it (a browser can't time the WebSocket
                       // pings itself), sent with every pace check. Older peers ignore it
+        Window,       // client -> server: this PC's rollback budget, the frames it can run past its newest confirmed input (WOTM_ROLLBACK);
+                      // the server cuts the others' delays by it (delayCut). An older server ignores it, so nobody's delay is cut
     };
 
     struct Join
@@ -122,6 +124,10 @@ namespace wotm_net::proto
     struct Rtt
     {
         uint32_t ms = 0;
+    };
+    struct Window
+    {
+        uint8_t frames = 0;
     };
 
     class Writer
@@ -423,6 +429,19 @@ namespace wotm_net::proto
         return r.done();
     }
 
+    inline std::vector<uint8_t> encode(const Window &m)
+    {
+        Writer w(Type::Window);
+        w.u8(m.frames);
+        return w.take();
+    }
+    inline bool decode(const std::vector<uint8_t> &b, Window &m)
+    {
+        Reader r(b, Type::Window);
+        m.frames = r.u8();
+        return r.done();
+    }
+
     // fields per game frame (WOTM_FIXEDSTEP) in a match of this many players: 3 or more, or a member whose device can't compute 60 game
     // frames a second (a phone, HELLO hz=30), switch the game to its own 30 Hz mode. A frame is always one step of game time, so a
     // device that falls short of the rate slows the game itself for everyone; at 30 Hz it does half the frames for the same time
@@ -479,6 +498,25 @@ namespace wotm_net::proto
     {
         return adviseDelay(current, rttMs, rttMs, player, frameMs);
     }
+
+    // Rollback (Window): a player's input applied k frames sooner reaches every other PC k frames late, and each of those PCs redoes the
+    // frames it ran on a prediction. So the frames a player's delay is cut by are the smallest budget among the other players still in
+    // the match (0 when one declared none, or nobody else is there)
+    inline uint32_t delayCut(const std::vector<uint32_t> &budgets, const std::vector<bool> &active, size_t player)
+    {
+        uint32_t cut = 0;
+        bool any = false;
+        for (size_t j = 0; j < budgets.size() && j < active.size(); ++j)
+        {
+            if (j == player || !active[j])
+                continue;
+            cut = any ? std::min(cut, budgets[j]) : budgets[j];
+            any = true;
+        }
+        return cut;
+    }
+    // a delay less the cut, never under 1 frame (a sample always applies at least one frame later)
+    inline uint32_t cutDelay(uint32_t delay, uint32_t cut) { return delay > cut + 1u ? delay - cut : 1u; }
 
     // the delay everyone starts with (the frames before it are neutral for every player): the largest player's, and at least 2,
     // since a browser's ping is 0 until its first pong (the advice brings a LAN player down to 1 during the match)

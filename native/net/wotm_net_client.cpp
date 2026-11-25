@@ -214,10 +214,12 @@ namespace wotm_net
         std::vector<uint8_t> packet;
         std::vector<proto::Away> aways;
         std::vector<proto::Hash> hashes;
+        std::vector<proto::Window> windows;
         {
             std::lock_guard<std::mutex> lk(mu_);
             hashes.swap(hashQueue_);
             aways.swap(awayQueue_);
+            windows.swap(windowQueue_);
             if (status_ == Status::Running && local_ >= 0)
             {
                 const uint32_t have = inputs_.nextMissing(local_);
@@ -247,6 +249,8 @@ namespace wotm_net
         }
         for (const proto::Away &a : aways)
             net_->send(proto::kControl, proto::encode(a), true);
+        for (const proto::Window &w : windows)
+            net_->send(proto::kControl, proto::encode(w), true);
         if (!packet.empty() && !(cfg_.dropInputPercent > 0 && static_cast<int>(rng_() % 100u) < cfg_.dropInputPercent))
             net_->send(proto::kInputs, packet, false);
     }
@@ -340,6 +344,37 @@ namespace wotm_net
             if (!inputs_.has(q, frame))
                 out.push_back(q);
         return out;
+    }
+
+    bool MatchClient::arrived(int player, uint32_t frame, PadState &s) const
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        if (!inputs_.has(player, frame))
+            return false;
+        s = inputs_.get(player, frame);
+        return true;
+    }
+
+    PadState MatchClient::prediction(int player) const
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        const uint32_t next = inputs_.nextMissing(player);
+        return next == 0u ? PadState{} : inputs_.get(player, next - 1u);
+    }
+
+    uint32_t MatchClient::firstMissing() const
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        return inputs_.firstMissing();
+    }
+
+    void MatchClient::setBudget(uint32_t frames)
+    {
+        std::lock_guard<std::mutex> lk(mu_);
+        if (frames == budget_)
+            return;
+        budget_ = frames;
+        windowQueue_.push_back({static_cast<uint8_t>(std::min(frames, 255u))});
     }
 
     void MatchClient::setAway(bool away)

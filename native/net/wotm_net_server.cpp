@@ -949,6 +949,12 @@ namespace wotm_net
         diagLine(archive_.reportsFile(), "src=client_outside claimed_lobby=" + code + " claimed_player=" + name + " " + diag::format(r), false);
     }
 
+    uint32_t Server::reach(const Match &m, size_t slot)
+    {
+        const Slot &s = m.slots[slot];
+        return m.inputs.nextMissing(static_cast<int>(slot)) + (s.path > s.advised ? s.path - s.advised : 0u);
+    }
+
     // For each player of a started match, every 100 ms: how many frames their inputs are behind the player furthest ahead. A player
     // whose inputs arrive late holds everyone else's frames back by this much
     void Server::sampleBehind(Match &m)
@@ -960,13 +966,13 @@ namespace wotm_net
         uint32_t lead = 0;
         for (size_t i = 0; i < m.slots.size(); ++i)
             if (!m.slots[i].gone)
-                lead = std::max(lead, m.inputs.nextMissing(static_cast<int>(i)));
+                lead = std::max(lead, reach(m, i));
         for (size_t i = 0; i < m.slots.size(); ++i)
         {
             Slot &s = m.slots[i];
             if (s.gone || !s.peer)
                 continue;
-            const uint32_t behind = lead - m.inputs.nextMissing(static_cast<int>(i));
+            const uint32_t behind = lead - reach(m, i);
             s.window.behindMax = std::max(s.window.behindMax, behind);
             s.window.behindSum += behind;
             ++s.window.behindSamples;
@@ -985,7 +991,7 @@ namespace wotm_net
         for (size_t i = 0; i < m.slots.size(); ++i)
             if (!m.slots[i].gone)
             {
-                lead = std::max(lead, m.inputs.nextMissing(static_cast<int>(i)));
+                lead = std::max(lead, reach(m, i));
                 frame = std::min(frame, m.inputs.nextMissing(static_cast<int>(i)));
             }
         // each member's trail, less what its longer path to the server alone accounts for
@@ -1001,7 +1007,7 @@ namespace wotm_net
             uint32_t behind = 0;
             if (active)
             {
-                behind = lead - m.inputs.nextMissing(static_cast<int>(i));
+                behind = lead - reach(m, i);
                 const uint32_t path = Holdback::latencyFrames(rttHighOf(s.peer), minRtt, proto::frameMs(m.step));
                 behind = behind > path ? behind - path : 0u;
             }
@@ -1046,10 +1052,10 @@ namespace wotm_net
             if (s.gone || !s.peer)
                 continue;
             const uint32_t rtt = (s.peer.enet ? s.peer.enet->roundTripTime : s.peer.ws->link->rttMs()) + testRttMs_.load();
-            char stats[200];
-            std::snprintf(stats, sizeof stats, " rtt_ms=%u rtt_high_ms=%u rtt_level_ms=%u in_pkts=%u in_gap_avg_ms=%.0f in_gap_max_ms=%.0f behind_max=%u behind_avg=%.1f away=%d", rtt,
+            char stats[240];
+            std::snprintf(stats, sizeof stats, " rtt_ms=%u rtt_high_ms=%u rtt_level_ms=%u in_pkts=%u in_gap_avg_ms=%.0f in_gap_max_ms=%.0f behind_max=%u behind_avg=%.1f away=%d rb_budget=%u", rtt,
                           rttHighOf(s.peer), s.rtt.riseLevel(), w.packets, w.packets ? w.gapSumMs / w.packets : 0.0, w.gapMaxMs, w.behindMax,
-                          w.behindSamples ? w.behindSum / w.behindSamples : 0.0, s.away ? 1 : 0);
+                          w.behindSamples ? w.behindSum / w.behindSamples : 0.0, s.away ? 1 : 0, s.budget);
             diagEvent(l, "player=" + s.name + " slot=" + std::to_string(i) + " transport=" + (s.peer.ws ? "ws" : "enet") + " hz=" +
                              std::to_string(60 / m.step) + " delay=" + std::to_string(s.advised) + stats);
         }
@@ -1200,15 +1206,24 @@ namespace wotm_net
                 s.rtt.add(rttHighOf(s.peer));
         const std::vector<uint32_t> levels = rttLevels(m), fallLevels = rttLevels(m, true);
         const double frame = proto::frameMs(m.step);
+        std::vector<uint32_t> budgets;
+        std::vector<bool> active;
+        for (const Slot &s : m.slots)
+        {
+            budgets.push_back(s.budget);
+            active.push_back(s.peer && !s.gone);
+        }
         for (size_t i = 0; i < m.slots.size(); ++i)
         {
             Slot &s = m.slots[i];
-            const uint32_t d = proto::adviseDelay(s.advised, levels, fallLevels, i, frame);
+            s.path = proto::adviseDelay(s.path, levels, fallLevels, i, frame);
+            const uint32_t cut = proto::delayCut(budgets, active, i), d = proto::cutDelay(s.path, cut);
             if (!s.peer || s.gone || d == s.advised)
                 continue;
-            log("lobby %s: %s's delay %u -> %u frame(s) (round trip the delay covers: %u ms)", l.code.c_str(), s.name.c_str(), s.advised, d, levels[i]);
+            log("lobby %s: %s's delay %u -> %u frame(s) (round trip the delay covers: %u ms, rollback cut %u)", l.code.c_str(), s.name.c_str(),
+                s.advised, d, levels[i], cut);
             diagEvent(l, "event=delay player=" + s.name + " from=" + std::to_string(s.advised) + " to=" + std::to_string(d) +
-                             " rtt_level_ms=" + std::to_string(levels[i]));
+                             " rtt_level_ms=" + std::to_string(levels[i]) + " cut=" + std::to_string(cut));
             s.advised = d;
             send(s.peer, proto::kControl, proto::encode(proto::Pace{d}), true);
         }
@@ -1305,6 +1320,18 @@ namespace wotm_net
             v.resize(m->slots.size());
             v[static_cast<size_t>(si)] = Match::SlotHash{h.hash, std::move(h.blocks)};
             checkHashes(*m);
+            break;
+        }
+        case proto::Type::Window:
+        {
+            proto::Window w;
+            if (!m || !proto::decode(data, w) || m->slots[static_cast<size_t>(si)].budget == w.frames)
+                break;
+            Slot &s = m->slots[static_cast<size_t>(si)];
+            log("lobby %s: %s's rollback budget %u -> %u frame(s)", lobbies_[static_cast<size_t>(m->lobby)].code.c_str(), s.name.c_str(), s.budget,
+                static_cast<uint32_t>(w.frames));
+            diagEvent(lobbies_[static_cast<size_t>(m->lobby)], "event=window player=" + s.name + " frames=" + std::to_string(w.frames));
+            s.budget = w.frames;
             break;
         }
         case proto::Type::Away:
@@ -1543,7 +1570,7 @@ namespace wotm_net
                     }
                     st.delay = cfg_.forcedDelay ? cfg_.forcedDelay : proto::startDelay(rtt, proto::frameMs(m->step));
                     for (Slot &s : m->slots)
-                        s.advised = st.delay;
+                        s.advised = s.path = st.delay;
                     m->lastPace = now;
                     m->delay = st.delay;
                     m->inputs = InputTimeline(static_cast<int>(m->slots.size()), st.delay);

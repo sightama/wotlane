@@ -3,6 +3,7 @@
 #include "wotm_confighash.hpp"
 #include "wotm_lockstep.hpp"
 #include "wotm_net_holdback.hpp"
+#include "wotm_prediction.hpp"
 #include "wotm_monsters.hpp"
 #include "wotm_lobby_client.hpp"
 #include "wotm_net_client.hpp"
@@ -376,6 +377,24 @@ namespace
         CHECK(t.get(1, 5) == PadState{});
     }
 
+    // the first frame some player's input is missing for: every frame before it is complete. A dropped player never holds it back
+    TEST(timeline_first_missing_is_the_earliest_gap_of_any_player)
+    {
+        InputTimeline t(3, 1);
+        CHECK(t.firstMissing() == 1u);
+        t.set(0, 1, pressed(1));
+        t.set(0, 2, pressed(1));
+        t.set(1, 1, pressed(2));
+        CHECK(t.firstMissing() == 1u);   // player 3 has nothing for frame 1
+        t.set(2, 1, pressed(3));
+        CHECK(t.firstMissing() == 2u);
+        t.drop(1, 2);
+        CHECK(t.firstMissing() == 2u);   // player 3 still lacks frame 2
+        t.set(2, 2, pressed(3));
+        t.set(2, 3, pressed(3));
+        CHECK(t.firstMissing() == 3u);   // player 1 lacks frame 3; the dropped player 2 counts as complete
+    }
+
     TEST(local_delay_schedules_sampled_input_ahead)
     {
         InputTimeline t(2, 3);
@@ -512,6 +531,113 @@ namespace
             contiguous = contiguous && next == i + 1u + s.delay();
         }
         CHECK(contiguous);
+    }
+
+    // ---- rollback: predictions and the window (wotm_prediction.hpp) ----
+    using wotm_net::PredictedInputs;
+
+    // the inputs that have arrived, for PredictedInputs::firstWrong
+    struct Arrived
+    {
+        std::map<std::pair<int, uint32_t>, PadState> in;
+        bool operator()(int player, uint32_t frame, PadState &s) const
+        {
+            const auto it = in.find({player, frame});
+            if (it == in.end())
+                return false;
+            s = it->second;
+            return true;
+        }
+    };
+
+    // a prediction that turns out right is dropped; one whose input hasn't arrived stays outstanding
+    TEST(predictions_right_ones_are_dropped)
+    {
+        PredictedInputs p;
+        Arrived a;
+        for (uint32_t f = 1; f < 4; ++f)
+            p.predicted(f, 1, pressed(2));
+        CHECK(p.oldest() == 1u);
+        a.in[{1, 1}] = pressed(2);
+        a.in[{1, 2}] = pressed(2);
+        CHECK(p.firstWrong(a) == PredictedInputs::kNone);
+        CHECK(p.oldest() == 3u);
+        a.in[{1, 3}] = pressed(2);
+        CHECK(p.firstWrong(a) == PredictedInputs::kNone);
+        CHECK(p.oldest() == PredictedInputs::kNone);
+    }
+
+    // the first wrong prediction is where the rollback starts, whichever player it was; it and every prediction after it are dropped
+    // (the redo records them again), the right ones before it too
+    TEST(predictions_first_wrong_one_names_the_frame)
+    {
+        PredictedInputs p;
+        Arrived a;
+        for (uint32_t f = 11; f < 15; ++f)
+            for (int q = 1; q < 3; ++q)
+                p.predicted(f, q, pressed(4));
+        a.in[{1, 11}] = pressed(4);   // right
+        a.in[{2, 11}] = pressed(4);   // right
+        a.in[{2, 12}] = pressed(4);   // right
+        a.in[{1, 12}] = pressed(5);   // wrong: frame 12
+        a.in[{2, 13}] = pressed(6);   // wrong too, later
+        CHECK(p.firstWrong(a) == 12u);
+        CHECK(p.oldest() == PredictedInputs::kNone);
+    }
+
+    // each (frame, player) is recorded once: the game reads the pad twice per frame and the first read is what the frame used
+    TEST(predictions_keep_the_first_record_of_a_frame)
+    {
+        PredictedInputs p;
+        Arrived a;
+        p.predicted(5, 0, pressed(1));
+        p.predicted(5, 0, pressed(2));
+        a.in[{0, 5}] = pressed(1);
+        CHECK(p.firstWrong(a) == PredictedInputs::kNone && p.oldest() == PredictedInputs::kNone);
+    }
+
+    // the frames a rollback goes back over are recorded anew: clear() forgets everything (a barrier: stage load)
+    TEST(predictions_clear_forgets_them)
+    {
+        PredictedInputs p;
+        p.predicted(3, 1, pressed(1));
+        p.clear();
+        CHECK(p.oldest() == PredictedInputs::kNone);
+        Arrived a;
+        a.in[{1, 3}] = pressed(9);
+        CHECK(p.firstWrong(a) == PredictedInputs::kNone);
+    }
+
+    // The window a PC can afford: the most frames w with played + save + restore + w redone frames under 90% of the frame (every frame
+    // may roll back while a remote player moves a stick), capped by the setting
+    TEST(window_affordable_fits_the_redo_in_the_frame)
+    {
+        using wotm_net::FrameCosts;
+        const double f60 = 1000.0 / 60.0, f30 = 1000.0 / 30.0;
+        CHECK(wotm_net::affordableWindow(FrameCosts{5.8, 1.4, 1.4, 5.5}, f60, 3) == 1u);    // Chrome, fast Mac: 14.1 of 15.0
+        CHECK(wotm_net::affordableWindow(FrameCosts{11.1, 3.1, 3.0, 10.7}, f60, 3) == 0u);  // Firefox: 17.2 already
+        CHECK(wotm_net::affordableWindow(FrameCosts{3.0, 1.4, 1.0, 2.5}, f60, 3) == 3u);    // native: 3.8 would fit
+        CHECK(wotm_net::affordableWindow(FrameCosts{3.0, 1.4, 1.0, 2.5}, f60, 2) == 2u);
+        CHECK(wotm_net::affordableWindow(FrameCosts{15.2, 2.1, 2.0, 14.8}, f30, 3) == 0u);  // Chrome, 8 monsters at 30 Hz: 34.1 of 30.0
+        CHECK(wotm_net::affordableWindow(FrameCosts{10.6, 2.9, 2.2, 9.7}, f30, 3) == 1u);   // native, 8 monsters: 25.4 of 30.0
+        CHECK(wotm_net::affordableWindow(FrameCosts{3.0, 1.0, 1.0, 0.0}, f60, 2) == 2u);    // a redo measured at 0: the cap
+        CHECK(wotm_net::affordableWindow(FrameCosts{5.8, 1.4, 1.4, 5.5}, f60, 0) == 0u);    // rollback off
+    }
+
+    // The window a PC declares follows what it can afford: down at once (an over-budget PC slows the match), up only after two windows in
+    // a row with room (a single quiet window doesn't move it)
+    TEST(window_chooser_drops_at_once_and_rises_after_two_windows)
+    {
+        wotm_net::WindowChooser c;
+        CHECK(c.window() == 0u);
+        CHECK(c.update(2) == 0u);
+        CHECK(c.update(2) == 2u);
+        CHECK(c.update(1) == 1u);   // at once
+        CHECK(c.update(2) == 1u);
+        CHECK(c.update(1) == 1u);   // the run with room starts over
+        CHECK(c.update(2) == 1u);
+        CHECK(c.update(3) == 2u);   // two in a row with room: to the smaller of the two
+        CHECK(c.update(0) == 0u);
     }
 
     // ---- protocol ----
@@ -718,6 +844,30 @@ namespace
         p::Pace b;
         CHECK(p::decode(p::encode(a), b) && b.delay == 7u);
         CHECK(p::typeOf(p::encode(a)) == p::Type::Pace);
+    }
+
+    TEST(proto_window_roundtrip)
+    {
+        p::Window a{2};
+        p::Window b;
+        CHECK(p::decode(p::encode(a), b) && b.frames == 2u);
+        CHECK(p::typeOf(p::encode(a)) == p::Type::Window);
+    }
+
+    // A player's input applied k frames sooner reaches every other PC k frames late, and those PCs redo the frames: the cut is the
+    // smallest budget among the other players still in the match (none declared, or nobody else: no cut), and a delay never goes under 1
+    TEST(proto_delay_cut_is_the_smallest_budget_of_the_others)
+    {
+        CHECK(p::delayCut({0, 1}, {true, true}, 0) == 1u);
+        CHECK(p::delayCut({0, 1}, {true, true}, 1) == 0u);
+        CHECK(p::delayCut({2, 1, 3}, {true, true, true}, 0) == 1u);
+        CHECK(p::delayCut({2, 1, 3}, {true, false, true}, 0) == 3u);   // player 2 left: only player 3 absorbs it
+        CHECK(p::delayCut({2}, {true}, 0) == 0u);                       // alone
+        CHECK(p::delayCut({2, 2}, {true, false}, 0) == 0u);
+        CHECK(p::cutDelay(5, 2) == 3u);
+        CHECK(p::cutDelay(2, 2) == 1u);
+        CHECK(p::cutDelay(1, 3) == 1u);
+        CHECK(p::cutDelay(4, 0) == 4u);
     }
 
     TEST(proto_rtt_roundtrip)
@@ -1994,6 +2144,50 @@ namespace
         run(600);
         CHECK(ok && most >= 10u && a.delay() + 4u <= most && b.delay() + 4u <= most);   // back down (how far depends on the local ping)
         CHECK(same && ordered);
+        CHECK(a.status() == Status::Running && b.status() == Status::Running);
+    }
+
+    // A PC that declares a rollback budget (Window) takes that many frames off the other player's delay; its own delay stays the path's,
+    // since the other PC declared none. The clients see the inputs that arrived and predict the rest from the newest one
+    TEST(match_rollback_budget_cuts_the_other_players_delay)
+    {
+        ServerConfig cfg = testConfig();
+        cfg.paceMs = 20;
+        RunningServer rs(cfg);
+        auto ms = formMatch(cfg.port, {"Ana", "Bia"}, {3, 1});
+        MatchClient a, b;
+        std::string err;
+        CHECK(a.start(clientFor(cfg.port, *ms[0]), err));
+        CHECK(b.start(clientFor(cfg.port, *ms[1]), err));
+        CHECK(a.waitStarted(5000) && b.waitStarted(5000));
+        MatchClient *cs[2] = {&a, &b};
+        uint32_t i = 0;
+        bool ok = true;
+        const auto run = [&](uint32_t samples) {
+            for (const uint32_t end = i + samples; i < end && ok; ++i)
+            {
+                for (int q = 0; q < 2; ++q)
+                    cs[q]->pushSample(pressed(static_cast<uint16_t>(0x10u << q)));   // steady: the delay can step
+                for (MatchClient *c : cs)
+                    ok = ok && c->waitFrame(i, 5000);
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            }
+        };
+        rs.server.setTestRtt(150);   // 153 ms of path: 10 frames each (more on a loaded machine)
+        run(300);
+        CHECK(ok && a.delay() >= 10u && a.delay() == b.delay());
+        b.setBudget(2);
+        run(300);
+        CHECK(ok && a.delay() + 2u == b.delay());
+        b.setBudget(0);
+        run(300);
+        CHECK(ok && a.delay() == b.delay());
+        // what B sees of A: the frames that arrived, and the newest of them as the prediction for the rest
+        PadState s;
+        const uint32_t next = b.firstMissing();
+        CHECK(next > i && b.arrived(0, next - 1u, s) && s == pressed(0x10u));
+        CHECK(!b.arrived(0, next + 50u, s));
+        CHECK(b.prediction(0) == pressed(0x10u));
         CHECK(a.status() == Status::Running && b.status() == Status::Running);
     }
 
