@@ -4,6 +4,8 @@
 import { rememberedSlow } from './rate.js';
 
 export const PROTOCOL = 5;   // native/net/wotm_net_proto.hpp kProtocol (5: map ids as the stage, <monster>:<skin> members)
+// the additive wire level this page knows (kWire, docs/ONLINE.md "Wire versions"): the server sends it nothing newer
+export const WIRE = 1;
 
 // one lobby line: the command, its words, and its key=value words as fields (MATCH, SETTINGS); `rest` is everything after the command
 export function parseLine(line) {
@@ -150,7 +152,7 @@ export class LobbyClient {
     this.ready = this.expect(['WELCOME']);
     this.ready.catch(() => this.close());   // a refused HELLO leaves nothing to keep open
     // rejoin=1: a token after the join, so the page that reloads after a match can come back to the same lobby (REJOIN, quick rematch)
-    socket.onopen = () => socket.send(`HELLO ${PROTOCOL} ${build}${halfRate ? ' hz=30' : ''} rejoin=1`);
+    socket.onopen = () => socket.send(`HELLO ${PROTOCOL} ${build}${halfRate ? ' hz=30' : ''} rejoin=1 wire=${WIRE}`);
   }
 
   expect(replies) {

@@ -195,6 +195,25 @@ to the console) and starts once that many players are in; `--code <code> --name 
   blocks that differ. Please report it with the message and everyone's `runtime\live.err.log` (each one has that PC's block hashes
   of the moment, so two logs are enough to name what diverged).
 
+## Wire versions
+
+Older builds keep playing on the newest `wotm_server` (a deploy during a game night must not refuse a player whose page or package is
+from before it), so the wire changes only by adding, and every addition is negotiated:
+
+- `kProtocol` (`native/net/wotm_net_proto.hpp`) moves only when a message's format changes; the server refuses another protocol.
+- `kWire`, the additive level, moves when a message or an optional field is added. A client says its level in `HELLO` (`wire=<n>`;
+  none means 0, every build from before levels) and the server keeps it per connection.
+- The server never sends a member what its level does not know: a new message or field is sent only to members at or above the level
+  that added it. The first addition that goes to a whole lobby at once also picks, per lobby, the lowest level among its members
+  and uses only that (no such line exists yet). Level 1 adds the server's own
+  level to `WELCOME` (`WELCOME <lobbies> wire=<n>`); a level 0 client gets `WELCOME <lobbies>` as always.
+- The page says its level in `web/lobby.js` (`WIRE`, kept equal to `kWire` by `web/lobby.test.mjs`). The native lobby clients
+  (`wotm_lobby_client.cpp`, the launcher, `net_lobby.py`) say none yet, so they get only level 0 lines; one must send `wire=` before
+  it can get anything newer, since the server cannot tell a client that does not know a level from one that did not say it.
+- Match messages travel on the match connection (ENet or `/match`), which does not carry a level today: the first change that adds a
+  match message also maps each match connection to its member's lobby level, and sends the new message only at or above it.
+- Lobbies compare the simulation id (`tools/build_id.py`): builds that compute alike play together whatever their wire level.
+
 ## Diagnostics
 
 When an online match goes badly (lag, stutter, a freeze) the server holds what every player's page and the server itself saw, so the

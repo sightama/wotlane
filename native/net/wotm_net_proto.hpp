@@ -18,6 +18,10 @@ namespace wotm_net::proto
 {
     constexpr uint16_t kProtocol = 5;   // 3: pad states carry mouse motion and camera settings; 4: Hash carries the 256 block hashes;
                                         // 5: the lobby carries saved map ids (stage) and skin ids (<monster>:<skin>)
+    // The additive wire level (docs/ONLINE.md "Wire versions"): it moves when a message or an optional field is added, and kProtocol
+    // only when a format changes. A client says its level in HELLO (wire=<n>; none: 0) and the server sends it only what that level
+    // knows, so older retained builds keep playing on the newest server. 1: WELCOME carries the server's level (wire=<n>)
+    constexpr int kWire = 1;
     constexpr int kMaxPlayers = 8;   // 4 in the game's player slots and 4 in AI slots driven by the network (wotm_multi.inc)
     constexpr uint16_t kDefaultPort = 7777;
     constexpr uint16_t kDefaultMasterPort = 7778;   // the master server (list of public servers, wotm_net_master.hpp)
@@ -525,7 +529,7 @@ namespace wotm_net::proto
     // next member becomes owner. The lobby has a 4-letter code (to join without the list) and may have a password. Members stay in it
     // during the match and, when the match ends (everyone has left it: QUIT closes the game), it goes back to waiting with the same
     // members. An empty lobby closes.
-    // client: HELLO <protocol> <build> | LIST | CREATE <lobby> <name> <monster> [password] | JOIN <code> <name> <monster> [password] |
+    // client: HELLO <protocol> <build> [hz=30] [rejoin=1] [wire=<n>] | LIST | CREATE <lobby> <name> <monster> [password] | JOIN <code> <name> <monster> [password] |
     //         SET [stage=<stage>] [wins=<wins>] [mods=<list>] | MONSTER <monster> (any member, while the lobby waits) | START | LEAVE |
     //         CHAT <text> (printable text up to kMaxChatBytes, kChatBurst lines per kChatWindowMs, only while the lobby waits) |
     //         KICK <name> | OWNER <name> (owner only, while the lobby waits: remove a member, who can't join this lobby again for a while;
@@ -533,7 +537,7 @@ namespace wotm_net::proto
     //         "sw" when its browser draws WebGL in software, shown to the lobby; an older server refuses the "sw" forms with an ERROR) |
     //         DIAG <key=value>... (a page's diagnostics report, at any time after HELLO: never answered, never relayed; see wotm_net_diag.hpp;
     //         an older server answers "ERROR unknown command: DIAG", which a client that sends it ignores)
-    // server: WELCOME <open lobbies> | LOBBY <code> <waiting|playing> <n>/<max> <open|locked> <lobby> <owner> <names,...|-> |
+    // server: WELCOME <open lobbies> [wire=<n>] (to a client at level 1 or above) | LOBBY <code> <waiting|playing> <n>/<max> <open|locked> <lobby> <owner> <names,...|-> |
     //         END | CREATED <code> | JOINED <code> | LEFT <code> | SETTINGS <code> stage=<stage> wins=<wins> mods=<list> | CHAT <code> <name> <text> |
     //         MEMBERS <code> <owner> <name:monster,...> |
     //         KICKED <code> <seconds> (this member was removed; the seconds are the ban) |
@@ -571,6 +575,17 @@ namespace wotm_net::proto
             if (const size_t eq = s.find('='); eq != std::string::npos && eq > 0)
                 kv[s.substr(0, eq)] = s.substr(eq + 1);
         return kv;
+    }
+
+    // a HELLO's wire level (its key=values): 0 when it says none or something that is not a level (a build from before levels)
+    inline int wireOf(const std::map<std::string, std::string> &kv)
+    {
+        const auto it = kv.find("wire");
+        if (it == kv.end() || it->second.empty() || it->second.size() > 4)
+            return 0;
+        if (it->second.find_first_not_of("0123456789") != std::string::npos)
+            return 0;
+        return std::stoi(it->second);
     }
 
     // player name: letters, digits, '_' and '-', up to 16
