@@ -76,10 +76,10 @@ setTimeout(() => { const m = pending(); if (m && !m.classList.contains('problem'
   #canvas { display: block; width: 100%; height: 100%; background: #000; outline: none; }
   #screen { position: absolute; inset: 0; }
   /* the loading screen: over the canvas while the disc streams in; the card takes presses (Another tip), the rest of it none */
-  #loading { position: absolute; inset: 0; display: grid; place-items: center; padding: 16px; overflow: hidden; color: var(--fg); pointer-events: none;
+  #loading { position: absolute; inset: 0; display: grid; padding: 16px; overflow: hidden auto; color: var(--fg); pointer-events: none;
              background: radial-gradient(120% 70% at 50% 108%, #5a1d0c 0%, #1d0e0e 45%, var(--bg) 78%); }
   #loading > .art { position: absolute; inset: auto 0 0 0; width: 100%; height: min(46%, 360px); }
-  .loadcard { position: relative; width: min(460px, 100%); display: grid; gap: 12px; padding: 20px; border: 1px solid var(--line); border-radius: 12px;
+  .loadcard { position: relative; margin: auto; width: min(460px, 100%); display: grid; gap: 12px; padding: 20px; border: 1px solid var(--line); border-radius: 12px;
               background: rgba(11, 11, 13, .86); box-shadow: 0 0 60px rgba(224, 89, 42, .18); pointer-events: auto; }
   .kicker { margin: 0; color: var(--accent); font-size: 12px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; }
   #loadHeadline { margin: 0; font-size: 20px; font-weight: 600; }
@@ -91,6 +91,14 @@ setTimeout(() => { const m = pending(); if (m && !m.classList.contains('problem'
   .loadtip .label { margin-bottom: 2px; }
   /* a phone held sideways: the touch buttons take the two sides, so the card keeps to the middle between them */
   @media (pointer: coarse) and (orientation: landscape) { .loadcard { width: min(380px, max(240px, 100% - 440px)); } }
+  /* a short screen (a phone held sideways): a tighter card, so all of it fits */
+  @media (max-height: 420px) {
+    .loadcard { gap: 6px; padding: 12px; }
+    .kicker { display: none; }
+    #loadHeadline { font-size: 16px; }
+    .loadmeta, #loadNote, .loadtip p { font-size: 12px; }
+    .loadtip { gap: 6px; padding-top: 6px; }
+  }
   #loadNextTip { flex: none; border-radius: 8px; padding: 6px 12px; min-height: var(--target); min-width: var(--target); }
   progress { --progress-bar-radius: 1e5px; appearance: none; border: 0 solid; overflow: clip; width: 100%; height: 12px; border-radius: var(--progress-bar-radius);
              background: var(--bar-track); box-shadow: inset 0 1px 2px rgba(0, 0, 0, .4);

@@ -245,7 +245,7 @@ test('the tips cover controls, rules and game night, and read cleanly', () => {
   for (const word of [/Jump, Fast and Turbo/, /invite/i, /rematch/i, /8 players/]) assert.ok(tips.some((t) => word.test(t)), `a tip matching ${word}`);
   for (const t of tips) {
     assert.ok(t.length > 20 && t.length <= 140, `short enough to read at a glance: ${t}`);
-    assert.doesNotMatch(t, /[–—]/, 'no em or en dashes');
+    assert.doesNotMatch(t, /[\u2013\u2014]/, 'no em or en dashes');
     assert.match(t, /[.!]$/);
   }
 });
@@ -254,4 +254,11 @@ test('a tip list that lacks an action in the controls skips that tip instead of 
   const tips = loadingTips(CONTROLS.filter((c) => c.bind !== 'BLOCK'), keyLabel);
   assert.ok(!tips.some((t) => /undefined/.test(t)));
   assert.ok(!tips.some((t) => /^Hold /.test(t)));
+});
+
+test('time left grows while chunks stop coming', () => {
+  const p = new LoadingProgress(20 * MB);
+  for (let i = 0; i <= 4; i++) p.add(MB, 1000 + i * 500);
+  assert.equal(p.secondsLeft(3000), (20 * MB - 5 * MB) / (2 * MB));   // 15 MB at 2 MB/s
+  assert.equal(p.secondsLeft(5000), 15);                              // 2 s of nothing: 4 MB over 4 s is 1 MB/s
 });

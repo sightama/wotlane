@@ -33,13 +33,14 @@ class LoadingProgress {
     this.done = true;
   }
 
-  // seconds until the expected download is in at the recent rate, or null: under a second of samples, nothing left, or no network bytes
-  secondsLeft() {
+  // seconds until the expected download is in at the recent rate (a stall since the last chunk lowers it), or null: under a second of
+  // samples, nothing left, or no network bytes
+  secondsLeft(now) {
     if (this.samples.length < 2 || this.bytes >= this.expectedBytes) return null;
     const [t0, b0] = this.samples[0];
     const [t1, b1] = this.samples[this.samples.length - 1];
     if (t1 - t0 < 1000 || b1 <= b0) return null;
-    return (this.expectedBytes - this.bytes) / ((b1 - b0) / ((t1 - t0) / 1000));
+    return (this.expectedBytes - this.bytes) / ((b1 - b0) / ((Math.max(t1, now) - t0) / 1000));
   }
 
   // what the loading screen draws at `now`, or null once the downloads went quiet (and from then on): `percent` is null until there is
@@ -55,7 +56,7 @@ class LoadingProgress {
     const raw = Math.floor((this.bytes / this.expectedBytes) * 100);
     const total = Math.floor(this.expectedBytes / MB);
     const mb = Math.min(total, Math.floor(this.bytes / MB));
-    const left = this.secondsLeft();
+    const left = this.secondsLeft(now);
     return {
       percent: Math.min(99, raw),
       headline: 'Downloading game data',

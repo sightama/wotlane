@@ -3,6 +3,8 @@
 'use strict';
 
 const IDLE_MS = 2000;
+// the page's overlays over the game with buttons of their own: the stall prompt and the loading screen
+const OVERLAYS = '#stall, #loading';
 
 // Tab, with or without Shift: not the browser's or the system's own shortcuts (Ctrl+Tab, Alt+Tab, Cmd+Tab)
 function isGameTab(e) {
@@ -37,7 +39,9 @@ class IdleCursor {
 // `idleCursor`: false leaves the cursor alone (tests); it is also left alone on a touch screen
 function installGameInput({ win, canvas, running, idleCursor = true }) {
   win.addEventListener('keydown', (e) => {
-    if (running() && isGameTab(e) && !e.target?.closest?.('#stall')) e.preventDefault();   // the stall prompt's buttons need Tab
+    if (!running() || !isGameTab(e) || e.target?.closest?.(OVERLAYS)) return;   // an overlay's buttons need Tab
+    e.preventDefault();
+    win.document?.querySelector('#loading:not([hidden]) button')?.focus();   // the loading screen's button: nothing to pause yet
   }, true);
   if (idleCursor && !win.matchMedia?.('(pointer: coarse)').matches)
     new IdleCursor({ canvas, setTimer: (fn, ms) => win.setTimeout(fn, ms), clearTimer: (id) => win.clearTimeout(id) }).start();

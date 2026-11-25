@@ -510,7 +510,7 @@ for (const [w, h] of [[844, 390], [568, 320]]) {
   await ctx.close();
 }
 // ---- the loading screen: the parts, contrast over its art, the button, and motion only where the player allows it
-for (const [view, viewport, opts, min] of [['phone', { width: 844, height: 390 }, { isMobile: true, hasTouch: true }, 44], ['desktop', { width: 1280, height: 800 }, {}, 24]]) {
+for (const [view, viewport, opts, min] of [['phone', { width: 844, height: 390 }, { isMobile: true, hasTouch: true }, 44], ['small phone', { width: 568, height: 320 }, { isMobile: true, hasTouch: true }, 44], ['desktop', { width: 1280, height: 800 }, {}, 24]]) {
   const { ctx, page } = await openPage(viewport, opts, { refuseFullscreen: true });   // Firefox's window grows to the screen in fullscreen
   await showLoadingScreen(page, 'download');
   await check(`[${view}] the loading screen shows progress, bytes, time left, a note and a tip`, async () => {

@@ -78,6 +78,8 @@ test('the progress bar fill stands out from its track by 3:1, and the button is 
 test('the loading screen sits under the movie and the streaming note, and takes presses only on its card', () => {
   assert.match(rule('#loading'), /pointer-events:\s*none/);
   assert.match(rule('.loadcard'), /pointer-events:\s*auto/);
+  assert.doesNotMatch(rule('#loading'), /z-index/);   // #movie (z-index 5) and #streaming (6) stack above it
+  assert.match(rule('#movie'), /z-index:\s*5/);
 });
 
 test('the front card has a banner of the art above the title, hidden from assistive technology', () => {
