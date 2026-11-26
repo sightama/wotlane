@@ -185,6 +185,7 @@ struct UploadHdr {
 
 // Particles and effects: needs Ram (above); the Scene draws them after the translucent pass
 #include "wotm_fx.hpp"
+#include "wotm_silhouette.hpp"   // shadow silhouettes on the GPU (WOTM_GPUSIL)
 
 namespace wotm {
 
@@ -1582,10 +1583,15 @@ public:
         float inten = ram.f32(addr::psShadowIntens);   // 80 in psVarInit (GS scale: 0x80 = 1.0)
         inten = (inten > 0.f && inten < 1000.f) ? std::min(1.f, inten / 128.f) : 0.625f;
 
-        rlDrawRenderBatchActive();
-        rlDisableDepthMask();
-        rlDisableBackfaceCulling();
-        rlSetBlendMode(BLEND_ALPHA);
+        // every blocker's silhouette first: on the GPU (WOTM_GPUSIL=1) they are drawn together (two shared atlases, then each into its own target), with one switch away
+        // from the view's framebuffer and back; on the CPU each is rasterized here
+        static const bool wantGpu = [] { const char *v = std::getenv("WOTM_GPUSIL"); return v && v[0] == '1'; }();
+        // the view's framebuffer, before any render texture is made: LoadRenderTexture ends by binding the window's
+        GlTarget view;
+        if (wantGpu) { rlDrawRenderBatchActive(); view = GlTarget::current(); }
+        gpuSilOn_ = wantGpu && gpuSil_.ready(kShadowRes);
+        silJobs_.clear();
+        std::vector<unsigned> texs(shadows.size(), 0);
         for (size_t k = 0; k < shadows.size(); ++k) {
             const ShadowBlocker &b = shadows[k];
             static const bool shadowLog = std::getenv("WOTM_SHADOWLOG") != nullptr;   // once: getenv is slow on Windows
@@ -1598,11 +1604,61 @@ public:
                                  ram.u32(it.node + 0xC), it.lodIdx, it.fade, it.m.m[3][0], it.m.m[3][1], it.m.m[3][2], md ? md->tris.size() / 3 : size_t(0), md ? int(md->skinned) : -1);
                 }
             }
-            unsigned tex = 0;
-            {
-                ProfScope ps(DrawProf::ShadowTex);
-                tex = shadowTexture(ram, k, b, R, U);
-            }
+            ProfScope ps(DrawProf::ShadowTex);
+            texs[k] = shadowTexture(ram, k, b, R, U);
+        }
+        if (wantGpu) {
+            ProfScope ps(DrawProf::ShadowTex);
+            rlDrawRenderBatchActive();
+            if (!silJobs_.empty())   // every silhouette reused: nothing to draw
+                gpuSil_.render(silJobs_.size(), kShadowRes, [&](size_t i) {
+                    return std::pair<const RenderTexture2D &, const std::vector<float> &>(shadowCache_[silJobs_[i].entry].rt, silJobs_[i].xy);
+                });
+            static const bool silCheck = std::getenv("WOTM_SILCHECK") != nullptr;
+            if (silCheck)   // diagnostics: each GPU silhouette against the CPU one from the same corners (texels off by more than 2 levels)
+                for (const SilJob &j : silJobs_) {
+                    Image img = LoadImageFromTexture(shadowCache_[j.entry].rt.texture);
+                    ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
+                    std::vector<uint32_t> cpu;
+                    rasterSilhouette(j.xy, cpu);
+                    const auto *q = static_cast<const uint32_t *>(img.data);
+                    int worst = 0, over = 0;
+                    double sum = 0;
+                    for (int i = 0; i < img.width * img.height && size_t(i) < cpu.size(); ++i) {
+                        const int d = std::abs(int(q[i] >> 24) - int(cpu[size_t(i)] >> 24));
+                        worst = std::max(worst, d);
+                        over += d > 2;
+                        sum += cpu[size_t(i)] >> 24;
+                    }
+                    std::fprintf(stderr, "[silcheck] blocker %d: %zu tris, coverage %.0f, worst %d levels, %d texels over 2\n", shadows[j.slot].index,
+                                 j.xy.size() / 6, sum / 255.0, worst, over);
+                    UnloadImage(img);
+                }
+            static const bool slogTex = std::getenv("WOTM_SHADOWLOG") != nullptr;
+            if (slogTex)   // diagnostics: as the CPU path, shadow_<slot>.png (white = shadow), read back from the GPU
+                for (const SilJob &j : silJobs_) {
+                    Image img = LoadImageFromTexture(shadowCache_[j.entry].rt.texture);
+                    ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
+                    auto *q = static_cast<uint32_t *>(img.data);
+                    for (int i = 0; i < img.width * img.height; ++i) { const uint32_t a = q[i] >> 24; q[i] = 0xFF000000u | a | (a << 8) | (a << 16); }
+                    char name[64];
+                    std::snprintf(name, sizeof name, "shadow_%zu.png", j.slot);
+                    ExportImage(img, name);
+                    UnloadImage(img);
+                }
+            // after the diagnostics' read backs: on WebGL, LoadImageFromTexture leaves the window's framebuffer bound
+            view.restore();
+            // the receivers draw with the scene's shader, as on the CPU path (render left raylib's default one)
+            if (shaderOn_) rlSetShader(alphaShader_.id, alphaShader_.locs);
+        }
+
+        rlDrawRenderBatchActive();
+        rlDisableDepthMask();
+        rlDisableBackfaceCulling();
+        rlSetBlendMode(BLEND_ALPHA);
+        for (size_t k = 0; k < shadows.size(); ++k) {
+            const ShadowBlocker &b = shadows[k];
+            const unsigned tex = texs[k];
             if (!tex) continue;
             const float E = b.extent;
             auto lightUV = [&](const float p[3], float &u, float &v, float &h) {
@@ -1768,6 +1824,7 @@ public:
     struct ShadowCacheEntry {
         uint64_t key = 0, used = 0, redraw = ~0ull;
         Texture2D tex{};
+        RenderTexture2D rt{};   // the GPU's silhouette (WOTM_GPUSIL)
         int index = -1;
         float origin[3] = {}, extent = 0.f, R[3] = {};
         std::vector<uint32_t> nodes;
@@ -1791,44 +1848,12 @@ public:
         return true;
     }
 
-    // Blocker silhouette in the light frame: rasterized on the CPU (kShadowRes^2), blurred (retail filters with sprites) and sent
-    // as a black texture with alpha = coverage. Reused by the entries' key (shadowKey: a redraw without a new frame) or from
-    // another view of the same redraw (shadowNear: split screen). Items without a palette copy (viewer) always redo it.
-    unsigned shadowTexture(const Ram &ram, size_t slot, const ShadowBlocker &b, const float R[3], const float U[3]) {
+    // The blocker's casting triangles in silhouette texels (x, y per corner, 6 floats a triangle; y = texture row), degenerate ones out
+    std::vector<float> shadowCorners(const Ram &ram, const ShadowBlocker &b, const float R[3], const float U[3]) {
         constexpr int N = kShadowRes;
-        bool cacheable = true;
-        for (const DrawItem &it : b.casters) cacheable = cacheable && (!it.animPkt || it.pal);
-        const uint64_t key = cacheable ? shadowKey(b, R, U) : 0;
-        ++shadowTick_;
-        static const bool slogTex = std::getenv("WOTM_SHADOWLOG") != nullptr;
-        static const bool noReuse = std::getenv("WOTM_SHADOWNOCACHE") != nullptr;   // diagnostics: redo every silhouette (as before)
-        if (cacheable && !slogTex && !noReuse)
-            for (ShadowCacheEntry &e : shadowCache_)
-                if (e.tex.id && (e.key == key || shadowNear(e, b, R))) {
-                    e.used = shadowTick_;
-                    if (drawProfOn()) ++drawProf().shadowHit;
-                    return e.tex.id;
-                }
-        if (drawProfOn()) ++drawProf().shadowMiss;
-        static const bool keyLog = std::getenv("WOTM_SHADOWKEYLOG") != nullptr;   // diagnostics: what goes into each silhouette's key
-        if (keyLog) {
-            std::fprintf(stderr, "[shadowkey] blocker %d key %016llx origin %.3f %.3f %.3f extent %.3f casters", b.index, (unsigned long long)key,
-                         b.origin[0], b.origin[1], b.origin[2], b.extent);
-            for (const DrawItem &it : b.casters) {
-                ShadowBlocker one;
-                one.casters.push_back(it);
-                const uint64_t hm = shadowKey(one, R, U);   // only this one (matrix and palette)
-                one.casters.back().pal.reset();
-                std::fprintf(stderr, " %x(lod %d, pal %d, x %.3f, m+pal %04llx, m %04llx)", it.node, it.lodIdx, it.pal ? 1 : 0, it.m.m[3][0],
-                             (unsigned long long)(hm & 0xFFFF), (unsigned long long)(shadowKey(one, R, U) & 0xFFFF));
-            }
-            std::fprintf(stderr, "\n");
-        }
-        (void)slot;
-        std::vector<float> &cov = shadowCov_;
-        cov.assign(size_t(N * N), 0.f);
         const float E = b.extent;
-        for (const DrawItem &it : b.casters) {
+        std::vector<float> xy;
+        for (const DrawItem &it : b.casters)
             forEachTriPos(ram, it, [&](const float p[3][3]) {
                 float x[3], y[3];
                 for (int i = 0; i < 3; ++i) {
@@ -1838,17 +1863,29 @@ public:
                 }
                 const float area = (x[1] - x[0]) * (y[2] - y[0]) - (x[2] - x[0]) * (y[1] - y[0]);
                 if (!(std::fabs(area) > 1e-6f)) return;
-                const int x0 = std::max(1, int(std::floor(std::min({x[0], x[1], x[2]})))), x1 = std::min(N - 2, int(std::ceil(std::max({x[0], x[1], x[2]}))));
-                const int y0 = std::max(1, int(std::floor(std::min({y[0], y[1], y[2]})))), y1 = std::min(N - 2, int(std::ceil(std::max({y[0], y[1], y[2]}))));
-                for (int py = y0; py <= y1; ++py)
-                    for (int px = x0; px <= x1; ++px) {
-                        const float cx = px + 0.5f, cy = py + 0.5f;
-                        const float w0 = (x[1] - cx) * (y[2] - cy) - (x[2] - cx) * (y[1] - cy);
-                        const float w1 = (x[2] - cx) * (y[0] - cy) - (x[0] - cx) * (y[2] - cy);
-                        const float w2 = (x[0] - cx) * (y[1] - cy) - (x[1] - cx) * (y[0] - cy);
-                        if ((w0 >= 0 && w1 >= 0 && w2 >= 0) || (w0 <= 0 && w1 <= 0 && w2 <= 0)) cov[size_t(py * N + px)] = 1.f;
-                    }
+                for (int i = 0; i < 3; ++i) { xy.push_back(x[i]); xy.push_back(y[i]); }
             });
+        return xy;
+    }
+
+    // The CPU silhouette from those corners: every texel whose center is inside a triangle (not the 1-texel border), then a 3x3 box
+    // twice (retail filters with sprites); out as black with alpha = coverage. GpuSilhouette::render draws the same on the GPU.
+    void rasterSilhouette(const std::vector<float> &xy, std::vector<uint32_t> &px) {
+        constexpr int N = kShadowRes;
+        std::vector<float> &cov = shadowCov_;
+        cov.assign(size_t(N * N), 0.f);
+        for (size_t k = 0; k + 6 <= xy.size(); k += 6) {
+            const float x[3] = {xy[k], xy[k + 2], xy[k + 4]}, y[3] = {xy[k + 1], xy[k + 3], xy[k + 5]};
+            const int x0 = std::max(1, int(std::floor(std::min({x[0], x[1], x[2]})))), x1 = std::min(N - 2, int(std::ceil(std::max({x[0], x[1], x[2]}))));
+            const int y0 = std::max(1, int(std::floor(std::min({y[0], y[1], y[2]})))), y1 = std::min(N - 2, int(std::ceil(std::max({y[0], y[1], y[2]}))));
+            for (int py = y0; py <= y1; ++py)
+                for (int px = x0; px <= x1; ++px) {
+                    const float cx = px + 0.5f, cy = py + 0.5f;
+                    const float w0 = (x[1] - cx) * (y[2] - cy) - (x[2] - cx) * (y[1] - cy);
+                    const float w1 = (x[2] - cx) * (y[0] - cy) - (x[0] - cx) * (y[2] - cy);
+                    const float w2 = (x[0] - cx) * (y[1] - cy) - (x[1] - cx) * (y[0] - cy);
+                    if ((w0 >= 0 && w1 >= 0 && w2 >= 0) || (w0 <= 0 && w1 <= 0 && w2 <= 0)) cov[size_t(py * N + px)] = 1.f;
+                }
         }
         for (int pass = 0; pass < 2; ++pass) {   // 3x3 box twice; the border stays at 0 (CLAMP doesn't extend the shadow)
             std::vector<float> &o = shadowTmp_;
@@ -1862,18 +1899,13 @@ public:
                 }
             cov.swap(o);
         }
-        std::vector<uint32_t> &px = shadowPx_;
         px.resize(cov.size());
         for (size_t i = 0; i < cov.size(); ++i) px[i] = uint32_t(std::min(1.f, cov[i]) * 255.f) << 24;
-        if (slogTex) {   // diagnostics: silhouette in shadow_<slot>.png (white = shadow) in the current directory
-            std::vector<uint32_t> vis(px.size());
-            for (size_t i = 0; i < px.size(); ++i) { const uint32_t a = px[i] >> 24; vis[i] = 0xFF000000u | a | (a << 8) | (a << 16); }
-            Image img{vis.data(), N, N, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
-            char name[64];
-            std::snprintf(name, sizeof name, "shadow_%zu.png", slot);
-            ExportImage(img, name);
-        }
-        // entry to reuse: the least recently used (at most kShadowCacheN textures; 10 blockers x 4 views fit)
+    }
+
+    // Entry for a silhouette about to be made: the least recently used (at most kShadowCacheN; 10 blockers x 4 views fit), with what
+    // shadowKey and shadowNear compare
+    ShadowCacheEntry &shadowEntry(bool cacheable, uint64_t key, const ShadowBlocker &b, const float R[3]) {
         ShadowCacheEntry *e = nullptr;
         if (shadowCache_.size() < kShadowCacheN) e = &shadowCache_.emplace_back();
         else
@@ -1892,7 +1924,61 @@ public:
             e->nodes.push_back(it.node);
             for (int c = 0; c < 3; ++c) e->pos.push_back(it.m.m[3][c]);
         }
-        Texture2D &t = e->tex;
+        return *e;
+    }
+
+    // Blocker silhouette in the light frame: rasterized on the CPU (kShadowRes^2), blurred (retail filters with sprites) and sent
+    // as a black texture with alpha = coverage. Reused by the entries' key (shadowKey: a redraw without a new frame) or from
+    // another view of the same redraw (shadowNear: split screen). Items without a palette copy (viewer) always redo it.
+    unsigned shadowTexture(const Ram &ram, size_t slot, const ShadowBlocker &b, const float R[3], const float U[3]) {
+        constexpr int N = kShadowRes;
+        bool cacheable = true;
+        for (const DrawItem &it : b.casters) cacheable = cacheable && (!it.animPkt || it.pal);
+        const uint64_t key = cacheable ? shadowKey(b, R, U) : 0;
+        ++shadowTick_;
+        static const bool slogTex = std::getenv("WOTM_SHADOWLOG") != nullptr;
+        static const bool noReuse = std::getenv("WOTM_SHADOWNOCACHE") != nullptr;   // diagnostics: redo every silhouette (as before)
+        if (cacheable && !slogTex && !noReuse)
+            for (ShadowCacheEntry &e : shadowCache_)
+                if (const unsigned id = gpuSilOn_ ? e.rt.texture.id : e.tex.id; id && (e.key == key || shadowNear(e, b, R))) {
+                    e.used = shadowTick_;
+                    if (drawProfOn()) ++drawProf().shadowHit;
+                    return id;
+                }
+        if (drawProfOn()) ++drawProf().shadowMiss;
+        static const bool keyLog = std::getenv("WOTM_SHADOWKEYLOG") != nullptr;   // diagnostics: what goes into each silhouette's key
+        if (keyLog) {
+            std::fprintf(stderr, "[shadowkey] blocker %d key %016llx origin %.3f %.3f %.3f extent %.3f casters", b.index, (unsigned long long)key,
+                         b.origin[0], b.origin[1], b.origin[2], b.extent);
+            for (const DrawItem &it : b.casters) {
+                ShadowBlocker one;
+                one.casters.push_back(it);
+                const uint64_t hm = shadowKey(one, R, U);   // only this one (matrix and palette)
+                one.casters.back().pal.reset();
+                std::fprintf(stderr, " %x(lod %d, pal %d, x %.3f, m+pal %04llx, m %04llx)", it.node, it.lodIdx, it.pal ? 1 : 0, it.m.m[3][0],
+                             (unsigned long long)(hm & 0xFFFF), (unsigned long long)(shadowKey(one, R, U) & 0xFFFF));
+            }
+            std::fprintf(stderr, "\n");
+        }
+        std::vector<float> xy = shadowCorners(ram, b, R, U);
+        if (gpuSilOn_) {   // drawn by drawShadows with the other blockers' (GpuSilhouette::render)
+            ShadowCacheEntry &e = shadowEntry(cacheable, key, b, R);
+            if (!e.rt.id) e.rt = GpuSilhouette::make(N);
+            if (!e.rt.id) return 0;
+            silJobs_.push_back({size_t(&e - shadowCache_.data()), slot, std::move(xy)});
+            return e.rt.texture.id;
+        }
+        std::vector<uint32_t> &px = shadowPx_;
+        rasterSilhouette(xy, px);
+        if (slogTex) {   // diagnostics: silhouette in shadow_<slot>.png (white = shadow) in the current directory
+            std::vector<uint32_t> vis(px.size());
+            for (size_t i = 0; i < px.size(); ++i) { const uint32_t a = px[i] >> 24; vis[i] = 0xFF000000u | a | (a << 8) | (a << 16); }
+            Image img{vis.data(), N, N, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
+            char name[64];
+            std::snprintf(name, sizeof name, "shadow_%zu.png", slot);
+            ExportImage(img, name);
+        }
+        Texture2D &t = shadowEntry(cacheable, key, b, R).tex;
         if (!t.id) {
             Image img{px.data(), N, N, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
             t = LoadTextureFromImage(img);
@@ -3286,6 +3372,7 @@ public:
         ViewScope vs(vctx);
         if (drawProfOn()) ++drawProf().views;
         const bool useShader = beginShader(ram, wire);
+        shaderOn_ = useShader;
         rlDisableDepthTest();   // the sky is drawn first, without depth
         {
             ProfScope ps(DrawProf::Sky);
@@ -4239,6 +4326,11 @@ private:
     std::unordered_map<uint64_t, bool> partial_;   // texture (texKey) with semi-transparent alpha
     std::unordered_map<uint64_t, uint8_t> texAmax_;   // largest raw alpha of the texture (texKey): 0x80 = 1.0, up to 0xFF
     static constexpr size_t kShadowCacheN = 48;
+    GpuSilhouette gpuSil_;
+    bool gpuSilOn_ = false;   // this drawShadows makes its silhouettes on the GPU
+    bool shaderOn_ = false;   // draw() turned the GS shader on (beginShader)
+    struct SilJob { size_t entry, slot; std::vector<float> xy; };   // a silhouette shadowTexture queued for drawShadows to draw
+    std::vector<SilJob> silJobs_;
     static constexpr float kShadowTol = 1.5f;   // world units (the silhouette has ~2 per texel)
     std::vector<ShadowCacheEntry> shadowCache_;   // shadow silhouettes by the entries' key (shadowKey), least recently used goes out
     uint64_t shadowTick_ = 0;
