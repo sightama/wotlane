@@ -5,30 +5,11 @@
 #include "rlgl.h"
 #include "raymath.h"
 #include "wotm_glsl.hpp"
+#include "wotm_gpupass.hpp"
 #include <algorithm>
 #include <vector>
 
-extern "C" {
-extern void (*glad_glGetIntegerv)(unsigned, int *);
-}
-
 namespace wotm {
-
-// The framebuffer and viewport a view draws into (Scene::draw runs inside its BeginTextureMode), read before drawing elsewhere and
-// put back after. raylib's EndTextureMode would bind the window instead, so the silhouettes switch with rlEnableFramebuffer.
-struct GlTarget {
-    int fbo = 0, vp[4] = {};
-    static GlTarget current() {
-        GlTarget t;
-        glad_glGetIntegerv(0x8CA6 /* GL_FRAMEBUFFER_BINDING */, &t.fbo);
-        glad_glGetIntegerv(0x0BA2 /* GL_VIEWPORT */, t.vp);
-        return t;
-    }
-    void restore() const {
-        rlEnableFramebuffer(unsigned(fbo));
-        rlViewport(vp[0], vp[1], vp[2], vp[3]);
-    }
-};
 
 class GpuSilhouette {
 public:
@@ -71,33 +52,10 @@ public:
     // default one on).
     template <class Job>
     void render(size_t count, int n, Job job) {
-        // the view's matrices are kept aside and put back as they were: rlPushMatrix on the modelview only switches to rlgl's per-vertex
-        // transform, the camera's matrix stays in the modelview the batch draws with
-        const Matrix viewProj = rlGetMatrixProjection(), viewModel = rlGetMatrixModelview();
-        rlSetMatrixModelview(MatrixIdentity());
-        rlDisableDepthTest();
-        rlDisableColorBlend();   // coverage and the passes replace, they don't blend
-        rlDisableBackfaceCulling();   // the silhouette takes every triangle, whichever way it faces
+        const OffscreenPass pass;
         const float side = float(n), atlas = float(kTiles * n), none[2] = {0.f, 0.f};
         SetShaderValue(blur_, sideLoc_, &side, SHADER_UNIFORM_FLOAT);
-
-        auto into = [&](const RenderTexture2D &t, int w) {
-            rlEnableFramebuffer(t.id);
-            rlViewport(0, 0, w, w);
-            rlSetMatrixProjection(MatrixOrtho(0, w, 0, w, -1, 1));   // y up: row 0 of the texture is y = 0, as in the CPU array
-        };
-        auto quad = [&](unsigned tex, float w) {
-            rlSetTexture(tex);
-            rlBegin(RL_QUADS);
-            rlColor4ub(255, 255, 255, 255);
-            rlTexCoord2f(0, 0); rlVertex2f(0, 0);
-            rlTexCoord2f(1, 0); rlVertex2f(w, 0);
-            rlTexCoord2f(1, 1); rlVertex2f(w, w);
-            rlTexCoord2f(0, 1); rlVertex2f(0, w);
-            rlEnd();
-            rlDrawRenderBatchActive();
-            rlSetTexture(0);
-        };
+        auto into = [](const RenderTexture2D &t, int w) { OffscreenPass::into(t.id, w); };
         constexpr size_t perAtlas = size_t(kTiles * kTiles);
         for (size_t first = 0; first < count; first += perAtlas) {
             const size_t last = std::min(count, first + perAtlas);
@@ -127,7 +85,7 @@ public:
             into(pass1_, kTiles * n);
             SetShaderValue(blur_, fromLoc_, none, SHADER_UNIFORM_VEC2);
             BeginShaderMode(blur_);
-            quad(cover_.texture.id, atlas);
+            OffscreenPass::quad(cover_.texture.id, atlas);
             EndShaderMode();
 
             // second pass: each silhouette's tile into its own target
@@ -136,16 +94,10 @@ public:
                 into(job(i).first, n);
                 SetShaderValue(blur_, fromLoc_, from, SHADER_UNIFORM_VEC2);
                 BeginShaderMode(blur_);
-                quad(pass1_.texture.id, side);
+                OffscreenPass::quad(pass1_.texture.id, side);
                 EndShaderMode();
             }
         }
-
-        rlEnableColorBlend();
-        rlEnableBackfaceCulling();
-        rlEnableDepthTest();
-        rlSetMatrixProjection(viewProj);
-        rlSetMatrixModelview(viewModel);
     }
 
 private:

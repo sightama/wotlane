@@ -105,6 +105,13 @@ came from a browser cache, memory or disk; Firefox's requests are not seen). `--
 whole set from the script instead, and reports the storage quota and what `persist()` answers. The local server sends the page with
 `no-store`, so locally every visit downloads the wasm again; `--live` gives the real caching. Muted like every check here.
 
+## GPU dust check
+
+`node tools/browser_mp_test/dustcheck.mjs chrome|firefox|brave <page url> [secs] [--log <file>]` opens an AI vs AI fight on a served
+page (`python3 tools/serve_web.py --site <dist> --data <disc folder>`) with `WOTM_GPUDUST=1 WOTM_DUSTCHECK=1` from the address and
+sums the game's `[dustcheck]` lines: each GPU dust texture read back against the CPU raster of the same sprites (`docs/passos/NATIVO.md`).
+Exit 1 when a texel is off by more than 2 levels or no line came (the GPU path did not run).
+
 ## Rollback synctest
 
 `node tools/browser_mp_test/synctest.mjs --browser chrome|firefox --back 2 [--step 2 --match 3,1,2,4,5,7,8,9,1] --minutes 30` serves a
