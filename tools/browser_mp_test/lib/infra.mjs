@@ -71,8 +71,6 @@ export async function startLocal({ site, data, server, outDir, maxPlayers = 8, d
   };
 }
 
-// Live target: a public site needs nothing; a site with a password gate (password given) sets a cookie at its login form that every
-// player's context gets. The server's log is not reachable from here, so the client logs are the only witness.
 // A latency proxy between the tabs and the local server's WebSocket port (tools/net_lagproxy.py --tcp): one listening port per link,
 // each `{ rtt, jitter }` in ms; every connection to a link's port gets that round trip (several tabs may share one link). `spikes`:
 // "<link (1-based)>:<every s>:<extra rtt ms>:<length ms>". Returns the links' ports and stop(), which writes the proxy's log to `logPath`
@@ -97,6 +95,8 @@ export async function startLagProxy({ wsPort, links, spikes = [], logPath }) {
   return { ports, stop: () => { writeFileSync(logPath, log); proc.kill('SIGTERM'); } };
 }
 
+// Live target: a public site needs nothing; a site with a password gate (password given) sets a cookie at its login form that every
+// player's context gets. The server's log is not reachable from here, so the client logs are the only witness.
 export async function startLive({ url, password = '' }) {
   const base = url.replace(/\/$/, '');
   const cookies = password ? await loginCookies(base, password) : [];

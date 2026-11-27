@@ -178,6 +178,8 @@ CHECKS = {
     # rollback with 3 players (30 Hz), every mouse changing and player 2 pausing
     'rollback_3p': dict(**ROLLBACK, players=3, player_env=f'1:{ROLLBACK_MOUSE}|||2:{ROLLBACK_MOUSE};PS2X_PAD=24:0.3:start;25:0.3:up;'
                         f'26:0.3:cross|||3:{ROLLBACK_MOUSE}', secs=50, expect=r'\[dialog\] 0 opened|||[1-9]\d* rollbacks'),
+    # rollback_mouse's match without rollback: today's lockstep, whose delays and stalls the rollback checks compare against
+    'lockstep_mouse': dict(rtt=60, player_env=f'1:{ROLLBACK_MOUSE}|||2:{ROLLBACK_MOUSE}', secs=50),
     # rollback with mice that move on every other frame (inputs arriving between two pad reads of one frame)
     'rollback_taps': dict(**ROLLBACK, player_env=f'1:{ROLLBACK_TAPS}|||2:{ROLLBACK_TAPS}', secs=50,
                           expect=r'\[rollback\] window 0 -> 2|||[1-9]\d* rollbacks'),
