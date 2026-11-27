@@ -134,11 +134,12 @@
     button.addEventListener('click', async () => {
       button.disabled = true;
       try {
-        await ui.saveCard({
+        const outcome = await ui.saveCard({
           cell, makeCanvas, draw: window.wotmResult.drawCard,
           capture: () => ui.captureFrame(canvas, { raf: requestAnimationFrame, makeCanvas }),
           deliver: (blob) => ui.deliverPng(blob, { nav: navigator, makeFile: (data, name) => new File([data], name, { type: 'image/png' }), download }),
         });
+        if (outcome === 'none') out('[web] result card: nothing to save (no result, or the image could not be made)');
       } catch (e) {
         out('[web] result card failed: ' + e.message);
       } finally {

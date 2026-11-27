@@ -104,8 +104,9 @@ function drawCard(ctx, layout, frame) {
   ctx.fillStyle = '#b4b4bc';
   font(30, 400);
   if (layout.subtitle) ctx.fillText(layout.subtitle, x, 232);
-  let y = 320;
-  const rowH = Math.min(70, Math.floor(240 / Math.max(1, layout.rows.length)));
+  // more than five rows start higher so the eighth row's bar stays inside the card
+  let y = layout.rows.length > 5 ? 296 : 320;
+  const rowH = Math.min(70, Math.floor(250 / Math.max(1, layout.rows.length)));
   for (const row of layout.rows) {
     ctx.fillStyle = row.lead ? '#ffffff' : '#b4b4bc';
     font(Math.round(rowH * 0.56), row.lead ? 700 : 400);

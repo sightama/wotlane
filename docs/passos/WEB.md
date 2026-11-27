@@ -405,7 +405,7 @@ The score is read from the game's own state by `native/wotm_matchresult.hpp` (ro
 `Shell::m_roundsPlayed`, the monster type) and published, from `Scene::takeSnapshot`, as cells the page reads with `Module._wotm_web_result(i)`
 (the header lists them). It only reads guest RAM. It is in `PRESENTATION` of `tools/build_id.py`, so the simulation id does not change, and builds
 from before it existed still share lobbies. The game keeps no damage, KO or best-combo counter, so the card has none; every number on it is
-simulation state, so every client of one match reads the same score. `web/match_result.js` has the reading, the layout data and the drawing,
+simulation state, so every client of one match reads the same score once both have reached the same frame. `web/match_result.js` has the reading, the layout data and the drawing,
 `web/result_card_ui.js` the button, the frame copy (a blank WebGL buffer gives a card without a picture) and the share or download.
 
 ## The public site
