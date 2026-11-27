@@ -1,6 +1,7 @@
 // ABOUTME: Unit tests for the pure parts of the native layer (no game, no window): frame interpolation from wotm_interp.hpp (matrices,
 // ABOUTME: camera, cuts, projection), the settings profile for network matches, the mod digest, the map creator's stagemap and lock-on target cycling, the input latency stages. Build and run: tools\test_native.bat
 #include "wotm_interp.hpp"
+#include "wotm_matchresult.hpp"
 #include "wotm_settings.hpp"
 #include "wotm_snd.hpp"
 #include "wotm_rollback.hpp"
@@ -6386,6 +6387,107 @@ TEST(zip_inflate_codes_stops_on_an_invalid_code)
     // bl is a guest register: mask_bits + 2 * bl is a 32-bit guest address, here the halfword before the table (0: entry 0)
     CHECK(z::inflateCodes(ram.m.data(), tab.data(), zipt::kMaskAddr, s, tl, tl, 0x7FFFFFFF, 1, [] {}) == 1);
     CHECK(s.bitBucket == 0x5 && s.bitCount == 3 && s.windowPos == 0x1234);
+}
+
+// the score the page's result card reads (wotm_matchresult.hpp): a RAM of zeros, then a session of two fighters
+struct FakeRam
+{
+    std::vector<uint8_t> m = std::vector<uint8_t>(0x600000, 0);
+    bool ok(uint32_t a, uint32_t n = 4) const { return a >= 0x1000 && uint64_t(a) + n <= m.size(); }
+    uint32_t u32(uint32_t a) const { uint32_t v = 0; if (ok(a)) std::memcpy(&v, &m[a], 4); return v; }
+    void set(uint32_t a, uint32_t v) { std::memcpy(&m[a], &v, 4); }
+};
+
+// the offsets are the game's (include/game/game.h and shell.h; TheGame at shellGame 0x2B35A0, Shell at shellInfo 0x414D80), written out here
+// so a slip in the constants shows up
+TEST(matchresult_addresses_are_the_games_fields)
+{
+    namespace mr = wotm::matchresult;
+    CHECK(mr::kMonsters == 0x2B35A0u + 0x120380u && mr::kNumMonsters == 0x2B35A0u + 0x1203D8u);
+    CHECK(mr::kTypeBits == 0x14u && mr::kWinsThisGame == 0x3Cu);
+    CHECK(mr::kKillTarget == 0x414D80u + 0x2A44u && mr::kRoundsPlayed == 0x414D80u + 0x2B5Cu);
+    CHECK(mr::kInSession == 0x414D80u + 0x2BCCu);
+}
+
+TEST(matchresult_reads_only_inside_a_session)
+{
+    namespace mr = wotm::matchresult;
+    FakeRam ram;
+    ram.set(mr::kNumMonsters, 2);
+    CHECK(!mr::read(ram).session);
+    CHECK(mr::read(ram).count == 0);   // menus: stale monsters are not read
+}
+
+TEST(matchresult_reads_fighters_target_and_rounds)
+{
+    namespace mr = wotm::matchresult;
+    FakeRam ram;
+    ram.set(mr::kInSession, 1);
+    ram.set(mr::kNumMonsters, 2);
+    ram.set(mr::kKillTarget, 3);
+    ram.set(mr::kRoundsPlayed, 4);
+    ram.set(mr::kMonsters, 0x80100000u);       // KSEG0 pointer, masked like the game does
+    ram.set(mr::kMonsters + 4, 0xA0200000u);   // KSEG1
+    ram.set(0x100000 + mr::kTypeBits, 5u << 5);
+    ram.set(0x100000 + mr::kWinsThisGame, 3);
+    ram.set(0x200000 + mr::kTypeBits, 1u << 5);
+    ram.set(0x200000 + mr::kWinsThisGame, 1);
+    const mr::Result r = mr::read(ram);
+    CHECK(r.session && r.count == 2 && r.target == 3 && r.rounds == 4);
+    CHECK(r.fighter[0].type == 5 && r.fighter[0].wins == 3 && r.fighter[1].type == 1 && r.fighter[1].wins == 1);
+    CHECK(r.totalWins() == 4);
+    CHECK(r.winner() == 0);
+}
+
+TEST(matchresult_winner_needs_the_target_and_a_clear_lead)
+{
+    namespace mr = wotm::matchresult;
+    mr::Result r;
+    r.count = 2;
+    r.fighter[0].wins = 2;
+    r.fighter[1].wins = 1;
+    r.target = 3;
+    CHECK(r.winner() == -1);   // nobody at the target yet
+    r.fighter[1].wins = 3;
+    CHECK(r.winner() == 1);
+    r.fighter[0].wins = 3;
+    CHECK(r.winner() == -2);   // a tie at the target is no winner
+    r.target = 0;
+    CHECK(r.winner() == -1);   // endless
+    r.target = 3;
+    r.fighter[0].wins = 3;
+    r.fighter[1].wins = 3;
+    r.count = 3;
+    r.fighter[2].wins = 4;
+    CHECK(r.winner() == 2);   // the most wins at the target, wherever the tie is in the list
+}
+
+TEST(matchresult_skips_a_slot_outside_ram_and_caps_the_fighters)
+{
+    namespace mr = wotm::matchresult;
+    FakeRam ram;
+    ram.set(mr::kInSession, 1);
+    ram.set(mr::kNumMonsters, 12);   // more slots than the card holds
+    for (uint32_t i = 0; i < 12; ++i) ram.set(mr::kMonsters + 4 * i, 0x100000 + i * 0x1000);
+    CHECK(mr::read(ram).count == mr::kMaxFighters);
+    ram.set(mr::kMonsters + 4, 0x7FFFFFF0u);   // a pointer past RAM ends the list there
+    CHECK(mr::read(ram).count == 1);
+}
+
+TEST(matchresult_publishes_the_cells_the_page_reads)
+{
+    namespace mr = wotm::matchresult;
+    mr::Result r;
+    r.session = true;
+    r.count = 2;
+    r.target = 3;
+    r.rounds = 4;
+    r.fighter[0] = {5, 3};
+    r.fighter[1] = {1, 1};
+    mr::publish(r);
+    CHECK(mr::cell(0) == 1 && mr::cell(1) == 2 && mr::cell(2) == 3 && mr::cell(3) == 4 && mr::cell(4) == 0);
+    CHECK(mr::cell(5) == 5 && mr::cell(6) == 3 && mr::cell(7) == 1 && mr::cell(8) == 1);
+    CHECK(mr::cell(9) == 0 && mr::cell(10) == 0);   // slots past the fighters read 0
 }
 
 int main()

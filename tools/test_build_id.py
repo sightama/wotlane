@@ -122,6 +122,17 @@ class SimulationIdTest(unittest.TestCase):
             self.assertNotEqual(full, full2)
             self.assertRegex(sim, r'^wl-[0-9a-f]{16}$')
 
+    def test_a_new_presentation_file_leaves_the_id_other_builds_compute_without_it(self):
+        # clients on a build from before the file existed and clients on one with it must still share lobbies
+        with tempfile.TemporaryDirectory() as a:
+            repo, runtime = make_tree(Path(a))
+            before, full_before = self.ids(repo, runtime)
+            (repo / 'native' / 'wotm_matchresult.hpp').write_text('// reads the score\n')
+            after, full_after = self.ids(repo, runtime)
+            self.assertIn('native/wotm_matchresult.hpp', build_id.PRESENTATION)
+            self.assertEqual(before, after)
+            self.assertNotEqual(full_before, full_after)
+
     def test_a_simulation_change_moves_the_simulation_id(self):
         with tempfile.TemporaryDirectory() as a:
             repo, runtime = make_tree(Path(a))

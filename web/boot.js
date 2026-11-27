@@ -118,6 +118,37 @@
     if (document.hidden) syncSaves();   // a hidden tab gets no animation frames, which is where the game's saves are synced
   }
 
+  // the result card (web/result_card_ui.js): the Save button shows while the match has a result; the score is what the game publishes
+  // (native/wotm_matchresult.hpp), read and never written. The card is drawn here from it and the game's current frame
+  function watchResultCard() {
+    const ui = window.wotmResultUi;
+    const button = document.getElementById('resultSave');
+    const cell = (i) => window.Module?._wotm_web_result?.(i);
+    const makeCanvas = () => document.createElement('canvas');
+    const download = (blob, name) => {
+      const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: name });
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    };
+    ui.watchResult({ button, cell, setTimer: setInterval, clearTimer: clearInterval });
+    button.addEventListener('click', async () => {
+      button.disabled = true;
+      try {
+        const outcome = await ui.saveCard({
+          cell, makeCanvas, draw: window.wotmResult.drawCard,
+          capture: () => ui.captureFrame(canvas, { raf: requestAnimationFrame, makeCanvas }),
+          deliver: (blob) => ui.deliverPng(blob, { nav: navigator, makeFile: (data, name) => new File([data], name, { type: 'image/png' }), download }),
+        });
+        if (outcome === 'none') out('[web] result card: nothing to save (no result, or the image could not be made)');
+      } catch (e) {
+        out('[web] result card failed: ' + e.message);
+      } finally {
+        button.disabled = false;
+        canvas.focus();
+      }
+    });
+  }
+
   // after a long wait for another player, the page offers to keep waiting or leave the match (back to the front panel)
   function watchStalls() {
     const prompt = new StallPrompt(60000);
@@ -214,6 +245,7 @@
         tellHidden();
         // the game's code is down and running: from here its disc reads are what the background prefetch makes way for
         window.wotmGamePrefetch?.release();
+        watchResultCard();
       },
     };
     const finishLoading = showLoading(isOnline ? 57 << 20 : 27 << 20, bootStatus.text);   // a first visit's download to a fight, or to the title

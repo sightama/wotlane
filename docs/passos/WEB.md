@@ -394,6 +394,20 @@ rotates by itself (the tip changes when the player presses Another tip), and the
 indeterminate state, slowed to 10 s under reduced motion. `tools/page_check.mjs` checks the screen's parts, contrast, the 44 px button,
 that no touch button covers it and the reduced-motion switch in Chrome, Brave and Firefox; `tools/page_shots.mjs` takes the screenshots.
 
+## The match result card
+A **Save result card** button (`#resultSave`, bottom middle of the stage) shows while a match has a result worth keeping: two or more
+fighters in a play session and a round won. It makes a 1200x630 PNG of the winner, how the fighters stand (monster names and rounds won,
+the wins target, rounds played) over the game's current frame, and hands it to the share sheet where the browser shares files, else downloads it.
+The card holds no player name, address or IP: the file is named `war-of-the-monsters-result.png`, and the page's code for it makes no network
+call and writes nothing to the game.
+
+The score is read from the game's own state by `native/wotm_matchresult.hpp` (rounds won per fighter, `Shell::m_killTarget`,
+`Shell::m_roundsPlayed`, the monster type) and published, from `Scene::takeSnapshot`, as cells the page reads with `Module._wotm_web_result(i)`
+(the header lists them). It only reads guest RAM. It is in `PRESENTATION` of `tools/build_id.py`, so the simulation id does not change, and builds
+from before it existed still share lobbies. The game keeps no damage, KO or best-combo counter, so the card has none; every number on it is
+simulation state, so every client of one match reads the same score once both have reached the same frame. `web/match_result.js` has the reading, the layout data and the drawing,
+`web/result_card_ui.js` the button, the frame copy (a blank WebGL buffer gives a card without a picture) and the share or download.
+
 ## The public site
 The live site is https://playwotm.com/ (Cloudflare in front of Caddy on the GCP VM; the old https://35-185-58-174.sslip.io/ redirects to it with a 301).
 Everything that serves and deploys it lives in the private coord repo (`scripts/deploy_web.sh`, `web/Caddyfile`, notes in its README).

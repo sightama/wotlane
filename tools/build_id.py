@@ -36,6 +36,8 @@ PRESENTATION = (
     # presenting and measuring: the present phase, the window, the pause view, the latency probes. The present phase slews when this
     # machine's vblanks fire (g_wotmVblankSlewUs): wall-clock pacing only, since lockstep keys every input by frame index
     'native/wotm_framephase.hpp', 'native/wotm_windowfit.hpp', 'native/wotm_pauseview.hpp', 'native/wotm_latency.hpp',
+    # the score the page's result card reads: it only reads guest RAM and publishes copies for the page
+    'native/wotm_matchresult.hpp',
     # drawn screens: the menu font, the legend and prompts (not the map editor's view, which hands the pad to the free camera, nor the
     # training view, which resets the training state it shares with the hooks)
     'native/runtime/wotm_menufont.inc', 'native/runtime/wotm_legend.inc', 'native/runtime/wotm_prompts.inc',
