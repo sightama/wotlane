@@ -209,7 +209,8 @@ has the design and its decisions).
   So each PC tells the server its window (match message `Window`), and the server takes the smallest window among the *other* players
   off each player's delay (`proto::delayCut`), never under 1 frame. A PC without rollback (or an older build) counts as 0: nobody's
   delay is cut against it, and its own delay can still be cut when every other PC has a window.
-- **The window a PC can afford:** every 300 frames it measures a played frame, a save, a restore and a redone frame on the game thread
+- **The window a PC can afford:** every 300 frames (60 for the first two of a fight, so a window can start a couple of seconds
+  in) it measures a played frame, a save, a restore and a redone frame on the game thread
   (until a rollback measured one, a redone frame counts as a played one, and a save plus restore of the current state times them) and
   takes the most frames w with played + save + restore + w redone frames within 90% of a frame (`wotm_prediction.hpp`
   `affordableWindow`): every frame may roll back while another player moves a stick or the mouse. The window drops at once and rises

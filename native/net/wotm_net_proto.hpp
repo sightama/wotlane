@@ -125,6 +125,8 @@ namespace wotm_net::proto
     {
         uint32_t ms = 0;
     };
+    // the most frames a PC may run past its newest confirmed input (WOTM_ROLLBACK's cap)
+    constexpr uint8_t kMaxWindow = 3;
     struct Window
     {
         uint8_t frames = 0;
@@ -438,7 +440,7 @@ namespace wotm_net::proto
     inline bool decode(const std::vector<uint8_t> &b, Window &m)
     {
         Reader r(b, Type::Window);
-        m.frames = r.u8();
+        m.frames = std::min(r.u8(), kMaxWindow);   // a bigger one would cut everyone else's delay to 1 frame
         return r.done();
     }
 

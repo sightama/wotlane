@@ -540,13 +540,16 @@ namespace wotm_rollback
         bool g_resume = false;               // a slot was just restored: the next boundary entry resumes right after it
         bool g_lockstep = false;             // this boundary is a lockstep point (a dialog frame, or outside rtMain)
         uint32_t g_skipSamples = 0;          // a redo that ended early (at a dialog) gave back these frames: their samples are skipped
-        uint32_t g_soundBanks = 0;           // the sound engine's bank generation at the last present boundary (a change is a lockstep point)
+        uint32_t g_soundBanks = kNone;       // the sound engine's bank generation at the last present boundary (a change is a lockstep point)
 
         // costs of the current measuring window (ms), and the window's counts
         constexpr uint32_t kWindowFrames = 300u;
+        // a fight's first two measuring windows are short, so the window can rise (after two windows with room) a few seconds in
+        constexpr uint32_t kFirstWindowFrames = 60u;
+        uint32_t g_measured = 0;   // measuring windows since the stage load
         std::vector<double> g_played, g_saves, g_restores, g_redos;
         uint32_t g_frames = 0, g_rollbacks = 0, g_redone = 0, g_depthMax = 0;
-        // since the match began, for the page's diagnostics (wotmWebRollbackStats)
+        // since the game started (never reset: the page's diagnostics take differences, wotmWebRollbackStats)
         uint32_t g_allRollbacks = 0, g_allRedone = 0, g_allSaves = 0;
         double g_allRedoMs = 0.0, g_allSaveMs = 0.0;
         clk::time_point g_frameBegin, g_redoStart;
@@ -660,12 +663,13 @@ namespace wotm_rollback
             g_allRedoMs += spent;
         }
 
-        // Every kWindowFrames present frames: the costs measured (a save and a restore of the same state now and then when no rollback
-        // measured them) give the window this PC can afford
+        // Every kWindowFrames present frames (kFirstWindowFrames for a fight's first two): the costs measured (a save and a restore of the
+        // same state now and then when no rollback measured them) give the window this PC can afford
         void measure()
         {
-            if (++g_frames < kWindowFrames)
+            if (++g_frames < (g_measured < 2u ? kFirstWindowFrames : kWindowFrames))
                 return;
+            ++g_measured;
             if (g_restores.size() < 3u)   // calibration: save and restore the state of now (unchanged: the game carries on the same)
             {
                 const auto t0 = clk::now();
@@ -703,7 +707,7 @@ namespace wotm_rollback
                 std::fprintf(stderr, "[rollback] WOTM_ROLLBACK needs a network match (WOTM_NET): off\n");
                 return;
             }
-            g_cap = static_cast<uint32_t>(std::clamp(std::atoi(e), 1, 3));
+            g_cap = static_cast<uint32_t>(std::clamp(std::atoi(e), 1, static_cast<int>(wotm_net::proto::kMaxWindow)));
             if (const char *w = std::getenv("WOTM_ROLLBACK_WINDOW"); w && *w)
                 g_fixedWindow = std::clamp(std::atoi(w), 0, static_cast<int>(g_cap));
             if (const char *m = std::getenv("WOTM_ROLLBACK_MISPREDICT"); m && std::atoi(m) > 0)
@@ -725,9 +729,9 @@ namespace wotm_rollback
             g_redo = g_resume = false;
             g_hashed = kNone;
             g_skipSamples = 0;
+            g_soundBanks = kNone;
+            g_measured = 0;
             g_frameValid = false;
-            g_allRollbacks = g_allRedone = g_allSaves = 0;
-            g_allRedoMs = g_allSaveMs = 0.0;
         }
     }
 
@@ -782,8 +786,9 @@ namespace wotm_rollback
         // is checked here; the states kept from now on have the new banks
         if (const uint32_t banks = wotmSoundBankGeneration(); banks != hybrid::g_soundBanks)
         {
-            if (!hybrid::g_predicted.empty())
-                std::fprintf(stderr, "[rollback] a sound bank changed before frame %u while predictions were unchecked: lockstep point\n", frame);
+            if (hybrid::g_soundBanks != hybrid::kNone)   // not the fight's first boundary: a bank changed during the fight
+                std::fprintf(stderr, "[rollback] a sound bank changed before frame %u: lockstep point%s\n", frame,
+                             hybrid::g_predicted.empty() ? "" : " (a wrong prediction from before it would stop the match)");
             hybrid::g_soundBanks = banks;
             hybrid::g_lockstep = true;
         }
@@ -811,9 +816,12 @@ namespace wotm_rollback
         hybrid::backAtPresent();
         hybrid::waitThrough(wotm_sync::g_index);
         // the kept states are rtMain's thread's: a dialog on another guest thread can't unwind into them
-        if (ctx != g_ctx && !hybrid::g_predicted.empty())
+        if (ctx != g_ctx)
         {
-            wotm_sync::netFail("rollback: a dialog on another guest thread found unchecked predictions (a bug: please report it)");
+            if (hybrid::g_predicted.firstWrong([](int player, uint32_t frame, wotm_net::PadState &s) {
+                    return wotm_sync::g_net->arrived(player, frame, s);
+                }) != hybrid::kNone)
+                wotm_sync::netFail("rollback: a dialog on another guest thread found a wrong prediction (a bug: please report it)");
             return false;
         }
         // restored: the unwind reaches the entry of timerWaitForMinUpdateRate, where resume() goes straight on
@@ -845,8 +853,8 @@ namespace wotm_rollback
             save(index);
         // final: every input up to it arrived (frame 0 is always complete: the first frames are neutral) and no prediction is left unchecked
         const uint32_t first = net.firstMissing(), oldest = g_predicted.oldest();
-        const uint32_t final = std::min({first == 0u ? 0u : first - 1u, oldest == 0u ? 0u : oldest - 1u, index});
-        for (uint32_t f = g_hashed == kNone ? 0u : g_hashed + 1u; f <= final; ++f)
+        const uint32_t finalUpTo = std::min({first == 0u ? 0u : first - 1u, oldest == 0u ? 0u : oldest - 1u, index});
+        for (uint32_t f = g_hashed == kNone ? 0u : g_hashed + 1u; f <= finalUpTo; ++f)
         {
             // the live RAM, or the kept state's (the guest RAM is a snapshot's first piece)
             const uint8_t *ram = f == index ? rdram : g_slotFrame[slot(f)] == f ? g_slots[slot(f)].bytes.data() : nullptr;

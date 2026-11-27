@@ -866,6 +866,14 @@ namespace
         CHECK(p::typeOf(p::encode(a)) == p::Type::Window);
     }
 
+    // a window over the most a PC may declare reads as that most: one client can't cut everyone else's delay to 1 frame
+    TEST(proto_window_is_capped_when_read)
+    {
+        p::Window b;
+        CHECK(p::decode(p::encode(p::Window{200}), b) && b.frames == p::kMaxWindow);
+        CHECK(p::decode(p::encode(p::Window{p::kMaxWindow}), b) && b.frames == p::kMaxWindow);
+    }
+
     // A player's input applied k frames sooner reaches every other PC k frames late, and those PCs redo the frames: the cut is the
     // smallest budget among the other players still in the match (none declared, or nobody else: no cut), and a delay never goes under 1
     TEST(proto_delay_cut_is_the_smallest_budget_of_the_others)
