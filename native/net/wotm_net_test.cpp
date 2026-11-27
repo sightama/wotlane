@@ -596,6 +596,18 @@ namespace
         CHECK(p.firstWrong(a) == PredictedInputs::kNone && p.oldest() == PredictedInputs::kNone);
     }
 
+    // every read of a frame uses what its first read predicted: an earlier input arriving between two reads must not change the frame's
+    // input (the check compares only the recorded one)
+    TEST(predictions_are_latched_per_frame_and_player)
+    {
+        PredictedInputs p;
+        PadState s;
+        CHECK(!p.used(5, 1, s));
+        p.predicted(5, 1, pressed(1));
+        CHECK(p.used(5, 1, s) && s == pressed(1));
+        CHECK(!p.used(5, 0, s) && !p.used(6, 1, s));
+    }
+
     // the frames a rollback goes back over are recorded anew: clear() forgets everything (a barrier: stage load)
     TEST(predictions_clear_forgets_them)
     {

@@ -201,7 +201,8 @@ Off by default; `WOTM_ROLLBACK=<n>` (n = 1 to 3; in the browser `?WOTM_ROLLBACK=
 has the design and its decisions).
 
 - **What it changes:** a PC with rollback runs up to its **window** of frames past the newest input that arrived from the others,
-  predicting each missing input as that player's newest one. When the real input arrives and differs, it restores the state saved after
+  predicting each missing input as that player's newest one. A frame keeps the prediction it first ran on for all its pad reads, even when
+  the real input arrives between two of them. When the real input arrives and differs, it restores the state saved after
   the frame before the wrong one and runs the frames up to the present again (no drawing, sound or pacing in between), then draws the
   corrected frame. The other players see that PC's own inputs as today.
 - **Who gets less delay:** a player's input applied k frames sooner reaches every other PC k frames late, and those PCs redo the frames.
@@ -216,15 +217,19 @@ has the design and its decisions).
 - **State:** the snapshot is the synctest's (`docs/investigacoes/2026-11-18/rollback-synctest/README.md`): guest RAM in use,
   scratchpad, CPU context, VU0, the host state the game reads back (fixed-step clock, orbit camera, modifiers, intro skip, test cheats)
   and the sound engine. A state is kept only when a rollback could come back to it (the next frame runs on a prediction, or this one did
-  and its inputs are not all in).
+  and its inputs are not all in). It keeps cap + 2 states plus one for timing, each about 40 MB (47 MB with 8 monsters): about
+  200 MB at cap 2, 240 MB at cap 3.
 - **Lockstep points:** a dialog loop's frame (pause, round end) and a frame boundary outside the fight loop wait for every input up to
   them. A wrong prediction found there restores the last fight frame's state through the runtime's unwind (the hook returns with the
   restored pc and the recompiled callers return); a redo that reaches a dialog earlier than the frame it started from ends there.
+  A sound bank loaded or unloaded is a lockstep point too: a state kept before it cannot come back (the sound engine refuses it), so a wrong
+  prediction from before the change stops the match with an error.
 - **Desync check:** only final frames (every input up to them arrived and was checked) go into the hash the server compares, from the
   live RAM or from the frame's kept state, so PCs with and without rollback compare the same frames. `WOTM_STATEHASH` writes final frames
-  only too.
+  only too, and `WOTM_INPUTREC` records the inputs of final frames only (never a prediction).
 - **Checks:** `python3 tools/net_checks.py --only rollback_mouse` (and `rollback_pause`, `rollback_wins`, `rollback_mixed`, `rollback_mispredict`,
-  `rollback_3p`): two or three native PCs behind a 60 ms round trip, mice that change every 3 frames, state compared on every final
+  `rollback_3p`, `rollback_taps`): two or three native PCs behind a 60 ms round trip, mice that change every 3 frames (every other
+  frame in `rollback_taps`), state compared on every final
   frame.
 
 ## Wire versions

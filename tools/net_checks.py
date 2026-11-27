@@ -97,6 +97,9 @@ def wobbling_mouse(first, frames, every=3):
 # gives a delay to cut
 ROLLBACK = dict(rtt=60, extra_env='WOTM_ROLLBACK=2;WOTM_ROLLBACK_WINDOW=2')
 ROLLBACK_MOUSE = 'WOTM_CAMERA=1;WOTM_ORBITMOUSE=' + wobbling_mouse(300, 1800)
+# the mouse moves on every other frame only: the newest input that arrived flips between two values from one frame to the next, so an
+# input arriving between two pad reads of a predicted frame changes the prediction (a frame keeps the one it first ran on)
+ROLLBACK_TAPS = 'WOTM_CAMERA=1;WOTM_ORBITMOUSE=' + ';'.join(f'{f}:1:{3 * (f % 2)}:0' for f in range(300, 2100))
 
 CHECKS = {
     # mouse on one PC only (WOTM_ORBITMOUSE: mouse-like movement from input frame 300 on), modern camera on both: the motion travels in
@@ -152,9 +155,6 @@ CHECKS = {
     # the second PC without the map's folder: the mods digest differs and the server refuses the match (as different_mods)
     'map_online_missing': dict(setup=make_map, extra_env=f'WOTM_MODS={MAP_MODS}', player_env=f'2:WOTM_MODS={NO_MAP}', stage='t1',
                                secs=30, expect_refused='game configuration differs'),
-    # map copies online: c1 plus 50 lattice copies applied on both PCs, same state on every frame. The per-frame state hash covers
-    # only the low 32 MB of guest RAM and the copies' nodes live in the map reserve above it, so each PC also dumps its stage image
-    # and reserve (WOTM_STAGE_DUMP) and both pairs must match byte for byte
     # rollback: every player's mouse camera changes every 3 frames, so whichever PC runs ahead rolls back all the time; the final frames
     # match
     'rollback_mouse': dict(**ROLLBACK, player_env=f'1:{ROLLBACK_MOUSE}|||2:{ROLLBACK_MOUSE}', secs=50,
@@ -178,6 +178,12 @@ CHECKS = {
     # rollback with 3 players (30 Hz), every mouse changing and player 2 pausing
     'rollback_3p': dict(**ROLLBACK, players=3, player_env=f'1:{ROLLBACK_MOUSE}|||2:{ROLLBACK_MOUSE};PS2X_PAD=24:0.3:start;25:0.3:up;'
                         f'26:0.3:cross|||3:{ROLLBACK_MOUSE}', secs=50, expect=r'\[dialog\] 0 opened|||[1-9]\d* rollbacks'),
+    # rollback with mice that move on every other frame (inputs arriving between two pad reads of one frame)
+    'rollback_taps': dict(**ROLLBACK, player_env=f'1:{ROLLBACK_TAPS}|||2:{ROLLBACK_TAPS}', secs=50,
+                          expect=r'\[rollback\] window 0 -> 2|||[1-9]\d* rollbacks'),
+    # map copies online: c1 plus 50 lattice copies applied on both PCs, same state on every frame. The per-frame state hash covers
+    # only the low 32 MB of guest RAM and the copies' nodes live in the map reserve above it, so each PC also dumps its stage image
+    # and reserve (WOTM_STAGE_DUMP) and both pairs must match byte for byte
     'map_copy_online': dict(setup=make_copy_map, after=same_copy_dumps, extra_env=f'WOTM_MODS={MAP_MODS}', stage='c1', secs=60,
                             player_env=f'1:WOTM_STAGE_DUMP={COPY_DUMPS}_1.bin|||2:WOTM_STAGE_DUMP={COPY_DUMPS}_2.bin',
                             expect=r'\[stages\] c1: copies: 58 applied, 0 refused',

@@ -540,6 +540,7 @@ namespace wotm_rollback
         bool g_resume = false;               // a slot was just restored: the next boundary entry resumes right after it
         bool g_lockstep = false;             // this boundary is a lockstep point (a dialog frame, or outside rtMain)
         uint32_t g_skipSamples = 0;          // a redo that ended early (at a dialog) gave back these frames: their samples are skipped
+        uint32_t g_soundBanks = 0;           // the sound engine's bank generation at the last present boundary (a change is a lockstep point)
 
         // costs of the current measuring window (ms), and the window's counts
         constexpr uint32_t kWindowFrames = 300u;
@@ -670,7 +671,8 @@ namespace wotm_rollback
                 const auto t0 = clk::now();
                 g_state.save(g_live, wotm_sync::g_index);
                 const auto t1 = clk::now();
-                g_state.load(g_live);
+                if (!g_state.load(g_live))
+                    return wotm_sync::netFail("rollback: the calibration restore failed (a bug: please report it)");
                 g_saves.push_back(ms(t0, t1));
                 g_restores.push_back(ms(t1, clk::now()));
             }
@@ -731,11 +733,13 @@ namespace wotm_rollback
 
     bool on() { return hybrid::on(); }
 
-    // the input a frame runs with: the player's when it has arrived, else a prediction (the newest that arrived), recorded for the check
+    // the input a frame runs with: the player's when it has arrived, else a prediction (the newest that arrived), recorded for the check.
+    // A frame that already ran on a prediction keeps it for its later pad reads, even when the real input arrives in between: the check
+    // compares the recorded prediction, so the frame must not mix it with another input
     wotm_net::PadState input(int controller, uint32_t frame)
     {
         wotm_net::PadState s;
-        if (wotm_sync::g_net->arrived(controller, frame, s))
+        if (hybrid::g_predicted.used(frame, controller, s) || wotm_sync::g_net->arrived(controller, frame, s))
             return s;
         s = wotm_sync::g_net->prediction(controller);
         if (hybrid::g_mispredict)
@@ -774,6 +778,15 @@ namespace wotm_rollback
             addPieces(rdram, ctx);
             std::fill(hybrid::g_slotFrame.begin(), hybrid::g_slotFrame.end(), hybrid::kNone);
         }
+        // a sound bank loaded or unloaded: a state kept before it can't come back (the sound engine refuses it), so every input up to now
+        // is checked here; the states kept from now on have the new banks
+        if (const uint32_t banks = wotmSoundBankGeneration(); banks != hybrid::g_soundBanks)
+        {
+            if (!hybrid::g_predicted.empty())
+                std::fprintf(stderr, "[rollback] a sound bank changed before frame %u while predictions were unchecked: lockstep point\n", frame);
+            hybrid::g_soundBanks = banks;
+            hybrid::g_lockstep = true;
+        }
         if (hybrid::g_lockstep)
             hybrid::waitThrough(frame);
         else if (redone)
@@ -786,7 +799,7 @@ namespace wotm_rollback
     // entry of timerWaitForMinUpdateRate, where resume() goes straight on)
     bool lockstepBoundary(uint8_t *rdram, R5900Context *ctx)
     {
-        (void)rdram, (void)ctx;
+        (void)rdram;
         if (!hybrid::on())
         {
             barrier("dialog loop");
@@ -797,6 +810,12 @@ namespace wotm_rollback
         hybrid::g_lockstep = true;
         hybrid::backAtPresent();
         hybrid::waitThrough(wotm_sync::g_index);
+        // the kept states are rtMain's thread's: a dialog on another guest thread can't unwind into them
+        if (ctx != g_ctx && !hybrid::g_predicted.empty())
+        {
+            wotm_sync::netFail("rollback: a dialog on another guest thread found unchecked predictions (a bug: please report it)");
+            return false;
+        }
         // restored: the unwind reaches the entry of timerWaitForMinUpdateRate, where resume() goes straight on
         hybrid::g_resume = hybrid::correct(wotm_sync::g_index);
         if (hybrid::g_resume)
@@ -835,6 +854,7 @@ namespace wotm_rollback
                 return wotm_sync::netFail("rollback: frame " + std::to_string(f) + " is final but its state was not kept (a bug: please report it)");
             wotm_sync::stateHash(ram, f);
             wotm_sync::netHash(ram, f);
+            wotm_sync::recordInputs(f);
             g_hashed = f;
         }
         if (redo)

@@ -23,6 +23,16 @@ namespace wotm_net
         // a (frame, player) is what the frame used
         void predicted(uint32_t frame, int player, const PadState &used) { used_.emplace(std::make_pair(frame, player), used); }
 
+        // true with the prediction the frame already ran on for that player: its later reads must use the same input
+        bool used(uint32_t frame, int player, PadState &s) const
+        {
+            const auto it = used_.find({frame, player});
+            if (it == used_.end())
+                return false;
+            s = it->second;
+            return true;
+        }
+
         // `arrived(player, frame, state)`: true with the real input when it has arrived. Drops the right predictions and returns the
         // first frame with a wrong one (kNone: none)
         template <class Arrived> uint32_t firstWrong(const Arrived &arrived)
@@ -48,6 +58,7 @@ namespace wotm_net
 
         // the oldest frame that ran on a prediction not yet checked (kNone: none)
         uint32_t oldest() const { return used_.empty() ? kNone : used_.begin()->first.first; }
+        bool empty() const { return used_.empty(); }
 
         // a barrier (stage load): nothing before it can be rolled back
         void clear() { used_.clear(); }

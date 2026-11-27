@@ -900,6 +900,26 @@ namespace wotm_sync
             std::fflush(g_hashFile);
     }
 
+    // WOTM_INPUTREC: the inputs frame `frame` ran with, once they are final (a rollback's predictions never go in)
+    void recordInputs(uint32_t frame)
+    {
+        if (!g_inputRec || !g_levelLoaded)
+            return;
+        if (!g_inputRecHeader)
+        {
+            const std::vector<uint8_t> header = wotm_net::encodeInputHeader(g_mods);
+            std::fwrite(header.data(), 1, header.size(), g_inputRec);
+            g_inputRecHeader = true;
+        }
+        for (int c = 0; c < kControllers; ++c)
+        {
+            const std::vector<uint8_t> r = wotm_net::encodeInputRecord({frame, static_cast<uint32_t>(c), inputFor(c, frame)});
+            std::fwrite(r.data(), 1, r.size(), g_inputRec);
+        }
+        if ((frame & 63u) == 0u)
+            std::fflush(g_inputRec);
+    }
+
     // fieldCounterAtStart/fieldCounter: D_006F8DC0/D_006F8DBC; fieldsForAverage: D_006F8DE4 (fields since timerSetFrameStart)
     void frame(uint8_t *rdram, uint32_t fieldCounter, uint32_t fieldCounterAtStart, uint32_t fieldsForAverage)
     {
@@ -914,22 +934,8 @@ namespace wotm_sync
             // sound advances by the frame's real length, on the game thread (when each sound ends becomes a function of the frames);
             // in a turbo fight that is 1 vsync for 2 fields, so sound keeps its normal speed instead of overfilling the output
             wotmSoundFrame(static_cast<unsigned>(wotm::modifiers::vsyncsPerFrame(g_fixedStep, g_mods)), !redo);
-            if (g_inputRec && g_levelLoaded && !redo)
-            {
-                if (!g_inputRecHeader)
-                {
-                    const std::vector<uint8_t> header = wotm_net::encodeInputHeader(g_mods);
-                    std::fwrite(header.data(), 1, header.size(), g_inputRec);
-                    g_inputRecHeader = true;
-                }
-                for (int c = 0; c < kControllers; ++c)
-                {
-                    const std::vector<uint8_t> r = wotm_net::encodeInputRecord({g_index, static_cast<uint32_t>(c), inputFor(c, g_index)});
-                    std::fwrite(r.data(), 1, r.size(), g_inputRec);
-                }
-                if ((g_index & 63u) == 0u)
-                    std::fflush(g_inputRec);
-            }
+            if (!redo && !(g_net && wotm_rollback::on()))   // a rollback records final frames only (wotm_rollback.inc netFrame)
+                recordInputs(g_index);
             if (!redo)
                 sampleInputs(g_index + 1u);
         }
