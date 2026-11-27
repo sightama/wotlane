@@ -30,6 +30,7 @@
 #include "net/wotm_camsettings.hpp"
 #include "net/wotm_inputfile.hpp"
 #include "net/wotm_confighash.hpp"
+#include "wotm_dust.hpp"
 
 #include <algorithm>
 #include <array>
@@ -1570,6 +1571,59 @@ TEST(detmath_same_bits_on_every_machine)
         mix(dm::atan2f(b[i], b[i + 1]));
     }
     CHECK(digestIs("detmath", h, 0xa6c8104174bda8ccull));
+}
+
+// The composite dust texture's CPU math (wotm_dust.hpp) on fixed inputs shaped like a stage's (three lights, a view facing +z, the
+// packet's table of 4 sub-images x 4 mirrorings): the sprite list stays within the microprogram's 199, the alpha comes only from
+// half of pass 1's G (at most 127), and the texture's bits are the same on every machine (the SSE4.1 raster and the scalar one agree).
+// The GPU path (WOTM_GPUDUST) is checked against this raster in the game, with WOTM_DUSTCHECK.
+TEST(dust_texture_same_bits_on_every_machine)
+{
+    namespace dust = wotm::dust;
+    dust::Inputs in{};
+    const float P[8] = {4.f, 4.f, 500.f, 0.3f, 106.f, 1.20755f, -1000.f, 72.f};
+    const float L[3][4] = {{0.6f, 0.f, 0.8f, 0.f}, {-0.3f, 0.8f, 0.5f, 0.f}, {0.f, -0.5f, 0.86f, 0.f}};
+    const float C[5][3] = {{40.f, 35.f, 30.f}, {20.f, 20.f, 25.f}, {10.f, 12.f, 8.f}, {0.f, 0.f, 0.f}, {25.f, 22.f, 20.f}};
+    std::memcpy(in.P, P, sizeof P);
+    std::memcpy(in.L, L, sizeof L);
+    std::memcpy(in.C, C, sizeof C);
+    in.ctx[0][0] = 1.f; in.ctx[1][1] = 1.f; in.ctx[2][2] = 1.f; in.ctx[2][3] = 1.f;
+    in.ctx[5][0] = 500.f; in.ctx[5][1] = 500.f; in.ctx[6][0] = 0.1f; in.ctx[6][1] = -0.05f;
+    in.nloop = 280;
+    in.seed = 0x1234567u;
+    for (int k = 0; k < 16; ++k) {   // a 16-texel quadrant of the 32x32 source, in 1/16 texel, mirrored in u and v by k / 4
+        int16_t u0 = int16_t((k & 1) * 256), v0 = int16_t(((k >> 1) & 1) * 256), u1 = int16_t(u0 + 256), v1 = int16_t(v0 + 256);
+        if (k & 4) std::swap(u0, u1);
+        if (k & 8) std::swap(v0, v1);
+        in.uvtab[k][0] = u0; in.uvtab[k][1] = v0; in.uvtab[k][2] = u1; in.uvtab[k][3] = v1;
+    }
+    std::vector<uint32_t> px1(32 * 32), px2(32 * 32);   // a soft blob (raw GS alpha up to 0x80) and a tinted one
+    for (int y = 0; y < 32; ++y)
+        for (int x = 0; x < 32; ++x) {
+            const float d = std::sqrt(float((x - 16) * (x - 16) + (y - 16) * (y - 16))) / 16.f, f = std::max(0.f, 1.f - d);
+            const uint32_t g = uint32_t(255.f * f), a = uint32_t(128.f * f);
+            px1[size_t(y * 32 + x)] = (uint32_t(x * 8) & 255) | (g << 8) | ((uint32_t(y * 8) & 255) << 16) | (a << 24);
+            px2[size_t(y * 32 + x)] = (200u - uint32_t(x * 3)) | ((150u + uint32_t(y)) << 8) | ((uint32_t(x + y) * 4u & 255u) << 16) | (a << 24);
+        }
+    std::vector<dust::Sprite> spr;
+    int bg[3] = {0, 0, 0};
+    dust::sprites(in, spr, bg);
+    CHECK(!spr.empty() && spr.size() <= 199);
+    std::vector<uint32_t> px;
+    dust::raster(spr, bg, int(in.P[4]), dust::Source{px1.data(), 32, 32}, dust::Source{px2.data(), 32, 32}, px);
+    CHECK(px.size() == size_t(dust::kSide * dust::kSide));
+    uint32_t amax = 0;
+    for (const uint32_t p : px) amax = std::max(amax, p >> 24);
+    CHECK(amax > 0 && amax <= 127);
+    uint64_t h = 1469598103934665603ull;   // FNV-1a over the sprite count, the background and the texture
+    auto mix = [&h](uint32_t u) {
+        for (int k = 0; k < 4; ++k)
+            h = (h ^ ((u >> (8 * k)) & 0xFFu)) * 1099511628211ull;
+    };
+    mix(uint32_t(spr.size()));
+    for (const int c : bg) mix(uint32_t(c));
+    for (const uint32_t p : px) mix(p);
+    CHECK(digestIs("dust", h, 0x2eec5750c0f832dcull));
 }
 
 // The translated game's VU0 macro ops use raw SSE intrinsics (PS2Recomp's vu_translation_helpers.cpp): VMINI/VMAX as _mm_min_ps

@@ -31,7 +31,7 @@ PRESENTATION = (
     # drawing: Scene (reads guest RAM through the read-only Ram) and what only it includes
     'native/wotm_native.hpp', 'native/wotm_fx.hpp', 'native/wotm_gs.hpp', 'native/wotm_glsl.hpp', 'native/wotm_interp.hpp',
     'native/wotm_msaa.hpp', 'native/wotm_preview.hpp', 'native/wotm_flame.hpp', 'native/wotm_texmods.hpp', 'native/wotm_glad_web.cpp',
-    'native/wotm_silhouette.hpp',
+    'native/wotm_silhouette.hpp', 'native/wotm_gpupass.hpp', 'native/wotm_dust.hpp', 'native/wotm_dust_gpu.hpp',
     # (not wotm_model.hpp or wotm_tint.hpp: the creator makes the skins' PNGs with them, and mods are in the config hash)
     # presenting and measuring: the present phase, the window, the pause view, the latency probes. The present phase slews when this
     # machine's vblanks fire (g_wotmVblankSlewUs): wall-clock pacing only, since lockstep keys every input by frame index

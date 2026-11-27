@@ -968,6 +968,15 @@ public:
         const uint32_t k = (ram.u16(fxaddr::textureInfo + 8 * (ram.u32(b + fxoff::texInfoIndex) & 127) + 2) + frame) & 127;
         return uint64_t(ram.u32(fxaddr::tex0 + 8 * k)) | (uint64_t(ram.u32(fxaddr::tex0 + 8 * k + 4)) << 32);
     }
+    // Some collected system draws with the composite dust texture: drawSystem's test (texFor) on the system's first texture frame
+    bool usesDust(const Ram &ram) const {
+        for (const FxSystem &s : systems) {
+            const uint32_t tinfo = fxaddr::textureInfo + 8 * (ram.u32(s.base + fxoff::texInfoIndex) & 127);
+            const bool own = ram.s16(tinfo) > 0 && ram.u16(fxaddr::texId + 2 * (ram.u16(tinfo + 2) & 127)) != 0;
+            if (!own && isDustTex(systemTex0(ram, s.base))) return true;
+        }
+        return false;
+    }
 
     // particleDraw's view test: viewInFOV(0, &FOVsphere (+0x2C80), &FOVextent (+0x2C90)), the box (center, half-extent) against
     // the 6 planes of worldCtx[0] (fovNormsTP at +0xF0, fovSigns at +0x170; src/common/view.cpp). False = retail doesn't draw the system.

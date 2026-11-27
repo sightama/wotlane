@@ -24,9 +24,6 @@
 #include <memory>
 #include <unordered_map>
 #include <vector>
-#if defined(_M_X64) || defined(__SSE4_1__)
-#include <smmintrin.h>   // dustTexture: SSE4.1 rasterization
-#endif
 
 #include "raylib.h"
 #include "rlgl.h"
@@ -186,6 +183,7 @@ struct UploadHdr {
 // Particles and effects: needs Ram (above); the Scene draws them after the translucent pass
 #include "wotm_fx.hpp"
 #include "wotm_silhouette.hpp"   // shadow silhouettes on the GPU (WOTM_GPUSIL)
+#include "wotm_dust_gpu.hpp"   // the composite dust texture's math (wotm_dust.hpp), and on the GPU (WOTM_GPUDUST)
 
 namespace wotm {
 
@@ -1257,10 +1255,10 @@ public:
     }
 
     // Particle texture: texId (index into the global texInfo) + TEX0 from the particle table (psm/CBP). 0 = didn't decode.
-    // Particles::kDustTexId = the composite dust/smoke texture (dustTexture).
+    // Particles::kDustTexId = the composite dust/smoke texture (dustTexture; the one prepareDust made for this view, if it did).
     // WOTM_FXNOGRAY=1: no gray ramp when the palette isn't in the loaded .RTX files (diagnostics).
     unsigned particleTexture(const Ram &ram, uint32_t texId, uint64_t tex0) {
-        if (texId == Particles::kDustTexId) return dustTexture(ram);
+        if (texId == Particles::kDustTexId) return dustView_ ? dustView_ : dustTexture(ram);
         if (!texId || texId >= 1000) return 0;
         const gs::Tex0 t0 = gs::Tex0::decode(tex0);
         const uint64_t key = (uint64_t(texId) << 40) | (uint64_t(t0.cbp) << 12) | (uint64_t(t0.csa) << 4) | t0.cpsm | (1ull << 61);
@@ -1284,32 +1282,27 @@ public:
     }
 
     // Composite dust/smoke texture (VRAM 0xFD800, TEX0 with TBP 0x3F60, CT32 64x64, four 32x32 cells), which the game rebuilds
-    // in VRAM on every particleDraw with some system active (texDrawDustPacketBuild, packet at 0x78F6E0). Here the same math on the CPU, redone
-    // when the parameters change (the phase advances 1/256 per frame; depends on the camera). docs/passos/VU1CHECK.md, "Corrigido".
-    //  - Pass 1 (microprogram 0x2E98): a generator h = frac(c + h * b) draws 70 normals x 4 cells; each becomes a SPRITE with
-    //    half-side 5 + 4t texels (t = frac(phase + h.w)) at the cell center + A * n * t, with A from the worldToScreenMat columns (q0-q3)
-    //    and the focal (q5); z = min(72 - 1000 t (forward . n), 128), a = min(t, 1 - t) z, emitted only when a >= 1 (hemisphere facing the
-    //    camera), up to 199 sprites. Draws source 1 (TextureInfo[32]) with RGBA (1, 106, 1, a) additive RGB only: density lands in G.
-    //  - Half of RGB and A = G & 0x7F (copyGreenChannelToAlpha, the CT16 trick).
-    //  - Pass 2 (MSCNT, 0x31C0): background and sprites with color = ambient + 0.5 + sum of the stage lights (dustLighting) along the normal, and
-    //    A = a * 1.20755, with source 2 (TextureInfo[33]) in (Cs - Cd) * As + Cd RGB only.
-    // Plain float arithmetic (the VU truncates); the distribution matches the investigation's dustsim.py. On METRO: color ~(57, 57, 40),
-    // alpha up to 127 (dark smoke).
-    unsigned dustTexture(const Ram &ram) {
+    // in VRAM on every particleDraw with some system active (texDrawDustPacketBuild, packet at 0x78F6E0). Here the same math
+    // (wotm_dust.hpp: the sprite list of microprograms 0x2E98 and 0x31C0, then both passes), redone when the parameters change (the phase
+    // advances 1/256 per frame; depends on the camera). docs/passos/VU1CHECK.md, "Corrigido". Source 1 is TextureInfo[32], source 2
+    // TextureInfo[33]. On METRO: color ~(57, 57, 40), alpha up to 127 (dark smoke).
+    // gpu (prepareDust, WOTM_GPUDUST=1): a regeneration is drawn on the GPU (GpuDust) instead of rasterized here; the caller has flushed
+    // the batch and saved the view's target. A regeneration while the particles draw (gpu false) is rasterized on the CPU.
+    unsigned dustTexture(const Ram &ram, bool gpu = false) {
         constexpr uint32_t kPkt = 0x0078F6E0u, kParams = 0x006F8DA4u, kNormals = 0x006F8D9Cu, kColors = 0x006F8DA0u, kCtx = 0x00256B90u;
         const uint32_t pa = ram.u32(kParams), na = ram.u32(kNormals), ca = ram.u32(kColors);
-        if (!ram.ok(pa - 16, 48) || !ram.ok(na, 48) || !ram.ok(ca, 80) || !ram.ok(kPkt + 0xB4, 128)) return dustTex_[dustLast_].id;
-        float P[8], L[3][4], C[5][3], ctx[8][4];
-        for (int i = 0; i < 8; ++i) P[i] = ram.f32(pa + 4 * uint32_t(i));
-        for (int r = 0; r < 3; ++r) for (int i = 0; i < 4; ++i) L[r][i] = ram.f32(na + 16 * uint32_t(r) + 4 * uint32_t(i));
-        for (int k = 0; k < 5; ++k) for (int i = 0; i < 3; ++i) C[k][i] = ram.f32(ca + 16 * uint32_t(k) + 4 * uint32_t(i));
-        for (int q = 0; q < 8; ++q) for (int i = 0; i < 4; ++i) ctx[q][i] = ram.f32(kCtx + 16 * uint32_t(q) + 4 * uint32_t(i));
-        const uint32_t nloop = ram.u32(pa - 16), seed = ram.u32(pa - 4);
+        if (!ram.ok(pa - 16, 48) || !ram.ok(na, 48) || !ram.ok(ca, 80) || !ram.ok(kPkt + 0xB4, 128)) return dustId_[dustLast_];
+        dust::Inputs in;
+        for (int i = 0; i < 8; ++i) in.P[i] = ram.f32(pa + 4 * uint32_t(i));
+        for (int r = 0; r < 3; ++r) for (int i = 0; i < 4; ++i) in.L[r][i] = ram.f32(na + 16 * uint32_t(r) + 4 * uint32_t(i));
+        for (int k = 0; k < 5; ++k) for (int i = 0; i < 3; ++i) in.C[k][i] = ram.f32(ca + 16 * uint32_t(k) + 4 * uint32_t(i));
+        for (int q = 0; q < 8; ++q) for (int i = 0; i < 4; ++i) in.ctx[q][i] = ram.f32(kCtx + 16 * uint32_t(q) + 4 * uint32_t(i));
+        in.nloop = ram.u32(pa - 16); in.seed = ram.u32(pa - 4);
         uint64_t hash = 1469598103934665603ull;
         auto mix = [&](const void *d, size_t n) { for (size_t i = 0; i < n; ++i) hash = (hash ^ static_cast<const uint8_t *>(d)[i]) * 1099511628211ull; };
-        mix(P, sizeof P); mix(L, sizeof L); mix(C, sizeof C); mix(ctx, sizeof ctx); mix(&nloop, 4); mix(&seed, 4);
+        mix(in.P, sizeof in.P); mix(in.L, sizeof in.L); mix(in.C, sizeof in.C); mix(in.ctx, sizeof in.ctx); mix(&in.nloop, 4); mix(&in.seed, 4);
         for (int i = 0; i < kDustSlots; ++i)
-            if (dustTex_[i].id && hash == dustHash_[i]) return dustTex_[dustLast_ = i].id;
+            if (dustId_[i] && hash == dustHash_[i]) return dustId_[dustLast_ = i];
 
         auto source = [&](uint32_t ti, DustSrc &s) {   // decoded once per (texId, TEX0)
             const uint32_t k = ram.u16(fxaddr::textureInfo + 8 * ti + 2) & 127, id = ram.u16(fxaddr::texId + 2 * k);
@@ -1319,198 +1312,119 @@ public:
             const uint32_t ptr = ram.u32(addr::texInfo + 16 * id) & 0x0FFFFFFF;
             s.id = id; s.tex0 = t0;
             s.ok = decodeUploadTex(ram, ptr, gs::Tex0::decode(t0), s.px, s.w, s.h, false, true) && s.w && s.h && s.px.size() >= size_t(s.w) * s.h;
+            s.texOk = false;
             return s.ok;
         };
         DustSrc &src1 = dustSrc_[0], &src2 = dustSrc_[1];
-        if (!source(32, src1) || !source(33, src2)) return dustTex_[dustLast_].id;
+        if (!source(32, src1) || !source(33, src2)) return dustId_[dustLast_];
         const double startTime = GetTime();   // diagnostics (WOTM_DUSTLOG): cost of the math, excluding decoding the sources
-
-        // ---- pass 1: sprite list
-        auto fbits = [](uint32_t b) { float f; std::memcpy(&f, &b, 4); return f; };
-        auto fbitsOf = [](float f) { uint32_t b; std::memcpy(&b, &f, 4); return b; };
-        uint32_t rnd = 0x3F800000u | (seed & 0x7FFFFFu);   // the VU's RINIT / RNEXT
-        auto rnext = [&]() { const uint32_t x = rnd & 0x7FFFFFu; rnd = ((((x << 1) | (((x >> 4) ^ (x >> 22)) & 1u)) & 0x7FFFFFu) | 0x3F800000u); return fbits(rnd); };
-        float h[4];
-        for (float &v : h) v = rnext();
-        const float hc[4] = {fbits(0x3f3659ad), fbits(0x3f1ec458), fbits(0x3eb64807), fbits(0x3f16d60a)};
-        const float hb[4] = {fbits(0x3f7e2a20), fbits(0x3f7cd6ea), fbits(0x3f66b74f), fbits(0x3f7e6ea7)};
-        const float sx = P[2] / ctx[5][0], sy = P[2] / ctx[5][1];
-        float col[3][3];
-        for (int i = 0; i < 3; ++i) {
-            const float *c = ctx[i];
-            col[i][0] = (c[0] + ctx[6][0] * c[3]) * sx; col[i][1] = (c[1] + ctx[6][1] * c[3]) * sy; col[i][2] = P[6] * c[3];
-        }
-        const float fwd[3] = {ctx[0][3], ctx[1][3], ctx[2][3]};
-        static const float kCenter[4][2] = {{2032, 2032}, {2064, 2032}, {2032, 2064}, {2064, 2064}};   // cells on the GS screen (2016 = texel 0)
-        int16_t uvtab[16][4];   // the packet's UNPACK V4-16: 4 sub-images x 4 mirrorings of the source, in 1/16 texel
         for (uint32_t k = 0; k < 16; ++k)
-            for (uint32_t c = 0; c < 4; ++c) uvtab[k][c] = ram.s16(kPkt + 0xB4 + 8 * k + 2 * c);
-        struct DSpr { int x0, y0, x1, y1, a1; const int16_t *uv; float n[3]; int rgb2[3], a2; };
-        std::vector<DSpr> spr;
-        float r21[3] = {h[0] - 1.5f, h[1] - 1.5f, h[2] - 1.5f};
-        int left = int(nloop), vi5 = 29;
-        bool full = false;
-        while (left > 0 && !full) {
-            float t = P[3] + h[3];
-            t -= t >= 0.f ? std::floor(t) : std::trunc(t);
-            for (int i = 0; i < 4; ++i) { h[i] = hc[i] + h[i] * hb[i]; h[i] -= std::trunc(h[i]); }
-            const float r2 = r21[0] * r21[0] + r21[1] * r21[1] + r21[2] * r21[2];
-            const float half = (1.f + P[0]) + t * P[1];
-            std::rotate(h, h + 1, h + 4);   // MR32
-            const float rs = 1.f / std::sqrt(r2);
-            float n[3] = {r21[0] * rs, r21[1] * rs, r21[2] * rs};
-            for (int i = 0; i < 3; ++i) r21[i] = h[i] - 0.5f;
-            for (int k = 0; k < 4; ++k) {
-                const uint32_t idx = fbitsOf(h[0]) & 15;
-                std::rotate(h, h + 1, h + 4);
-                --left;
-                if (vi5 >= 0x3FC) { full = true; break; }
-                const float d[3] = {n[0] * t, n[1] * t, n[2] * t};
-                const float cx = col[0][0] * d[0] + col[1][0] * d[1] + col[2][0] * d[2] + kCenter[k][0];
-                const float cy = col[0][1] * d[0] + col[1][1] * d[1] + col[2][1] * d[2] + kCenter[k][1];
-                const float cz = std::min(col[0][2] * d[0] + col[1][2] * d[1] + col[2][2] * d[2] + P[7], 128.f);
-                const float a = std::min(1.f - t, t) * cz;
-                if (a >= 1.f) {
-                    DSpr s{int((cx - half) * 16.f) - 2016 * 16, int((cy - half) * 16.f) - 2016 * 16, int((cx + half) * 16.f) - 2016 * 16,
-                           int((cy + half) * 16.f) - 2016 * 16, int(a), uvtab[idx], {n[0], n[1], n[2]}, {0, 0, 0}, 0};
-                    spr.push_back(s);
-                    vi5 += 5;
-                }
-                const float n0 = n[0];
-                n[0] = -n[1]; n[1] = n[2]; n[2] = n0;   // the normal rotates from cell to cell: (x, y, z) -> (-y, z, x)
-            }
-        }
-
-        // ---- pass 2: light
-        auto light = [&](const float nv[3], int out[3]) {
-            float dots[4];
-            for (int j = 0; j < 4; ++j) dots[j] = std::max(0.f, L[0][j] * nv[0] + L[1][j] * nv[1] + L[2][j] * nv[2]);
-            for (int i = 0; i < 3; ++i) {
-                float v = C[4][i] + 0.5f;
-                for (int j = 0; j < 4; ++j) v += C[j][i] * dots[j];
-                out[i] = std::min(255, std::max(0, int(v)));
-            }
-        };
+            for (uint32_t c = 0; c < 4; ++c) in.uvtab[k][c] = ram.s16(kPkt + 0xB4 + 8 * k + 2 * c);
         int bg[3];
-        light(fwd, bg);
-        for (DSpr &s : spr) { light(s.n, s.rgb2); s.a2 = int(float(s.a1) * P[5]); }
+        dust::sprites(in, dustSpr_, bg);
+        const int g1 = int(in.P[4]);
+        const dust::Source s1{src1.px.data(), src1.w, src1.h}, s2{src2.px.data(), src2.w, src2.h};
 
-        // ---- rasterization like the GS (bilinear with CLAMP on the source; top-left rule)
-        // The bilinear sample splits into column and row: index already CLAMPed and the weight of each side, computed once per column and
-        // per row of the sprite with the same float math (the result is the same as sampling per pixel).
-        struct Tap { int i0, i1; float w0, w1; };
-        auto taps = [](float u, int n) {
-            u -= 0.5f;
-            const int i = int(std::floor(u));
-            const float f = u - float(i);
-            return Tap{std::min(std::max(i, 0), n - 1), std::min(std::max(i + 1, 0), n - 1), 1.f - f, f};
-        };
-        std::vector<std::array<int, 4>> fb(64 * 64, std::array<int, 4>{0, 0, 0, 0});
-        // greenOnly (pass 1): only the source's G and A count; the frame's R and B are replaced by the background before pass 2
-        auto draw = [&](const DSpr &s, const DustSrc &src, const int rgb[3], int a, bool additive, bool greenOnly) {
-            const float u0 = s.uv[0] / 16.f, v0 = s.uv[1] / 16.f, u1 = s.uv[2] / 16.f, v1 = s.uv[3] / 16.f;
-            if (s.x1 <= s.x0 || s.y1 <= s.y0) return;
-            const int pxa = std::max(0, (s.x0 + 15) >> 4), pxb = std::min(64, (s.x1 + 15) >> 4);
-            const int pya = std::max(0, (s.y0 + 15) >> 4), pyb = std::min(64, (s.y1 + 15) >> 4);
-            if (pxa >= pxb || pya >= pyb) return;
-            Tap cx[64];
-            for (int px = pxa; px < pxb; ++px)
-                cx[px] = taps(u0 + (u1 - u0) * float(px * 16 - s.x0) / float(s.x1 - s.x0), int(src.w));
-            const int c0 = greenOnly ? 1 : 0, c1 = greenOnly ? 2 : 3;
-            for (int py = pya; py < pyb; ++py) {
-                const Tap ry = taps(v0 + (v1 - v0) * float(py * 16 - s.y0) / float(s.y1 - s.y0), int(src.h));
-                const uint32_t *row[2] = {src.px.data() + size_t(ry.i0) * src.w, src.px.data() + size_t(ry.i1) * src.w};
-                const float wy[2] = {ry.w0, ry.w1};
-#if defined(_M_X64) || defined(__SSE4_1__)
-                // all 4 channels at once (RGBA in lanes): same sum and same integer math as the scalar version below
-                const __m128i vrgb = _mm_setr_epi32(rgb[0], rgb[1], rgb[2], 0), v255 = _mm_set1_epi32(255), vzero = _mm_setzero_si128();
-                (void)c0; (void)c1;
-                auto texel = [](uint32_t p) { return _mm_cvtepi32_ps(_mm_cvtepu8_epi32(_mm_cvtsi32_si128(int(p)))); };
-                for (int px = pxa; px < pxb; ++px) {
-                    const Tap &tx = cx[px];
-                    __m128 acc = _mm_setzero_ps();
-                    for (int dj = 0; dj < 2; ++dj) {
-                        acc = _mm_add_ps(acc, _mm_mul_ps(texel(row[dj][tx.i0]), _mm_set1_ps(tx.w0 * wy[dj])));
-                        acc = _mm_add_ps(acc, _mm_mul_ps(texel(row[dj][tx.i1]), _mm_set1_ps(tx.w1 * wy[dj])));
-                    }
-                    const __m128i t = _mm_cvttps_epi32(acc);
-                    const __m128i as = _mm_set1_epi32((a * _mm_extract_epi32(t, 3)) >> 7);
-                    int *dp = fb[size_t(py) * 64 + size_t(px)].data();
-                    const __m128i d = _mm_loadu_si128(reinterpret_cast<const __m128i *>(dp));
-                    const __m128i cs = _mm_srai_epi32(_mm_mullo_epi32(vrgb, t), 7);
-                    __m128i r;
-                    if (additive)
-                        r = _mm_min_epi32(v255, _mm_add_epi32(_mm_srai_epi32(_mm_mullo_epi32(cs, as), 7), d));
-                    else
-                        r = _mm_max_epi32(vzero, _mm_min_epi32(v255, _mm_add_epi32(_mm_srai_epi32(_mm_mullo_epi32(_mm_sub_epi32(cs, d), as), 7), d)));
-                    r = _mm_blend_epi16(r, d, 0xC0);   // the frame's alpha doesn't change
-                    _mm_storeu_si128(reinterpret_cast<__m128i *>(dp), r);
-                }
-#else
-                for (int px = pxa; px < pxb; ++px) {
-                    const Tap &tx = cx[px];
-                    float acc[4] = {0, 0, 0, 0};
-                    for (int dj = 0; dj < 2; ++dj) {   // same summation order as the per-pixel sample
-                        const float wa = tx.w0 * wy[dj], wb = tx.w1 * wy[dj];
-                        const uint32_t pa = row[dj][tx.i0], pb = row[dj][tx.i1];
-                        for (int c = c0; c < c1; ++c) acc[c] += float((pa >> (8 * c)) & 255) * wa;
-                        acc[3] += float(pa >> 24) * wa;
-                        for (int c = c0; c < c1; ++c) acc[c] += float((pb >> (8 * c)) & 255) * wb;
-                        acc[3] += float(pb >> 24) * wb;
-                    }
-                    const int as = (a * int(acc[3])) >> 7;
-                    auto &d = fb[size_t(py) * 64 + size_t(px)];
-                    for (int c = c0; c < c1; ++c) {
-                        const int cs = (rgb[c] * int(acc[c])) >> 7;
-                        d[c] = additive ? std::min(255, ((cs * as) >> 7) + d[c]) : std::max(0, std::min(255, (((cs - d[c]) * as) >> 7) + d[c]));
-                    }
-                }
-#endif
-            }
-        };
-        const int rgb1[3] = {1, int(P[4]), 1};
-        for (const DSpr &s : spr) draw(s, src1, rgb1, s.a1, true, true);
-        for (auto &p : fb) {
-            for (int c = 0; c < 3; ++c) p[c] >>= 1;          // sprite (0, 0, 0, 64) in (Cs - Cd) * As + Cd: ((-Cd * 64) >> 7) + Cd
-            p[3] = p[1] & 0x7F;                            // copyGreenChannelToAlpha (CT16's bit 15 comes out 0)
-            for (int c = 0; c < 3; ++c) p[c] = bg[c];      // pass 2: background
-        }
-        for (const DSpr &s : spr) draw(s, src2, s.rgb2, s.a2, false, false);
-
-        std::vector<uint32_t> px(64 * 64);   // raw GS alpha (0x80 = 1.0), like the other particle textures
-        for (size_t i = 0; i < px.size(); ++i)
-            px[i] = uint32_t(fb[i][0]) | (uint32_t(fb[i][1]) << 8) | (uint32_t(fb[i][2]) << 16) | (uint32_t(fb[i][3]) << 24);
-        const double mathEnd = GetTime();
         const int slot = dustNext_;
         dustNext_ = (dustNext_ + 1) % kDustSlots;
-        Texture2D &dt = dustTex_[slot];
-        if (!dt.id) {
-            Image img{px.data(), 64, 64, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
-            dt = LoadTextureFromImage(img);
-            if (dt.id) { SetTextureFilter(dt, TEXTURE_FILTER_BILINEAR); SetTextureWrap(dt, TEXTURE_WRAP_CLAMP); }
+        static const bool lg = std::getenv("WOTM_DUSTLOG") != nullptr;
+        static const bool check = std::getenv("WOTM_DUSTCHECK") != nullptr;
+        std::vector<uint32_t> &px = dustPx_;
+        double mathEnd = 0;
+        RenderTexture2D &rt = dustRt_[slot];
+        const bool onGpu = gpu && gpuDust_.ready() && dustSourceTex(src1) && dustSourceTex(src2) && (rt.id || (rt = GpuDust::make()).id);
+        if (onGpu) {
+            gpuDust_.render(rt, dustSpr_, bg, g1, src1.tex, src2.tex);
+            mathEnd = GetTime();
+            dustId_[slot] = rt.texture.id;
+            if (lg || check) {   // diagnostics: the GPU's texture read back (on WebGL this binds the window's framebuffer; prepareDust puts the view's back)
+                Image img = LoadImageFromTexture(rt.texture);
+                ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
+                px.assign(static_cast<const uint32_t *>(img.data), static_cast<const uint32_t *>(img.data) + size_t(img.width) * size_t(img.height));
+                UnloadImage(img);
+            }
+            if (check) {   // diagnostics: against the CPU raster of the same sprites (channels off by more than 2 levels)
+                std::vector<uint32_t> cpu;
+                dust::raster(dustSpr_, bg, g1, s1, s2, cpu);
+                int worst = 0, over = 0;
+                for (size_t i = 0; i < cpu.size() && i < px.size(); ++i) {
+                    int texel = 0;
+                    for (int c = 0; c < 4; ++c) texel = std::max(texel, std::abs(int((px[i] >> (8 * c)) & 255) - int((cpu[i] >> (8 * c)) & 255)));
+                    worst = std::max(worst, texel);
+                    over += texel > 2;
+                }
+                std::fprintf(stderr, "[dustcheck] phase %.4f sprites %zu: worst %d levels, %d texels over 2%s\n", in.P[3], dustSpr_.size(), worst, over,
+                             px.size() == cpu.size() ? "" : " (read back failed)");
+            }
         } else {
-            UpdateTexture(dt, px.data());
+            dust::raster(dustSpr_, bg, g1, s1, s2, px);
+            mathEnd = GetTime();
+            Texture2D &dt = dustTex_[slot];
+            if (!dt.id) {
+                Image img{px.data(), dust::kSide, dust::kSide, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
+                dt = LoadTextureFromImage(img);
+                if (dt.id) { SetTextureFilter(dt, TEXTURE_FILTER_BILINEAR); SetTextureWrap(dt, TEXTURE_WRAP_CLAMP); }
+            } else {
+                UpdateTexture(dt, px.data());
+            }
+            dustId_[slot] = dt.id;
         }
         dustHash_[slot] = hash;
         dustLast_ = slot;
-        {   // diagnostics: WOTM_DUSTLOG=1 prints the summary on every regeneration
-            static const bool lg = std::getenv("WOTM_DUSTLOG") != nullptr;
-            if (lg) {
-                int amax = 0; double asum = 0, cw[3] = {0, 0, 0};
-                for (const auto &p : fb) { amax = std::max(amax, p[3]); asum += p[3]; for (int c = 0; c < 3; ++c) cw[c] += double(p[c]) * p[3]; }
-                std::fprintf(stderr, "[dust] phase %.4f sprites %zu bg %d %d %d alpha max %d mean %.1f weighted color %.0f %.0f %.0f (%.2f ms, upload %.2f ms)\n", P[3], spr.size(), bg[0], bg[1], bg[2],
-                             amax, asum / 4096.0, asum ? cw[0] / asum : 0.0, asum ? cw[1] / asum : 0.0, asum ? cw[2] / asum : 0.0, (mathEnd - startTime) * 1000.0, (GetTime() - mathEnd) * 1000.0);
+        if (lg) {   // diagnostics: WOTM_DUSTLOG=1 prints the summary on every regeneration
+            int amax = 0; double asum = 0, cw[3] = {0, 0, 0};
+            for (const uint32_t p : px) {
+                const int a = int(p >> 24);
+                amax = std::max(amax, a); asum += a;
+                for (int c = 0; c < 3; ++c) cw[c] += double((p >> (8 * c)) & 255) * a;
             }
+            std::fprintf(stderr, "[dust] phase %.4f sprites %zu bg %d %d %d alpha max %d mean %.1f weighted color %.0f %.0f %.0f (%.2f ms, %s %.2f ms)\n", in.P[3], dustSpr_.size(),
+                         bg[0], bg[1], bg[2], amax, asum / 4096.0, asum ? cw[0] / asum : 0.0, asum ? cw[1] / asum : 0.0, asum ? cw[2] / asum : 0.0,
+                         (mathEnd - startTime) * 1000.0, onGpu ? "gpu, read back" : "upload", (GetTime() - mathEnd) * 1000.0);
         }
-        return dt.id;
+        return dustId_[slot];
     }
-    struct DustSrc { std::vector<uint32_t> px; uint32_t w = 0, h = 0, id = 0; uint64_t tex0 = 0; bool ok = false; };
+    struct DustSrc {
+        std::vector<uint32_t> px; uint32_t w = 0, h = 0, id = 0; uint64_t tex0 = 0; bool ok = false;
+        Texture2D tex{}; bool texOk = false;   // the pixels as a texture (GpuDust): texOk until the source is decoded again
+    };
+    // the source as a texture of its pixels (GpuDust), made again after the source is decoded again
+    static bool dustSourceTex(DustSrc &s) {
+        if (s.texOk) return true;
+        if (s.tex.id) UnloadTexture(s.tex);
+        Image img{s.px.data(), int(s.w), int(s.h), 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
+        s.tex = LoadTextureFromImage(img);
+        return s.texOk = s.tex.id != 0;
+    }
+    // WOTM_GPUDUST=1: this view's dust texture drawn on the GPU before its particles, since some particle types ask for their texture
+    // inside rlBegin, where the batch can't switch targets. Their lookup takes this one (dustView_, until the particles are drawn) and
+    // does not read the live RAM again, which the game may have moved on meanwhile (retail builds it once per particleDraw too). fxRam is
+    // the RAM the particles draw from.
+    void prepareDust(const Ram &ram, const Ram &fxRam) {
+        static const bool want = [] { const char *v = std::getenv("WOTM_GPUDUST"); return v && v[0] == '1'; }();
+        dustView_ = 0;
+        if (!want || !fx.usesDust(fxRam)) return;
+        rlDrawRenderBatchActive();
+        // the view's framebuffer, before any render texture is made: LoadRenderTexture ends by binding the window's
+        const GlTarget view = GlTarget::current();
+        dustView_ = dustTexture(ram, true);
+        view.restore();
+        // the particles draw with the scene's shader (the GPU pass left raylib's default one on)
+        if (shaderOn_) rlSetShader(alphaShader_.id, alphaShader_.locs);
+    }
     DustSrc dustSrc_[2];   // sources 1 and 2 (TextureInfo[32] and [33]) decoded
-    // one per view (the math depends on the camera): each view draws with its own, and a redraw of the same game frame reuses
+    std::vector<dust::Sprite> dustSpr_;   // a regeneration's sprite list (dust::sprites)
+    std::vector<uint32_t> dustPx_;   // the CPU raster, or the GPU's read back for the diagnostics
+    // one per view (the math depends on the camera): each view draws with its own, and a redraw of the same game frame reuses.
+    // dustId_ is the slot's current texture: the CPU one (dustTex_) or the GPU's (dustRt_)
     static constexpr int kDustSlots = 4;
     Texture2D dustTex_[kDustSlots]{};
+    RenderTexture2D dustRt_[kDustSlots]{};
+    GpuDust gpuDust_;
+    unsigned dustId_[kDustSlots]{};
     uint64_t dustHash_[kDustSlots]{};
     int dustNext_ = 0, dustLast_ = 0;
+    unsigned dustView_ = 0;   // the dust texture prepareDust made for the particles the view is drawing (0: they make it as they draw)
 
     Particles fx;   // the frame's particle systems (collected along with the scene, drawn after the translucent pass)
 
@@ -3406,7 +3320,10 @@ public:
             // debris brings its own TEST and closes with setClosingContext (0x5004B: As >= 4). Measured by the check (XGKICK's TEST).
             if (!wire) setAlphaRef(sprites.empty() ? 0 : 3);
             // particles with the RAM from the capture instant (fxRam_), not the live one the game is already rewriting; textures still come from live RAM
-            if (!wire) fx.draw(fxRam_ ? Ram{fxRam_.get(), ram.size} : ram, [&](uint32_t id, uint64_t t0) { return particleTexture(ram, id, t0); }, eye_);
+            const Ram fxRam = fxRam_ ? Ram{fxRam_.get(), ram.size} : ram;
+            if (!wire) prepareDust(ram, fxRam);
+            if (!wire) fx.draw(fxRam, [&](uint32_t id, uint64_t t0) { return particleTexture(ram, id, t0); }, eye_);
+            dustView_ = 0;
             if (!wire) setAlphaRef(kGsAlphaRef);
             if (!wire && !deferFlares && !fx.flares.e.empty()) {   // lens flare: screen, after the particles
                 if (fullDepth) {   // depth without waiting on the GPU, as in split screen (drawFlaresFor)
