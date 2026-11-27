@@ -14,7 +14,8 @@ usage: sh tools/rollback_ab.sh --site <web dist> [--out <dir>] [--window <n>] [-
   --only    just the latency runs or just the desync matrix
 Each latency run: 2 tabs, 60 ms round trip with 10 ms jitter, 90 s; Chrome runs twice each way (its spread between runs). The
 matrix: 2, 3 and 4 players x baseline, pause, stall, the last tab of each lobby in Firefox, the window fixed at --window
-(WOTM_ROLLBACK_WINDOW: every PC predicts, whatever its costs afford). Exit status 1 when any run failed (the others still run).
+(WOTM_ROLLBACK_WINDOW: every PC predicts, whatever its costs afford), then 2 players x baseline, pause with every prediction
+wrong (WOTM_ROLLBACK_MISPREDICT: dialogs restore through the unwind in wasm). Exit status 1 when any run failed (the others still run).
 EOF
 }
 
@@ -66,6 +67,10 @@ fi
 if [ "$only" != latency ]; then
     run desync node desync.mjs --cases 2,3,4 --scenarios baseline,pause,stall --browser chrome --firefox 1 --rtt 60 --jitter 10 \
         --site "$site" --data "$data" --env "WOTM_ROLLBACK=$window" --env "WOTM_ROLLBACK_WINDOW=$window" --out "$out/desync"
+    # every prediction wrong: the pause and the round's end open on predicted frames and restore through the unwind, in wasm
+    run desync_mispredict node desync.mjs --cases 2 --scenarios baseline,pause --browser chrome --firefox 1 --rtt 60 --jitter 10 \
+        --site "$site" --data "$data" --env "WOTM_ROLLBACK=$window" --env "WOTM_ROLLBACK_WINDOW=$window" \
+        --env WOTM_ROLLBACK_MISPREDICT=1 --out "$out/desync_mispredict"
 fi
 echo "results: $out"
 exit "$status"
