@@ -28,6 +28,12 @@ test('WOTM_PRESENT_PHASE from the address reaches an online match too (presentat
   assert.equal(env.WOTM_PRESENT_PHASE, '0');
 });
 
+test('WOTM_GPUDUST and WOTM_DUSTCHECK from the address reach an online match too (drawing only: the players may differ)', () => {
+  const env = pageEnv(params('WOTM_GPUDUST=1&WOTM_DUSTCHECK=1'), fixed, { WOTM_NET: 'wss://x/match', WOTM_FIXEDSTEP: '1' }, 'wl-x');
+  assert.equal(env.WOTM_GPUDUST, '1');
+  assert.equal(env.WOTM_DUSTCHECK, '1');
+});
+
 test('any other WOTM_ or PS2X_ key in the address is ignored', () => {
   const env = pageEnv(params('WOTM_NETSERVER=evil:1&PS2X_ELF=/x&WOTM_CHEATS=1&WOTM_PADLOG=1&WOTM_BUILDID=wl-x&other=1'), fixed, null, null);
   assert.deepEqual(env, fixed);
@@ -56,8 +62,9 @@ test('WOTM_BUILDID comes only from the build id', () => {
   assert.equal('WOTM_BUILDID' in pageEnv(params('WOTM_BUILDID=wl-address'), fixed, { WOTM_BUILDID: 'wl-match' }, null), false);
 });
 
-test('the allowlist is the six test switches', () => {
-  assert.deepEqual([...FROM_ADDRESS].sort(), ['PS2X_STATS', 'WOTM_AIVSAI', 'WOTM_MAPEDIT', 'WOTM_MATCH', 'WOTM_PRESENT_PHASE', 'WOTM_VBLANK_SPIN']);
+test('the allowlist is the eight test switches', () => {
+  assert.deepEqual([...FROM_ADDRESS].sort(), ['PS2X_STATS', 'WOTM_AIVSAI', 'WOTM_DUSTCHECK', 'WOTM_GPUDUST', 'WOTM_MAPEDIT', 'WOTM_MATCH',
+                                              'WOTM_PRESENT_PHASE', 'WOTM_VBLANK_SPIN']);
 });
 
 test('an invite link names a lobby by its 4-character code, in any case', () => {
