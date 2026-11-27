@@ -21,6 +21,8 @@ node --test tools/browser_mp_test/test/     # the log readers
 Use `--site <dir>` to test a `web_dist` copy and `--data <dir>` for the folder with `game.iso` and `SCUS_971.97`. Results (logs,
 screenshots, `results.md`, `results.json`) go to `<runtime>/browser_mp_test/<time>/`, or `--out`.
 
+`node tools/browser_mp_test/result_card.mjs [--browser chromium|chrome|brave|firefox] [--ai]` plays a 2-player match to a wins target of 1 on a local server (with the round-ending cheat, or with `--ai` the game's AI in every seat), reads the score the game publishes (`wotm_web_result`) on both tabs once the Save result card button shows, saves the card on both and checks it is a 1200x630 PNG with the same score on both tabs. `rounds played` reads 0 with `--ai` and with the cheat (those paths do not go through the human battle evaluation that counts rounds), so the card leaves that line out.
+
 `node tools/browser_mp_test/quit_starved.mjs --browser firefox|chromium|chrome [--hidden]` loads `web/reload.js` in a page whose `setTimeout`, `setInterval` and `requestAnimationFrame` are disabled and checks that the reload still happens (QUIT must not wait on a timer). `timer_heartbeat.mjs` prints how late `setTimeout` fires on each of several tabs under a game-like load.
 
 `run.mjs --diag-out <file>` (not `desync.mjs` or `latency.mjs`) appends every `DIAG` line each tab sends on its lobby socket (`web/diag.js`: the join report, the periodic ones, the last
