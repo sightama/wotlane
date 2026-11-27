@@ -34,9 +34,11 @@ while [ $# -gt 0 ]; do
     esac
 done
 [ -n "$site" ] && [ -d "$site" ] || { echo "rollback_ab: --site <web dist folder> is required" >&2; exit 2; }
+site=$(cd "$site" && pwd)
 data=$repo/runtime/web_data
 [ -n "$out" ] || out=$repo/runtime/rollback_ab/$(date +%Y%m%d-%H%M%S)
 mkdir -p "$out"
+out=$(cd "$out" && pwd)
 cd "$repo/tools/browser_mp_test"
 status=0
 
